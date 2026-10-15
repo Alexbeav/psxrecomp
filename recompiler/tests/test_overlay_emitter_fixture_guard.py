@@ -156,9 +156,41 @@ def fixture_b_seeds():
     return f"0x{F0:08X}\n0x{F1:08X}\n0x{F2:08X}\n"
 
 
+# Fixture C: the same image with the seed kinds that compile_overlays.py writes
+# for composite captures and hosted fragments and that A and B never write. The
+# lines have its format and its order: producer ranges, cross-producer allows,
+# root seeds by address, hosted interiors.
+#   producer_range   [F0, F0+0x20) and [F1, guard): the two padding words
+#                    belong to no producer
+#   cross_call_allow F1: F0's jal crosses producers, so F1 becomes a
+#                    call-discovered entry only through this line
+#   0x... F1+0x14    a plain seed that fails the boundary check (the block
+#                    after F1's loop); it becomes an interior alias of F1
+#   call_root F2+8   a call target with no boundary evidence; no other seed
+#                    roots F2, so only the call_root rule makes it a walk root
+#   hosted_interior F0+0x10 F0    the host is an explicit root: accepted
+#   hosted_interior F1+4 F1       the host is only call-discovered: rejected
+C_PADDING = F0 + 0x20
+C_BOUNDARY_FAIL = F1 + 0x14
+C_CALL_ROOT = F2 + 0x08
+C_ANALYSIS_END = LOAD + 0x5C   # the guard word is not analysable
+
+
+def fixture_c_seeds():
+    return (f"producer_range 0x{F0:08X} 0x{C_PADDING:08X}\n"
+            f"producer_range 0x{F1:08X} 0x{C_ANALYSIS_END:08X}\n"
+            f"cross_call_allow 0x{F1:08X}\n"
+            f"0x{F0:08X}\n"
+            f"0x{C_BOUNDARY_FAIL:08X}\n"
+            f"call_root 0x{C_CALL_ROOT:08X}\n"
+            f"hosted_interior 0x{F0 + 0x10:08X} 0x{F0:08X}\n"
+            f"hosted_interior 0x{F1 + 0x04:08X} 0x{F1:08X}\n")
+
+
 FIXTURES = (
     ("a_exact_entry_ws_config", fixture_a_image, fixture_a_seeds, fixture_a_config),
     ("b_exact_entry_plain", fixture_a_image, fixture_b_seeds, None),
+    ("c_composite_hosted", fixture_a_image, fixture_c_seeds, None),
 )
 
 

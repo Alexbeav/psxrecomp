@@ -4,7 +4,7 @@
   "history": [
     {
       "codegen_ver": 15,
-      "digest": "bc1da152bc6ae62b6daed6eca0e1c08d5fb7da82ced7b4dcf4ac14f3c73b5709",
+      "digest": "df14367e96947bdabba223b00619dc6f22cac9ed7b414a74e46ef7bd64439ab4",
       "files": {
         "a_exact_entry_ws_config": {
           "full.c": "57e7b6046e8c8e49e40fdef596b2a68e569413133c7489a7bf6a6c5c018c1d12",
@@ -13,6 +13,10 @@
         "b_exact_entry_plain": {
           "full.c": "f09ca6050d9643f5c82e92aafab714dc4f87f34c1c9b9964b5aa14f4604cd07e",
           "full.ranges": "edfab5cb57b6eba9c20f79ff69ddaf86d802cc43c4c1fcedda6449d160f2731a"
+        },
+        "c_composite_hosted": {
+          "full.c": "d51dfdd9a9bfa5fa1ce7052cc5eeadb916f4e835ed11edc028ab9f805ecf8785",
+          "full.ranges": "0a46a2524c02e300351194b90882c16ccc72f653058f47cd3d6b5e80dd64db5b"
         }
       }
     }

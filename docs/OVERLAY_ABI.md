@@ -115,12 +115,28 @@ The guard runs `psxrecomp-game` with every `PSX*` variable removed from its
 environment, so a generator switch in the caller's shell cannot change the
 digest.
 
-The guard sees only what the fixtures reach: the exact-entry walk with
-padding between routines, an interior alias, a dispatch root, a
-`[[recompiler.patch]]` edit and a `mod_function_entry_funcs` hook from
-`--ws-config`, and a trailing guard word. A change to an overlay path that
-no fixture reaches, such as the other `--ws-config` widescreen site lists,
-is not caught. Add a fixture when you add such a path.
+The guard sees only what the fixtures reach. The fixtures write these seed
+lines, in the format and order of `compile_overlays.py`:
+
+| Seed line | Fixture | What it reaches |
+|---|---|---|
+| `0x...` (plain) | A, B, C | a walk root that passes the boundary check, with padding between routines; in C, one that fails it and becomes an alias |
+| `interior` | A | an interior alias of a rooted host |
+| `dispatch_root` | A | a walk root without a boundary check |
+| `call_root` | C | a call target that fails the boundary check and is still a walk root |
+| `producer_range` | C | two producers with padding between them that belongs to neither |
+| `cross_call_allow` | C | a call across producers that makes the callee a call-discovered entry |
+| `hosted_interior` | C | one with an explicitly rooted host (accepted) and one with a call-discovered host (rejected) |
+
+Fixture A also reaches a `[[recompiler.patch]]` edit and a
+`mod_function_entry_funcs` hook from `--ws-config`, and all three fixtures end
+in a trailing guard word. A change to an overlay path that no fixture reaches,
+such as the other `--ws-config` widescreen site lists or a jump table, is not
+caught. Add a fixture when you add such a path. No fixture has a cross-producer
+call without a `cross_call_allow` line, so the guard does not see a producer
+gate that lets every such call through. That gate is in
+`recompiler/src/function_analysis.cpp`, which is in the codegen hash: a change
+there moves the key.
 
 The record is append-only by rule, and `--record` keeps the rule. The test
 cannot tell a hand edit of an existing entry from the original. In review, a
