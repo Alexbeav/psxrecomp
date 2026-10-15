@@ -1,8 +1,11 @@
 """Prepare and compare the Octoshock Spyro movies with owned inputs.
 
-One adapter for the three Spyro titles spyro_admission.py admits, keyed by that module's title
-id. Each entry below pins its own boot program, controller bytes, firmware and runtime profile;
-an entry is added when its title's route is first built.
+One adapter for the Spyro titles, keyed by title id. Spyro 3 4083M is one of the titles
+spyro_admission.py admits; Spyro 2 5278M has an admission tool of its own, spyro2_admission.py
+(hashed into its admitted reference, so it is not a second entry in the first module). ADMISSION
+below names each title's tool, roles and longest neutral tail. Each entry pins its own boot
+program, controller bytes, firmware and runtime profile; an entry is added when its title's route
+is first built.
 
 These movies carry a DualShock with live sticks. The route comes from
 dualshock_route.read_movie_octoshock_dualshock, which keeps every logged stick byte, and every
@@ -10,6 +13,11 @@ profile names --axis-model octoshock-byte: Octoshock hands those bytes to the pa
 runtime must deliver them unchanged (the Nymashock default rescales them as 16-bit values). A
 movie that presses the physical Analog (MODE) button is refused, here and in
 run_native.route_identity, until a runtime models when the pad looks at it.
+
+spyro2-5278M is a BizHawk 2.8 Nymashock movie. Its sticks are raw u16 values; the route comes
+from nymashock28_route.read_movie_nymashock28, which converts them to the pad bytes the Nymashock
+pad reports (Mednafen's table), so --axis-model octoshock-byte delivers them unscaled here too. The
+movie declares the port-1 memory card off, and the reader refuses any other sync setting.
 
 spyro3-4083M was recorded on BizHawk 2.3. Its profile is the 2.3 set Abe's Oddysee and Pepsiman
 run (the shared 2.2.2 models with the 2.3 CD-DA and MDEC models), except that the pad answers
@@ -33,6 +41,8 @@ import sys
 import build_cache
 import dualshock_route
 import media_container
+import nymashock28_route
+import spyro2_admission
 import spyro_admission as source
 import tekken3
 from observation_evidence import terminal_consistency
@@ -58,7 +68,42 @@ PROFILE_23 = [
     '--precise-slice', 'on', '--cpu-return-probe', '--ram-page-probe',
     '--axis-model', AXIS_MODEL,
 ]
+# The Nymashock 2.8 host. Bio Hazard's set (biohazard.PROFILE: the nymashock-1.29.0 pad, CD drive
+# and MDEC selectors; Mednafen 1.27.1 and 1.29.0 emulate the PS1 identically), without its
+# --card-model because this movie declares port 1 empty, and with the octoshock-byte axis model for
+# the pad bytes the route holds. Which Mednafen BizHawk 2.8's Nymashock carries is not stated by any
+# source read, so this set is unqualified for it until a replay matches.
+PROFILE_NYMA28 = [
+    '--critical-section-model', 'exception', '--syscall-model', 'guest-exception',
+    '--field-model', 'octoshock-2.2.2-ntsc-raster',
+    '--dma-model', 'octoshock-2.2.2-otc',
+    '--pad-ack-model', 'nymashock-1.29.0-dualshock', '--legacy-card-repair', 'off',
+    '--cd-firmware-model', 'octoshock-2.2.2', '--cd-cold-status-model', 'octoshock-2.2.2',
+    '--cd-toc-seek-model', 'octoshock-2.2.2', '--cd-explicit-seek-model', 'octoshock-2.2.2',
+    '--cd-read-start-model', 'octoshock-2.2.2-pipeline', '--cd-dma-model', 'octoshock-2.2.2',
+    '--cd-drive-model', 'nymashock-1.29.0',
+    '--cd-cdda-model', 'octoshock-2.3', '--mdec-source-model', 'nymashock-1.29.0',
+    '--gpu-status-model', 'octoshock-2.2.2-raster', '--gpu-dma-model', 'octoshock-2.2.2-bounded-quad',
+    '--timer1-model', 'octoshock-2.2.2', '--timer2-model', 'octoshock-2.2.2',
+    '--precise-slice', 'on', '--cpu-return-probe', '--ram-page-probe',
+    '--axis-model', AXIS_MODEL,
+]
+SPYRO2_STEM = "Spyro 2 - Ripto's Rage! (USA)"
 TITLES = {
+    'spyro2-5278M': {
+        # Canonical PSXRTI2 controller bytes of the movie (dualshock_route.write_route).
+        'controller_sha256': 'bd1290ee904fb9e5c363ab8f19173ee265c49bc53b4d84d4010aebbdb94ed286',
+        'route_reader': 'nymashock28', 'reader': {'mednafen_values': {'psx.input.port1.memcard': '0'}},
+        'bios_stem': 'SCPH5501',
+        'boot': 'SCUS_944.25', 'game_id': 'SCUS-94425',
+        'exe_sha256': '7b54002789ab379e0d3a6b49d7b50078b9c9c2fed589f41ff9878ebb68fe0bc1',
+        'disc_stem': SPYRO2_STEM, 'track_bytes': 565371408,
+        # Read from the boot program's own PS-X EXE header and cross-checked on every setup.
+        'load_address': 0x80010000, 'entry_pc': 0x8005478C, 'text_size': 0x57000, 'stack_base': 0x801FFFF0,
+        'system_cnf': b'BOOT = cdrom:\\SCUS_944.25;1\r\nTCB = 4\r\nEVENT = 16\r\nSTACK = 801FFFF0\r\n',
+        'name': 'Spyro 2 Riptos Rage', 'exe_name': 'Spyro2-TAS',
+        'profile': PROFILE_NYMA28,
+    },
     'spyro3-4083M': {
         # Canonical PSXRTI2 controller bytes of the movie (dualshock_route.write_route).
         'controller_sha256': '3160bdc3b0d55034196b6b0dae18cb1433d3fae2523cab6f8ccb6b68319f0cd1',
@@ -81,22 +126,44 @@ command = tekken3.command
 require_hash = tekken3.require_hash
 
 
+# The admission facts of a title that spyro_admission.py does not admit. spyro2_admission.py is a
+# module of its own because its bytes are hashed into the admitted reference.
+SPYRO2_ADMITTED = {
+    'frames': spyro2_admission.FRAMES, 'schema': 'spyro2-independent-source-v1',
+    'movie_sha256': spyro2_admission.MOVIE_SHA, 'firmware': spyro2_admission.FIRMWARE_NAME,
+    'firmware_sha256': spyro2_admission.FIXED[spyro2_admission.FIRMWARE_NAME],
+    'media': {name: sha for name, sha in spyro2_admission.FIXED.items() if name.startswith(SPYRO2_STEM + '.')},
+    'tool': spyro2_admission, 'roles': ('stock-control', 'pages-observer'), 'max_tail': 12000,
+}
+
+
 def title_spec(title):
+    """(runtime entry, admission facts); facts carry the admission tool, its roles and longest tail."""
     if title not in TITLES:
         raise ValueError('no Spyro route entry for ' + str(title))
-    return TITLES[title], source.TITLES[title]
+    if title == 'spyro2-5278M':
+        return TITLES[title], SPYRO2_ADMITTED
+    spec = source.TITLES[title]
+    return TITLES[title], {**spec, 'firmware_sha256': source.FIRMWARE[spec['firmware']][1],
+                           'tool': source, 'roles': ('stock', 'observer'), 'max_tail': 6000}
+
+
+def admit(title, root, role):
+    """The title's own admission tool, called with the arguments it takes."""
+    _, spec = title_spec(title)
+    return spec['tool'].admit(root, role) if spec['tool'] is not source else source.admit(root, title, role)
 
 
 def verify_reference(path, title):
     """The admitted source reference, re-checked against this title's own constants."""
     _, spec = title_spec(title)
-    frames = spec['frames']
-    ref = source.read(path)
+    frames, tool = spec['frames'], spec['tool']
+    ref = tool.read(path)
     if (ref.get('schema') != spec['schema'] or ref.get('source_qualification') != 'pass'
             or ref.get('movie_sha256') != spec['movie_sha256'] or ref.get('original_inputs') != frames):
         raise ValueError('wrong independent Spyro source reference')
     endpoint = ref.get('observed_returns')
-    if type(endpoint) is not int or not frames <= endpoint <= frames + 6000 or ref.get('neutral_tail') != endpoint - frames:
+    if type(endpoint) is not int or not frames <= endpoint <= frames + spec['max_tail'] or ref.get('neutral_tail') != endpoint - frames:
         raise ValueError('invalid source reference endpoint')
     bindings = {str(Path(x['path']).resolve()): x['sha256'] for x in ref['bindings']}
     if len(bindings) != len(ref['bindings']):
@@ -106,7 +173,7 @@ def verify_reference(path, title):
     for key in ('ram_pages', 'terminal_ram'):
         if str(Path(ref[key]).resolve()) not in bindings:
             raise ValueError('unbound source reference field')
-    if ref.get('admission_tool_sha256') != source.digest(Path(source.__file__)):
+    if ref.get('admission_tool_sha256') != tool.digest(Path(tool.__file__)):
         raise ValueError('source reference admission tool differs')
     stock, observed = Path(ref['stock_source']).resolve(), Path(ref['observer_source']).resolve()
     if stock == observed:
@@ -114,11 +181,11 @@ def verify_reference(path, title):
     if (Path(ref['ram_pages']).resolve() != observed / 'ram-pages.tsv'
             or Path(ref['terminal_ram']).resolve() != observed / f'ram-frame-{endpoint:06d}.bin'):
         raise ValueError('source reference fields do not belong to the admitted roles')
-    for root, role in ((stock, 'stock'), (observed, 'observer')):
+    for root, role in zip((stock, observed), spec['roles']):
         for name in ('manifest.json', 'complete.json', 'exit.json', 'semantic-review.json'):
             if str(root / name) not in bindings:
                 raise ValueError('source reference is missing admission evidence')
-        admitted, terminal, _ = source.admit(root, title, role)
+        admitted, terminal, _ = admit(title, root, role)
         if admitted != endpoint or terminal[3].lower() != ref['terminal_ram_sha256']:
             raise ValueError('source reference terminal differs')
     return ref
@@ -128,7 +195,10 @@ def read_route(movie, title):
     """The movie's rows, refused when a runtime could not deliver them exactly."""
     entry, spec = title_spec(title)
     require_hash(movie, spec['movie_sha256'])
-    rows, facts = dualshock_route.read_movie_octoshock_dualshock(movie, **entry['reader'])
+    if entry.get('route_reader') == 'nymashock28':
+        rows, facts = nymashock28_route.read_movie_nymashock28(movie, **entry['reader'])
+    else:
+        rows, facts = dualshock_route.read_movie_octoshock_dualshock(movie, **entry['reader'])
     if facts['mode_press_frames']:
         raise ValueError('movie presses the physical Analog button; no runtime models it yet')
     if len(rows) != spec['frames']:
@@ -140,7 +210,7 @@ def media(cue, bios, title):
     entry, spec = title_spec(title)
     stem = entry['disc_stem']
     require_hash(cue, spec['media'][stem + '.cue'])
-    require_hash(bios, source.FIRMWARE[spec['firmware']][1])
+    require_hash(bios, spec['firmware_sha256'])
     lines = [x.strip() for x in cue.read_text().splitlines() if x.strip()]
     match = re.fullmatch(r'FILE "([^"\r\n]+)" BINARY', lines[0]) if lines else None
     if not match or lines[1:] != ['TRACK 01 MODE2/2352', 'INDEX 01 00:00:00']:
@@ -191,7 +261,7 @@ def setup(args):
     title = args.title
     entry, spec = title_spec(title)
     bios_stem, boot = entry['bios_stem'], entry['boot']
-    bios_sha = source.FIRMWARE[spec['firmware']][1]
+    bios_sha = spec['firmware_sha256']
     if os.name != 'nt':
         raise ValueError('Windows UCRT build required for this candidate')
     if subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip():
@@ -426,7 +496,7 @@ def run(args):
     check_launch_arguments(args)
     if args.ladder is not None:
         info = read_setup(args.setup)
-        endpoint = source.read(Path(info['reference'])).get('observed_returns')
+        endpoint = title_spec(info['title'])[1]['tool'].read(Path(info['reference'])).get('observed_returns')
         if type(endpoint) is not int:
             raise ValueError('invalid source reference endpoint')
         report = run_ladder(args.output.resolve(), parse_ladder(args.ladder, endpoint), endpoint,
