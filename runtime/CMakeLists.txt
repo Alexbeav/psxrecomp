@@ -205,6 +205,9 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_biohazard_checkpoint.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME interp_refused_text_handoff_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_refused_text_handoff.py --cc ${CMAKE_C_COMPILER})
+        # PS1B-454 row 5: a deliverable interrupt is taken at the next dirty-RAM entry (590c23693).
+        add_test(NAME interp_entry_poll_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_entry_poll.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME syscall_change_thread_self_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_change_thread_self.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE}
@@ -285,6 +288,13 @@ if(BUILD_TESTING)
         target_compile_options(dma_default_regs_test PRIVATE -O2 -flto -fwhole-program)
         target_link_options(dma_default_regs_test PRIVATE -flto)
         add_test(NAME dma_default_regs_test COMMAND dma_default_regs_test)
+        # PS1B-454 part B row 6: the SPU-to-RAM direction of DMA channel 4,
+        # through the production dma.c and spu.c (Gran Turismo, FAIL-027).
+        add_executable(dma_spu_read_test tests/test_dma_spu_read.c src/spu.c src/crc32.c src/dma_gpu_ll.c)
+        target_include_directories(dma_spu_read_test PRIVATE include)
+        target_compile_options(dma_spu_read_test PRIVATE -O2 -flto -fwhole-program -UNDEBUG)
+        target_link_options(dma_spu_read_test PRIVATE -flto)
+        add_test(NAME dma_spu_read_test COMMAND dma_spu_read_test)
         add_executable(dma_otc_during_ll_test tests/test_dma_otc_during_ll.c src/dma_gpu_ll.c)
         target_include_directories(dma_otc_during_ll_test PRIVATE include)
         target_compile_options(dma_otc_during_ll_test PRIVATE -O2 -UNDEBUG)
@@ -329,6 +339,17 @@ if(BUILD_TESTING)
     add_executable(cdrom_boot_model_test tests/test_cdrom_boot_model.c src/psx_sha256.c)
     target_include_directories(cdrom_boot_model_test PRIVATE include)
     add_test(NAME cdrom_boot_model_test COMMAND cdrom_boot_model_test)
+    # PS1B-454: GetID answers the licence string of the disc in the drive
+    # (b82e72cb0, Kula World), and main.cpp maps each region to its string.
+    add_executable(cdrom_getid_region_test tests/test_cdrom_getid_region.c src/psx_sha256.c)
+    target_include_directories(cdrom_getid_region_test PRIVATE include)
+    add_test(NAME cdrom_getid_region_test COMMAND cdrom_getid_region_test
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+    # PS1B-454: a new command cancels the INT2 a Pause still owes (2d67bb9a7,
+    # PSX-CD-007; Medal of Honor Underground, Gran Turismo).
+    add_executable(cdrom_stale_int2_cancel_test tests/test_cdrom_stale_int2_cancel.c src/psx_sha256.c)
+    target_include_directories(cdrom_stale_int2_cancel_test PRIVATE include)
+    add_test(NAME cdrom_stale_int2_cancel_test COMMAND cdrom_stale_int2_cancel_test)
     add_executable(cdrom_getlocl_test tests/test_cdrom_getlocl.c src/psx_sha256.c)
     target_include_directories(cdrom_getlocl_test PRIVATE include)
     add_test(NAME cdrom_getlocl_test COMMAND cdrom_getlocl_test)
@@ -1452,7 +1473,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             target_compile_options(${_queue_test}_test PRIVATE -O2 -flto -fwhole-program -UNDEBUG)
             target_link_options(${_queue_test}_test PRIVATE -flto)
         endforeach()
-        foreach(_case pending deferred reset snapshot packets interlace-charge)
+        foreach(_case pending deferred reset snapshot packets polyline-terminator interlace-charge)
             add_test(NAME gpu_command_queue_${_case} COMMAND gpu_command_queue_test ${_case})
         endforeach()
         add_test(NAME dma_gpu_command_queue_linked_list COMMAND dma_gpu_command_queue_test)

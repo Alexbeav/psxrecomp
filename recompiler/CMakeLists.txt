@@ -928,6 +928,27 @@ if(BUILD_TESTING)
              COMMAND bios_address_model_test
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+    # PS1B-454: the BIOS profiles with a verified shell entry export it, and
+    # the runtime boot plan built from the export skips the boot (c4ec298eb,
+    # Future Cop on SCPH-5552). Reads bios/*.toml — run from the framework root.
+    add_executable(bios_runtime_exports_test
+        tests/bios_runtime_exports_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+        ../runtime/src/bios_hle_plan.c
+    )
+    target_include_directories(bios_runtime_exports_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+        ../runtime/include
+    )
+    target_link_libraries(bios_runtime_exports_test PRIVATE fmt)
+    add_test(NAME bios_runtime_exports_test
+             COMMAND bios_runtime_exports_test
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
     # These targets were already built by every test build, but without
     # add_test() entries ctest could neither run nor fail them.
     add_test(NAME l2_structural_test COMMAND l2_structural_test)
