@@ -140,7 +140,10 @@ class PgoBiosPreflightTests(unittest.TestCase):
     def test_retail_only_title_without_bios_cfg_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             reason = cli.pgo_bios_preflight({"openbios": False}, Path(folder))
-            self.assertIn("start refused (no_bios)", reason)
+            # D32 (Alex, 2026-10-15): line 1 names the missing BIOS and predicts no runtime refusal.
+            self.assertEqual(reason, "this title needs a PlayStation BIOS (openbios = false), but "
+                             f"{Path(folder) / 'bios.cfg'} is missing or names a file that does not exist")
+            self.assertNotIn("start refused", reason)
 
     def test_bios_cfg_naming_a_missing_file_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -190,7 +193,9 @@ class PgoBiosPreflightTests(unittest.TestCase):
                 result = cli.cmd_pgo_train(args, progress)
             self.assertEqual(result, cli.EXIT_OK)
             self.assertEqual(events, [("configure", ""), ("build",)])
-            self.assertIn("start refused (no_bios)", progress.result.call_args.kwargs["pgo_skipped"])
+            skipped = progress.result.call_args.kwargs["pgo_skipped"]
+            self.assertIn("needs a PlayStation BIOS (openbios = false)", skipped)
+            self.assertNotIn("start refused", skipped)
 
 
 if __name__ == "__main__":

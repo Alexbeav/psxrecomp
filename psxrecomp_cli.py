@@ -1986,8 +1986,7 @@ def pgo_bios_preflight(runtime: dict, build_dir: Path) -> str:
     if any((build_dir / c).is_file() for c in candidates):   # absolute paths ignore the left side
         return ""
     return ("this title needs a PlayStation BIOS (openbios = false), but "
-            f"{build_dir / 'bios.cfg'} is missing or names a file that does not exist "
-            "(start refused (no_bios))")
+            f"{build_dir / 'bios.cfg'} is missing or names a file that does not exist")
 
 
 def pgo_merge_tool_available(project_root: Path) -> str:
