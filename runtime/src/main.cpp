@@ -16703,6 +16703,18 @@ void mh_launcher_settings_get(RecompLauncherCSettings* out) {
     ls.renderer = v.renderer;
     ls.render_thread = v.render_thread;
     ls.present_thread = v.present_thread;
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    /* Rows the menu may not show but a preset governs: as in force, so the
+     * preset classification (quality_take_launcher) compares like for like. */
+#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
+    ls.dynamic_resolution_min = dynres_min_value();
+#endif
+    ls.geometry_correction = g_video_geometry_correction ? 1 : 0;
+    ls.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
+    ls.frame_interp = g_frame_interpolation ? 1 : 0;
+    ls.frame_interp_fps = g_frame_interpolation_fps;
+    quality_seed_launcher(&ls);
+#endif
 #if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK) && \
     defined(PSX_HAS_JOGCON_FFB_PLAYER_SETTING)
     ls.jogcon_force_feedback = psx_jogcon_ffb_player_enabled();
@@ -16739,6 +16751,10 @@ void mh_launcher_game_info(RecompLauncherCGameInfo* out) {
     gi.has_vsync = 0;
     gi.has_rewind_depth = 0;
     gi.mods = PSXRecompV4::mod_runtime_launcher_provider();
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    /* The Graphics preset row, as in the pre-game launcher. */
+    quality_fill_game_info(&gi);
+#endif
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
     /* The same lobby the pre-game launcher drives, so the menu can host/join. */
     gi.netplay_supported = g_lnch_netplay_available ? 1 : 0;
@@ -16860,6 +16876,12 @@ static void host_pause_service(void) {
     if (have_video) (void)psx_video_apply_live(&video);
 #if defined(RECOMP_LAUNCHER)
     if (have_ls) {
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+        /* The menu's Graphics preset row: classified like the launcher's
+         * (a pick, or a governed edit); the save below settles it. Rows the
+         * menu shows apply now, preset-only keys at the next launch. */
+        quality_take_launcher(&post, nullptr, false);
+#endif
         const PsxHostVideoSettings v = ovl_video_from(post);
         (void)psx_video_apply_live(&v);
 #if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK) && \
