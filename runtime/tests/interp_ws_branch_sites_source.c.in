@@ -1,0 +1,5 @@
+/* Compile the production source-runtime gate unchanged. source_gpu_runtime_active()
+ * lets the interpreter hand its branch decision to the delivery helper, where
+ * the fixture reads it without running the delay slot. */
+#include "@SOURCE_RUNTIME@"
+void ws_branch_sites_enable_source(void) { enabled = 1; }

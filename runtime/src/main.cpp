@@ -15724,6 +15724,20 @@ int main(int argc, char** argv) {
                 gc.ws_cull_plane_nx_sites.data(), (int)gc.ws_cull_plane_nx_sites.size());
             gpu_ws_set_xclip_load_sites(
                 gc.ws_cull_xclip_load_sites.data(), (int)gc.ws_cull_xclip_load_sites.size());
+            /* Branch-decision lists: the generated code widens or keeps these
+             * branches; the dirty-RAM interpreter decides them the same way
+             * (dirty_ram_branch_taken, PS1B-520). */
+            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_BLTZ,
+                gc.ws_cull_bltz_sites.data(), (int)gc.ws_cull_bltz_sites.size());
+            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_KEEP,
+                gc.ws_cull_branch_keep_sites.data(),
+                (int)gc.ws_cull_branch_keep_sites.size());
+            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_NCLIP_KEEP,
+                gc.ws_cull_nclip_keep_sites.data(),
+                (int)gc.ws_cull_nclip_keep_sites.size());
+            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_NCLIP_EXACT,
+                gc.ws_cull_nclip_exact_sites.data(),
+                (int)gc.ws_cull_nclip_exact_sites.size());
             {
                 std::vector<uint32_t> addresses, expected, results;
                 addresses.reserve(gc.ws_cull_keep_sites.size());

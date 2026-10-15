@@ -69,6 +69,14 @@ void dirty_ram_ld_delay_discard(void);
  * follow the same decision as the interpreter (PS1B-510). */
 int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value);
 
+/* The interpreter's decision for a conditional branch insn at pc (BEQ, BNE,
+ * BLEZ, BGTZ, REGIMM; 1 = taken), with the [widescreen.cull] branch-site lists
+ * (bltz_sites, branch_keep_sites, nclip_keep_sites, nclip_exact_sites) and the
+ * auto_screen_x funnel widen, decided as the recompiler's generated code
+ * decides them (PS1B-520). */
+int dirty_ram_branch_taken(uint32_t pc, uint32_t insn, uint32_t rs_value,
+                           uint32_t rt_value);
+
 /* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
  * gap) after snap restore. Not in boot_state — peers that drifted through FMV
  * otherwise entered the post-FMV dirty wait on opposite poll phases. */

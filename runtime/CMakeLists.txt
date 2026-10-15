@@ -256,6 +256,10 @@ if(BUILD_TESTING)
         # as the interpreter does (Cause.BT and register 6).
         add_test(NAME irq_handoff_ws_cull_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_irq_handoff_ws_cull.py --cc ${CMAKE_C_COMPILER})
+        # PS1B-520: the interpreter decides a branch on a [widescreen.cull]
+        # branch-site list as the generated code does.
+        add_test(NAME interp_ws_branch_sites_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_ws_branch_sites.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME syscall_change_thread_self_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_change_thread_self.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE}
