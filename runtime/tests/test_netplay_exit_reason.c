@@ -208,6 +208,60 @@ int main(void)
             netplay_start_failure_report_text(-3, 1, "my lan pc", "", NETPLAY_BIND_BAD_ADDRESS, 0, "",
                                               report, sizeof(report));
             CHECK(strstr(report, "\"(address)\" is not an address and a port to listen on.") != NULL);
+            /* An IPv6 address is groups between colons. Its last group is not
+             * a port: "fe80::1234" left "(address):1234" in the report. The
+             * port is kept for "[address]:port" and for nothing else that
+             * holds more than one colon. Every cause and every answer of the
+             * system again, with no piece of the address in the report. */
+            {
+                static const char *const v6[] = {
+                    "fe80::1234", "2001:db8::77", "::1", "::", "[2001:db8::77]", "2001:db8::77:47810",
+                    "[2001:db8::77]:47810", "[fe80::1234%eth0]:47810", "fe80::1234%eth0" };
+                static const char *const v6_never[] = {
+                    "fe80", "2001", "db8", "1234", "::", ":77", "eth0", "[", "]", "(address):1 ", "(address):1." };
+                size_t n6;
+                for (a = 0; a < sizeof(v6) / sizeof(v6[0]); ++a) for (c = 0; c < 6; ++c)
+                for (d = 0; d < 8; ++d) for (e = 0; e < 3; ++e) {
+                    netplay_start_failure_report_text(codes[e], 1, v6[a], v6[a], probes[c], errors[d],
+                                                      "in use", report, sizeof(report));
+                    for (n6 = 0; n6 < sizeof(v6_never) / sizeof(v6_never[0]); ++n6)
+                        if (strstr(report, v6_never[n6])) {
+                            fprintf(stderr, "address in the report: [%s] from [%s] holds [%s]\n",
+                                    report, v6[a], v6_never[n6]);
+                            ++failures;
+                        }
+                    CHECK(report[0] != '\0' && strlen(report) < NETPLAY_START_FAILURE_CAP);
+                }
+                /* No port in the text: none in the report. */
+                netplay_start_failure_report_text(-3, 1, "fe80::1234", "", NETPLAY_BIND_OK, 0, "",
+                                                  report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address).") == 0);
+                netplay_start_failure_report_text(-3, 1, "::1", "", NETPLAY_BIND_OK, 0, "", report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address).") == 0);
+                /* An unbracketed address with a port cannot be told from an
+                 * address alone: nothing of it is kept. */
+                netplay_start_failure_report_text(-3, 1, "2001:db8::77:47810", "", NETPLAY_BIND_OK, 0, "",
+                                                  report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address).") == 0);
+                /* In brackets the port is a port, and stays. */
+                netplay_start_failure_report_text(-3, 1, "[2001:db8::77]:47810", "", NETPLAY_BIND_OK, 0, "",
+                                                  report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address):47810.") == 0);
+                netplay_start_failure_report_text(-3, 1, "[2001:db8::77]:47810", "", NETPLAY_BIND_FAILED, 10048,
+                                                  "in use", report, sizeof(report));
+                CHECK(strstr(report, "Netplay could not open UDP port 47810 on (address) (system error 10048).") != NULL);
+                /* Brackets with no port, and a bracket that is not closed before the colon. */
+                netplay_start_failure_report_text(-3, 1, "[2001:db8::77]", "", NETPLAY_BIND_OK, 0, "",
+                                                  report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address).") == 0);
+                netplay_start_failure_report_text(-3, 1, "[2001:db8::77:47810", "", NETPLAY_BIND_OK, 0, "",
+                                                  report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address).") == 0);
+                /* One colon, as before: the port stays. */
+                netplay_start_failure_report_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_OK, 0, "",
+                                                  report, sizeof(report));
+                CHECK(strcmp(report, "Netplay could not start its connection on (address):7777.") == 0);
+            }
             /* The sentence for the box and the log is not changed by this. */
             netplay_start_failure_text(-3, 1, "203.0.113.77:47810", "", NETPLAY_BIND_FAILED, 10048, "in use",
                                        why, sizeof(why));
