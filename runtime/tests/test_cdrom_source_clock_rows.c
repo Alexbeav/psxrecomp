@@ -323,6 +323,91 @@ static void test_init(int disc)
            "J3 disc %d: an Init after the completion starts a new reset", disc);
 }
 
+/* ---- 14.5 J6 (PS1G-118): Init from an active stream ---------------------------
+ * kind 0: an established read; 1: a CD-DA play; 2: a read with a pended
+ * data-ready notice; 3: a CD-DA play under the source CD-DA model
+ * (PSX_CD_CDDA_MODEL=octoshock-2.3), in the state Tomb Raider's route showed at
+ * its Init: track 2, mode 05h, status 82h, two sectors in the pipe. Before J6
+ * the controller stopped the process here (exit 2, the old J1). The stream
+ * stops at the command: no sector is read, no CD-DA sector is played and no
+ * data-ready notice or CD-DA report comes after the acknowledge. The next
+ * interrupt is the completion, at the time J3 sets. */
+static void test_init_from_stream(int kind)
+{
+    static const char *const names[4] = { "a read", "a CD-DA play", "a pended data-ready notice",
+                                          "a source-model CD-DA play" };
+    static const uint8_t position[3] = { 0x00, 0x02, 0x10 };
+    const char *what = names[kind];
+    int cdda = kind == 1 || kind == 3;
+    set_model("PSX_CD_CDDA_MODEL", kind == 3 ? "octoshock-2.3" : "");
+    clock_boot(1);
+    EXPECT(source_cdda.enabled == (kind == 3), "J6 %s: source CD-DA model %d", what, source_cdda.enabled);
+    advance(40000);
+    if (!cdda) {
+        write_command(0x02, position, 3);
+        run_to_execution();
+        acknowledge(0x1f);
+        write_command(0x06, NULL, 0);
+        run_to_execution();
+        acknowledge(0x1f);
+        for (int guard = 0; irq_flag != CDIRQ_DATA_READY && guard < 20000; ++guard) advance(1000);
+        EXPECT(irq_flag == CDIRQ_DATA_READY && reading, "J6 %s: the read delivers its first sector (flag %d)", what, irq_flag);
+        acknowledge(0x1f);
+    } else {
+        cdda_playing = 1;
+        cdda_track = 1;
+        cdda_lba = 4500;
+        cdda_delay = CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+        stat_reg = (uint8_t)(CDSTAT_MOTOR | CDSTAT_PLAY);
+        s_source_seek_paused = 0;
+        if (kind == 3) {
+            cdda_track = 2;
+            mode_reg = 0x05;
+            source_cdda.pipe_count = 2;
+            source_cdda.pipe_at = 1;
+            source_cdda.sectors_read = 2;
+            source_cdda.play_track_match = -1;
+        }
+    }
+    write_command(0x0a, NULL, 0);
+    if (kind == 2) {
+        pending_dataready = 1;
+        pending_dataready_stat = stat_reg;
+        pending_dataready_slot = s_ring_write;
+    }
+    int reads_before = reads;
+    uint64_t played_before = cdda_sectors_played, fires_before = s_dataready_fires;
+    run_to_execution();
+    uint64_t start = psx_cycle_count;
+    EXPECT(irq_flag == CDIRQ_ACK && response_fifo[response_read] == status_before &&
+           (status_before & (cdda ? CDSTAT_PLAY : CDSTAT_READ)),
+           "J2 %s: flag %d, response %02X, status before %02X", what, irq_flag, response_fifo[response_read], status_before);
+    EXPECT(!reading && !cdda_playing && !pending_dataready, "J6 %s: the stream stops at the command (read %d, CD-DA %d, pended %d)",
+           what, reading, cdda_playing, pending_dataready);
+    EXPECT(!source_cdda.seeking && !source_cdda.pipe_count && !source_cdda.async_type,
+           "J6 %s: no source CD-DA seek, pipe or report is left (seek %d, pipe %u, report %u)", what,
+           source_cdda.seeking, (unsigned)source_cdda.pipe_count, (unsigned)source_cdda.async_type);
+    EXPECT(s_source_reset_due == start + 1136000u && stat_reg == CDSTAT_MOTOR,
+           "J3 %s: reset due %lld cycles after Init, status %02X", what, (long long)(s_source_reset_due - start), stat_reg);
+    acknowledge(0x1f);
+    int other = 0;
+    while (psx_cycle_count < start + 1136000u && !other) {
+        uint64_t left = start + 1136000u - psx_cycle_count;
+        advance(left < 1000 ? (int)left : 1000);
+        if (irq_flag && irq_flag != CDIRQ_COMPLETE) other = irq_flag;
+    }
+    EXPECT(!other && irq_flag == CDIRQ_COMPLETE && psx_cycle_count == start + 1136000u && s_source_reset_due == 0,
+           "J6 %s: the next interrupt is the completion at 1,136,000 cycles (flag %d, other %d)", what, irq_flag, other);
+    EXPECT(reads == reads_before && cdda_sectors_played == played_before && s_dataready_fires == fires_before,
+           "J6 %s: nothing streamed after the Init (sectors read %d, CD-DA sectors %llu, data-ready %llu)", what,
+           reads - reads_before, (unsigned long long)(cdda_sectors_played - played_before),
+           (unsigned long long)(s_dataready_fires - fires_before));
+    EXPECT(mode_reg == 0x20 && s_source_seek_paused == 1, "J5 %s: the completion sets mode %02X and paused %d", what,
+           mode_reg, s_source_seek_paused);
+    acknowledge(0x1f);
+    set_model("PSX_CD_CDDA_MODEL", "");
+}
+
 /* ---- 14.1: the kept checkpoint code takes the state as the stubs leave it ---- */
 static void test_checkpoint(void)
 {
@@ -399,8 +484,10 @@ int main(int argc, char **argv)
     test_second_response_waits();
     test_init(1);
     test_init(0);
+    for (int kind = 0; kind < 4; ++kind)
+        test_init_from_stream(kind);
     test_checkpoint();
     test_default_path();
-    printf("CD source clock rows (spec 14 Q1-Q8, J2-J4): %u checks, %d failures\n", checks, failures);
+    printf("CD source clock rows (spec 14 Q1-Q8, J2-J4, J6): %u checks, %d failures\n", checks, failures);
     return failures != 0;
 }
