@@ -1277,6 +1277,14 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
 
     /* RAM was memcpy'd; force overlay revalidation before resume. */
     overlay_watch_invalidate_after_ram_restore();
+    /* PS1B-513: a state taken in the game, loaded before game entry, sets the
+     * game-start latch without the entry handoff. The rows the interpreter
+     * counted so far are not the game's: move them to the run report's
+     * pre-load sums as entry does, once, on the latch's 0 -> 1 only. */
+    if (s_pending_game_started && !fntrace_is_game_started()) {
+        extern void dirty_ram_pc_table_game_load(void);
+        dirty_ram_pc_table_game_load();
+    }
     fntrace_restore_game_started(s_pending_game_started);
     /* Every device changed at once: the deadline caches keyed on this
      * generation must not reuse a countdown computed before the load. */

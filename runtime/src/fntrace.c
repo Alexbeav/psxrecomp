@@ -59,8 +59,11 @@ void fntrace_mark_game_started(CPUState* cpu) {
     s_game_started = 1;
     extern void dirty_ram_clear_image_baseline(void);
     extern void memory_note_game_entry(void);
+    extern void dirty_ram_pc_table_game_load(void);
     dirty_ram_clear_image_baseline();
     memory_note_game_entry();
+    /* PS1B-513: the interpreter rows so far are the BIOS's, not the game's. */
+    dirty_ram_pc_table_game_load();
     cdrom_notify_game_started();
     boot_state_trigger_capture(cpu);
 }

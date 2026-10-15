@@ -558,6 +558,7 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         in.native_handoffs  = g_dirty_ram_native_handoffs;
         in.table            = g_dirty_ram_pc_table;
         in.table_size       = DIRTY_RAM_PC_TABLE_SIZE;
+        dirty_ram_pc_table_preload(&in.preload);   /* PS1B-513: rows moved at game entry */
         overlay_loader_get_miss_reasons(in.miss[0], in.miss[1]);
         if (psx_interp_report_json(id_report, (int)sizeof(id_report), &in) <= 0)
             snprintf(id_report, sizeof(id_report), "{}");

@@ -32,6 +32,9 @@ void source_gpu_runtime_rederive_returns(void){mutations++;}
 void interrupts_note_state_load(int n){(void)n;mutations++;}
 void overlay_watch_invalidate_after_ram_restore(void){mutations++;}
 void fntrace_restore_game_started(int n){(void)n;mutations++;}
+int fntrace_is_game_started(void){return 0;}
+/* PS1B-513: a load that restores a started game moves the pre-load rows. */
+void dirty_ram_pc_table_game_load(void){mutations++;}
 void interrupts_set_cycles_since_vblank(uint32_t n){(void)n;mutations++;}
 int gpu_vram_dirty_tracking(void){return 0;}
 void gpu_vram_dirty_clear(void){mutations++;}

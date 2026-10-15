@@ -37,13 +37,42 @@ static void put(char *out, int cap, int *n, const char *fmt, ...)
 
 enum { WHERE_KERNEL = 0, WHERE_TEXT, WHERE_OVERLAY, WHERE_COUNT };
 static const char *const k_where[WHERE_COUNT] = { "kernel", "text", "overlay" };
+typedef char where_count_matches_header[(WHERE_COUNT == PSX_INTERP_PLACES) ? 1 : -1];
+
+static int place_of(uint32_t kernel_end, uint32_t text_lo, uint32_t text_hi, uint32_t pc)
+{
+    uint32_t phys = pc & 0x1FFFFFFFu;
+    if (phys < kernel_end) return WHERE_KERNEL;
+    if (phys >= text_lo && phys < text_hi) return WHERE_TEXT;
+    return WHERE_OVERLAY;
+}
 
 static int where_of(const PsxInterpReportInput *in, uint32_t pc)
 {
-    uint32_t phys = pc & 0x1FFFFFFFu;
-    if (phys < in->kernel_end) return WHERE_KERNEL;
-    if (phys >= in->text_lo && phys < in->text_hi) return WHERE_TEXT;
-    return WHERE_OVERLAY;
+    return place_of(in->kernel_end, in->text_lo, in->text_hi, pc);
+}
+
+void psx_interp_preload_close(DirtyRamPcEntry *table, uint32_t table_size,
+                              uint32_t kernel_end, uint32_t text_lo, uint32_t text_hi,
+                              uint64_t frame, PsxInterpPreload *pre)
+{
+    if (!pre) return;
+    for (uint32_t i = 0; table && i < table_size; i++) {
+        DirtyRamPcEntry *e = &table[i];
+        if (e->pc == 0 || e->hits == 0) continue;
+        int w = place_of(kernel_end, text_lo, text_hi, e->pc);
+        pre->addresses[w]++;
+        pre->hits[w] += e->hits;
+        pre->entries[w] += e->entry_hits;
+        e->hits = 0;
+        e->insns = 0;
+        e->entry_hits = 0;
+        e->occ_crc = 0;
+        e->occ_ok = 0;
+        e->last_ext_ra = 0;
+    }
+    pre->game_started = 1;
+    pre->frame = frame;
 }
 
 /* More hits first; the lower address first among equals, so the list does not
@@ -104,6 +133,18 @@ int psx_interp_report_json(char *out, int cap, const PsxInterpReportInput *in)
         put(out, cap, &n, "%s\"%s\": {\"addresses\": %u, \"hits\": %llu, \"entries\": %llu}",
             w ? ", " : "", k_where[w], (unsigned)addresses[w],
             (unsigned long long)hits[w], (unsigned long long)entries[w]);
+    {
+        const PsxInterpPreload *pre = &in->preload;
+        uint32_t pre_used = 0;
+        for (int w = 0; w < WHERE_COUNT; w++) pre_used += pre->addresses[w];
+        put(out, cap, &n, "}, \"preload\": {\"game_started\": %d, \"frame\": %llu, \"addresses\": %u, \"by_place\": {",
+            pre->game_started ? 1 : 0, (unsigned long long)pre->frame, (unsigned)pre_used);
+        for (int w = 0; w < WHERE_COUNT; w++)
+            put(out, cap, &n, "%s\"%s\": {\"addresses\": %u, \"hits\": %llu, \"entries\": %llu}",
+                w ? ", " : "", k_where[w], (unsigned)pre->addresses[w],
+                (unsigned long long)pre->hits[w], (unsigned long long)pre->entries[w]);
+        put(out, cap, &n, "}");
+    }
     put(out, cap, &n, "}, \"hottest_max\": %d, \"hottest\": [", PSX_INTERP_REPORT_HOTTEST);
     for (int i = 0; i < top_n; i++) {
         const DirtyRamPcEntry *e = top[i];

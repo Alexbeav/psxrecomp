@@ -278,6 +278,15 @@ The array is emitted inline and truncates before the trailing bitmap
 diagnostics when the response buffer fills; a partial list is still valid JSON
 (the cut lands between rows). Poll periodically to accumulate coverage.
 
+At game entry the counts of every row are cleared (PS1B-513): what ran before
+it, the BIOS intro among it, moves to the run report's
+`interp_detail.per_address.preload` (`docs/RUN_REPORT_INTERP_DETAIL.md`). A row
+with no hits is left out, so a row that ran only before game entry drops out of
+`per_pc`, and one that runs again counts again from 0. Counts fall at that one
+moment: a delta taken across game entry is not a rate, and
+`tools/stall_report.py` stops on it with "counter reset". Take both snapshots
+after game entry.
+
 ---
 
 ## Rule when the server can't answer your question

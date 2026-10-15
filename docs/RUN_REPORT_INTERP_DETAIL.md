@@ -19,6 +19,10 @@ debug server, so this is the only place where a start says it.
                     "by_place": {"kernel": {"addresses": 14, "hits": 3849, "entries": 3849},
                                  "text": {"addresses": 2196, "hits": 71128211, "entries": 880231},
                                  "overlay": {"addresses": 0, "hits": 0, "entries": 0}},
+                    "preload": {"game_started": 1, "frame": 1841, "addresses": 1544,
+                                "by_place": {"kernel": {"addresses": 5, "hits": 367000, "entries": 367000},
+                                             "text": {"addresses": 1300, "hits": 23000000, "entries": 1000000},
+                                             "overlay": {"addresses": 239, "hits": 76000, "entries": 76000}}},
                     "hottest_max": 32, "hottest": [
       {"pc": "0x80064D80", "place": "text", "hits": 2364000, "entries": 2364000, "insns": 40188000,
        "last_caller_ra": "0x80064164", "unit_crc": "0x53132191", "unit_valid": 0}
@@ -68,8 +72,23 @@ code.
 ## per_address
 
 The interpreter keeps one row per block entry address it ran. `addresses` is
-the number of rows in use; `by_place` sums them per place. `hottest` lists the
+the number of rows with hits; `by_place` sums them per place. `hottest` lists the
 `hottest_max` rows with the most hits, the hottest first.
+
+`addresses`, `by_place` and `hottest` count what ran after game entry
+(PS1B-513). Before that, with a real BIOS intro (`fast_boot` false and the
+BIOS run as recompiled code, not by the HLE boot), the BIOS shell runs from RAM
+0x30000 and up. Its addresses lie inside the game's text or overlay range, so a
+place decided from the game's ranges called them the game's: on the EU BIOS
+(SCPH-5552) 0x000597E8, 0x0005981C and 0x00059774 were the hottest "text"
+addresses of every title. At game entry (the latch that also clears the text
+image baseline, `fntrace_mark_game_started`) each row's counts are moved to
+`preload` and cleared. The row keeps its address, so the table's lookups are
+unchanged, and an address that runs again after entry counts again from 0.
+`table_size` is still the size of the whole table: rows moved at entry stay in
+it. So `addresses` no longer counts every row in use: the rows in use are at
+most `addresses` plus `preload.addresses` (a row that ran on both sides of game
+entry is in both). A reader that judges how full the table is uses that sum.
 
 | Field | Meaning |
 | --- | --- |
@@ -78,6 +97,28 @@ the number of rows in use; `by_place` sums them per place. `hottest` lists the
 | `insns` | Instructions run from this address. |
 | `last_caller_ra` | The guest return address at the last such arrival: who called it. |
 | `unit_crc`, `unit_valid` | The compiled overlay unit whose ranges cover the address at that time, and whether its code matched. 0 and 0: no unit covers it. A CRC with `unit_valid` 0: a unit exists, but its code is not the code in RAM. |
+
+### per_address.preload
+
+What the interpreter ran before game entry, by the same places. It sits next
+to `by_place`, so a reader that sums the keys of `by_place` still reads three
+places.
+
+| Field | Meaning |
+| --- | --- |
+| `game_started` | 1 when game entry moved the rows. 0: the game was never entered in this start (it stopped in the BIOS), and `by_place` and `hottest` hold everything that ran. |
+| `frame` | The frame of the move: the frame of game entry. A start that enters the game twice (the game range armed again) shows the second. |
+| `addresses` | The rows moved, summed over the places. A row moved at two entries counts twice. |
+| `by_place` | Per place: rows moved, their hits and their entries. |
+
+`by_place` plus `preload.by_place`, place by place, is what `by_place` held
+before this change: everything the interpreter ran since power-on. A reader
+that wants the old meaning adds the two. A resume of a state taken in the
+game (a TAS or replay resume that restores the game-start latch) moves the
+rows the same way, with that frame.
+
+The `dirty_ram_stats` debug command reads the same table, so its `per_pc`
+rows also start again at game entry.
 
 ## loader_miss
 
@@ -103,6 +144,10 @@ sums of the reasons, taken when the report is written.
 `disp_interp` counts loader lookups that found no native unit. The interpreter
 then may still decline the target, so `per_address` is the record of what was
 interpreted.
+
+`loader_miss`, `disp_interp` and the `interpreter` totals still count from
+power-on: with a real BIOS intro they include the BIOS's share, which
+`per_address.preload` shows.
 
 ## overlay_capture_queue
 
@@ -142,4 +187,5 @@ the queue are still tried again.
 The object is built when the report is written. During play the added work
 is one counter increment at each exit of the loader's dispatch that ends in
 the interpreter, and one local variable set to 0 in that function. A native
-dispatch passes none of the increments.
+dispatch passes none of the increments. Game entry walks the per-address
+table once (262,144 rows) to move the pre-load counts.
