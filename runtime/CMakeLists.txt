@@ -198,6 +198,15 @@ if(BUILD_TESTING)
     else()
         message(STATUS "low_ram_game_entry_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
     endif()
+    # PS1B-506: word and half loads from KSEG2 read 0 and are counted, as the
+    # byte load is. Links the real memory.c; same link helper as above.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+            OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        add_test(NAME kseg2_inline_load_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kseg2_inline_load.py --cc ${CMAKE_C_COMPILER})
+    else()
+        message(STATUS "kseg2_inline_load_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
+    endif()
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_test(NAME break_guest_vector_interp_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_break_guest_vector_interp.py --cc ${CMAKE_C_COMPILER})

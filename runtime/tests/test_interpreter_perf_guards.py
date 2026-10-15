@@ -36,6 +36,7 @@ def main():
     cyc_header = (ROOT / "runtime/include/psx_cyc.h").read_text(encoding="utf-8")
     instr_cost = (ROOT / "runtime/include/psx_instr_cost.h").read_text(encoding="utf-8")
     starvation = (ROOT / "runtime/include/starvation_ring.h").read_text(encoding="utf-8")
+    inline_loads_exclude_kseg2(cyc_header)
 
     record = body(interp, "exec_pc_table_record")
     if "uint32_t *slot = &g_dirty_ram_exec_pc_bitmap[word >> 5]" not in record:
@@ -356,6 +357,15 @@ def main():
 
     print("PASS: capture/cache and interpreter cycle hot-path guards intact")
     return 0
+
+
+def inline_loads_exclude_kseg2(cyc_header):
+    """KSEG2 is not main RAM: the inline word and half loads leave it to the
+    slow readers, which return 0 and count g_kseg2_ignored_reads (PS1B-506).
+    The control is in test_kseg2_inline_load.py."""
+    for fn in ("psx_cyc_load_word", "psx_cyc_load_half"):
+        if "addr < UINT32_C(0xC0000000) && physical < UINT32_C(0x800000)" not in body(cyc_header, fn):
+            raise AssertionError(f"{fn} main-RAM fast path does not exclude KSEG2")
 
 
 if __name__ == "__main__":
