@@ -1987,6 +1987,17 @@ bool mod_runtime_prepare_resources(const std::filesystem::path& disc_path, std::
     HostLaunchTimingScope timing(HOST_LAUNCH_PREPARE_RESOURCES);
     RuntimeMods& s = state();
     if (!s.initialized) { timing.success(); return true; }
+    // Cold lobby offers prepare without committing a plan. Establish their
+    // selected disc identity too; final commit independently revalidates it.
+    if (!disc_path.empty() && (disc_path != s.disc_path || s.disc_sha256.empty())) {
+        std::string digest;
+        if (!measured_disc_digest(disc_path, digest, &s.error)) {
+            if (error) *error = s.error;
+            return false;
+        }
+        s.disc_path = disc_path;
+        s.disc_sha256 = std::move(digest);
+    }
     const auto media_cache = media_cache_root();
     if (!s.manager.prepare_resources(s.game_id, disc_path, media_cache, &s.error, s.cached_prepare,
             active_prepare_progress ? *active_prepare_progress : ModPrepareProgress{})) {
@@ -2154,7 +2165,9 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
          host_file_identity(resolve_disc_path(disc_path).data, inputs.data_identity));
 #endif
 #if !defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
-    if (disc_path != s.disc_path)
+    // Offline legacy commits retain path-based digest reuse. A netplay commit
+    // must remeasure even after a same-path lobby offer was prepared.
+    if (!save_selection || disc_path != s.disc_path)
 #endif
     {
         std::string hash_error, digest;
@@ -2238,7 +2251,9 @@ const std::string& mod_runtime_session_plan_fp() {
 std::string mod_runtime_plan_fingerprint_portable() {
     RuntimeMods& s = state();
     if (!s.initialized) return {};
-    ModResolution plan = s.manager.resolve(s.game_id, s.exe_sha256, std::string());
+    // Portable means independent of machine-local paths, not disc identity.
+    // Exact-disc overlays must retain the source qualification used at commit.
+    ModResolution plan = s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
     if (!plan.ok || !netplay_resources_verified(plan)) return {};
     return plan.fingerprint;
 }

@@ -1263,6 +1263,26 @@ int main(int argc, char** argv) {
         check(!PSXRecompV4::mod_runtime_prepare_for_launcher(raw_path,&error,
             [&](float fraction,const std::string&){++reports;return fraction<1.0f;}),"cancel before installing prepared plan");
         check(reports>1 && error=="Preparation canceled.","runtime propagates cooperative cancellation");
+        check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"cold offer overlay initialize");
+        check(PSXRecompV4::mod_runtime_prepare_resources(raw_path,&error),"cold offer prepares exact-disc resources without commit");
+        const auto offer_fp=PSXRecompV4::mod_runtime_plan_fingerprint_portable();
+        check(offer_fp.size()==64 && PSXRecompV4::mod_runtime_fingerprint().empty(),"cold offer qualifies disc without installing a plan");
+        check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"cold LAN overlay initialize");
+        test_match_caps={};
+        check(PSXRecompV4::mod_runtime_commit_for_direct_netplay(raw_path,&error),"cold LAN accepts exact-disc resource overlay");
+        check(PSXRecompV4::mod_runtime_session_plan_fp()==offer_fp &&
+              PSXRecompV4::mod_runtime_plan_fingerprint_portable()==offer_fp &&
+              PSXRecompV4::mod_runtime_fingerprint()==offer_fp,"offer and committed exact-disc identities agree");
+        PSXRecompV4::mod_runtime_end_netplay();
+        const auto changed_disc=folder/"offered.bin";
+        write_bytes(changed_disc,raw_iso);
+        check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"changed offer overlay initialize");
+        check(PSXRecompV4::mod_runtime_prepare_resources(changed_disc,&error),"prepare source before same-path mutation");
+        auto changed_bytes=raw_iso;changed_bytes[10]^=1; // Outside every stock overlay guard range.
+        write_bytes(changed_disc,changed_bytes);
+        check(!PSXRecompV4::mod_runtime_commit_for_direct_netplay(changed_disc,&error),"final LAN commit rejects same-path changed source identity");
+        check(PSXRecompV4::mod_runtime_session_plan_fp().empty(),"changed offer cannot install session identity");
+        check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"restore original overlay selection");
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(raw_path,&error),"prepare verified resource-backed overlay");
         mod_runtime_enable_disc_patches();
         fs::remove(pack_path,ec); // Committed bytes must remain immutable and resident.
