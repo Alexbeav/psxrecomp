@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 import importlib.util
 import io
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import tempfile
@@ -18,6 +18,9 @@ SPEC.loader.exec_module(guard)
 ALEX = ('Alexandros Mandravillis', 'Alexbeav@live.com')
 BAD = ('unlisted fixture', 'fixture@example.invalid')
 INSTALLER = Path(__file__).with_name('install_public_push_guard.py').resolve()
+INSTALLER_SPEC = importlib.util.spec_from_file_location('installer', INSTALLER)
+installer = importlib.util.module_from_spec(INSTALLER_SPEC)
+INSTALLER_SPEC.loader.exec_module(installer)
 CHECKER = Path(__file__).with_name('check_public_commits.py').resolve()
 
 
@@ -29,11 +32,12 @@ def run(*args, data=None, env=None):
 def fixture_parent():
     """Return the folder that holds the fixtures, or None for the default.
 
-    The installer refuses a hook folder on C: on Windows, and the default
-    temporary folder is on C: there. The working directory is used then,
-    because ctest starts this file in the build tree.
+    On a host whose C: is the small system drive, the installer refuses a
+    hook folder on C:, and the default temporary folder is on C: there. The
+    working directory is used then, because ctest starts this file in the
+    build tree.
     """
-    if sys.platform == 'win32' and Path(tempfile.gettempdir()).resolve().drive.upper() == 'C:':
+    if installer.refuses_drive_c() and Path(tempfile.gettempdir()).resolve().drive.upper() == 'C:':
         here = Path.cwd().resolve()
         if here.drive.upper() != 'C:':
             return str(here)
@@ -282,6 +286,87 @@ class GuardTests(unittest.TestCase):
             self.skipTest('directory symlink privilege unavailable')
         self.refused('hook target resolves outside this clone hook directory')
         self.assertFalse(outside.exists())
+
+
+class DriveRuleTests(unittest.TestCase):
+    def test_drive_c_is_refused_only_on_the_small_system_drive_host(self):
+        for platform, host, refused in (('win32', 'EAGLE', True), ('win32', 'eagle', True),
+                                        ('win32', 'PEGASUS', False), ('win32', '', False), ('linux', 'EAGLE', False)):
+            with self.subTest(platform=platform, host=host), patch.object(installer.sys, 'platform', platform), \
+                    patch.object(installer.platform, 'node', return_value=''), patch.dict(os.environ, COMPUTERNAME=host):
+                self.assertEqual(installer.refuses_drive_c(), refused)
+
+    def test_empty_or_missing_computername_falls_back_to_the_node_name(self):
+        for node, refused in (('Eagle', True), (' eagle ', True), ('Pegasus', False), ('', False)):
+            for blank in ('', '  ', None):
+                with self.subTest(node=node, computername=blank), patch.object(installer.sys, 'platform', 'win32'), \
+                        patch.object(installer.platform, 'node', return_value=node), patch.dict(os.environ):
+                    if blank is None:
+                        os.environ.pop('COMPUTERNAME', None)
+                    else:
+                        os.environ['COMPUTERNAME'] = blank
+                    self.assertEqual(installer.refuses_drive_c(), refused)
+        # A set COMPUTERNAME wins over the node name.
+        with patch.object(installer.sys, 'platform', 'win32'), patch.object(installer.platform, 'node', return_value='Eagle'), \
+                patch.dict(os.environ, COMPUTERNAME='PEGASUS'):
+            self.assertFalse(installer.refuses_drive_c())
+
+    def test_hook_folder_on_c_follows_the_host_name_without_writing_anything(self):
+        # Pure paths: the check reads only the drive letter, so no folder is made on C:.
+        on_c = PureWindowsPath('C:/work/clone/.git/hooks')
+        on_d = PureWindowsPath('D:/work/clone/.git/hooks')
+        for host, folder, refused in (('EAGLE', on_c, True), ('eagle', on_c, True), ('EAGLE', on_d, False),
+                                      ('PEGASUS', on_c, False), ('PEGASUS', on_d, False), ('', on_c, False)):
+            with self.subTest(host=host, folder=str(folder)), patch.object(installer.sys, 'platform', 'win32'), \
+                    patch.object(installer.platform, 'node', return_value=''), patch.dict(os.environ, COMPUTERNAME=host):
+                if refused:
+                    with self.assertRaisesRegex(ValueError, 'refusing to write a hook on C:'):
+                        installer.check_hook_drive(folder)
+                else:
+                    installer.check_hook_drive(folder)
+
+
+class WriteReached(Exception):
+    """Raised by the fake folder type at the first write, so nothing is written."""
+
+
+class FakeWindowsPath(PureWindowsPath):
+    """A Windows path that exists nowhere: the same on every host, and it cannot write."""
+    def resolve(self, strict=False):
+        return self
+
+    def exists(self):
+        return False
+
+    def mkdir(self, *args, **kwargs):
+        raise WriteReached(str(self))
+
+
+class InstallDriveTests(unittest.TestCase):
+    """install() itself, with git and the folder type faked: the drive rule must be wired into it."""
+
+    def install(self, host, hooks):
+        git_dir = hooks.rsplit('/', 1)[0]
+
+        def fake_git(args, **kwargs):
+            if args[:3] == ['git', 'config', '--get']:
+                return subprocess.CompletedProcess(args, 1, b'', b'')
+            out = hooks if '--git-path' in args else git_dir
+            return subprocess.CompletedProcess(args, 0, out + '\n', '')
+
+        with patch.object(installer.sys, 'platform', 'win32'), patch.object(installer.platform, 'node', return_value=''),                 patch.dict(os.environ, COMPUTERNAME=host), patch.object(installer, 'Path', FakeWindowsPath),                 patch.object(installer.subprocess, 'run', side_effect=fake_git),                 patch.object(installer.shutil, 'copyfile', side_effect=WriteReached):
+            installer.install()
+
+    def test_install_refuses_c_before_any_write_on_eagle_only(self):
+        hooks = 'C:/work/clone/.git/hooks'
+        for host in ('EAGLE', 'eagle'):
+            with self.subTest(host=host), self.assertRaisesRegex(ValueError, 'refusing to write a hook on C:'):
+                self.install(host, hooks)
+        for host in ('PEGASUS', ''):
+            with self.subTest(host=host), self.assertRaises(WriteReached):
+                self.install(host, hooks)
+        with self.subTest(host='EAGLE', folder='D:'), self.assertRaises(WriteReached):
+            self.install('EAGLE', 'D:/work/clone/.git/hooks')
 
 
 if __name__ == '__main__':
