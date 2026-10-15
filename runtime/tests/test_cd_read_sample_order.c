@@ -17,7 +17,7 @@
 #include "../src/memory.c"
 
 /* The guest clock and the deadline bookkeeping that psx_cycles.c owns. */
-uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_cycle_fast_limit, g_psx_device_gen;
+uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_device_gen;
 int psx_in_device_service, g_event_step_conservative, g_ls_replay_active, g_psx_cyc_bb_defer;
 uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit, *g_psx_cyc_local_acc, g_dma_cpu_read_wait;
 void psx_advance_cycles_slow(uint32_t cycles) { (void)cycles; abort(); }

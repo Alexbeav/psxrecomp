@@ -43,7 +43,7 @@ int g_ls_mode, g_precise_mode, g_psx_call_bail;
 static int run_case(uint64_t start, uint32_t future, int chopped) {
     setup(512,start);
     s_devices_synced_cycle=start;s_next_watchdog=s_next_pc_sample=UINT64_MAX;
-    psx_in_device_service=0;g_psx_cycle_fast_limit=0;g_psx_cyc_batch=0;
+    psx_in_device_service=0;g_psx_cyc_batch=0;
     timer_due=future?start+future:0;timer_events=0;timer_fired_cycle=dma_irq_cycle=0;
     channels[3].madr=0xB070;channels[3].bcr=0x00010200;
     channels[3].chcr=0;

@@ -8,7 +8,7 @@
 #pragma GCC diagnostic ignored "-Wmisleading-indentation"
 #include "source_gpu_runtime.h"
 #pragma GCC diagnostic pop
-uint64_t psx_cycle_count, g_psx_cycle_fast_limit, psx_next_service_cycle;
+uint64_t psx_cycle_count, psx_next_service_cycle;
 void (*g_psx_cpu_step_boundary_callback)(CPUState *, uint32_t, uint64_t);
 uint64_t psx_get_cycle_count(void) {return psx_cycle_count;}
 void dma_source_gpu_service_at(uint64_t cycle) {assert(cycle == psx_cycle_count);}
