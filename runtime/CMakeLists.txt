@@ -620,7 +620,7 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
         add_executable(${_target} tests/test_sio_port_device_identity.c)
         target_include_directories(${_target} PRIVATE include)
         target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
-        foreach(_profile IN ITEMS 0 1 2 3)
+        foreach(_profile IN ITEMS 0 1 2 3 4)
             add_test(NAME ${_target}_${_profile} COMMAND ${_target} ${_profile})
             add_test(NAME ${_target}_${_profile}_mouse_roundtrip
                 COMMAND ${_target} ${_profile} --touch-mouse)

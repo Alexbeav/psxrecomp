@@ -77,6 +77,7 @@ static void source_profile(const char *profile) {
 int main(void) {
     source_profile("nymashock-1.29.0-dualshock");
     source_profile("octoshock-2.2.2-digital");   /* the digital pad has the same DTR rule */
+    source_profile("nymashock-2.8-gamepad");     /* and so does the 2.8 plain gamepad profile */
     /* Negative control: the default profile keeps its device routing. */
     boot("");
     sio_write(0x1F80104A, 0); sio_write(0x1F80104A, 0x1003);

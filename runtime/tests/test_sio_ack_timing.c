@@ -29,11 +29,17 @@ int memcard_write_sector(int slot,int sector,const uint8_t *buf) { (void)slot;(v
 void memcard_flush(int slot) { (void)slot; }
 static void advance(unsigned n) { while(n--) { clock_now++;sio_advance(1); } }
 
+/* source: 0 default, 1 octoshock-2.2.2-digital, 2 nymashock-1.29.0-dualshock,
+ * 3 nymashock-2.8-gamepad (a plain digital pad on the 2.8 core), 4 the 1.29.0
+ * DualShock profile driving a pad whose config mode is off. */
+static const char *ack_name(int source) {
+    return source==4||source==2?"nymashock-1.29.0-dualshock":source==3?"nymashock-2.8-gamepad":source?"octoshock-2.2.2-digital":"";
+}
 static void setup(int source, int irq) {
 #ifdef _WIN32
-    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",source==2?"nymashock-1.29.0-dualshock":source?"octoshock-2.2.2-digital":"");
+    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",ack_name(source));
 #else
-    setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",source==2?"nymashock-1.29.0-dualshock":source?"octoshock-2.2.2-digital":"",1);
+    setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",ack_name(source),1);
 #endif
     clock_now=0; i_stat=1u<<9;
     sio_init(); sio_connect_pad(0); sio_set_pad_config_capable(0,source==2);
@@ -53,7 +59,7 @@ int main(void) {
     assert(sio_snapshot_bytes()>0);
 
     /* Source pulse is independent of reads and of IRQ enable. */
-    for(int profile=1;profile<=2;profile++) for(int irq=0;irq<2;irq++)
+    for(int profile=1;profile<=3;profile++) for(int irq=0;irq<2;irq++)
     for(int analog=0;analog<=(profile==2);analog++) {
         setup(profile,irq);
         if(analog) sio_set_pad_analog(0,1,128,128,128,128);
@@ -68,6 +74,17 @@ int main(void) {
         assert(sio_snapshot_bytes()>0 &&
                !sio_snapshot_read(NULL,0));
     }
+    /* A plain pad on the 1.29.0 DualShock profile keeps the default ACK
+     * delay: only the plain-gamepad profile times it at 64 cycles. */
+    setup(4,1); sio_write(0x1F801040,1);
+    advance(1088+63);assert(!(stat()&0x80));advance(1);
+    assert(!(stat()&0x80));
+    advance(1000);assert(stat()&0x80);
+    /* The plain-gamepad profile follows the pad's config capability, as the
+     * 1.29.0 DualShock profile does: a config-capable pad is also timed. */
+    setup(3,1); sio_set_pad_config_capable(0,1); sio_write(0x1F801040,1);
+    advance(1088+63);assert(!(stat()&0x80));advance(1);
+    assert(stat()&0x80);
     /* CTRL ACK clears only IRQ; source intentionally does not reassert it. */
     setup(1,1);sio_write(0x1F801040,1);jump(1152);
     sio_write(0x1F80104A,0x1013);assert(!(stat()&0x200));assert(stat()&0x80);
