@@ -19,10 +19,12 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -102,6 +104,9 @@ def play(part):
         time.sleep(60)
         return 0
     if part == "holds-pid":
+        # The parent is the tool's supervisor. It outlives this program by a moment after a kill, and
+        # it too has the test's folder as its working folder. The pid file comes last: it is the signal.
+        Path("setup.ppid").write_text(str(os.getppid()), encoding="utf-8")
         Path("setup.pid").write_text(str(os.getpid()), encoding="utf-8")
         time.sleep(60)
         return 0
@@ -144,7 +149,8 @@ def process_alive(pid):
 
 def setup_pid(folder):
     marker = Path(folder, "setup.pid")
-    deadline = time.monotonic() + 10
+    # A ceiling that only bounds a hang: on a loaded host two process starts can take many seconds.
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if marker.is_file():
             value = marker.read_text(encoding="utf-8")
@@ -168,6 +174,62 @@ def clean_stand_in(pid):
         os.kill(pid, signal.SIGTERM)
         if not wait_for_stop(pid) and os.name != "nt":
             os.kill(pid, signal.SIGKILL)
+
+
+def hold_folder(folder):
+    """A running process that has `folder` as its working folder until its stdin is closed."""
+    holder = subprocess.Popen([sys.executable, "-c", "import sys; print('up', flush=True); sys.stdin.read()"],
+                              cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    holder.stdout.readline()                # the working folder is taken at the start, before this line
+    return holder
+
+
+def release_holder(holder):
+    for stream in (holder.stdin, holder.stdout):
+        stream.close()
+    holder.wait(timeout=10)
+
+
+# How long a folder may stay held after the processes that used it have stopped. A ceiling that
+# only bounds a hang: a folder that is free is removed at once.
+FOLDER_FREE_SECONDS = 30
+
+
+def remove_folder(folder, holders=None, seconds=FOLDER_FREE_SECONDS):
+    """Remove `folder`, waiting for the processes that just stopped to let go of it (PS1B-502).
+
+    On Windows a folder that was the working folder of a process cannot be removed until that
+    process is gone, and a process the test has seen stop can keep it a moment longer. The tool's
+    supervisor outlives the setup program it kills, and under load the gap is long enough to make
+    an immediate removal fail with WinError 32. So the removal is retried until the deadline. A
+    folder still held after it fails the test, naming the processes the test knew of and which of
+    them are still running. `holders` maps a name to a pid.
+    """
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            shutil.rmtree(folder)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                known = ["%s (pid %d) is %s" % (name, pid, "still running" if process_alive(pid) else "stopped")
+                         for name, pid in (holders or {}).items()]
+                raise AssertionError("the temporary folder %s was still in use %d s after the test finished: %s; %s"
+                                     % (folder, seconds, exc, "; ".join(known) or "no process was recorded")) from exc
+            time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def scratch_folder(holders=None):
+    """A temporary folder like tempfile.TemporaryDirectory, removed with remove_folder."""
+    folder = tempfile.mkdtemp()
+    try:
+        yield folder
+    finally:
+        remove_folder(folder, holders)
 
 
 class PlainStart(unittest.TestCase):
@@ -199,14 +261,18 @@ class PlainStart(unittest.TestCase):
             self.assertIn("  | " + lines[-1], printed.getvalue())
 
     def test_a_killed_tool_stops_its_setup_program(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        holders = {}
+        with scratch_folder(holders) as tmp:
             wrapper = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--hold-tool", tmp],
                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL,
                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            holders["the killed tool"] = wrapper.pid
             pid = None
             try:
                 pid = setup_pid(tmp)
+                holders["the setup program"] = pid
+                holders["the tool's supervisor"] = int(Path(tmp, "setup.ppid").read_text(encoding="utf-8"))
                 self.assertTrue(process_alive(pid), "the stand-in must be alive before the tool is killed")
                 wrapper.kill()
                 wrapper.wait(timeout=10)
@@ -218,8 +284,57 @@ class PlainStart(unittest.TestCase):
                 if pid is not None:
                     clean_stand_in(pid)
 
+    # The two parts below hold a folder with a running process, which only Windows refuses to remove.
+    @unittest.skipUnless(os.name == "nt", "skipped: only Windows refuses to remove a running process's folder")
+    def test_a_folder_held_for_a_moment_is_removed_when_its_holder_stops(self):
+        folder = tempfile.mkdtemp()
+        holder = hold_folder(folder)
+        refused = threading.Event()
+        real_rmtree = shutil.rmtree
+
+        def counting_rmtree(path, *args, **kwargs):
+            try:
+                real_rmtree(path, *args, **kwargs)
+            except OSError:
+                refused.set()
+                raise
+
+        def let_go():
+            # Only after the removal has been refused once, so the retry is what is tested.
+            if refused.wait(timeout=30):
+                time.sleep(0.2)
+            release_holder(holder)
+
+        releaser = threading.Thread(target=let_go)
+        releaser.start()
+        try:
+            with mock.patch.object(shutil, "rmtree", counting_rmtree):
+                remove_folder(folder, {"the holder": holder.pid})
+            self.assertTrue(refused.is_set(), "the folder was never held, so no retry was tested")
+            self.assertFalse(os.path.exists(folder))
+        finally:
+            refused.set()
+            releaser.join(timeout=30)
+            shutil.rmtree(folder, ignore_errors=True)
+
+    @unittest.skipUnless(os.name == "nt", "skipped: only Windows refuses to remove a running process's folder")
+    def test_a_folder_that_stays_held_fails_after_the_deadline_and_names_its_holder(self):
+        folder = tempfile.mkdtemp()
+        holder = hold_folder(folder)
+        try:
+            began = time.monotonic()
+            with self.assertRaises(AssertionError) as caught:
+                remove_folder(folder, {"the holder": holder.pid}, seconds=1)
+            self.assertGreaterEqual(time.monotonic() - began, 1.0, "it must wait for the deadline before it fails")
+            self.assertIn("the holder (pid %d) is still running" % holder.pid, str(caught.exception))
+            self.assertTrue(os.path.isdir(folder))
+        finally:
+            release_holder(holder)
+        remove_folder(folder)
+        self.assertFalse(os.path.exists(folder))
+
     def test_an_interrupted_tool_stops_its_setup_program_and_cleans_its_folders(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with scratch_folder() as tmp:
             pids = []
 
             def interrupt(*_args, **_kwargs):
