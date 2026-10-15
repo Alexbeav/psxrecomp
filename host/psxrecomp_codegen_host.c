@@ -606,6 +606,27 @@ static void toolchain_text_new_pack_failed(char* out, size_t cap, const char* st
              "toolchain was not changed.", step);
 }
 
+/* The download into the temporary folder, and the put back of the installed
+ * pack (PS1B-488). tools/toolchain_pack.py holds both word for word. */
+#define TOOLCHAIN_DOWNLOAD_NO_FOLDER "the temporary folder could not be created"
+#define TOOLCHAIN_DOWNLOAD_NO_WRITE \
+    "the pack could not be written into the temporary folder"
+
+static void toolchain_text_download_failed(char* out, size_t cap, const char* reason) {
+    snprintf(out, cap,
+             "The toolchain pack was not downloaded: %s. The installed "
+             "toolchain was not changed. Check the free space and the "
+             "permissions of the temporary folder, then try again.", reason);
+}
+
+static void toolchain_text_put_back_failed(char* out, size_t cap, const char* step) {
+    snprintf(out, cap,
+             "The new toolchain pack did not pass its check: %s. The installed "
+             "toolchain could not be put back under its name. It was left in "
+             "the same place, with .old- at the start of its name. Download the "
+             "latest pack to install the toolchain again.", step);
+}
+
 /* `error` is GetLastError() on Windows and errno elsewhere, from the rename. */
 static void toolchain_text_rename_failed(char* out, size_t cap, long error) {
 #if defined(_WIN32)
@@ -3125,13 +3146,22 @@ static int host_download_url_to_file(const char* url, const char* dest,
              "curl.exe -fsSL --retry 3 --retry-delay 2 -o \"%s\" \"%s\"", dest,
              url);
     if (!run_cmdline_wait(cmd, &code) || code != 0) {
-        snprintf(err_msg, err_cap,
-                 "Toolchain download failed (curl exit %lu). Check network / "
-                 "curl.exe.",
-                 (unsigned long)code);
+        if (code == 23)   /* curl's write error: nothing could be written */
+            toolchain_text_download_failed(err_msg, err_cap,
+                                           TOOLCHAIN_DOWNLOAD_NO_WRITE);
+        else
+            snprintf(err_msg, err_cap,
+                     "Toolchain download failed (curl exit %lu). Check network / "
+                     "curl.exe.",
+                     (unsigned long)code);
         return 0;
     }
-    return path_is_file(dest);
+    if (!path_is_file(dest)) {   /* curl is done and the pack is not there */
+        toolchain_text_download_failed(err_msg, err_cap,
+                                       TOOLCHAIN_DOWNLOAD_NO_WRITE);
+        return 0;
+    }
+    return 1;
 }
 
 static int host_extract_zip(const char* zip_path, const char* dest_dir,
@@ -3191,6 +3221,7 @@ static int host_download_url_to_file(const char* url, const char* dest,
                                      char* err_msg, size_t err_cap) {
     char cmd[4096];
     char parent[1400];
+    int status;
     if (!dirname_copy(parent, sizeof(parent), dest)) {
         snprintf(err_msg, err_cap, "Bad download destination.");
         return 0;
@@ -3199,11 +3230,21 @@ static int host_download_url_to_file(const char* url, const char* dest,
     unlink(dest);
     snprintf(cmd, sizeof(cmd),
              "curl -fsSL --retry 3 --retry-delay 2 -o \"%s\" \"%s\"", dest, url);
-    if (system(cmd) != 0) {
-        snprintf(err_msg, err_cap, "Toolchain download failed (curl).");
+    status = system(cmd);
+    if (status != 0) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 23)   /* curl's write error */
+            toolchain_text_download_failed(err_msg, err_cap,
+                                           TOOLCHAIN_DOWNLOAD_NO_WRITE);
+        else
+            snprintf(err_msg, err_cap, "Toolchain download failed (curl).");
         return 0;
     }
-    return path_is_file(dest);
+    if (!path_is_file(dest)) {   /* curl is done and the pack is not there */
+        toolchain_text_download_failed(err_msg, err_cap,
+                                       TOOLCHAIN_DOWNLOAD_NO_WRITE);
+        return 0;
+    }
+    return 1;
 }
 
 static int host_extract_zip(const char* zip_path, const char* dest_dir,
@@ -3606,10 +3647,13 @@ static int host_install_toolchain_from_zip(
             if (back && unwrap_toolchain_pack_root(dest, pack, sizeof(pack)))
                 set_toolchain_latest_pointer(cache_root, pack);
         }
-        /* The check's own sentence when the check named a step and the installed
-         * pack is what it was; the older text otherwise. */
+        /* The check's own sentence when the check named a step: the one that
+         * says the installed pack is what it was, or the one that says it is
+         * left under its dot-name. The older text otherwise. */
         if (g_tc_check_step[0] && back)
             toolchain_text_new_pack_failed(err_msg, err_cap, g_tc_check_step);
+        else if (g_tc_check_step[0])
+            toolchain_text_put_back_failed(err_msg, err_cap, g_tc_check_step);
         else
             snprintf(err_msg, err_cap,
                      "Extracted toolchain but cmake.exe is missing or will not run "
@@ -3647,6 +3691,11 @@ static int host_download_and_install_toolchain(
     snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/psxrecomp-tc-%d", (int)getpid());
 #endif
     mkdir_p(tmp_dir);
+    if (!path_is_dir(tmp_dir)) {
+        toolchain_text_download_failed(err_msg, err_cap,
+                                       TOOLCHAIN_DOWNLOAD_NO_FOLDER);
+        return 0;
+    }
     if (!join_path(zip_path, sizeof(zip_path), tmp_dir, asset)) {
         snprintf(err_msg, err_cap, "Temp path too long.");
         return 0;

@@ -133,6 +133,23 @@ def s3(error: int, windows: bool = WINDOWS) -> str:
     return "The installed toolchain folder could not be renamed (system error %d). The toolchain was not changed." % error
 
 
+# Two more (PS1B-488): the pack could not be downloaded into the temporary folder, and the
+# installed pack could not be put back after the new pack failed its check.
+D_REASONS = ("the temporary folder could not be created",
+             "the pack could not be written into the temporary folder")
+
+
+def sd(reason: str) -> str:
+    return ("The toolchain pack was not downloaded: %s. The installed toolchain was not changed. "
+            "Check the free space and the permissions of the temporary folder, then try again." % reason)
+
+
+def sp(step: str) -> str:
+    return ("The new toolchain pack did not pass its check: %s. The installed toolchain could not be put "
+            "back under its name. It was left in the same place, with .old- at the start of its name. "
+            "Download the latest pack to install the toolchain again." % step)
+
+
 DEAD_PID = 99999999      # no process has this id: a set-aside folder of an owner that has ended
 
 
@@ -154,8 +171,9 @@ def make_pack(root: Path, version: str = "1.0.14", marker: str = "", stub: Path 
 
 
 def make_zip(path: Path, version: str = "1.0.14", marker: str = "new.txt", stub: Path | None = None,
-             tools: tuple = PACK_TOOLS) -> Path:
-    """The zip of a pack, with the Unix modes a real pack's zip records."""
+             tools: tuple = PACK_TOOLS, overrides: dict | None = None) -> Path:
+    """The zip of a pack, with the Unix modes a real pack's zip records. `overrides` maps a
+    tool name to the program that stands for it instead of `stub`."""
     with zipfile.ZipFile(path, "w") as archive:
         def put(name: str, data: bytes, mode: int) -> None:
             info = zipfile.ZipInfo(name)
@@ -166,7 +184,7 @@ def make_zip(path: Path, version: str = "1.0.14", marker: str = "new.txt", stub:
             put("bin/" + CMAKE, b"not a program\n", 0o644)
         else:
             for tool in tools:
-                put("bin/" + tool + EXE, stub.read_bytes(), 0o755)
+                put("bin/" + tool + EXE, (overrides or {}).get(tool, stub).read_bytes(), 0o755)
         put("retcomm-toolchain.json", pack_manifest(version).encode("utf-8"), 0o644)
         put(marker, (marker + "\n").encode("utf-8"), 0o644)
     return path
@@ -267,6 +285,44 @@ def run_cli_child(test_file: Path, case: str, sandbox: Path, switch: bool, extra
 # --- the setup host, by a probe that includes its source file ------------------------------------
 
 PROBE = r"""
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#endif
+/* PROBE_FAIL_PUT_BACK set: the rename of a folder whose name starts with ".old-" fails, which is
+ * the put back of an installed pack that was set aside. Every other rename is the real one. */
+static int probe_fail_put_back(const char* src) {
+    const char* base = src;
+    const char* p;
+    if (!getenv("PROBE_FAIL_PUT_BACK"))
+        return 0;
+    for (p = src; *p; ++p)
+        if (*p == '/' || *p == '\\')
+            base = p + 1;
+    return strncmp(base, ".old-", 5) == 0;
+}
+#if defined(_WIN32)
+static BOOL probe_MoveFileExA(LPCSTR from, LPCSTR to, DWORD flags) {
+    if (probe_fail_put_back(from)) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    return (MoveFileExA)(from, to, flags);
+}
+#  define MoveFileExA(from, to, flags) probe_MoveFileExA(from, to, flags)
+#else
+static int probe_rename(const char* from, const char* to) {
+    if (probe_fail_put_back(from)) {
+        errno = EACCES;
+        return -1;
+    }
+    return (rename)(from, to);
+}
+#  define rename(from, to) probe_rename(from, to)
+#endif
 #include "%(host_c)s"
 int recomp_launcher_relaunch_exe(char* o, size_t c) { (void)o; (void)c; return 0; }
 /* probe <operation> [argument] [argument]: one toolchain operation of the host. */

@@ -337,6 +337,11 @@ def toolchain_bin_check(bin_dir: Path, log=None) -> str:
         shutil.rmtree(work, ignore_errors=True)
 
 
+class DownloadWriteError(OSError):
+    """The pack was being downloaded and the write into the temporary folder
+    failed (as opposed to the connection)."""
+
+
 class ToolchainRefused(RuntimeError):
     """An install that stopped with one of the sentences a player reads. The
     exception's text is the whole sentence: a caller prints it alone, with no
@@ -348,6 +353,28 @@ def _new_pack_failed_text(step: str) -> str:
     in host/psxrecomp_codegen_host.c."""
     return ("The new toolchain pack did not pass its check: %s. "
             "The installed toolchain was not changed." % step)
+
+
+_DOWNLOAD_NO_FOLDER = "the temporary folder could not be created"
+_DOWNLOAD_NO_WRITE = "the pack could not be written into the temporary folder"
+
+
+def _download_failed_text(reason: str) -> str:
+    """What a player reads when the pack cannot be downloaded into the
+    temporary folder. The same sentence in host/psxrecomp_codegen_host.c."""
+    return ("The toolchain pack was not downloaded: %s. The installed toolchain "
+            "was not changed. Check the free space and the permissions of the "
+            "temporary folder, then try again." % reason)
+
+
+def _put_back_failed_text(step: str) -> str:
+    """What a player reads when a new pack fails its check in its place and the
+    installed pack cannot be put back under its name. The same sentence in
+    host/psxrecomp_codegen_host.c."""
+    return ("The new toolchain pack did not pass its check: %s. The installed "
+            "toolchain could not be put back under its name. It was left in the "
+            "same place, with .old- at the start of its name. Download the "
+            "latest pack to install the toolchain again." % step)
 
 
 def _rename_failed_text(error: int) -> str:
@@ -1251,18 +1278,22 @@ def install_from_zip(
     if step:
         # It passed where it was unpacked and fails in its place: the new pack
         # is taken out and the pack that was installed goes back under its name.
+        put_back = True     # nothing was installed before, or it is back under its name
         if moved:
             shutil.rmtree(dest, ignore_errors=True)
+            if aside is not None:
+                put_back = False
             if aside is not None and not dest.exists():
                 try:
                     os.rename(aside, dest)
+                    put_back = True
                     _set_latest_pointer(cache_root, unwrap_pack_root(dest))
                 except OSError as exc:
                     if log:
                         log(f"Could not put the installed toolchain back: {exc}")
             elif _is_link(cache_root / "latest") and not pack_root_looks_usable(unwrap_pack_root(cache_root / "latest")):
                 _remove_pointer(cache_root / "latest")
-        raise ToolchainRefused(_new_pack_failed_text(step))
+        raise ToolchainRefused(_new_pack_failed_text(step) if put_back else _put_back_failed_text(step))
     # 5. Only now the folder that was set aside is removed, the user's login
     #    PATH is written (same as zip install.sh) and older tags are pruned.
     _remove_aside(aside, log)
@@ -1283,8 +1314,20 @@ def download_url(url: str, dest: Path, token: Optional[str] = None) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "psxrecomp-toolchain"})
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as out:
-        shutil.copyfileobj(resp, out)
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        try:
+            out = open(dest, "wb")
+        except OSError as exc:
+            raise DownloadWriteError(exc.errno, str(exc)) from exc
+        with out:
+            while True:
+                chunk = resp.read(1 << 16)      # a failure here is the connection's
+                if not chunk:
+                    break
+                try:
+                    out.write(chunk)
+                except OSError as exc:
+                    raise DownloadWriteError(exc.errno, str(exc)) from exc
 
 
 def download_latest_pack(
@@ -1309,10 +1352,16 @@ def download_latest_pack(
     url = f"https://github.com/{repo}/releases/latest/download/{asset}"
     if log:
         log(f"Downloading {asset} from {repo}...")
-    with tempfile.TemporaryDirectory(prefix="psxrecomp-tc-") as tmp:
+    try:
+        scratch = tempfile.TemporaryDirectory(prefix="psxrecomp-tc-")
+    except OSError as e:
+        raise ToolchainRefused(_download_failed_text(_DOWNLOAD_NO_FOLDER)) from e
+    with scratch as tmp:
         zpath = Path(tmp) / asset
         try:
             download_url(url, zpath, token=token or None)
+        except DownloadWriteError as e:
+            raise ToolchainRefused(_download_failed_text(_DOWNLOAD_NO_WRITE)) from e
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"toolchain download failed ({e.code}): {url}") from e
         except urllib.error.URLError as e:
