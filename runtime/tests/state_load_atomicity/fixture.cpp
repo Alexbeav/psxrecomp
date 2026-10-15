@@ -5,9 +5,29 @@
 #include "pst_wire.h"
 #include "mod_memory.h"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <zlib.h>
 extern "C" uint8_t *memory_get_ram_ptr(void);
+static void fixture_setenv(const char *name,const char *value) {
+#ifdef _WIN32
+    _putenv_s(name,value);
+#else
+    setenv(name,value,1);
+#endif
+}
+// No guest code runs, so the BIOS image is all zeros. Write it when missing.
+static bool zero_bios_ready(const char *path) {
+    if(FILE *f=std::fopen(path,"rb")) { std::fclose(f); return true; }
+    FILE *f=std::fopen(path,"wb");
+    if(!f) return false;
+    static const uint8_t zero[4096]={};
+    bool ok=true;
+    for(int i=0;i<128&&ok;i++) ok=std::fwrite(zero,1,sizeof zero,f)==sizeof zero;
+    return std::fclose(f)==0&&ok;
+}
 extern "C" void *__real_malloc(size_t);
 extern "C" void *__real_realloc(void *, size_t);
 static int fail_at=-1, calls=0, hits=0;
@@ -60,14 +80,15 @@ int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     const bool source_profile=argc==3;
     if(source_profile) {
-        _putenv_s("PSX_INPUT_ROUTE_FILE","fixture-no-guest-execution");
-        _putenv_s("PSX_GPU_DMA_MODEL","octoshock-2.2.2-bounded-linked-list");
-        _putenv_s("PSX_INPUT_ROUTE_FIELD_MODEL","octoshock-2.2.2-ntsc-raster");
-        _putenv_s("PSX_TIMER1_MODEL","octoshock-2.2.2");
-        _putenv_s("PSX_TIMER2_MODEL","octoshock-2.2.2");
-        _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL","nymashock-1.29.0-dualshock");
-        _putenv_s("PSX_INPUT_ROUTE_CARD_MODEL","nymashock-1.29.0");
+        fixture_setenv("PSX_INPUT_ROUTE_FILE","fixture-no-guest-execution");
+        fixture_setenv("PSX_GPU_DMA_MODEL","octoshock-2.2.2-bounded-linked-list");
+        fixture_setenv("PSX_INPUT_ROUTE_FIELD_MODEL","octoshock-2.2.2-ntsc-raster");
+        fixture_setenv("PSX_TIMER1_MODEL","octoshock-2.2.2");
+        fixture_setenv("PSX_TIMER2_MODEL","octoshock-2.2.2");
+        fixture_setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL","nymashock-1.29.0-dualshock");
+        fixture_setenv("PSX_INPUT_ROUTE_CARD_MODEL","nymashock-1.29.0");
     }
+    if(!zero_bios_ready(argv[1]))return 2;
     memory_init(argv[1]);gr_set_backend(GR_BACKEND_SOFTWARE);gpu_init();dma_init();
     mdec_init();timers_init();interrupts_init();sio_init();spu_init();cdrom_init(nullptr);
     if(source_profile) {
@@ -104,6 +125,13 @@ int main(int argc,char **argv) {
             reject("missing",pack(incoming,missing,compressed));
             auto duplicate=sections;duplicate.push_back(sections[i]);
             reject("duplicate",pack(incoming,duplicate,compressed));
+            // Every section one byte short of its length (PS1B-454 row 4).
+            auto shorter=sections;
+            if(!shorter[i].data.empty()) {
+                shorter[i].data.pop_back();
+                const std::string label="one byte short, tag "+std::to_string(sections[i].tag);
+                reject(label.c_str(),pack(incoming,shorter,compressed));
+            }
         }
         auto bad=sections;
         for(auto &s:bad)if(s.tag==BS_SEC_MDEC)put32(s.data,0,0xffffffff);

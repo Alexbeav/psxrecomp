@@ -6,17 +6,25 @@ material, so keep the output directory on private scratch storage.
 
 Raw and compressed version-10 controls must roundtrip successfully in the
 normal and source-comparison profiles. The fixture omits and duplicates every
-required section, truncates the stream, corrupts late semantic fields, and fails
-allocation sites. It also exercises different MDEC FIFO sizes and reversed
-section order. Rejected loads must leave the serialized machine byte-identical
-to its pre-load state. A final valid load must still work.
+required section, makes each section one byte short, truncates the stream,
+corrupts late semantic fields, and fails allocation sites. It also exercises
+different MDEC FIFO sizes and reversed section order. Rejected loads must leave
+the serialized machine byte-identical to its pre-load state. A final valid load
+must still work.
 
-Run `run.py --runtime-build BUILD --build-target TARGET --executable-output
-TARGET.exe --output PRIVATE_NEW_DIRECTORY --repeat 1` with the configured
-compiler, CMake and Ninja on PATH. The build must use this source checkout.
-The runner records source and linked-input hashes, commands, logs and results.
-This full-consumer integration check is separate from the recompiler CTest
-suite: a green CTest run does not establish state-load atomicity.
+The runtime CTest suite runs the fixture as `state_load_atomicity_default` and
+`state_load_atomicity_source`. They link every `psx-runtime` object except the
+front end, so they check the readers of that build, on Windows and Linux. They
+are registered only for GCC with GNU ld (`--wrap` fails chosen allocations) and
+a `PSXRECOMP_ALLOW_NO_BIOS` build with no BIOS backend linked; configure prints
+a line when they are not. Each writes its own zero BIOS image into the build
+directory, because no guest code runs.
+
+For a title's build, run `run.py --runtime-build BUILD --build-target TARGET
+--executable-output TARGET.exe --output PRIVATE_NEW_DIRECTORY --repeat 1` with
+the configured compiler, CMake and Ninja on PATH. The build must use this source
+checkout. The runner records source and linked-input hashes, commands, logs and
+results.
 
 The loader retains inflated sections, checks presence and content, and reserves
 MDEC/bitmap storage before applying any guest state. Scheduler admission reads
