@@ -91,6 +91,23 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/framework_identity_test"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/framework_identity/check.cmake")
+    # PS1B-490: psx-runtime must carry the float-contraction-off flag. Reads the
+    # target's COMPILE_OPTIONS as written at configure time.
+    get_target_property(_psx_runtime_opts psx-runtime COMPILE_OPTIONS)
+    if(NOT _psx_runtime_opts)
+        set(_psx_runtime_opts "")
+    endif()
+    string(REPLACE ";" "\n" _psx_runtime_opts "${_psx_runtime_opts}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fp_contract_flag_test/psx-runtime-options.txt"
+         "${_psx_runtime_opts}\n")
+    add_test(NAME fp_contract_flag_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DOPTIONS_FILE=${CMAKE_CURRENT_BINARY_DIR}/fp_contract_flag_test/psx-runtime-options.txt"
+            "-DC_ID=${CMAKE_C_COMPILER_ID}"
+            "-DC_FRONTEND=${CMAKE_C_COMPILER_FRONTEND_VARIANT}"
+            "-DCXX_ID=${CMAKE_CXX_COMPILER_ID}"
+            "-DCXX_FRONTEND=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/fp_contract/check.cmake")
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)
