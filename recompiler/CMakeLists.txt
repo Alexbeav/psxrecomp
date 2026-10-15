@@ -1019,6 +1019,15 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_compile_overlays_static_tail.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The generator's environment switches change overlay C but are not in
+        # the cache folder name, so compile_overlays.py refuses them (PS1B-517).
+        add_test(
+            NAME compile_overlays_generator_switches
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_compile_overlays_generator_switches.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --gcc ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME fmv_cycle_batch_codegen
             COMMAND ${Python3_EXECUTABLE}

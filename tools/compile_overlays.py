@@ -634,6 +634,52 @@ CROSS_VARIANT_DONOR_REASONS = {
 # entry for these bytes and retain one of the classifier's local root reasons.
 HOSTED_OWNER_REASONS = EXACT_FRAGMENT_REASONS - {'DISPATCH_ROOT'}
 FATAL_SEED_REASONS = {'BRANCH_TARGET_ONLY', 'OBSERVED_PC_ONLY', 'UNKNOWN'}
+# Environment switches the code generator reads while it emits an overlay unit
+# (recompiler/src/code_generator.cpp). Each changes the emitted C when its
+# value starts with '0', and none is part of the cache folder name: cg<ver>,
+# the emitter hash (source text), the config hash (game.toml fields) and the
+# flavor never see the environment. A unit made under a non-default value
+# would therefore be loaded by every runtime that reads the same folder
+# (PS1B-517). No kit, launcher, Studio or Workbench sets them, so they are
+# refused here rather than keyed.
+GENERATOR_OUTPUT_SWITCHES = (
+    'PSX_CODEGEN_CYCLE_PER_INSN',  # per-instruction vs block-up-front cycles
+    'PSX_EMIT_PROD',               # data-stub emission for TODO-heavy bodies
+    'PSX_CPS',                     # CPS vs legacy dispatch; --cps pins it to 1
+)
+
+
+def refuse_generator_output_switches(args, env=None) -> None:
+    """Exit when the generator would emit overlay units off its defaults.
+
+    --cps sets PSX_CPS=1 for every recompiler spawn, so PSX_CPS is refused
+    only without it. getattr: in-process callers pass light args objects.
+    """
+    env = os.environ if env is None else env
+    found = []
+    for name in GENERATOR_OUTPUT_SWITCHES:
+        if name == 'PSX_CPS' and getattr(args, 'cps', False):
+            continue
+        value = env.get(name)
+        if value and value[0] == '0':
+            found.append(f'{name}={value}')
+    if found:
+        sys.exit('ERROR: refusing to emit overlay units with '
+                 + ', '.join(found) + ' set. These switches change the '
+                 'generated code but are not part of the overlay cache key, '
+                 'so a runtime with the default setting would load the units '
+                 '(PS1B-517). Unset them for this tool.')
+
+
+def recompiler_env(args) -> dict:
+    """The environment for a psxrecomp-game overlay spawn."""
+    refuse_generator_output_switches(args)
+    env = dict(os.environ)
+    if getattr(args, 'cps', False):
+        env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
+    return env
+
+
 def recompiler_project_root_args(args) -> list:
     """--project-root arguments for a psxrecomp-game invocation, or [].
 
@@ -3604,9 +3650,7 @@ def generate_interior_fragment_static(interior: int, data: bytes,
                '--out-dir', out_dir_tmp, '--overlay',
                '--ws-config', os.path.abspath(args.game_toml)]
         cmd += recompiler_project_root_args(args)
-        sub_env = dict(os.environ)
-        if args.cps:
-            sub_env['PSX_CPS'] = '1'
+        sub_env = recompiler_env(args)
         result = subprocess.run(
             cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
             cwd=os.path.dirname(os.path.abspath(args.game_toml)), env=sub_env)
@@ -6006,9 +6050,7 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
         cmd += recompiler_project_root_args(args)
         print(f'  recompile: {args.recompiler} ...{" [CPS]" if args.cps else ""}')
         toml_dir = os.path.dirname(os.path.abspath(args.game_toml))
-        sub_env = dict(os.environ)
-        if args.cps:
-            sub_env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
+        sub_env = recompiler_env(args)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                            cwd=toml_dir, env=sub_env)
         if r.returncode != 0:
@@ -6276,6 +6318,9 @@ def main():
     ap.add_argument('--target-os', choices=['auto', 'win', 'linux', 'macos'], default='auto',
                     help='target operating system for compiled overlay shards (default: auto)')
     args = ap.parse_args()
+    # Before any cache folder exists: recompiler_env() repeats the check at
+    # each spawn, but a SystemExit there only ends a worker thread.
+    refuse_generator_output_switches(args)
     target_os = args.target_os
     if target_os == 'auto':
         if 'mingw' in args.gcc.lower() or 'w64' in args.gcc.lower() or args.gcc.lower().endswith('.exe'):
@@ -6599,9 +6644,7 @@ def main():
             cmd += recompiler_project_root_args(args)
             print(f'  recompile: {args.recompiler} ...{" [CPS]" if args.cps else ""}')
             toml_dir = os.path.dirname(os.path.abspath(args.game_toml))
-            sub_env = dict(os.environ)
-            if args.cps:
-                sub_env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
+            sub_env = recompiler_env(args)
             r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                                cwd=toml_dir, env=sub_env)
             if r.returncode != 0:
@@ -6827,9 +6870,7 @@ def main():
     # interior PC (recovers no host). Isolated => a bad fragment fails alone and
     # never poisons a region's trusted DLL.
     def _do_frags(interior_frag_jobs, stats):
-        frag_env = dict(os.environ)
-        if args.cps:
-            frag_env['PSX_CPS'] = '1'
+        frag_env = recompiler_env(args)
         # Persistent doomed-interior memo: skip interiors already proven to fail
         # audit from IDENTICAL bytes, so autocompile stops re-walking data-as-code
         # every cycle. --force ignores the skip (re-attempts) for triage/debug.

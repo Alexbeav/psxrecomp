@@ -72,6 +72,12 @@ The cache folder is `cg<codegen ver>_<codegen hash>_gc<config hash>_f<flavour>`.
 A build reads and writes only its own folder. Folders from other builds stay on
 disk and are not opened.
 
+The code generator reads three environment switches: `PSX_CODEGEN_CYCLE_PER_INSN`,
+`PSX_EMIT_PROD` and `PSX_CPS`. A value that starts with `0` changes the overlay
+code, and the folder name does not record it. So `compile_overlays.py` refuses to
+run when one of them starts with `0`. `--cps` sets `PSX_CPS=1` for every
+recompiler spawn, so `PSX_CPS` is refused only without it (PS1B-517).
+
 The codegen hash is the first 8 hex digits of SHA-256 over the files in
 `runtime/codegen_hash_sources.cmake`, in list order, with CRLF read as LF.
 `runtime/hash_codegen.cmake` is the only code that computes it. Line endings do
