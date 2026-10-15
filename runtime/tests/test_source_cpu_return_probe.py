@@ -9,9 +9,13 @@ import tempfile
 def main():
     p=argparse.ArgumentParser();p.add_argument('--cc',default='gcc');a=p.parse_args()
     here=Path(__file__).resolve().parent
-    cases=[('legacy',None,20000,0),('legacy_bound',None,20001,4),
+    # The route can end one return after its cap (two clocks; PS1G-119): that return is
+    # tolerated and left out of the capture. The second return past the cap aborts.
+    unrecorded={'legacy_one_past','one_past'}
+    cases=[('legacy',None,20000,0),('legacy_one_past',None,20001,0),('legacy_bound',None,20002,4),
            ('pepsiman','75406',75406,0),('re1','227202',227202,0),
-           ('overrun','75406',75407,4),('zero','0',1,4),('junk','123x',1,4),
+           ('one_past','75406',75407,0),('overrun','75406',75408,4),
+           ('zero','0',1,4),('junk','123x',1,4),
            ('negative','-2',1,4),('space',' 12',1,4),('overflow','99999999999999999',1,4)]
     with tempfile.TemporaryDirectory() as temp:
         root=Path(temp)
@@ -26,7 +30,10 @@ def main():
                 if limit is not None:env['PSX_SOURCE_CPU_MAX_FRAMES']=limit
                 result=subprocess.run([str(exe),str(frame)],env=env,capture_output=True,timeout=10)
                 assert result.returncode==expected,(name,opt,result.returncode,expected,result.stderr)
-                if expected==0:
+                if name in unrecorded:
+                    assert not (out/'cpu-return.tsv').exists(),(name,opt)
+                    assert b'not recorded' in result.stderr,(name,opt,result.stderr)
+                elif expected==0:
                     lines=(out/'cpu-return.tsv').read_text().splitlines();assert len(lines)==2
                     fields=lines[1].split('\t')
                     assert fields==[str(frame),'80012340','40500000000','00001234','00005678','00009ABC']+[
