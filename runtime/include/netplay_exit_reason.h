@@ -56,8 +56,19 @@ enum {
     NETPLAY_BIND_FAILED      = 1,  /* the system refused the bind */
     NETPLAY_BIND_BAD_ADDRESS = 2,  /* the listen address is not "address:port", or its name is unknown */
     NETPLAY_BIND_NO_SOCKET   = 3,  /* the system made no socket */
-    NETPLAY_BIND_PEER_BAD    = 4   /* listen address opened; the peer address cannot be read */
+    NETPLAY_BIND_PEER_BAD    = 4,  /* listen address opened; the peer address cannot be read */
+    NETPLAY_BIND_IPV6_UNSUPPORTED = 5 /* the listen address is a well-formed IPv6 address; netplay listens on IPv4 only (PS1B-511) */
 };
+/* Whether a listen text is a well-formed IPv6 address, with or without a
+ * port (PS1B-511): "[2001:db8::77]:47810", "[::]", "::1", "fe80::1%3". The
+ * address is read with inet_pton, so Windows and Linux agree. A port must
+ * have one to five digits, 65535 at most; without brackets the library reads
+ * the last colon as the port's, so "2001:db8::77:47810" counts. An IPv4
+ * address, a name, a malformed IPv6 address and an empty text give 0. The
+ * probe in main.cpp answers NETPLAY_BIND_IPV6_UNSUPPORTED when this is 1:
+ * the text is correct, and netplay does not listen on IPv6, so the player is
+ * not told that it "is not an address". */
+int netplay_listen_text_is_ipv6(const char *hostport);
 #define NETPLAY_START_FAILURE_CAP 192
 void netplay_start_failure_text(int start_rc, int has_netplay,
                                 const char *bind_hostport,

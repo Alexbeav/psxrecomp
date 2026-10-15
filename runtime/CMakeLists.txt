@@ -45,6 +45,9 @@ if(BUILD_TESTING)
         tests/test_netplay_exit_reason.c
         src/netplay_exit_reason.c)
     target_include_directories(netplay_exit_reason_test PRIVATE include)
+    if(WIN32)
+        target_link_libraries(netplay_exit_reason_test PRIVATE ws2_32)
+    endif()
     add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
     # PS1G-63: why a start ended before the first frame, for the run report.
     add_executable(start_refusal_test
