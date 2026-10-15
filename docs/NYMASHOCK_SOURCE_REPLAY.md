@@ -189,3 +189,16 @@ Existing setup and replay receipts remain immutable. The exact-profile admission
 Primary metadata: [BizHawk's Mednafen update](https://github.com/TASEmulators/BizHawk/commit/cb3c7610d53bec2a82adc1c721ae5329557cd659).
 The release gitlinks are `ddf225cf63b7b355cb2ac7772450cf473f4b53ac` for 2.9.1 and `382ff1b8d293c9a862497706808cbb79b2cecbfb` for 2.10, 2.11 and 2.11.1.
 Tracking: PS1B-276. These identity facts do not replace source admission or gameplay qualification.
+
+## BizHawk 2.8 plain gamepad (PS1G-128)
+
+BizHawk 2.8 uses Mednafen `52c06fc2`. A movie with `PortDevices {"0":"gamepad"}` logs fourteen button characters and no
+sticks. `tools/tasreplays/nymashock28_digital_route.py` exports it to PSXRTI1 and refuses everything else: another core or
+version, another port device, a second port, console events, disc changes, anchored movies, non-default Mednafen values and a
+malformed row. It shares nothing with `nymashock28_route.py` but the button-bit table.
+
+`--pad-ack-model nymashock-2.8-gamepad` times the pad ACK at 64 cycles (pulse 32) for a plain digital pad, as the frozen
+2.8 `gamepad.cpp` requests (0x40 after each byte that has a reply byte left). The other Nymashock names time the ACK only
+for a config-capable pad. The profile is refused on a DualShock route (`run_native.py` and the runtime). `--card-model nymashock-2.8`
+uses the existing card profile (256 cycles, as the 2.8 memory card requests 0x100). No 2.8 CD-drive or MDEC model is
+qualified; a caller keeps the 1.29.0 labels and says so. Nothing here shows that 2.8 and the native runtime agree at any frame.
