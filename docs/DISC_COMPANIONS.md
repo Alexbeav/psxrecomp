@@ -97,7 +97,7 @@ Older installed setup kits retain their existing behavior.
 The native launcher also checks the exact data-track SHA-256 before Play.
 With the matching recomp-ui update, the verification card shows `SBI File`:
 `Missing` for a required missing or mismatched companion, `OK` for a match,
-and `N/A` when the registry has no requirement for this disc. A CHD never matches a data-track rule; for a serial on the LibCrypt warning list the row then shows `OK` when the disc mounted with its SBI loaded and `Missing` otherwise. That row is a warning only and does not block Play.
+and `N/A` when the registry has no requirement for this disc. A CHD never matches a data-track rule; for a serial on the LibCrypt warning list the row then shows `OK` when the disc mounted with its SBI loaded and `Missing` otherwise. That row is a warning only and does not block Play. The missing-SBI warning follows the same test: it is raised for such a serial exactly when the row would show `Missing`, also when the image's TOC did not mount (for example because the `.sbi` beside it is empty or damaged), since no SBI was loaded then.
 `N/A` is not proof that an unknown revision has complete subchannels.
 
 Select the disc first. Use **Browse For Disc / SBI** to select its matching SBI.

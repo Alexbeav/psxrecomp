@@ -333,7 +333,7 @@ DiscIdentity identify_disc(const fs::path& path,
         }
         netplay_verdict();
         v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
-                                            !v.toc_opened || v.sbi_loaded);
+                                            v.sbi_loaded);
         return v;
     }
 
@@ -419,8 +419,11 @@ DiscIdentity identify_disc(const fs::path& path,
     if (netplay_expect)
         apply_netplay_disc_expect(v, *netplay_expect);
 
+    // sbi_loaded is set only by a TOC mount that also loaded the .sbi, so an
+    // image whose TOC did not mount (a damaged .sbi beside it, say) has no SBI
+    // loaded: the warning agrees with the launcher's SBI File row (PS1B-495).
     v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
-                                        !v.toc_opened || v.sbi_loaded);
+                                        v.sbi_loaded);
     return v;
 }
 
