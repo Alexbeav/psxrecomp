@@ -188,8 +188,10 @@ static inline uint32_t psx_cyc_load_word(CPUState *cpu, uint32_t addr,
     return psx_read_word(addr);
 #else
 #ifndef PSX_OVERLAY_DLL_BUILD
+    /* KSEG2 (0xC0000000 and up) is not main RAM: the slow reader returns 0
+     * there and counts g_kseg2_ignored_reads, as the byte load does (PS1B-506). */
     uint32_t physical = addr & UINT32_C(0x1fffffff);
-    if (physical < UINT32_C(0x800000) && !g_ls_mode && !g_ds_recording && !g_dma_cpu_read_wait) {
+    if (addr < UINT32_C(0xC0000000) && physical < UINT32_C(0x800000) && !g_ls_mode && !g_ds_recording && !g_dma_cpu_read_wait) {
         uint32_t result;
         psx_cyc_ram_load_timing(cpu, rt, reg_mask);
         memcpy(&result, g_psx_ram + (physical & UINT32_C(0x1fffff)), sizeof result);
@@ -210,7 +212,7 @@ static inline uint16_t psx_cyc_load_half(CPUState *cpu, uint32_t addr,
 #else
 #ifndef PSX_OVERLAY_DLL_BUILD
     uint32_t physical = addr & UINT32_C(0x1fffffff);
-    if (physical < UINT32_C(0x800000) && !g_ls_mode && !g_ds_recording && !g_dma_cpu_read_wait) {
+    if (addr < UINT32_C(0xC0000000) && physical < UINT32_C(0x800000) && !g_ls_mode && !g_ds_recording && !g_dma_cpu_read_wait) {
         uint16_t result;
         psx_cyc_ram_load_timing(cpu, rt, reg_mask);
         memcpy(&result, g_psx_ram + (physical & UINT32_C(0x1fffff)), sizeof result);

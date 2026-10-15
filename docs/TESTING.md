@@ -139,16 +139,21 @@ runtime, so they do not prove runtime timing or performance.
 
 | Test | What it checks |
 |---|---|
-| `runtime/tests/test_interpreter_perf_guards.py` | Capture, overlay-cache and interpreter hot-path shapes. PS1B-176 re-expressed six stale groups against the current source: the load-value carry of PS1B-220, the hashed loaded-DLL lookup, the inline dependency mask, the inline cycle limit, and the rewritten main-RAM load paths. |
+| `runtime/tests/test_interpreter_perf_guards.py` | Capture, overlay-cache and interpreter hot-path shapes. PS1B-176 re-expressed six stale groups against the current source: the load-value carry of PS1B-220, the hashed loaded-DLL lookup, the inline dependency mask, the inline cycle limit (removed by PS1B-507), and the rewritten main-RAM load paths. |
 | `runtime/tests/test_interpreter_perf_guard_controls.py` | The interpreter guard passes on current source and rejects 14 deliberate source defects, each with its exact message. |
 | `runtime/tests/test_runtime_perf_diag_guards.py` | Opt-in Release performance telemetry: gates, cadence, exact benchmark frames and hot-path exclusions. |
 | `runtime/tests/test_runtime_perf_diag_guard_controls.py` | The telemetry guard passes on current source and rejects 12 deliberate source defects. `--baseline-guard <file>` runs the controls against another copy of the guard. |
 
-The inline cycle limit `g_psx_cycle_fast_limit` has had no nonzero writer since
-`31015cea` (PS1B-50), so the interpreter step and the main-RAM poll charge that
-read it always fall back to `psx_advance_cycles`. The guard fails if any runtime source stores
-a value other than 0 into it. A change that publishes a nonzero limit again must
-also invalidate it wherever a device deadline can move earlier.
+The inline cycle limit `g_psx_cycle_fast_limit` had no nonzero writer from
+`31015cea` on (PS1B-50), so its two readers always fell back to
+`psx_advance_cycles`. PS1B-507 measured the dead check at about 0.74 ns per
+interpreted instruction, and a restored limit at the same cost as no limit,
+because `psx_advance_cycles` is inline. It removed the symbol, its readers and
+its writers. The guard fails if code (not a comment) in `runtime/src`,
+`runtime/include`, `runtime/tests` or `recompiler/src`, string templates
+included, names it again. A change that restores it must change the guard,
+invalidate the limit wherever a device deadline can move earlier, and show
+equal timing.
 
 A guard that fails stays registered: mark it `DISABLED` in its `add_test`
 block and record why, never de-register it.

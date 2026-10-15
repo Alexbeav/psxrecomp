@@ -93,23 +93,23 @@ extern int g_ls_replay_active;     /* defined in the lockstep section; used by e
 
 /* Interpreter-only production fast path.  Do not put this in psx_cyc.h:
  * generated overlay DLLs deliberately batch psx_advance_cycles() through a
- * DLL-local accumulator and must never bind directly to runtime cycle state. */
+ * DLL-local accumulator and must never bind directly to runtime cycle state.
+ *
+ * The one-cycle charge goes straight to psx_advance_cycles(1u). An earlier
+ * inline limit (g_psx_cycle_fast_limit, "next <= limit: bump the counter")
+ * had no nonzero writer after 31015cea and was removed in PS1B-507. It is not
+ * worth restoring: psx_advance_cycles is a static inline since that commit,
+ * so its common path is the same few loads and an add, and a clang 22 -O2
+ * measurement put the restored and the direct forms at the same cost per
+ * step. A restored limit would also need an invalidation at every deadline
+ * change, with no host-time gain to pay for that risk. */
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM) && !STARVATION_RING_ENABLED
-extern uint64_t g_psx_cycle_fast_limit;
-extern int g_event_step_conservative;
-
 static inline void interp_cyc_step(CPUState *cpu, uint32_t reg_mask, uint32_t load_rt) {
     uint8_t w = cpu->read_absorb_which;
     if (cpu->read_absorb[w]) {
         cpu->read_absorb[w]--;
     } else if (!g_ls_replay_active) {
-        uint64_t next = psx_cycle_count + 1u;
-        if (!g_event_step_conservative && g_psx_cycle_fast_limit != 0u &&
-            next <= g_psx_cycle_fast_limit) {
-            psx_cycle_count = next;
-        } else {
-            psx_advance_cycles(1u);
-        }
+        psx_advance_cycles(1u);
     }
     psx_cyc_deps(cpu, reg_mask);
     if (load_rt < 32u && cpu->ld_which_t == load_rt) cpu->ld_which_t = 0u;
@@ -669,6 +669,19 @@ static int ws_cull_bltz_site(uint32_t pc) {
     cache[slot].pc = pc; cache[slot].gen = g_dirty_ram_code_gen;
     cache[slot].word = fetch_word(phys); cache[slot].flag = (int8_t)flag;
     return flag;
+}
+
+/* The BLTZ decision at pc for the value of rs. Widescreen render-funnel
+ * LEFT-edge widen (auto_screen_x): a classified funnel bltz rejects only past
+ * the revealed margin; identity at 4:3 (margin 0); gated per game, cheap
+ * cached scan. One definition for the interpreter and for the compiled IRQ
+ * hand-off, which recomputes the branch at a delay-slot interrupt
+ * (source_gpu_runtime.c): Cause.BT and the register-6 value follow it
+ * (PS1B-510). */
+int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value) {
+    if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
+        return psx_ws_cull_bltz(rs_value);
+    return (int32_t)rs_value < 0;
 }
 
 /* Widescreen far-backdrop column-PRELOAD site classification for the interpreter
@@ -2176,14 +2189,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x01: { /* REGIMM: BLTZ/BGEZ/BLTZAL/BGEZAL by rt field */
         int taken;
         switch (rt) {
-        case 0x00: /* BLTZ */
-            /* Widescreen render-funnel LEFT-edge widen (auto_screen_x): a
-             * classified funnel bltz rejects only past the revealed margin.
-             * Identity at 4:3 (margin 0). Gated per-game, cheap cached scan. */
-            if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
-                taken = psx_ws_cull_bltz(cpu->gpr[rs]);
-            else
-                taken = ((int32_t)cpu->gpr[rs] <  0);
+        case 0x00: /* BLTZ, with the widescreen funnel widen */
+            taken = dirty_ram_bltz_taken(pc, cpu->gpr[rs]);
             break;
         case 0x01: /* BGEZ */    taken = ((int32_t)cpu->gpr[rs] >= 0); break;
         case 0x10: /* BLTZAL */  taken = ((int32_t)cpu->gpr[rs] <  0);
