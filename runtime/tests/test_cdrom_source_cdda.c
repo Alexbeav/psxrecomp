@@ -56,7 +56,9 @@ int iso_has_subq_replacements(void *p){(void)p;return 0;}
 uint32_t iso_sector_count(void *p){(void)p;return 960;}
 static int track_count=3;
 int iso_track_count(void *p){(void)p;return track_count;}
-uint32_t iso_track_start_lba(void *p,int t){(void)p;return t==0?960:starts[t];}
+/* The stub lays out three tracks. The fifty-seven-tracks case raises only the
+ * count (PS1G-118), so a track outside the layout stops the test. */
+uint32_t iso_track_start_lba(void *p,int t){(void)p;if(t<0||t>=(int)(sizeof starts/sizeof starts[0]))abort();return t==0?960:starts[t];}
 uint32_t iso_track_pregap_lba(void *p,int t){(void)p;return t==2?90:t==3?450:0;}
 int iso_track_is_audio(void *p,int t){(void)p;return t==2||t==3;}
 static void env(const char *k,const char *v){
