@@ -54,9 +54,14 @@ void fntrace_restore_game_started(int started) { s_game_started = !!started; }
  * CD speed switch, and boot-state capture. Guest RAM survives this host event;
  * memory_note_game_entry only reads it (the run report's low_ram_at_entry and
  * the copy that replays of older recordings compare). */
+void (*g_fntrace_game_entry_hook)(void) = 0;
+
 void fntrace_mark_game_started(CPUState* cpu) {
     if (s_game_started) return;
     s_game_started = 1;
+    /* PS1B-105: the BIOS phase ends here; read it before anything clears it. */
+    if (g_fntrace_game_entry_hook) g_fntrace_game_entry_hook();
+
     extern void dirty_ram_clear_image_baseline(void);
     extern void memory_note_game_entry(void);
     extern void dirty_ram_pc_table_game_load(void);
