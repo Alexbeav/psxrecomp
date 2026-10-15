@@ -23,6 +23,30 @@ def body(source, name):
     raise AssertionError(f"unterminated function {name}")
 
 
+def fast_limit_nonzero_writes():
+    """Every runtime write to g_psx_cycle_fast_limit that may store nonzero."""
+    found = []
+    for directory in ("runtime/src", "runtime/include"):
+        for path in sorted((ROOT / directory).rglob("*")):
+            if path.suffix not in (".c", ".cpp", ".h", ".inc") or not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            name = path.relative_to(ROOT).as_posix()
+            for match in re.finditer(r"\bg_psx_cycle_fast_limit\b", text):
+                before = text[:match.start()].rstrip()
+                after = text[match.end():].lstrip()
+                if (before.endswith(("++", "--")) or
+                        (before.endswith("&") and not before.endswith("&&")) or
+                        after.startswith(("++", "--")) or
+                        re.match(r"(?:[-+*/%|&^]|<<|>>)=", after)):
+                    found.append(name)
+                elif after.startswith("=") and not after.startswith("=="):
+                    value = re.match(r"=\s*([^;,]*)", after).group(1).strip()
+                    if not re.fullmatch(r"0[uUlL]*", value):
+                        found.append(name)
+    return found
+
+
 def main():
     interp = (ROOT / "runtime/src/dirty_ram_interp.c").read_text(encoding="utf-8")
     capture = (ROOT / "runtime/src/overlay_capture.c").read_text(encoding="utf-8")
@@ -98,14 +122,21 @@ def main():
     dispatch_inner = body(interp, "dirty_ram_dispatch_inner")
     if "(!current_page_dirty || next_page != current_page)" not in dispatch_inner:
         raise AssertionError("page fast path does not preserve clean-miss behavior")
-    exec_one = body(interp, "exec_one_fetched")
-    for scope_guard in (
-            "pc_phys >= 0x1FC00000u && pc_phys < 0x1FC80000u",
-            "pc_phys < 0x00010000u",
-            "(in_bios_rom || in_bios_kernel_ram)"):
-        if scope_guard not in exec_one:
-            raise AssertionError(
-                f"load-delay value semantics lost BIOS ownership guard: {scope_guard}")
+    # Load values are carried across executor boundaries for every PC (PS1B-220,
+    # docs/ps1b-220-load-delay.md); the earlier BIOS-only scope is gone. The
+    # interpreter keeps the old GPR value visible to the next instruction and
+    # arms the pending value only after the load itself executed.
+    if "return exec_one_fetched_context(" not in body(interp, "exec_one_fetched"):
+        raise AssertionError("interpreter steps bypass the load-value context")
+    exec_ctx = body(interp, "exec_one_fetched_context")
+    value_begin = exec_ctx.find("psx_load_value_begin(cpu);")
+    value_cancel = exec_ctx.find("psx_load_value_cancel(cpu, delayed_value_writer(cpu,insn))")
+    inner = exec_ctx.find("exec_one_fetched_inner(cpu, pc, insn, next_pc_out)")
+    restore = exec_ctx.find("cpu->gpr[ld_rt] = before;", inner)
+    value_arm = exec_ctx.find("psx_load_value_arm(cpu,ld_rt,value);", inner)
+    if min(value_begin, value_cancel, inner, restore, value_arm) < 0 or not (
+            value_begin < value_cancel < inner < restore < value_arm):
+        raise AssertionError("load-delay value is not carried across the interpreter step")
     # RFE backend-contract parity: the recompiled rfe and every overlay shard
     # (ABI v12) call psx_rfe_mark_escape after popping SR, and the generated
     # trampoline runs psx_rfe_escape_check after each return. The interpreter
@@ -217,9 +248,15 @@ def main():
     candidate = body(loader, "overlay_loader_is_candidate")
     if "exact_entry_has(phys)" not in candidate or "idx_head" in candidate:
         raise AssertionError("candidate presence regressed from bitmap to hash probes")
-    if "cache_path_equal(s_loaded_paths[i], path)" not in body(
+    # dll_already_loaded is a hash probe since bab84528. Every hit is still
+    # confirmed by cache_path_equal, and the hash folds exactly what that
+    # compare ignores on Windows (separator and ASCII case).
+    if "cache_path_equal(s_loaded_paths[entry - 1], path)" not in body(
             loader, "dll_already_loaded"):
         raise AssertionError("published/scanned path separator aliases can double-load DLLs")
+    path_hash = body(loader, "loaded_path_hash")
+    if "if (c == '\\\\') c = '/';" not in path_hash or "cache_ascii_lower(c)" not in path_hash:
+        raise AssertionError("loaded-path hash does not fold what the path compare ignores")
     scheduler = body(traps, "psx_scheduler_run")
     shadow_sched_fixup = scheduler.find(
         "overlay_loader_shadow_scheduler_escape_fixup();")
@@ -278,15 +315,22 @@ def main():
     interp_step = body(interp, "interp_cyc_step")
     if "g_psx_cycle_fast_limit" not in interp_step or "next <= g_psx_cycle_fast_limit" not in interp_step:
         raise AssertionError("interpreter lost its exact pre-deadline one-cycle fast path")
+    if "g_psx_cycle_fast_limit != 0u &&" not in interp_step:
+        raise AssertionError("interpreter cycle fast path does not fall back on a zero limit")
     if "g_ls_replay_active" not in interp_step or "g_event_step_conservative" not in interp_step:
         raise AssertionError("interpreter cycle fast path does not guard exact diagnostic modes")
     if "g_psx_cycle_fast_limit" in cyc_header:
         raise AssertionError("runtime cycle fast path leaked into the overlay-DLL shared header")
     if "PSX_NO_DEBUG_TOOLS" not in starvation or "STARVATION_RING_ENABLED 0" not in starvation:
         raise AssertionError("production still enables the diagnostic starvation ring")
+    # The mask is a header inline over the instruction word since 9f9ac75b (a
+    # switch on the primary opcode, no role tables). It must not call out to
+    # another decoder on the per-instruction path.
+    if "static inline uint32_t psx_cyc_dep_res_mask(uint32_t insn)" not in instr_cost:
+        raise AssertionError("load-delay dependency mask is no longer a header inline")
     dep_mask = body(instr_cost, "psx_cyc_dep_res_mask")
-    if ("op_roles[64]" not in dep_mask or "special_roles[64]" not in dep_mask or
-            "switch (op)" in dep_mask):
+    dep_calls = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", dep_mask)) - {"switch", "UINT32_C"}
+    if dep_calls:
         raise AssertionError("load-delay dependency masks regressed to a second instruction decoder")
     gte_execute = body(gte, "gte_execute")
     direct_import = gte_execute.find("gte_import_cpu_state(&gte, cpu);")
@@ -302,48 +346,70 @@ def main():
                          "gte_mfc2(&gte", "gte_cfc2(&gte"):
         if old_selector in gte_marshaling:
             raise AssertionError("GTE command bridge regressed to selector dispatch loops")
-    for fn in ("psx_devices_mmio_sync", "psx_advance_cycles_exact", "psx_cycles_resync_after_restore"):
-        if "g_psx_cycle_fast_limit = 0" not in body(cycles, fn):
-            raise AssertionError(f"{fn} does not invalidate the inline cycle limit")
-    mmio_sync = body(cycles, "psx_devices_mmio_sync")
-    if not (mmio_sync.find("psx_devices_service_to_now()") <
-            mmio_sync.find("s_next_service_cycle = 0") <
-            mmio_sync.find("g_psx_cycle_fast_limit = 0")):
-        raise AssertionError("MMIO catch-up can republish a stale inline cycle limit")
+    # Inline cycle limit. Since 31015cea no deadline recompute publishes a
+    # nonzero limit, so MMIO sync and the exact path need no clear of their
+    # own: the limit cannot go stale while every write stores 0. A change that
+    # publishes a nonzero limit again must bring back and prove the
+    # invalidation at every deadline change (PS1B-50, PS1B-176).
+    nonzero = fast_limit_nonzero_writes()
+    if nonzero:
+        raise AssertionError(f"nonzero inline cycle limit writer: {nonzero[0]}")
+    if "g_psx_cycle_fast_limit" in body(cycles, "psx_devices_recompute_deadline"):
+        raise AssertionError("device deadline recompute publishes the inline cycle limit")
+    if "g_psx_cycle_fast_limit = 0" not in body(cycles, "psx_cycles_resync_after_restore"):
+        raise AssertionError("psx_cycles_resync_after_restore does not invalidate the inline cycle limit")
     service = body(cycles, "psx_devices_service_to_now")
-    if not (service.find("g_psx_cycle_fast_limit = 0") <
-            service.find("s_in_device_service = 1") <
-            service.find("psx_devices_recompute_deadline()") <
-            service.find("s_in_device_service = 0")):
+    service_order = [service.find("g_psx_cycle_fast_limit = 0")]
+    for pattern in (r"\b(?:s|psx)_in_device_service = 1;",
+                    r"\bpsx_devices_recompute_deadline\(\);",
+                    r"\b(?:s|psx)_in_device_service = 0;"):
+        found = re.search(pattern, service)
+        service_order.append(found.start() if found else -1)
+    if min(service_order) < 0 or service_order != sorted(service_order):
         raise AssertionError("device-service reentrancy can observe a nonzero inline cycle limit")
-    load_charge = body(memory, "psx_load_charge_cycles")
-    if "next <= g_psx_cycle_fast_limit" not in load_charge or "psx_advance_cycles(cycles)" not in load_charge:
-        raise AssertionError("runtime load timing lost its exact deadline fast/fallback paths")
-    for guard in ("g_ls_replay_active", "g_event_step_conservative", "next >= psx_cycle_count"):
-        if guard not in load_charge:
-            raise AssertionError(f"runtime load timing lost guard: {guard}")
     if "!defined(PSX_COSIM) && !STARVATION_RING_ENABLED" not in memory:
         raise AssertionError("runtime load fast path leaks into COSIM/diagnostic builds")
-    load_timing = body(memory, "psx_cyc_load_timing")
-    if "psx_load_charge_cycles(1u)" not in load_timing or "psx_cyc_base(cpu)" in load_timing:
-        raise AssertionError("runtime loads still use the out-of-line one-cycle base charge")
-    ram_fast = body(memory, "psx_cyc_main_ram_fast_addr")
-    for guard in ("g_ls_mode != 0", "g_ls_replay_active", "g_ds_recording",
-                  "g_ram_read_watch_active",
-                  "g_dma_exec_depth > 0", "addr >= 0xC0000000u",
-                  "phys >= 0x00800000u", "RAM_SIZE - width"):
-        if guard not in ram_fast:
-            raise AssertionError(f"main-RAM value fast path lost guard: {guard}")
-    for fn in ("psx_cyc_load_word", "psx_cyc_load_half", "psx_cyc_load_byte",
-               "psx_cyc_lwc2_read"):
-        load_body = body(memory, fn)
-        timing = load_body.find("psx_cyc_")
-        fast = load_body.find("psx_cyc_main_ram_fast_addr")
-        fallback = load_body.rfind("psx_read_")
-        if min(timing, fast, fallback) < 0 or not timing < fast < fallback:
+
+    # Memory timing was reimplemented on 2026-09-20 (5821073d, 8b8555c4).
+    # Word and half loads take an inline main-RAM path in psx_cyc.h; byte and
+    # LWC2 loads take a direct-RAM path in memory.c. Both charge timing before
+    # the value is read and fall back to the full accessor otherwise.
+    for fn, slow in (("psx_cyc_load_word", "psx_cyc_load_word_slow"),
+                     ("psx_cyc_load_half", "psx_cyc_load_half_slow")):
+        inline_load = body(cyc_header, fn)
+        for guard in ("#ifndef PSX_OVERLAY_DLL_BUILD", "physical < UINT32_C(0x800000)",
+                      "!g_ls_mode", "!g_ds_recording", "!g_dma_cpu_read_wait"):
+            if guard not in inline_load:
+                raise AssertionError(f"{fn} main-RAM fast path lost guard: {guard}")
+        timing = inline_load.find("psx_cyc_ram_load_timing(cpu, rt, reg_mask);")
+        value = inline_load.find("memcpy(&result, g_psx_ram")
+        watch = inline_load.find("if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(")
+        fallback = inline_load.find(f"return {slow}(cpu, addr, rt, reg_mask);")
+        if min(timing, value, watch, fallback) < 0 or not timing < value < watch < fallback:
             raise AssertionError(f"{fn} does not order timing, RAM fast path, fallback")
-    if "defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)" not in memory:
+    direct_ram = body(memory, "t172_memory_direct_ram")
+    for guard in ("addr < 0xc0000000u", "(addr & 0x1fffffffu) < 0x800000u", "!g_ls_mode",
+                  "!g_ds_recording", "!g_ls_replay_active", "!g_ram_read_watch_active",
+                  "!g_dma_exec_depth"):
+        if guard not in direct_ram:
+            raise AssertionError(f"main-RAM value fast path lost guard: {guard}")
+    direct_def = memory.find("static int t172_memory_direct_ram(")
+    direct_gate = memory.rfind("#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)", 0, direct_def)
+    if direct_gate < 0 or "#endif" in memory[direct_gate:direct_def]:
         raise AssertionError("main-RAM value fast path leaks into diagnostic/COSIM builds")
+    for fn, value_read in (("t172_memory_load", "psx_read_byte(addr)"),
+                           ("psx_cyc_lwc2_read", "psx_read_word(addr)")):
+        load_body = body(memory, fn)
+        timing = load_body.find("t172_memory_before(")
+        fast = load_body.find("t172_memory_direct_ram(addr)")
+        fallback = load_body.find(value_read)
+        tail = load_body.find("if (tail) psx_advance_cycles(tail);")
+        if min(timing, fast, fallback, tail) < 0 or not timing < fast < fallback < tail:
+            raise AssertionError(f"{fn} does not order timing, RAM fast path, fallback")
+    for fn in ("psx_cyc_load_word_slow", "psx_cyc_load_half_slow", "psx_cyc_load_byte",
+               "psx_cyc_load_word_timing_only"):
+        if "t172_memory_load(" not in body(memory, fn):
+            raise AssertionError(f"{fn} bypasses the timed memory load")
 
     gte_exec = body(gte, "gte_execute")
     for probe in ("s_gte_exec_count++", "s_gte_caller_ra =",
