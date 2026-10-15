@@ -693,6 +693,22 @@ in one stdout line and in the run report (`psx_last_run_report.json`):
              "notice": "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. ..."}
 ```
 
+`fast_boot` can only turn the BIOS boot-skip on. With `bios_hle` on (the
+default) the BIOS intro is skipped whatever `fast_boot` says, so
+`fast_boot = false` alone does not bring the intro back. To see the intro,
+set `bios_hle = false` here, or `[runtime] bios_hle_keep_intro = true` in the
+game's `game.toml`. When `fast_boot = false` is written in either file and the
+intro is still skipped, the start says so in one stdout line and in the run
+report (PS1B-354):
+
+```json
+"boot": {"boot_skip": 1, "fast_boot_ignored": 1,
+         "notice": "fast_boot = false has no effect while bios_hle is on: ..."}
+```
+
+`boot_skip` is 1 when the BIOS intro is skipped, 0 when it plays, and -1 when
+the start ended before the boot was decided.
+
 `file_format` is 0 when the file or the line is absent. A start that ends
 before the settings are read (a game config that cannot be read, for example)
 reports 0 for both formats. Every other key of `settings.toml` is read the

@@ -95,6 +95,12 @@ call into its shell, so all it needs is the per-image address of that shell entr
 — which every linked BIOS records. A player who switches BIOS gets the same
 boot, and the flag means one thing everywhere.
 
+The intro plays with `bios_hle = false`, or with `[runtime]
+bios_hle_keep_intro = true` in `game.toml`. The deprecated `fast_boot` key can
+only ask for the skip: `fast_boot = false` does not bring the intro back while
+`bios_hle` is on, and the start says so in one line and in the run report's
+`boot` object (PS1B-354).
+
 The HLE tier's *other* half — servicing a few kernel calls (the B0 event family)
 in the runtime instead of the recompiled BIOS — **is** per-image, because it needs
 the kernel's own `DeliverEvent` return address to send a delivered callback back
