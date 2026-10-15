@@ -32,7 +32,12 @@ and reduced image coverage separately from a complete gate.
 The Python `public_commit_guard` test uses isolated local Git repositories and a
 local mock SSH transport. It contacts no public remote. Its fixtures ignore the
 host's global and system Git configuration, so a host `core.hooksPath` does not
-change its result. It needs Git and Python;
+change its result. They also drop the variables that select a repository
+(`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and the rest of
+`git rev-parse --local-env-vars`), so a run that a Git hook or another tool starts
+cannot write fixture objects or configuration into that repository.
+The configuration variables `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` need Git 2.32
+or newer; an older Git ignores them. It needs Git and Python;
 the [public push policy](PUBLIC_PUSH_POLICY.md) describes the separate stage check
 and per-clone hook installation.
 
