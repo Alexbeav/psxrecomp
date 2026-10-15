@@ -535,6 +535,9 @@ build a candidate from a tree that dropped a registered behaviour.** You cannot 
 accident. A loss that is genuinely known is recorded in the registry's `known_absent` map
 with a written reason and reported as a debt rather than refusing; nothing may be marked
 absent silently, and clearing a debt means porting the behaviour back and deleting the entry.
+Every re-pin or new debt appends a record to the entry's `repins` list naming the issue;
+`tools/tasreplays/repin_records.py` fails a change in CI that excuses or removes pinned lines
+without one.
 
 Presence proves nothing about behaviour. Absence is a definite finding. Read
 `docs/tasreplays/LANE.md` before working the lane.

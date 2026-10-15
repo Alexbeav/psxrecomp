@@ -52,6 +52,14 @@ jobs:
         # Pegasus build (build_cache.stage_tools), so a composed pin could carry an evolved hunk
         # and the first notice was a refused build (pin F, 2026-09-28).
         run: python tools/tasreplays/qualified_hunks.py check
+      - name: Qualified-hunk re-pin records
+        # PS1B-480: the registry step above trusts the registry it reads. A change that marks an
+        # entry known_absent, or shortens, edits or removes one of its pinned blocks, must add a
+        # repins record to that entry naming the issue. The registry is compared between the
+        # merge-base and the head: the base is the pull request base, the previous stage head for a
+        # stage push, else the newest origin/stage/* branch (the full-history checkout fetches them).
+        if: github.repository == 'Alexbeav/psxrecomp'
+        run: python3 -B tools/tasreplays/repin_records.py --github
       - name: Install GL development files
         # psx-runtime and psx-oracle are part of the runtime tree's default
         # build and link libGL (gpu_gl_renderer.c).
