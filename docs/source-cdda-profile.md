@@ -1,7 +1,8 @@
 # Octoshock 2.3 CD-audio comparison profile
 
 `PSX_CD_CDDA_MODEL=octoshock-2.3` requires the explicit source command-clock
-tape. The Pepsiman adapter selects it; the default and Tekken profiles do not.
+tape. The route adapters abesoddysee, biohazard, crash, megamanx4, megamanx5,
+pepsiman, redc and spyro select it; the default and Tekken profiles do not.
 The original movie and its frame count are unchanged.
 
 CLAIM: CDDA uses the source drive seek deadline and two physical sector buffers
@@ -49,8 +50,9 @@ this Play with exit status 2.
 
 REPRODUCE: configure the runtime CMake tests with GNU C and run
 `ctest --test-dir <build> -R cdrom_source_cdda --output-on-failure`.
-O0 and O2 replay each complete transcript and check rejection of scan commands,
-double-speed playback and active data-read to Play. Each transcript also runs
+O0 and O2 replay each complete transcript (four audio-track and five data-track
+transcripts), check that Play on the data track starts, and check rejection of scan
+commands, double-speed playback and active data-read to Play. Each transcript also runs
 with a snapshot round trip after every operation, including queued PCM and
 pending reports. See [TAS checkpoints](TAS_CHECKPOINTS.md) for replay qualification.
 Fixtures bind original upstream, external oracle source head/tree/core hash,
