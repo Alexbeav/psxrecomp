@@ -77,6 +77,39 @@ int main(int argc, char **argv) {
         gpu_write_gp0(0x50005000); gpu_write_gp0(0xe1000123);
         assert(texpage_x==0); tick(20000);
         assert(texpage_x==3 && gp0_state==GP0_IDLE);
+    } else if (!strcmp(mode,"polyline-terminator")) {
+        /* PS1B-454 part B row 7 (G-Police mission 1, "GPU GP0 unknown command
+         * 0xFC"; Breath of Fire III). The words of the first two vertices are
+         * never the terminator; from the third vertex on only the first word
+         * of a vertex unit is tested (the vertex for mono, the colour for
+         * shaded). See "Polyline terminator rule" in gpu.c. */
+        reset_gpu_state_for_test(); gp1_reset_command_buffer();
+        /* Mono: the second vertex word matches the mask and is a vertex. */
+        gpu_write_gp0(0x480000ffu); gpu_write_gp0(0x000a000au);
+        gpu_write_gp0(0x50005000u); tick(20000);
+        assert(gp0_state==GP0_POLYLINE_MONO && polyline_has_prev==2);
+        gpu_write_gp0(0x00140014u); tick(20000);
+        assert(gp0_state==GP0_POLYLINE_MONO);
+        gpu_write_gp0(0x55555555u); tick(20000);
+        assert(gp0_state==GP0_IDLE);
+        gpu_write_gp0(0xe1000123u); tick(20000);
+        assert(texpage_x==3 && gp0_state==GP0_IDLE);
+        /* Shaded: a colour word with junk in its top byte (525E5E5Eh) at the
+         * second vertex, then a vertex word that matches the mask, do not end
+         * the line. A vertex word 55555555h at the third vertex is a vertex.
+         * The terminator ends the line at a colour position from the third
+         * vertex on, and the next word is a new command. */
+        gpu_write_gp0(0x580000ffu); gpu_write_gp0(0x000a000au);
+        gpu_write_gp0(0x525e5e5eu); tick(20000);
+        assert(gp0_state==GP0_POLYLINE_SHADED && polyline_has_prev==2);
+        gpu_write_gp0(0x50005000u); tick(20000);
+        assert(gp0_state==GP0_POLYLINE_SHADED && polyline_has_prev==3);
+        gpu_write_gp0(0x0000ff00u); gpu_write_gp0(0x55555555u); tick(20000);
+        assert(gp0_state==GP0_POLYLINE_SHADED && polyline_has_prev==3);
+        gpu_write_gp0(0x55555555u); tick(20000);
+        assert(gp0_state==GP0_IDLE);
+        gpu_write_gp0(0xe1000121u); tick(20000);
+        assert(texpage_x==1 && gp0_state==GP0_IDLE);
     } else if (!strcmp(mode,"interlace-charge")) {
         /* PSX-SPX GPUSTAT.10: in 480-line interlace with drawing to the
          * displayed area prohibited, the GPU skips the displayed field's
