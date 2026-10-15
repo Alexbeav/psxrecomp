@@ -96,6 +96,11 @@ void fntrace_restore_game_started(int started);
  * Performs dirty-image baseline clear, low-boot scratch clear, CD speed
  * switch, and boot-state capture. */
 void fntrace_mark_game_started(CPUState* cpu);
+/* Called by fntrace_mark_game_started at the latch's 0 -> 1, first thing,
+ * before the entry's side effects. NULL (the default) = nothing. Set by
+ * bios_phase_report_install (PS1B-105), which reads the interpreter's
+ * per-address table there before anything moves or clears it. */
+extern void (*g_fntrace_game_entry_hook)(void);
 /* Entry-pc-exact latch for the interpreter path: calls
  * fntrace_mark_game_started() only when addr matches the armed game entry
  * (fntrace_set_game_range lo).  No-op before the range is armed and after

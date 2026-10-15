@@ -1399,6 +1399,7 @@ if(BUILD_TESTING)
                 overlay_decodable_fallback
                 overlay_export_declarations
                 interp_report_wiring
+                bios_phase_report_wiring
                 overlay_init_guard
                 overlay_pair_dedup_runtime
                 recomp_ui_root_override
