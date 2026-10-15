@@ -3301,6 +3301,14 @@ static void exec_command(uint8_t cmd) {
             };
             for(int i=0;i<4;i++) response_push(version[s_source_firmware_model][i]);
             set_irq(CDIRQ_ACK);
+        } else if (param_count >= 1 && param_fifo[0] == 0x05) {
+            /* Get SCEx counters: INT3(total, success), no status byte (PSX-SPX).
+             * The counters are not modelled; the drive answers as one that
+             * received no SCEx string, as Octoshock and Mednafen do. Anti-modchip
+             * checks read them (PS1G-116, Spyro: Year of the Dragon). */
+            response_push(0x00);
+            response_push(0x00);
+            set_irq(CDIRQ_ACK);
         } else {
             response_push(stat_reg);
             set_irq(CDIRQ_ACK);
