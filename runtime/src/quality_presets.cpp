@@ -9,6 +9,8 @@
  * this); Custom is never overridden again, only re-detected on request. */
 #include "quality_presets.h"
 
+#include "host_overlay.h"
+
 #include "config_loader.h"
 
 #include <algorithm>
@@ -165,4 +167,85 @@ void record(PSXRecompV4::UserSettings& us, const Decision& d) {
     }
 }
 
+
+void copy_key(PSXRecompV4::UserSettings& d, const PSXRecompV4::UserSettings& s,
+              const std::string& k) {
+#define QCOPY(f) do { d.has_##f = s.has_##f; d.f = s.f; } while (0)
+    if (k == "internal_resolution" || k == "supersampling") {
+        QCOPY(internal_resolution); QCOPY(supersampling);
+    } else if (k == "dynamic_resolution") { QCOPY(dynamic_resolution);
+    } else if (k == "dynamic_resolution_min") { QCOPY(dynamic_resolution_min);
+    } else if (k == "frame_generation") { QCOPY(frame_generation);
+    } else if (k == "render_thread") { QCOPY(render_thread);
+    } else if (k == "present_thread") { QCOPY(present_thread);
+    } else if (k == "texture_filtering") { QCOPY(texture_filter);
+    } else if (k == "fmv_filter") { QCOPY(fmv_filter);
+    } else if (k == "antialiasing") { QCOPY(antialiasing);
+    } else if (k == "geometry_correction") { QCOPY(geometry_correction);
+    } else if (k == "perspective_texturing") { QCOPY(perspective_texturing);
+    } else if (k == "frame_interpolation") { QCOPY(frame_interpolation);
+    } else if (k == "frame_interpolation_fps") { QCOPY(frame_interpolation_fps);
+    }
+#undef QCOPY
+}
+
+Edit live_edit(const PsxHostVideoSettings& c, const PsxHostVideoSettings& n,
+               const std::vector<std::string>& keys) {
+    for (const std::string& k : keys) {
+        const bool diff =
+            (k == "texture_filtering" && c.texture_filter != n.texture_filter) ||
+            (k == "fmv_filter" && c.fmv_filter != n.fmv_filter) ||
+            (k == "antialiasing" && c.present_linear != n.present_linear) ||
+            (k == "dynamic_resolution" && c.dynamic_resolution != n.dynamic_resolution) ||
+            (k == "frame_generation" && c.frame_generation != n.frame_generation) ||
+            (k == "render_thread" && c.render_thread != n.render_thread) ||
+            (k == "present_thread" && c.present_thread != n.present_thread) ||
+            ((k == "internal_resolution" || k == "supersampling") &&
+             (c.internal_resolution != n.internal_resolution ||
+              c.supersampling != n.supersampling));
+        if (diff) return Edit::GOVERNED_EDIT;
+    }
+    return Edit::NONE;
+}
+
+static void copy_meta(PSXRecompV4::UserSettings& d, const PSXRecompV4::UserSettings& s) {
+    d.has_quality_preset = s.has_quality_preset;     d.quality_preset = s.quality_preset;
+    d.has_quality_base = s.has_quality_base;         d.quality_base = s.quality_base;
+    d.has_quality_hardware = s.has_quality_hardware; d.quality_hardware = s.quality_hardware;
+    d.has_quality_detected = s.has_quality_detected; d.quality_detected = s.quality_detected;
+}
+
+bool settle_save(PSXRecompV4::UserSettings& save, const PSXRecompV4::UserSettings& disk,
+                 Decision& run, Edit edit, int picked,
+                 const std::vector<std::string>& keys) {
+    if (run.preset == PSX_QUALITY_NONE) return false;   /* no presets offered */
+    auto keep_disk = [&] {
+        for (const std::string& k : keys) copy_key(save, disk, k);
+        copy_meta(save, disk);
+    };
+    if (run.env_override) {           /* one run: nothing quality-related persists */
+        keep_disk();
+        return false;
+    }
+    if (edit == Edit::PICK && picked >= 0 && picked < PSX_QUALITY_COUNT) {
+        const bool changed = run.preset != picked;
+        run.preset = run.base = picked;
+        for (const std::string& k : keys) copy_key(save, disk, k);
+        copy_meta(save, disk);
+        record(save, run);
+        return changed;
+    }
+    if (edit == Edit::GOVERNED_EDIT || run.preset == PSX_QUALITY_CUSTOM) {
+        const bool changed = run.preset != PSX_QUALITY_CUSTOM;
+        run.preset = PSX_QUALITY_CUSTOM;   /* base stays: Custom "from" it */
+        copy_meta(save, disk);
+        record(save, run);
+        return changed;
+    }
+    keep_disk();                          /* preset in force, nothing governed changed */
+    if (run.persist) record(save, run);
+    return false;
+}
+
 }  // namespace psxq
+

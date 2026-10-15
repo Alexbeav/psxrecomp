@@ -1617,6 +1617,36 @@ static void quality_startup(PSXRecompV4::GameConfig& gc,
     }
 }
 
+/* The preset/key-ownership transaction (psxq::settle_save) in front of every
+ * save that may carry governed keys: boot launcher, soft-return launcher and
+ * the in-game menu's live settings. The pending edit is what the frontend
+ * reported since the last save. */
+static psxq::Edit g_quality_edit = psxq::Edit::NONE;
+static int g_quality_picked = PSX_QUALITY_NONE;
+static bool quality_save_user_settings(const std::filesystem::path& path,
+                                       PSXRecompV4::UserSettings& us) {
+    if (g_quality_offered) {
+        const PSXRecompV4::UserSettings disk = PSXRecompV4::load_user_settings(path);
+        if (!disk.parse_error) {
+            const bool was_override = g_quality.env_override;
+            if (psxq::settle_save(us, disk, g_quality, g_quality_edit, g_quality_picked,
+                                  g_quality_keys))
+                std::fprintf(stdout, "psxrecomp: graphics preset %s%s%s%s\n",
+                             psx_quality_name(g_quality.preset),
+                             g_quality.preset == PSX_QUALITY_CUSTOM ? " (from " : "",
+                             g_quality.preset == PSX_QUALITY_CUSTOM
+                                 ? psx_quality_name(g_quality.base) : "",
+                             g_quality.preset == PSX_QUALITY_CUSTOM ? ")" : "");
+            else if (was_override && g_quality_edit != psxq::Edit::NONE)
+                std::fprintf(stdout, "psxrecomp: graphics settings changed under "
+                             "PSX_QUALITY: this run only, not saved\n");
+        }
+    }
+    g_quality_edit = psxq::Edit::NONE;
+    g_quality_picked = PSX_QUALITY_NONE;
+    return PSXRecompV4::save_user_settings(path, us);
+}
+
 static void quality_apply_video_globals(const PSXRecompV4::RuntimeConfig& r) {
     g_video_scale        = r.video_supersampling;
     g_video_internal_res = r.video_internal_resolution;
@@ -9840,6 +9870,10 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
     PsxHostVideoSettings cur;
     psx_video_current(&cur);
     unsigned m = psx_host_video_live_changes(&cur, next);
+    /* A governed value changed here makes the preset Custom when it is saved
+     * below (psxq::settle_save), so the next launch keeps it. */
+    if (g_quality_offered && g_quality_edit == psxq::Edit::NONE)
+        g_quality_edit = psxq::live_edit(cur, *next, g_quality_keys);
     unsigned deferred = 0;
     /* Netplay: dynamic resolution, frame generation and the filters change
      * how a peer renders mid-match; only the presentation of the frame we
@@ -9890,7 +9924,7 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
             us.render_thread = next->render_thread != 0;       us.has_render_thread = true;
             us.present_thread = next->present_thread != 0;     us.has_present_thread = true;
             us.internal_resolution = next->internal_resolution; us.has_internal_resolution = true;
-            (void)PSXRecompV4::save_user_settings(g_overlay_settings_path, us);
+            (void)quality_save_user_settings(g_overlay_settings_path, us);
         } catch (...) {
         }
     }
@@ -16048,29 +16082,29 @@ namespace {
         ls->quality_base = g_quality.base >= 0 ? g_quality.base + 1 : 0;
     }
 
-    /* After the launcher: apply a newly picked preset's keys the launcher
-     * has no row for, and store the state for settings.toml. */
+    /* After the launcher: classify what the player did (Settings.quality_preset,
+     * the same contract in recomp-ui and recomp-launcher), and apply a newly
+     * picked preset's keys the launcher has no row for. The state itself is
+     * settled when settings.toml is saved (quality_save_user_settings). */
     void quality_take_launcher(const RecompLauncherCSettings* ls,
-                               PSXRecompV4::UserSettings* us, bool apply_now) {
+                               PSXRecompV4::UserSettings* /*us*/, bool apply_now) {
         if (!g_quality_offered || ls->quality_preset < 1 || ls->quality_preset > 5) return;
         const int preset = ls->quality_preset - 1;
-        const int base = (ls->quality_base >= 1 && ls->quality_base <= 4)
-            ? ls->quality_base - 1 : g_quality.base;
-        if (apply_now && base != g_quality.base) {
-            if (const auto* p = quality_preset_for(base)) {
+        if (preset == PSX_QUALITY_CUSTOM) {
+            if (g_quality.preset != PSX_QUALITY_CUSTOM) g_quality_edit = psxq::Edit::GOVERNED_EDIT;
+            return;
+        }
+        if (preset == g_quality.preset) return;
+        g_quality_edit = psxq::Edit::PICK;
+        g_quality_picked = preset;
+        if (apply_now && !g_quality.env_override) {
+            if (const auto* p = quality_preset_for(preset)) {
                 /* The launcher wrote this preset's values into its rows,
                  * which the launch path applies next; this covers the rest
                  * (supersample, PGXP extras, ...). */
                 quality_apply_video_globals(p->runtime);
-                std::fprintf(stdout, "psxrecomp: graphics preset %s\n", psx_quality_name(base));
+                std::fprintf(stdout, "psxrecomp: graphics preset %s\n", psx_quality_name(preset));
             }
-        }
-        g_quality.preset = preset;
-        g_quality.base = base;
-        if (us) {
-            psxq::Decision d = g_quality;
-            d.detected_now = g_quality.detected_now;
-            psxq::record(*us, d);
         }
     }
 #endif
@@ -19055,8 +19089,11 @@ int main(int argc, char** argv) {
 
             if (lr == 1) {
                 /* Keep settings changed and then dismissed with Quit. */
-                PSXRecompV4::save_user_settings(
-                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
+                {
+                    PSXRecompV4::UserSettings save = seed;
+                    (void)quality_save_user_settings(
+                        exe_dir_from_argv(argv[0]) / "settings.toml", save);
+                }
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
@@ -19244,8 +19281,11 @@ int main(int argc, char** argv) {
                 }
                 g_video_win_w = seed.window_width;
                 /* Persist the user's choices next to the exe. */
-                PSXRecompV4::save_user_settings(
-                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
+                {
+                    PSXRecompV4::UserSettings save = seed;
+                    (void)quality_save_user_settings(
+                        exe_dir_from_argv(argv[0]) / "settings.toml", save);
+                }
             }
         }
     }
@@ -21503,7 +21543,7 @@ soft_return_lobby:
                     us.has_bios_path = false;
                     write_cached_path(argv[0], "bios.cfg", {});
                 }
-                (void)PSXRecompV4::save_user_settings(settings_path, us);
+                (void)quality_save_user_settings(settings_path, us);
             }
             g_video_renderer = ls.renderer;
             g_video_internal_res = ir.preset;

@@ -12,6 +12,7 @@
  */
 #include "config_loader.h"
 #include "quality_presets.h"
+#include "host_overlay.h"
 
 #include <cstdio>
 #include <cstring>
@@ -372,6 +373,134 @@ static void test_settings_round_trip() {
     fs::remove(p);
 }
 
+/* The preset/key-ownership transaction (psxq::settle_save), on the two cases
+ * from the #591 review, through a real settings.toml round trip. */
+static PSXRecompV4::UserSettings save_load(const PSXRecompV4::UserSettings& s) {
+    fs::path p = fs::temp_directory_path() / "psxrecomp_quality_txn.toml";
+    check(PSXRecompV4::save_user_settings(p, s), "txn: save");
+    PSXRecompV4::UserSettings r = PSXRecompV4::load_user_settings(p);
+    fs::remove(p);
+    return r;
+}
+
+/* What the next launch does with the file: decide, then mask while a preset
+ * (not Custom) is in force (main.cpp quality_preset_in_force). */
+static PSXRecompV4::UserSettings next_launch(const PSXRecompV4::UserSettings& disk,
+                                             const PsxHostInfo& h,
+                                             const std::vector<std::string>& keys,
+                                             psxq::Decision* out) {
+    psxq::Decision d = psxq::decide(0xFu, disk, h, nullptr, false, nullptr);
+    PSXRecompV4::UserSettings us = disk;
+    if (d.preset >= 0 && d.preset < PSX_QUALITY_COUNT) psxq::mask_user_settings(us, keys);
+    if (out) *out = d;
+    return us;
+}
+
+static void test_ownership_txn() {
+    const std::vector<std::string> keys = {"texture_filtering", "frame_generation",
+                                           "dynamic_resolution_min"};
+    PsxHostInfo m4 = host("Apple M4", "Apple M4", 10, 16);
+    char fp[17];
+    psx_quality_fingerprint(&m4, fp);
+
+    /* Saved Ultra on this machine. */
+    PSXRecompV4::UserSettings ultra;
+    ultra.has_quality_preset = true;   ultra.quality_preset = "ultra";
+    ultra.has_quality_base = true;     ultra.quality_base = "ultra";
+    ultra.has_quality_hardware = true; ultra.quality_hardware = fp;
+    ultra.has_quality_detected = true; ultra.quality_detected = "ultra";
+    ultra.has_scanlines = true;        ultra.scanlines = false;
+
+    /* Review case 1: PSX_QUALITY=low for one run, Settings opened and quit
+     * with nothing changed. The boot launcher's seed is built empty and
+     * filled with this run's (Low) values. */
+    {
+        psxq::Decision run = psxq::decide(0xFu, ultra, m4, "low", false, nullptr);
+        check(run.env_override && run.preset == PSX_QUALITY_LOW, "txn1: override in force");
+        PSXRecompV4::UserSettings seed;                    /* empty boot seed */
+        seed.has_texture_filter = true;  seed.texture_filter = 1;     /* Low: bilinear */
+        seed.has_frame_generation = true; seed.frame_generation = false;
+        seed.has_scanlines = true;       seed.scanlines = false;
+        psxq::settle_save(seed, ultra, run, psxq::Edit::NONE, PSX_QUALITY_NONE, keys);
+        PSXRecompV4::UserSettings disk = save_load(seed);
+        check(disk.quality_preset == "ultra" && disk.quality_base == "ultra",
+              "txn1: a one-run override never persists the preset");
+        check(!disk.has_texture_filter && !disk.has_frame_generation,
+              "txn1: nor the override's governed values (empty seed)");
+        psxq::Decision nd;
+        next_launch(disk, m4, keys, &nd);
+        check(nd.preset == PSX_QUALITY_ULTRA, "txn1: next launch is Ultra again");
+
+        /* Even a governed edit under the override applies this run only. */
+        PSXRecompV4::UserSettings edited = seed;
+        edited.texture_filter = 0;
+        psxq::Decision run2 = psxq::decide(0xFu, ultra, m4, "low", false, nullptr);
+        psxq::settle_save(edited, ultra, run2, psxq::Edit::GOVERNED_EDIT, PSX_QUALITY_NONE, keys);
+        check(edited.quality_preset == "ultra" && !edited.has_texture_filter,
+              "txn1: a governed edit under the override is not saved");
+    }
+    /* The override keeps a previous Custom profile and its values. */
+    {
+        PSXRecompV4::UserSettings custom = ultra;
+        custom.quality_preset = "custom";
+        custom.has_texture_filter = true; custom.texture_filter = 1;
+        psxq::Decision run = psxq::decide(0xFu, custom, m4, "low", false, nullptr);
+        PSXRecompV4::UserSettings seed;
+        seed.has_texture_filter = true; seed.texture_filter = 0;
+        psxq::settle_save(seed, custom, run, psxq::Edit::NONE, PSX_QUALITY_NONE, keys);
+        PSXRecompV4::UserSettings disk = save_load(seed);
+        check(disk.quality_preset == "custom" && disk.quality_base == "ultra" &&
+              disk.has_texture_filter && disk.texture_filter == 1,
+              "txn1: Custom and its values survive a one-run override");
+    }
+
+    /* Review case 2: a live in-game change to a governed value (texture
+     * filter) while Ultra is in force becomes Custom and survives restart. */
+    {
+        psxq::Decision run = psxq::decide(0xFu, ultra, m4, nullptr, false, nullptr);
+        PsxHostVideoSettings cur{}, next{};
+        cur.texture_filter = 0; next = cur; next.texture_filter = 1;
+        const psxq::Edit e = psxq::live_edit(cur, next, keys);
+        check(e == psxq::Edit::GOVERNED_EDIT, "txn2: texture filter is a governed live edit");
+        PSXRecompV4::UserSettings us = ultra;              /* the live path loads disk */
+        us.has_texture_filter = true; us.texture_filter = 1;
+        check(psxq::settle_save(us, ultra, run, e, PSX_QUALITY_NONE, keys),
+              "txn2: the state changes");
+        PSXRecompV4::UserSettings disk = save_load(us);
+        check(disk.quality_preset == "custom" && disk.quality_base == "ultra",
+              "txn2: a governed live edit becomes Custom from Ultra");
+        psxq::Decision nd;
+        PSXRecompV4::UserSettings eff = next_launch(disk, m4, keys, &nd);
+        check(nd.preset == PSX_QUALITY_CUSTOM && eff.has_texture_filter &&
+              eff.texture_filter == 1,
+              "txn2: the next launch keeps the manual texture filter");
+    }
+    /* An unrelated live edit (scanlines) keeps the preset. */
+    {
+        psxq::Decision run = psxq::decide(0xFu, ultra, m4, nullptr, false, nullptr);
+        PsxHostVideoSettings cur{}, next{};
+        next = cur; next.scanlines = 1;
+        const psxq::Edit e = psxq::live_edit(cur, next, keys);
+        check(e == psxq::Edit::NONE, "txn3: scanlines are not governed");
+        PSXRecompV4::UserSettings us = ultra;
+        us.scanlines = true;
+        us.has_texture_filter = true; us.texture_filter = 0;   /* the live path writes every row */
+        psxq::settle_save(us, ultra, run, e, PSX_QUALITY_NONE, keys);
+        check(us.quality_preset == "ultra" && us.scanlines && !us.has_texture_filter,
+              "txn3: unrelated edits keep the preset; its keys stay the preset's");
+    }
+    /* A launcher pick is recorded; the picked preset owns its keys. */
+    {
+        psxq::Decision run = psxq::decide(0xFu, ultra, m4, nullptr, false, nullptr);
+        PSXRecompV4::UserSettings seed;
+        seed.has_texture_filter = true; seed.texture_filter = 1;
+        psxq::settle_save(seed, ultra, run, psxq::Edit::PICK, PSX_QUALITY_MEDIUM, keys);
+        check(seed.quality_preset == "medium" && seed.quality_base == "medium" &&
+              seed.quality_hardware == fp && !seed.has_texture_filter,
+              "txn4: a picked preset is saved with the hardware it was picked on");
+    }
+}
+
 int main() {
     test_parse();
     test_classify();
@@ -379,6 +508,7 @@ int main() {
     test_decide();
     test_mask();
     test_settings_round_trip();
+    test_ownership_txn();
     if (failures) {
         std::fprintf(stderr, "quality_presets_test: %d failure(s)\n", failures);
         return 1;
