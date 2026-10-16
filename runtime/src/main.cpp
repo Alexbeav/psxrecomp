@@ -8741,14 +8741,12 @@ static int input_route_apply_event(uint8_t event, uint8_t disc_index,
                                    const char *disc_path,
                                    char *why, size_t why_cap) {
     if (event == INPUT_ROUTE_EVENT_TRAY_OPEN) {
-        if (cdrom_route_tray_open()) return 1;
-        std::snprintf(why, why_cap, "tray open failed");
-        return 0;
+        return cdrom_route_apply_event(event, nullptr, nullptr, why,
+                                       (uint32_t)why_cap);
     }
     if (event == INPUT_ROUTE_EVENT_TRAY_CLOSE) {
-        if (cdrom_route_tray_close()) return 1;
-        std::snprintf(why, why_cap, "tray close failed");
-        return 0;
+        return cdrom_route_apply_event(event, nullptr, nullptr, why,
+                                       (uint32_t)why_cap);
     }
     if (event != INPUT_ROUTE_EVENT_DISC_SELECT || !disc_path ||
         disc_index < 1 || (size_t)disc_index > g_disc_metadata_roster.size()) {
@@ -8759,9 +8757,9 @@ static int input_route_apply_event(uint8_t event, uint8_t disc_index,
         ? g_disc_serials[disc_index - 1] : std::string();
     const auto identity = PSXRecompV4::identify_disc(
         disc_path, expected, 0, false, false);
-    if (!cdrom_route_disc_select(disc_path,
-                                 disc_scex_for_region(identity.region))) {
-        std::snprintf(why, why_cap, "disc select failed");
+    if (!cdrom_route_apply_event(event, disc_path,
+                                 disc_scex_for_region(identity.region), why,
+                                 (uint32_t)why_cap)) {
         return 0;
     }
     note_mounted_disc_warning(disc_path, identity.detected_serial);

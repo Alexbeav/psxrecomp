@@ -617,6 +617,20 @@ if(BUILD_TESTING)
     add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_input_route_session.py
         $<TARGET_FILE:input_route_session_diagnostic> $<TARGET_FILE:input_route_session_release>)
+    add_executable(input_route_cdrom_events_test
+        tests/test_input_route_cdrom_events.c
+        src/input_route_session.c src/disc_digest_cache.c src/psx_sha256.c
+        src/iso_reader_c.cpp src/iso_reader.cpp src/cue_sheet.cpp)
+    target_include_directories(input_route_cdrom_events_test PRIVATE
+        include ${PSXRECOMP_ROOT}/recompiler/include)
+    if(NOT MSVC)
+        target_compile_options(input_route_cdrom_events_test PRIVATE
+            -Wall -Wextra -Werror -Wno-unused-function)
+    endif()
+    target_link_libraries(input_route_cdrom_events_test PRIVATE chdr-static)
+    add_test(NAME input_route_cdrom_events_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_input_route_cdrom_events.py
+        $<TARGET_FILE:input_route_cdrom_events_test>)
     add_executable(sio_nymashock_card_test tests/test_sio_nymashock_card.c)
     target_include_directories(sio_nymashock_card_test PRIVATE include)
     add_test(NAME sio_nymashock_card_test COMMAND ${Python3_EXECUTABLE}

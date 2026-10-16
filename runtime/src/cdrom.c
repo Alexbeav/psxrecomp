@@ -14,6 +14,7 @@
 #include "cd_seek_delay.h"
 #include "cdrom_irq.h"
 #include "cdrom_lid.h"
+#include "input_route_v3_file.h"
 #include "dma.h"
 #include "spu.h"
 #include "event_ring.h"
@@ -4038,6 +4039,21 @@ int cdrom_route_tray_close(void) {
     stat_reg |= CDSTAT_MOTOR | CDSTAT_SHELL;
     trace_cdrom('C', 0, iso_sector_count(iso_handle), 0);
     return 1;
+}
+
+int cdrom_route_apply_event(uint8_t event, const char* disc_path,
+                            const char scex[4], char* why, uint32_t why_size) {
+    const char *failure = "unsupported route event";
+    int ok = 0;
+    if (event == INPUT_ROUTE_EVENT_TRAY_OPEN) {
+        ok = cdrom_route_tray_open(); failure = "tray open failed";
+    } else if (event == INPUT_ROUTE_EVENT_TRAY_CLOSE) {
+        ok = cdrom_route_tray_close(); failure = "tray close failed";
+    } else if (event == INPUT_ROUTE_EVENT_DISC_SELECT && disc_path && disc_path[0]) {
+        ok = cdrom_route_disc_select(disc_path, scex); failure = "disc select failed";
+    }
+    if (!ok && why && why_size) snprintf(why, why_size, "%s", failure);
+    return ok;
 }
 
 /* The image and license region in the drive before a restore mount. */

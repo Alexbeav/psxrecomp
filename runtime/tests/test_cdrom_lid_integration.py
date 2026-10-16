@@ -61,9 +61,7 @@ assert "stat_reg |= CDSTAT_MOTOR | CDSTAT_SHELL" in route_close
 
 assert MAIN.index("input_route_session_set_disc_roster(") < MAIN.index(
     "input_route_session_set_event_executor(input_route_apply_event)")
-assert "cdrom_route_tray_open()" in MAIN
-assert "cdrom_route_disc_select(disc_path" in MAIN
-assert "cdrom_route_tray_close()" in MAIN
+assert MAIN.count("cdrom_route_apply_event(") == 3
 assert "savestate_note_disc_mounted(disc_index)" in MAIN
 
 print("PASS: timed CD lid integration guards")

@@ -29,6 +29,8 @@ int cdrom_replace_disc(const char* cue_path, const char scex[4]);
 int cdrom_route_tray_open(void);
 int cdrom_route_disc_select(const char* cue_path, const char scex[4]);
 int cdrom_route_tray_close(void);
+int cdrom_route_apply_event(uint8_t event, const char* disc_path,
+                            const char scex[4], char* why, uint32_t why_size);
 
 /* Put another image in the drive for a save-state load, without a lid event.
  *
