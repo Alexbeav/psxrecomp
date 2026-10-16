@@ -155,8 +155,11 @@ entries  ext_bytes of: u32 tag, u32 length, payload, zero padding to 4 bytes
 records  frame_count records of record_size, then end of file
 ```
 
-- `frame_count` is 1..1,000,000. `ext_bytes` is a multiple of 4 and at most
-  16 MiB. The file size must equal `28 + ext_bytes + frame_count * record_size`.
+- `frame_count` is 1..1,000,000 unless tag `0x00000204` selects capacity
+  contract version 1. Version 1 admits at most 4,000,000 frames. The reader
+  refuses a larger legacy route, an unknown contract version, or another
+  advertised ceiling. `ext_bytes` is a multiple of 4 and at most 16 MiB. The
+  file size must equal `28 + ext_bytes + frame_count * record_size`.
 - `record_size` 8 is a PSXRTI1 record (u32 one-based sequence, u16 active-low
   buttons, u16 0); 12 is a PSXRTI2 record. A PSXRTI3 digital route declares one
   digital pad on port 1.
@@ -172,7 +175,10 @@ records  frame_count records of record_size, then end of file
 | `0x80000105` | T101 | boot mode |
 | `0x80000110` | T101 | marker: u32 frame, u8 kind (1 MENU, 2 GAMEPLAY), u8[3] 0 |
 | `0x80000111` | T101 | checkpoint: u32 frame, u32 0, u64 guest cycle, u8[32] RAM SHA-256, u64[512] FNV-1a 64 page hashes |
-| `0x000002xx` | T98 | port layout, console events, disc set (mandatory; not read yet) |
+| `0x00000201` | T98 | port layout: u8 port count, u8[3] 0, then one device byte per port (0 none, 1 digital, 2 DualShock) |
+| `0x00000202` | T98 | console events: u32 count, then ordered 8-byte frame/event/disc records |
+| `0x00000203` | T98 | disc set: u32 count, then digest kind, u8[3] 0 and SHA-256 per disc |
+| `0x00000204` | PS1G-43 | capacity admission: u32 contract version 1, u32 ceiling 4,000,000 |
 | `0x00000301` | PS1B-191 | player replay anchor: the save state the replay starts from |
 | `0x00000302` | PS1B-191 | player replay settings: ASCII `key=value` lines |
 | `0x00000303` | PS1B-191 | player replay state digests: u32 count, then u32 frame and four u32 digests each |
@@ -192,3 +198,21 @@ frame 0 is before the first record. Frames strictly increase, are at most
 `frame_count`, and every checkpoint has a marker at the same frame. The runtime
 reader refuses unknown `0x800001xx` tags so that a newer identity field is never
 silently ignored.
+
+Console events use the same boundary rule. Event kinds are RESET 1,
+TRAY_OPEN 2, TRAY_CLOSE 3 and DISC_SELECT 4. RESET and TRAY_OPEN require disc
+index 0. TRAY_CLOSE and DISC_SELECT require a one-based index in the declared
+disc set. Events require a disc set even when an individual event does not name
+a disc. The reader preserves file order for events on the same frame and
+refuses decreasing frames, reserved bytes, unknown kinds and out-of-roster
+indices.
+
+The wire reader admits this metadata for validation and conversion tests. The
+product session still refuses a route that contains console events because it
+does not yet apply them to the CD-ROM and disc roster. This explicit refusal
+prevents a validated event from being skipped during playback.
+
+This source revision validates one declared digital or DualShock port. It
+refuses a multi-port body after it validates the declared record size, because
+the runtime does not yet deliver the second port. This refusal prevents a
+two-pad Exoddus route from being treated as a one-pad route.

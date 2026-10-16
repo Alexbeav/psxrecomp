@@ -76,6 +76,31 @@ static uint32_t identity_block(unsigned char *ext, const char *pin, int omit)
 
 static const char pin[] = "0123456789abcdef0123456789abcdef01234567";
 
+static FILE *long_route(uint32_t frames, int capacity)
+{
+    unsigned char h[28] = {0}, entry[16] = {0}, record[8] = {0};
+    FILE *f = tmpfile();
+    check(f != NULL, "long route tmpfile");
+    memcpy(h, "PSXRTI3\0", 8);
+    input_route_put32(h + 8, 3); input_route_put32(h + 12, 8);
+    input_route_put32(h + 16, frames); input_route_put32(h + 24, capacity ? 16 : 0);
+    check(fwrite(h, 1, sizeof(h), f) == sizeof(h), "long route header");
+    if (capacity) {
+        input_route_put32(entry, INPUT_ROUTE_TAG_CAPACITY);
+        input_route_put32(entry + 4, 8);
+        input_route_put32(entry + 8, 1);
+        input_route_put32(entry + 12, INPUT_ROUTE_V3_CAPACITY_V1_FRAMES);
+        check(fwrite(entry, 1, sizeof(entry), f) == sizeof(entry), "capacity entry");
+    }
+    record[4] = record[5] = 0xff;
+    for (uint32_t i = 0; i < frames; ++i) {
+        input_route_put32(record, i + 1);
+        check(fwrite(record, 1, sizeof(record), f) == sizeof(record), "long route record");
+    }
+    rewind(f);
+    return f;
+}
+
 int main(void)
 {
     InputRouteV3 meta;
@@ -169,6 +194,23 @@ int main(void)
     check(read_bytes(n - 1, &meta) != NULL, "extension size not a multiple of 4");
     cases += 7;
 
+    /* The old bound stays frozen unless the route explicitly selects the
+     * versioned capacity contract. */
+    {
+        FILE *f = long_route(INPUT_ROUTE_MAX_FRAMES + 1u, 0);
+        const char *err = input_route_v3_read(f, &meta, digital, NULL, markers, checkpoints);
+        fclose(f);
+        check(err && !strcmp(err, "long route lacks capacity admission"),
+              "long route without capacity admission refused");
+        f = long_route(INPUT_ROUTE_MAX_FRAMES + 1u, 1);
+        err = input_route_v3_read(f, &meta, digital, NULL, markers, checkpoints);
+        fclose(f);
+        check(!err && meta.frames == INPUT_ROUTE_MAX_FRAMES + 1u &&
+              meta.capacity_version == 1u && meta.steps == 1u,
+              "capacity v1 admits a lossless long route");
+        cases += 2;
+    }
+
     /* Tags. */
     {
         Buf b = {ext, 0};
@@ -176,9 +218,11 @@ int main(void)
         bentry(&b, 0x8000ffffu, "x", 1);
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
         check(!read_bytes(n, &meta), "unknown skippable tags are skipped");
-        b.n = 0; bentry(&b, 0x00000201u, "\1\0\0\0\1", 5);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\0\0\0\1", 5);
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
-        check(read_bytes(n, &meta) != NULL, "T98 mandatory tag refused here");
+        check(!read_bytes(n, &meta) && meta.port_count == 1 &&
+              meta.port_devices[0] == INPUT_ROUTE_DEVICE_DIGITAL,
+              "declared digital port layout admitted");
         b.n = 0; bentry(&b, 0x800001ffu, "x", 1);
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
         check(read_bytes(n, &meta) != NULL, "unknown 0x800001xx refused");
@@ -189,6 +233,37 @@ int main(void)
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
         check(read_bytes(n, &meta) != NULL, "entry longer than block");
         cases += 5;
+    }
+
+    /* Console events are ordered boundary actions bound to a verified disc
+     * roster. No event or disc index can be skipped or invented. */
+    {
+        unsigned char discs[76] = {0}, events[28] = {0};
+        Buf b = {ext, 0};
+        input_route_put32(discs, 2);
+        discs[4] = discs[40] = INPUT_ROUTE_DISC_DIGEST_FILE;
+        for (unsigned i = 0; i < 32; ++i) {
+            discs[8 + i] = (unsigned char)i;
+            discs[44 + i] = (unsigned char)(0x80 + i);
+        }
+        input_route_put32(events, 3);
+        input_route_put32(events + 4, 2); events[8] = INPUT_ROUTE_EVENT_TRAY_OPEN;
+        input_route_put32(events + 12, 3); events[16] = INPUT_ROUTE_EVENT_DISC_SELECT; events[17] = 2;
+        input_route_put32(events + 20, 3); events[24] = INPUT_ROUTE_EVENT_TRAY_CLOSE; events[25] = 2;
+        bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+        n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
+        check(!read_bytes(n, &meta) && meta.event_count == 3 && meta.disc_count == 2 &&
+              meta.events[1].disc_index == 2, "event and disc set admitted");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
+        check(read_bytes(n, &meta) != NULL, "events without disc set refused");
+        events[17] = 3;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+        n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
+        check(read_bytes(n, &meta) != NULL, "event outside disc set refused");
+        cases += 3;
     }
 
     /* Identity is all-or-nothing, strict, and unique. */

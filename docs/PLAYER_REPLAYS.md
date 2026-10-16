@@ -228,8 +228,11 @@ A power-on recording does not start when a save state is loaded at boot
 
 ## Limits
 
-- A replay holds at most 1,000,000 frames (about 4 hours 37 minutes at 60 Hz)
-  and 65,536 input changes. Constant analog stick movement can reach the input
+- A replay normally holds at most 1,000,000 frames (about 4 hours 37 minutes
+  at 60 Hz). A PSXRTI3 file can explicitly select capacity contract version 1,
+  which admits at most 4,000,000 frames. PSXRTI1 and PSXRTI2 keep the original
+  bound and byte contract. A replay holds at most 65,536 input changes.
+  Constant analog stick movement can reach the input
   limit in about 18 minutes. At either limit the recording stops and is saved.
 - Overlays run interpreted while a replay records or plays (the PS1B-191
   stopgap), so an overlay-heavy game can run slower. New dynamic overlays also

@@ -7,7 +7,7 @@
  *
  * Wire layout, little-endian:
  *   header   u8[8] "PSXRTI3\0", u32 version=3, u32 record_size,
- *            u32 frame_count (1..INPUT_ROUTE_MAX_FRAMES), u32 flags=0,
+ *            u32 frame_count, u32 flags=0,
  *            u32 ext_bytes (multiple of 4, <= 16 MiB)
  *   entries  ext_bytes of: u32 tag, u32 length, payload[length],
  *            zero padding to 4 bytes (not counted in length)
@@ -18,8 +18,8 @@
  * unknown bit-31 tags and refuses any other unknown tag.
  *   0x800001xx  T101 identity and markers (this reader). Unknown 0x800001xx
  *               tags are refused so an identity field is never ignored.
- *   0x000002xx  T98 port layout, console events, disc set. Not implemented
- *               here, so refused as unknown mandatory tags.
+ *   0x000002xx  T98 port layout, console events, disc set and explicit
+ *               versioned admission for a larger frame count.
  * Without a port-layout tag, record_size 8 is a PSXRTI1 record and 12 a
  * PSXRTI2 record, under the same strict record rules.
  *
@@ -34,6 +34,9 @@
 #define INPUT_ROUTE_V3_MAX_EXT (16u << 20)
 #define INPUT_ROUTE_V3_TEXT 128u
 #define INPUT_ROUTE_V3_MAX_MARKERS 256u
+#define INPUT_ROUTE_V3_MAX_EVENTS 256u
+#define INPUT_ROUTE_V3_MAX_DISCS 8u
+#define INPUT_ROUTE_V3_CAPACITY_V1_FRAMES 4000000u
 #define INPUT_ROUTE_RAM_PAGES 512u /* 2 MiB main RAM, 4 KiB pages */
 
 #define INPUT_ROUTE_TAG_SKIPPABLE   0x80000000u
@@ -46,6 +49,12 @@
 #define INPUT_ROUTE_TAG_BOOT_MODE   0x80000105u
 #define INPUT_ROUTE_TAG_MARKER      0x80000110u /* u32 frame, u8 kind, u8[3] 0 */
 #define INPUT_ROUTE_TAG_CHECKPOINT  0x80000111u /* see INPUT_ROUTE_CHECKPOINT_BYTES */
+#define INPUT_ROUTE_TAG_PORT_LAYOUT 0x00000201u
+#define INPUT_ROUTE_TAG_EVENTS      0x00000202u
+#define INPUT_ROUTE_TAG_DISC_SET    0x00000203u
+/* Explicit opt-in for routes beyond the frozen 1,000,000-frame legacy bound.
+ * Payload: u32 contract version=1, u32 admitted frame ceiling=4,000,000. */
+#define INPUT_ROUTE_TAG_CAPACITY    0x00000204u
 /* PS1B-191 player replay. Mandatory tags: a reader that does not admit
  * replays refuses the file instead of replaying it from power-on.
  *   ANCHOR    the machine state (.pst blob) the replay starts from
@@ -109,6 +118,30 @@ typedef struct {
     uint64_t pages[INPUT_ROUTE_RAM_PAGES];
 } InputRouteCheckpoint;
 
+enum {
+    INPUT_ROUTE_DEVICE_NONE = 0,
+    INPUT_ROUTE_DEVICE_DIGITAL = 1,
+    INPUT_ROUTE_DEVICE_DUALSHOCK = 2
+};
+
+enum {
+    INPUT_ROUTE_EVENT_RESET = 1,
+    INPUT_ROUTE_EVENT_TRAY_OPEN = 2,
+    INPUT_ROUTE_EVENT_TRAY_CLOSE = 3,
+    INPUT_ROUTE_EVENT_DISC_SELECT = 4
+};
+
+typedef struct {
+    uint32_t frame;
+    uint8_t event;
+    uint8_t disc_index;
+} InputRouteConsoleEvent;
+
+typedef struct {
+    uint8_t kind;
+    uint8_t digest[32];
+} InputRouteDisc;
+
 typedef struct {
     uint32_t record_size;
     uint32_t frames;
@@ -122,6 +155,13 @@ typedef struct {
     uint8_t disc_digest[32];
     uint32_t marker_count;
     uint32_t checkpoint_count;
+    uint32_t capacity_version;
+    uint8_t port_count;
+    uint8_t port_devices[2];
+    uint32_t event_count;
+    InputRouteConsoleEvent events[INPUT_ROUTE_V3_MAX_EVENTS];
+    uint32_t disc_count;
+    InputRouteDisc discs[INPUT_ROUTE_V3_MAX_DISCS];
 } InputRouteV3;
 
 /* Replay extension read by input_route_v3_read_ex. The anchor is located, not
@@ -210,7 +250,7 @@ static inline const char *input_route_v3_read_ex(
     unsigned char *cp = NULL;
     InputRouteV3 s;
     long start, size;
-    uint32_t used = 0, identity = 0, ext;
+    uint32_t used = 0, identity = 0, ext, shared = 0;
     const char *error = NULL;
     memset(meta, 0, sizeof(*meta));
     memset(&s, 0, sizeof(s));
@@ -221,9 +261,7 @@ static inline const char *input_route_v3_read_ex(
     s.record_size = input_route_le32(h + 12);
     s.frames = input_route_le32(h + 16);
     ext = input_route_le32(h + 24);
-    if (s.record_size != 8 && s.record_size != INPUT_DUALSHOCK_ROUTE_RECORD_BYTES)
-        return "record size";
-    if (!s.frames || s.frames > INPUT_ROUTE_MAX_FRAMES) return "frame count";
+    if (!s.frames || s.frames > INPUT_ROUTE_V3_CAPACITY_V1_FRAMES) return "frame count";
     if (input_route_le32(h + 20)) return "flags";
     if (ext % 4 || ext > INPUT_ROUTE_V3_MAX_EXT) return "extension size";
     if (fseek(f, 0, SEEK_END) || (size = ftell(f)) < 0 ||
@@ -242,6 +280,83 @@ static inline const char *input_route_v3_read_ex(
         if (length > ext - used || padded > ext - used)
             { error = "extension length"; break; }
         switch (tag) {
+        case INPUT_ROUTE_TAG_PORT_LAYOUT: {
+            uint32_t expected = 4;
+            if (shared & 1u) { error = "duplicate port layout"; break; }
+            if (length < 5 || length > 6 || fread(small, 1, length, f) != length)
+                { error = "port layout length"; break; }
+            s.port_count = small[0];
+            if (s.port_count < 1 || s.port_count > 2 || small[1] || small[2] || small[3] ||
+                length != 4u + s.port_count) { error = "port layout"; break; }
+            for (uint32_t i = 0; i < s.port_count; ++i) {
+                const uint8_t device = small[4 + i];
+                if (device > INPUT_ROUTE_DEVICE_DUALSHOCK) { error = "port device"; break; }
+                s.port_devices[i] = device;
+                expected += device == INPUT_ROUTE_DEVICE_DIGITAL ? 4u :
+                            device == INPUT_ROUTE_DEVICE_DUALSHOCK ? 8u : 0u;
+            }
+            if (!error && expected != s.record_size) error = "port record size";
+            shared |= 1u;
+            break;
+        }
+        case INPUT_ROUTE_TAG_EVENTS: {
+            uint32_t count;
+            if (shared & 2u) { error = "duplicate console events"; break; }
+            if (length < 4 || fread(small, 1, 4, f) != 4)
+                { error = "console events length"; break; }
+            count = input_route_le32(small);
+            if (count > INPUT_ROUTE_V3_MAX_EVENTS || length != 4u + 8u * count)
+                { error = "console events length"; break; }
+            for (uint32_t i = 0; !error && i < count; ++i) {
+                if (fread(small, 1, 8, f) != 8) { error = "short console event"; break; }
+                InputRouteConsoleEvent *event = &s.events[i];
+                event->frame = input_route_le32(small);
+                event->event = small[4];
+                event->disc_index = small[5];
+                if (small[6] || small[7] || event->frame > s.frames ||
+                    (i && event->frame < s.events[i - 1].frame))
+                    error = "console event frame/reserved/order";
+                else if (event->event < INPUT_ROUTE_EVENT_RESET ||
+                         event->event > INPUT_ROUTE_EVENT_DISC_SELECT)
+                    error = "console event kind";
+                else if ((event->event == INPUT_ROUTE_EVENT_RESET ||
+                          event->event == INPUT_ROUTE_EVENT_TRAY_OPEN) ? event->disc_index != 0
+                                                                      : event->disc_index == 0)
+                    error = "console event disc";
+            }
+            s.event_count = count;
+            shared |= 2u;
+            break;
+        }
+        case INPUT_ROUTE_TAG_DISC_SET: {
+            uint32_t count;
+            if (shared & 4u) { error = "duplicate disc set"; break; }
+            if (length < 4 || fread(small, 1, 4, f) != 4)
+                { error = "disc set length"; break; }
+            count = input_route_le32(small);
+            if (!count || count > INPUT_ROUTE_V3_MAX_DISCS || length != 4u + 36u * count)
+                { error = "disc set length"; break; }
+            for (uint32_t i = 0; !error && i < count; ++i) {
+                if (fread(small, 1, 36, f) != 36) { error = "short disc set"; break; }
+                if ((small[0] != INPUT_ROUTE_DISC_DIGEST_CUE &&
+                     small[0] != INPUT_ROUTE_DISC_DIGEST_FILE) || small[1] || small[2] || small[3])
+                    { error = "disc set kind/reserved"; break; }
+                s.discs[i].kind = small[0];
+                memcpy(s.discs[i].digest, small + 4, 32);
+            }
+            s.disc_count = count;
+            shared |= 4u;
+            break;
+        }
+        case INPUT_ROUTE_TAG_CAPACITY:
+            if (shared & 8u) { error = "duplicate capacity admission"; break; }
+            if (length != 8 || fread(small, 1, 8, f) != 8 ||
+                input_route_le32(small) != 1u ||
+                input_route_le32(small + 4) != INPUT_ROUTE_V3_CAPACITY_V1_FRAMES)
+                { error = "capacity admission"; break; }
+            s.capacity_version = 1;
+            shared |= 8u;
+            break;
         case INPUT_ROUTE_TAG_PIN:
             error = input_route_v3_text(f, length, s.pin);
             if (!error && length != 40) error = "pin length";
@@ -405,6 +520,19 @@ static inline const char *input_route_v3_read_ex(
     }
     free(cp);
     if (error) return error;
+    if (s.frames > INPUT_ROUTE_MAX_FRAMES && s.capacity_version != 1u)
+        return "long route lacks capacity admission";
+    if (!s.port_count) {
+        if (s.record_size != 8 && s.record_size != INPUT_DUALSHOCK_ROUTE_RECORD_BYTES)
+            return "record size";
+    } else if (s.port_count != 1 ||
+               (s.port_devices[0] != INPUT_ROUTE_DEVICE_DIGITAL &&
+                s.port_devices[0] != INPUT_ROUTE_DEVICE_DUALSHOCK)) {
+        return "declared port layout not supported";
+    }
+    if (s.event_count && !s.disc_count) return "console events require disc set";
+    for (uint32_t i = 0; i < s.event_count; ++i)
+        if (s.events[i].disc_index > s.disc_count) return "console event disc index";
     if (identity && identity != 31u) return "partial identity";
     s.has_identity = identity == 31u;
     for (uint32_t i = 0, j = 0; i < s.checkpoint_count; ++i) {

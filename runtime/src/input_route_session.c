@@ -488,6 +488,10 @@ int input_route_session_admit(const char *path)
                                                          sizeof(*s_checkpoints));
         error = s_checkpoints ? input_route_v3_read(f, &meta, digital, dual, s_markers, s_checkpoints)
                               : "out of memory";
+        /* The wire reader preserves and validates events, but the product
+         * must not arm until the host can apply every event at its boundary. */
+        if (!error && meta.event_count)
+            error = "console event execution is not implemented";
         count = meta.steps; frames = meta.frames;
         dualshock = meta.record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
     } else if (!memcmp(magic, "PSXRTI2\0", 8)) {
