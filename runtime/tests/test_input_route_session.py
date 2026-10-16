@@ -234,6 +234,17 @@ with tempfile.TemporaryDirectory() as temp:
               'boundary0=-1 events=2:0:-' in out and
               f'boundary1=-1 {expected}' in out and f'boundary3=-1 {expected}' in out,
               f'event boundaries preserve order and execute once on {exe.name}', out + err)
+        mutable = root / f'mutable-{exe.name}.bin'
+        mutable.write_bytes(roster2.read_bytes())
+        code, out, err = run(exe, 'event-mutate', event_route, mutable, roster1, mutable,
+                             markers_exit=False)
+        check(code == 0 and 'admitted=1 armed=1' in out and
+              'boundary0=-1 events=2:0:-' in out and
+              'boundary1=2 events=2:0:-' in out and
+              'boundary2=-1 events=2:0:-' in out and
+              'disc changed after admission' in err and '4:2:' not in out,
+              f'changed selected image fails before callback without retry on {exe.name}',
+              out + err)
     wrong_kind_disc = (struct.pack('<I', 2) +
                        struct.pack('<4B32s', 1, 0, 0, 0,
                                    hashlib.sha256(roster1.read_bytes()).digest()) +
@@ -249,6 +260,29 @@ with tempfile.TemporaryDirectory() as temp:
     check(code == 0 and 'admitted=0 armed=0' in out and
           'console event disc roster digest' in err,
           'event route with a wrong digest kind never arms', out + err)
+    cue_dir = root / 'event-cue'
+    cue_dir.mkdir()
+    cue_track = cue_dir / 'track.bin'
+    cue_track.write_bytes(b'cue track bytes')
+    cue_roster = cue_dir / 'disc.cue'
+    cue_roster.write_text('FILE "track.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
+    cue_kind, cue_digest = input_route_v3.disc_digest(cue_roster)
+    check(cue_kind == 'cue', 'CUE mutation fixture uses the CUE digest contract')
+    cue_disc = (struct.pack('<I', 2) +
+                struct.pack('<4B32s', 2, 0, 0, 0,
+                            hashlib.sha256(roster1.read_bytes()).digest()) +
+                struct.pack('<4B32s', 1, 0, 0, 0, bytes.fromhex(cue_digest)))
+    cue_ext = entry(0x00000202, event_list) + entry(0x00000203, cue_disc)
+    cue_route = root / 'cue-event.psxrti3'
+    cue_route.write_bytes(
+        struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 8, 3, 0, len(cue_ext)) + cue_ext +
+        b''.join(struct.pack('<IHH', n, 0xffff, 0) for n in range(1, 4)))
+    code, out, err = run(diagnostic, 'event-mutate', cue_route, cue_track,
+                         roster1, cue_roster, markers_exit=False)
+    check(code == 0 and 'admitted=1 armed=1' in out and
+          'boundary1=2 events=2:0:-' in out and 'boundary2=-1 events=2:0:-' in out and
+          'disc changed after admission' in err and '4:2:' not in out,
+          'changed CUE referenced file fails before callback without retry', out + err)
     code, out, err = run(diagnostic, 'event-fail', event_route, roster1, roster2,
                          markers_exit=False)
     check(code == 0 and 'boundary1=2' in out and 'boundary2=-1' in out and

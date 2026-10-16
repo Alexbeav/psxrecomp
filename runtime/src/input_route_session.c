@@ -777,6 +777,20 @@ int input_route_session_boundary(void)
         const char *path = event->event == INPUT_ROUTE_EVENT_DISC_SELECT
             ? s_disc_roster[event->disc_index - 1u] : NULL;
         char why[160] = {0};
+        if (path) {
+            uint32_t kind = 0;
+            uint8_t digest[32];
+            const InputRouteDisc *admitted = &s_meta.discs[event->disc_index - 1u];
+            const char *error = disc_digest_path(path, &kind, digest, 0);
+            if (error || kind != admitted->kind || memcmp(digest, admitted->digest, 32)) {
+                fprintf(stderr,
+                        "input route event failed: frame=%u kind=%u disc=%u reason=disc changed after admission\n",
+                        (unsigned)frame, (unsigned)event->event,
+                        (unsigned)event->disc_index);
+                s_active = s_route_armed = s_owns_ports = 0;
+                return 2;
+            }
+        }
         if (!s_event_executor(event->event, event->disc_index, path, why, sizeof(why))) {
             fprintf(stderr,
                     "input route event failed: frame=%u kind=%u disc=%u%s%s\n",

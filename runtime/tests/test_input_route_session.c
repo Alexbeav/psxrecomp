@@ -139,11 +139,14 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc >= 3 && (!strcmp(argv[1], "event-run") ||
-                      !strcmp(argv[1], "event-fail"))) {
+                      !strcmp(argv[1], "event-fail") ||
+                      !strcmp(argv[1], "event-mutate"))) {
         const char *roster[INPUT_ROUTE_V3_MAX_DISCS];
-        const uint32_t roster_count = argc > 3 ? (uint32_t)(argc - 3) : 0;
+        const int mutate = !strcmp(argv[1], "event-mutate");
+        const int roster_at = mutate ? 4 : 3;
+        const uint32_t roster_count = argc > roster_at ? (uint32_t)(argc - roster_at) : 0;
         for (uint32_t i = 0; i < roster_count && i < INPUT_ROUTE_V3_MAX_DISCS; ++i)
-            roster[i] = argv[3 + i];
+            roster[i] = argv[roster_at + i];
         fail_event = !strcmp(argv[1], "event-fail") ? INPUT_ROUTE_EVENT_DISC_SELECT : 0;
         input_route_session_set_event_executor(apply_event);
         input_route_session_set_disc_roster(roster, roster_count);
@@ -153,6 +156,11 @@ int main(int argc, char **argv)
         for (unsigned frame = 0; frame < 4; ++frame) {
             const int status = input_route_session_boundary();
             printf("boundary%u=%d events=%s\n", frame, status, event_log);
+            if (mutate && frame == 0) {
+                FILE *changed = fopen(argv[3], "ab");
+                if (!changed || fwrite("changed", 1, 7, changed) != 7 || fclose(changed))
+                    return 40;
+            }
         }
         return 0;
     }

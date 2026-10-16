@@ -210,7 +210,10 @@ indices.
 Before arming an event route, the product session resolves the configured disc
 roster in its declared order and hashes every complete image (or CUE and its
 referenced files). The count, digest kind and digest must exactly match the
-route. A missing, unreadable, reordered or changed roster is refused.
+route. A missing, unreadable, reordered or changed roster is refused. The
+selected entry is fully hashed again at its DISC_SELECT boundary, before the
+CD state can change, so a file or CUE track changed after admission is also
+refused.
 
 The product applies TRAY_OPEN, DISC_SELECT and TRAY_CLOSE at their declared
 boundary, before the next input record. Same-frame events run once in file
