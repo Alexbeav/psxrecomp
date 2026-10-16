@@ -23,6 +23,13 @@ void cdrom_init(const char* cue_path);
  * runtime overlay deliberately treats selected paths as session-only. */
 int cdrom_replace_disc(const char* cue_path, const char scex[4]);
 
+/* Input-route disc events. These keep the recorded open/select/close
+ * boundaries distinct. Select is transactional and is valid only while the
+ * route-held tray is open. Close makes the selected media readable now. */
+int cdrom_route_tray_open(void);
+int cdrom_route_disc_select(const char* cue_path, const char scex[4]);
+int cdrom_route_tray_close(void);
+
 /* Put another image in the drive for a save-state load, without a lid event.
  *
  * A state restores the drive's registers, FIFOs and sector buffers, but not

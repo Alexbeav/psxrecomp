@@ -207,10 +207,18 @@ a disc. The reader preserves file order for events on the same frame and
 refuses decreasing frames, reserved bytes, unknown kinds and out-of-roster
 indices.
 
-The wire reader admits this metadata for validation and conversion tests. The
-product session still refuses a route that contains console events because it
-does not yet apply them to the CD-ROM and disc roster. This explicit refusal
-prevents a validated event from being skipped during playback.
+Before arming an event route, the product session resolves the configured disc
+roster in its declared order and hashes every complete image (or CUE and its
+referenced files). The count, digest kind and digest must exactly match the
+route. A missing, unreadable, reordered or changed roster is refused.
+
+The product applies TRAY_OPEN, DISC_SELECT and TRAY_CLOSE at their declared
+boundary, before the next input record. Same-frame events run once in file
+order. TRAY_OPEN holds the emulated lid open, DISC_SELECT transactionally
+mounts the digest-bound roster entry, and TRAY_CLOSE starts the normal close
+state. A host failure stops and disarms the route; it is never treated as a
+successful or skipped event. RESET remains unsupported and is refused before
+arming. PSXRTI1 and PSXRTI2 behavior and bytes are unchanged.
 
 This source revision validates one declared digital or DualShock port. It
 refuses a multi-port body after it validates the declared record size, because

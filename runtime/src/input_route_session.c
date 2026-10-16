@@ -46,6 +46,9 @@ static uint8_t s_digest[32];
 static int s_replay_digest_cached;
 static uint32_t s_replay_digest_kind;
 static uint8_t s_replay_digest[32];
+static char s_disc_roster[INPUT_ROUTE_V3_MAX_DISCS][PATH_BYTES];
+static uint32_t s_disc_roster_count;
+static InputRouteEventExecutor s_event_executor;
 
 /* Armed state shared by replay and record. */
 static int s_active;         /* markers to check, or recording */
@@ -59,6 +62,7 @@ static InputRouteV3 s_meta;
 static InputRouteMarker s_markers[INPUT_ROUTE_V3_MAX_MARKERS];
 static InputRouteCheckpoint *s_checkpoints;
 static uint32_t s_next_marker;
+static uint32_t s_next_event;
 
 /* Release replay. */
 static InputRouteStep *s_digital;
@@ -135,6 +139,25 @@ void input_route_session_set_disc(const char *disc_serial, const char *disc_path
     s_replay_digest_cached = 0;
 }
 
+int input_route_session_set_disc_roster(const char *const *paths, uint32_t count)
+{
+    memset(s_disc_roster, 0, sizeof(s_disc_roster));
+    s_disc_roster_count = 0;
+    if (!count) return 1;
+    if (!paths || count > INPUT_ROUTE_V3_MAX_DISCS) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!paths[i] || !paths[i][0] || strlen(paths[i]) >= PATH_BYTES) return 0;
+        copy_text(s_disc_roster[i], sizeof(s_disc_roster[i]), paths[i]);
+    }
+    s_disc_roster_count = count;
+    return 1;
+}
+
+void input_route_session_set_event_executor(InputRouteEventExecutor executor)
+{
+    s_event_executor = executor;
+}
+
 /* ---- Disc digest (run_native.checkpoint_asset_digest) ---- */
 
 
@@ -180,7 +203,8 @@ static int cue_file_line(const char *line, char *name, size_t size)
     return *p ? -1 : 1;
 }
 
-static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use_file_cache);
+static const char *disc_digest_path(const char *path, uint32_t *kind,
+                                    uint8_t out[32], int use_file_cache);
 
 /* Route evidence (PSXRTI3 identity) always hashes the whole disc. Player
  * replays may use the persistent per-file cache (disc_digest_cache.h), which
@@ -190,7 +214,7 @@ static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use
 static const char *disc_digest(uint32_t *kind, uint8_t out[32])
 {
     if (!s_digest_cached) {
-        const char *error = disc_digest_uncached(&s_digest_kind, s_digest, 0);
+        const char *error = disc_digest_path(s_product_disc, &s_digest_kind, s_digest, 0);
         if (error) return error;
         s_digest_cached = 1;
     }
@@ -203,7 +227,8 @@ static const char *replay_disc_digest(uint32_t *kind, uint8_t out[32])
 {
     if (s_digest_cached) return disc_digest(kind, out);
     if (!s_replay_digest_cached) {
-        const char *error = disc_digest_uncached(&s_replay_digest_kind, s_replay_digest, 1);
+        const char *error = disc_digest_path(s_product_disc, &s_replay_digest_kind,
+                                             s_replay_digest, 1);
         if (error) return error;
         s_replay_digest_cached = 1;
     }
@@ -219,20 +244,21 @@ int input_route_session_prefetch_disc_digest(void)
     return replay_disc_digest(&kind, digest) == NULL;
 }
 
-static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use_file_cache)
+static const char *disc_digest_path(const char *path, uint32_t *kind,
+                                    uint8_t out[32], int use_file_cache)
 {
     int (*sha256_file)(const char *, uint8_t[32]) =
         use_file_cache ? disc_digest_cache_sha256 : disc_digest_full_sha256;
     uint8_t digest[32];
     char text[65];
-    if (!s_product_disc[0]) return "no disc is mounted";
-    if (!sha256_file(s_product_disc, digest)) return "cannot read the disc image";
-    if (!ends_with_ci(s_product_disc, ".cue")) {
+    if (!path || !path[0]) return "no disc is mounted";
+    if (!sha256_file(path, digest)) return "cannot read the disc image";
+    if (!ends_with_ci(path, ".cue")) {
         *kind = INPUT_ROUTE_DISC_DIGEST_FILE;
         memcpy(out, digest, 32);
         return NULL;
     }
-    FILE *f = fopen(s_product_disc, "rb");
+    FILE *f = fopen(path, "rb");
     char *cue;
     long size;
     if (!f || fseek(f, 0, SEEK_END) || (size = ftell(f)) < 0 || size > (1L << 20) ||
@@ -248,9 +274,9 @@ static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use
     int tracks = 0;
     char dir[PATH_BYTES];
     size_t dir_len = 0;
-    for (size_t i = 0; s_product_disc[i]; ++i)
-        if (s_product_disc[i] == '/' || s_product_disc[i] == '\\') dir_len = i + 1;
-    memcpy(dir, s_product_disc, dir_len);
+    for (size_t i = 0; path[i]; ++i)
+        if (path[i] == '/' || path[i] == '\\') dir_len = i + 1;
+    memcpy(dir, path, dir_len);
     psx_sha256_init(&ctx);
     hex(digest, 32, text);
     psx_sha256_update(&ctx, (const uint8_t *)text, 64);
@@ -455,6 +481,27 @@ static int alloc_steps(InputRouteStep **digital, InputDualShockRouteStep **dual)
     return 0;
 }
 
+static const char *validate_event_roster(const InputRouteV3 *meta)
+{
+    if (!meta->event_count && !meta->disc_count) return NULL;
+    if (meta->event_count && !s_event_executor)
+        return "console event executor not configured";
+    for (uint32_t i = 0; i < meta->event_count; ++i)
+        if (meta->events[i].event == INPUT_ROUTE_EVENT_RESET)
+            return "console reset event not supported";
+    if (s_disc_roster_count != meta->disc_count)
+        return "console event disc roster count";
+    for (uint32_t i = 0; i < meta->disc_count; ++i) {
+        uint32_t kind = 0;
+        uint8_t digest[32];
+        const char *error = disc_digest_path(s_disc_roster[i], &kind, digest, 0);
+        if (error) return "console event disc roster unreadable";
+        if (kind != meta->discs[i].kind || memcmp(digest, meta->discs[i].digest, 32))
+            return "console event disc roster digest";
+    }
+    return NULL;
+}
+
 int input_route_session_admit(const char *path)
 {
     unsigned char magic[8];
@@ -488,10 +535,7 @@ int input_route_session_admit(const char *path)
                                                          sizeof(*s_checkpoints));
         error = s_checkpoints ? input_route_v3_read(f, &meta, digital, dual, s_markers, s_checkpoints)
                               : "out of memory";
-        /* The wire reader preserves and validates events, but the product
-         * must not arm until the host can apply every event at its boundary. */
-        if (!error && meta.event_count)
-            error = "console event execution is not implemented";
+        if (!error) error = validate_event_roster(&meta);
         count = meta.steps; frames = meta.frames;
         dualshock = meta.record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
     } else if (!memcmp(magic, "PSXRTI2\0", 8)) {
@@ -536,8 +580,9 @@ int input_route_session_admit(const char *path)
     if (!v3) return 1;
     s_meta = meta;
     s_next_marker = 0;
+    s_next_event = 0;
     s_frame = 0;
-    s_active = meta.marker_count != 0;
+    s_active = meta.marker_count != 0 || meta.event_count != 0;
     if (!dualshock) {
         /* A PSXRTI3 digital body declares one digital pad at P1. */
         s_owns_ports = 1;
@@ -726,6 +771,22 @@ int input_route_session_boundary(void)
     if (s_recording) {
         record_marker_at_boundary(frame);
         return -1;
+    }
+    while (s_next_event < s_meta.event_count && s_meta.events[s_next_event].frame == frame) {
+        const InputRouteConsoleEvent *event = &s_meta.events[s_next_event];
+        const char *path = event->event == INPUT_ROUTE_EVENT_DISC_SELECT
+            ? s_disc_roster[event->disc_index - 1u] : NULL;
+        char why[160] = {0};
+        if (!s_event_executor(event->event, event->disc_index, path, why, sizeof(why))) {
+            fprintf(stderr,
+                    "input route event failed: frame=%u kind=%u disc=%u%s%s\n",
+                    (unsigned)frame, (unsigned)event->event,
+                    (unsigned)event->disc_index, why[0] ? " reason=" : "",
+                    why);
+            s_active = s_route_armed = s_owns_ports = 0;
+            return 2;
+        }
+        ++s_next_event;
     }
     int checked = 0;
     while (s_next_marker < s_meta.marker_count && s_markers[s_next_marker].frame == frame) {

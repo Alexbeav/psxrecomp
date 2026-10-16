@@ -3995,6 +3995,51 @@ int cdrom_replace_disc(const char* cue_path, const char scex[4]) {
     return 1;
 }
 
+int cdrom_route_tray_open(void) {
+    if (psx_netplay_active() || s_lid.physical_open) return 0;
+    stop_read_stream();
+    stop_cdda_playback();
+    xa_reset_decode();
+    spu_cd_audio_reset();
+    stat_reg = CDSTAT_ERROR | CDSTAT_SHELL;
+    cdrom_clear_pending_dataready();
+    cdrom_lid_begin_open(&s_lid, psx_cycle_count);
+    s_lid.close_due = UINT64_MAX; /* held open until the recorded close event */
+    s_lid_irq_pending = 1;
+    present_lid_open_irq_if_ready();
+    trace_cdrom('O', 0, 0, 0);
+    return 1;
+}
+
+int cdrom_route_disc_select(const char* cue_path, const char scex[4]) {
+    void *replacement, *previous;
+    if (!cue_path || !cue_path[0] || psx_netplay_active() || !s_lid.physical_open)
+        return 0;
+    replacement = iso_open(cue_path);
+    if (!replacement) return 0;
+    previous = iso_handle;
+    iso_handle = replacement;
+    if (scex) memcpy(disc_scex, scex, sizeof(disc_scex));
+    last_valid_subq_available = 0;
+    subq_replacements_active = iso_has_subq_replacements(iso_handle);
+    if (subq_replacements_active) update_last_valid_subq(0);
+    if (previous) iso_close(previous);
+    trace_cdrom('W', 0, iso_sector_count(iso_handle),
+                (uint32_t)iso_track_count(iso_handle));
+    return 1;
+}
+
+int cdrom_route_tray_close(void) {
+    if (psx_netplay_active() || !s_lid.physical_open || !iso_handle) return 0;
+    s_lid.physical_open = 0;
+    s_lid.close_due = 0;
+    stat_reg &= (uint8_t)~(CDSTAT_ERROR | CDSTAT_READ | CDSTAT_PLAY |
+                          CDSTAT_SEEK);
+    stat_reg |= CDSTAT_MOTOR | CDSTAT_SHELL;
+    trace_cdrom('C', 0, iso_sector_count(iso_handle), 0);
+    return 1;
+}
+
 /* The image and license region in the drive before a restore mount. */
 static void* restore_mount_previous;
 static char  restore_mount_previous_scex[4];

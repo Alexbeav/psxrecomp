@@ -29,6 +29,8 @@ void sio_set_pad_connected(int slot, int value) { connected[slot] = value; }
 void sio_set_pad_config_capable(int slot, int value) { config_capable[slot] = value; }
 static int analog[PSX_MAX_PLAYERS];
 static uint8_t sticks[PSX_MAX_PLAYERS][4];
+static char event_log[256];
+static int fail_event;
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry)
 { sticks[slot][0] = lx; sticks[slot][1] = ly; sticks[slot][2] = rx; sticks[slot][3] = ry; }
 void sio_set_pad_analog(int slot, int enabled, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
@@ -38,6 +40,20 @@ void sio_set_pad_state_slot(int slot, uint16_t buttons) { pad[slot] = buttons; }
 void sio_set_pad_mode_button(int slot, int pressed) { if (slot != 0 || pressed) abort(); }
 int sio_get_pad_mode_button(int slot) { if (slot != 0) abort(); return 0; }
 
+
+static int apply_event(uint8_t event, uint8_t disc_index, const char *disc_path,
+                       char *why, size_t why_size)
+{
+    char row[80];
+    snprintf(row, sizeof(row), "%s%u:%u:%s", event_log[0] ? "," : "",
+             (unsigned)event, (unsigned)disc_index, disc_path ? disc_path : "-");
+    if (strlen(event_log) + strlen(row) < sizeof(event_log)) strcat(event_log, row);
+    if (event == fail_event) {
+        snprintf(why, why_size, "fixture failure");
+        return 0;
+    }
+    return 1;
+}
 
 #ifdef PSX_NO_DEBUG_TOOLS
 /* A release product links the route observer and drives it from the release
@@ -120,6 +136,24 @@ int main(int argc, char **argv)
         const int before = input_route_session_armed();
         const int ok = input_route_session_admit(argv[2]);
         printf("before=%d admitted=%d armed=%d\n", before, ok, input_route_session_armed());
+        return 0;
+    }
+    if (argc >= 3 && (!strcmp(argv[1], "event-run") ||
+                      !strcmp(argv[1], "event-fail"))) {
+        const char *roster[INPUT_ROUTE_V3_MAX_DISCS];
+        const uint32_t roster_count = argc > 3 ? (uint32_t)(argc - 3) : 0;
+        for (uint32_t i = 0; i < roster_count && i < INPUT_ROUTE_V3_MAX_DISCS; ++i)
+            roster[i] = argv[3 + i];
+        fail_event = !strcmp(argv[1], "event-fail") ? INPUT_ROUTE_EVENT_DISC_SELECT : 0;
+        input_route_session_set_event_executor(apply_event);
+        input_route_session_set_disc_roster(roster, roster_count);
+        const int admitted = input_route_session_admit(argv[2]);
+        printf("admitted=%d armed=%d\n", admitted, input_route_session_armed());
+        if (!admitted) return 0;
+        for (unsigned frame = 0; frame < 4; ++frame) {
+            const int status = input_route_session_boundary();
+            printf("boundary%u=%d events=%s\n", frame, status, event_log);
+        }
         return 0;
     }
     if (argc >= 4 && !strcmp(argv[1], "words")) {

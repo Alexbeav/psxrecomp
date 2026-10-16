@@ -41,6 +41,19 @@ void input_route_session_set_product(const char *disc_serial,
 void input_route_session_set_disc(const char *disc_serial,
                                   const char *disc_path);
 
+/* Event routes bind their 1-based disc indices to this ordered product
+ * roster before admission. Paths are copied. Passing count 0 clears it. */
+int input_route_session_set_disc_roster(const char *const *paths,
+                                        uint32_t count);
+
+/* Product seam for an admitted console event. `disc_path` is non-NULL only
+ * for DISC_SELECT and already names the digest-bound roster entry. Return 0
+ * with `why` filled to stop the route; an event is never skipped. */
+typedef int (*InputRouteEventExecutor)(uint8_t event, uint8_t disc_index,
+                                       const char *disc_path,
+                                       char *why, size_t why_size);
+void input_route_session_set_event_executor(InputRouteEventExecutor executor);
+
 /* Prestart admission of PSX_INPUT_ROUTE_FILE. Parses the whole file and arms
  * markers and the declared P1 device. Returns 0 and prints the reason when
  * the route is refused. */

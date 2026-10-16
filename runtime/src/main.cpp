@@ -2543,6 +2543,9 @@ static std::string g_restore_mount_serial;
 /* Defined with the replay host hooks, below. */
 static void replay_identity_follow_disc(const std::string& serial,
                                         const std::string& mount);
+static int input_route_apply_event(uint8_t event, uint8_t disc_index,
+                                   const char *disc_path,
+                                   char *why, size_t why_cap);
 
 static void note_mounted_disc_warning(const std::filesystem::path& image,
                                       const std::string& serial) {
@@ -8732,6 +8735,43 @@ static void replay_identity_follow_disc(const std::string& serial,
     }
     s_replay_disc_serial = serial;
     replay_digest_prefetch_start();
+}
+
+static int input_route_apply_event(uint8_t event, uint8_t disc_index,
+                                   const char *disc_path,
+                                   char *why, size_t why_cap) {
+    if (event == INPUT_ROUTE_EVENT_TRAY_OPEN) {
+        if (cdrom_route_tray_open()) return 1;
+        std::snprintf(why, why_cap, "tray open failed");
+        return 0;
+    }
+    if (event == INPUT_ROUTE_EVENT_TRAY_CLOSE) {
+        if (cdrom_route_tray_close()) return 1;
+        std::snprintf(why, why_cap, "tray close failed");
+        return 0;
+    }
+    if (event != INPUT_ROUTE_EVENT_DISC_SELECT || !disc_path ||
+        disc_index < 1 || (size_t)disc_index > g_disc_metadata_roster.size()) {
+        std::snprintf(why, why_cap, "unsupported event or disc index");
+        return 0;
+    }
+    const std::string expected = (size_t)disc_index <= g_disc_serials.size()
+        ? g_disc_serials[disc_index - 1] : std::string();
+    const auto identity = PSXRecompV4::identify_disc(
+        disc_path, expected, 0, false, false);
+    if (!cdrom_route_disc_select(disc_path,
+                                 disc_scex_for_region(identity.region))) {
+        std::snprintf(why, why_cap, "disc select failed");
+        return 0;
+    }
+    note_mounted_disc_warning(disc_path, identity.detected_serial);
+    savestate_note_disc_mounted(disc_index);
+    {
+        std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
+        input_route_session_set_disc(identity.detected_serial.c_str(), disc_path);
+    }
+    s_replay_disc_serial = identity.detected_serial;
+    return 1;
 }
 
 extern "C" void replay_host_product(char *out, size_t cap) {
@@ -17984,6 +18024,23 @@ session_reboot:
         std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
         input_route_session_set_product(route_disc_serial.c_str(),
                                         disc_path_str.c_str(), bios_path_str.c_str());
+        std::vector<std::string> route_roster;
+        std::vector<const char *> route_roster_paths;
+        const int mounted_index = PSXRecompV4::disc_roster_index(
+            g_disc_metadata_roster, disc_path_str);
+        route_roster.reserve(g_disc_metadata_roster.size());
+        route_roster_paths.reserve(g_disc_metadata_roster.size());
+        for (size_t i = 0; i < g_disc_metadata_roster.size(); ++i) {
+            if ((int)i == mounted_index)
+                route_roster.push_back(disc_path_str);
+            else
+                route_roster.push_back(
+                    PSXRecompV4::resolve_disc_path(g_disc_metadata_roster[i]).mount.string());
+        }
+        for (const auto& path : route_roster) route_roster_paths.push_back(path.c_str());
+        input_route_session_set_disc_roster(route_roster_paths.data(),
+                                            (uint32_t)route_roster_paths.size());
+        input_route_session_set_event_executor(input_route_apply_event);
         /* Disc digests persist beside the memory cards, keyed by path, size
          * and mtime, so an unchanged image (often on a NAS) is not re-read. */
         disc_digest_cache_set_path(memcard_dir.empty() ? ""

@@ -182,22 +182,88 @@ with tempfile.TemporaryDirectory() as temp:
             code, out, err = run(exe, 'armed', path, markers_exit=False)
             check(code == 0 and 'before=0 admitted=1 armed=1' in out,
                   f'{name} route is armed on {exe.name}', out + err)
-    # The reader admits a valid event route, but the session must fail closed
-    # until runtime event execution exists. It must never become armed.
+    # Event routes bind every configured disc before arming, then apply exact
+    # boundary order once. Missing/wrong bindings and host failure stay closed.
     def entry(tag, payload):
         return struct.pack('<II', tag, len(payload)) + payload + bytes((-len(payload)) % 4)
 
-    event_disc = struct.pack('<I4B32s', 1, 2, 0, 0, 0, bytes(range(32)))
-    event_list = struct.pack('<II4B', 1, 0, 2, 0, 0, 0)
+    roster1 = root / 'event-disc-1.bin'
+    roster2 = root / 'event-disc-2.bin'
+    roster1.write_bytes(b'disc one')
+    roster2.write_bytes(b'disc two')
+    event_disc = (struct.pack('<I', 2) +
+                  struct.pack('<4B32s', 2, 0, 0, 0, hashlib.sha256(roster1.read_bytes()).digest()) +
+                  struct.pack('<4B32s', 2, 0, 0, 0, hashlib.sha256(roster2.read_bytes()).digest()))
+    event_list = (struct.pack('<I', 3) +
+                  struct.pack('<I4B', 0, 2, 0, 0, 0) +
+                  struct.pack('<I4B', 1, 4, 2, 0, 0) +
+                  struct.pack('<I4B', 1, 3, 2, 0, 0))
     event_ext = entry(0x00000202, event_list) + entry(0x00000203, event_disc)
     event_route = root / 'event-route.psxrti3'
-    event_route.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 8, 1, 0, len(event_ext)) +
-                            event_ext + struct.pack('<IHH', 1, 0xffff, 0))
+    event_route.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 8, 3, 0, len(event_ext)) +
+                            event_ext + b''.join(struct.pack('<IHH', n, 0xffff, 0)
+                                                 for n in range(1, 4)))
     for exe in (diagnostic, release):
         code, out, err = run(exe, 'armed', event_route, markers_exit=False)
         check(code == 0 and 'before=0 admitted=0 armed=0' in out and
-              'console event execution is not implemented' in err,
-              f'valid event route never arms on {exe.name}', out + err)
+              'console event executor not configured' in err,
+              f'event route without an executor never arms on {exe.name}', out + err)
+        code, out, err = run(exe, 'event-run', event_route, markers_exit=False)
+        check(code == 0 and 'admitted=0 armed=0' in out and
+              'console event disc roster count' in err,
+              f'event route without a roster never arms on {exe.name}', out + err)
+        code, out, err = run(exe, 'event-run', event_route, roster1, markers_exit=False)
+        check(code == 0 and 'admitted=0 armed=0' in out and
+              'console event disc roster count' in err,
+              f'event route with a short roster never arms on {exe.name}', out + err)
+        wrong = root / f'wrong-{exe.name}.bin'
+        wrong.write_bytes(b'not disc two')
+        code, out, err = run(exe, 'event-run', event_route, roster1, wrong, markers_exit=False)
+        check(code == 0 and 'admitted=0 armed=0' in out and
+              'console event disc roster digest' in err,
+              f'event route with a wrong roster digest never arms on {exe.name}', out + err)
+        code, out, err = run(exe, 'event-run', event_route, roster2, roster1,
+                             markers_exit=False)
+        check(code == 0 and 'admitted=0 armed=0' in out and
+              'console event disc roster digest' in err,
+              f'event route with swapped disc identities never arms on {exe.name}', out + err)
+        code, out, err = run(exe, 'event-run', event_route, roster1, roster2,
+                             markers_exit=False)
+        expected = f'events=2:0:-,4:2:{roster2},3:2:-'
+        check(code == 0 and 'admitted=1 armed=1' in out and
+              'boundary0=-1 events=2:0:-' in out and
+              f'boundary1=-1 {expected}' in out and f'boundary3=-1 {expected}' in out,
+              f'event boundaries preserve order and execute once on {exe.name}', out + err)
+    wrong_kind_disc = (struct.pack('<I', 2) +
+                       struct.pack('<4B32s', 1, 0, 0, 0,
+                                   hashlib.sha256(roster1.read_bytes()).digest()) +
+                       struct.pack('<4B32s', 2, 0, 0, 0,
+                                   hashlib.sha256(roster2.read_bytes()).digest()))
+    wrong_kind_ext = entry(0x00000202, event_list) + entry(0x00000203, wrong_kind_disc)
+    wrong_kind_route = root / 'wrong-kind-event.psxrti3'
+    wrong_kind_route.write_bytes(
+        struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 8, 3, 0, len(wrong_kind_ext)) +
+        wrong_kind_ext + b''.join(struct.pack('<IHH', n, 0xffff, 0) for n in range(1, 4)))
+    code, out, err = run(diagnostic, 'event-run', wrong_kind_route, roster1, roster2,
+                         markers_exit=False)
+    check(code == 0 and 'admitted=0 armed=0' in out and
+          'console event disc roster digest' in err,
+          'event route with a wrong digest kind never arms', out + err)
+    code, out, err = run(diagnostic, 'event-fail', event_route, roster1, roster2,
+                         markers_exit=False)
+    check(code == 0 and 'boundary1=2' in out and 'boundary2=-1' in out and
+          out.count('4:2:') == 3 and 'input route event failed' in err,
+          'event callback failure stops the route without retry', out + err)
+    reset_list = struct.pack('<II4B', 1, 0, 1, 0, 0, 0)
+    reset_ext = entry(0x00000202, reset_list) + entry(0x00000203, event_disc)
+    reset_route = root / 'reset-event.psxrti3'
+    reset_route.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 8, 1, 0, len(reset_ext)) +
+                            reset_ext + struct.pack('<IHH', 1, 0xffff, 0))
+    code, out, err = run(diagnostic, 'event-run', reset_route, roster1, roster2,
+                         markers_exit=False)
+    check(code == 0 and 'admitted=0 armed=0' in out and
+          'console reset event not supported' in err,
+          'unsupported reset event never arms', out + err)
     broken = root / 'broken.psxrti'
     broken.write_bytes(legacy.read_bytes()[:-1])
     code, out, err = run(release, 'words', broken, 1, markers_exit=False)
