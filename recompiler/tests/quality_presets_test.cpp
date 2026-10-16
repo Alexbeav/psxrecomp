@@ -15,6 +15,7 @@
 #include "host_overlay.h"
 
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -538,6 +539,144 @@ static void test_ingame_menu_txn() {
           "menu: the governed edit is Custom from High and keeps the value");
 }
 
+/* The in-game menu host path (main.cpp mh_launcher_settings_get ->
+ * provider -> mh_launcher_settings_apply -> host_pause_service ->
+ * quality_take_launcher + psx_video_apply_live's settle_save), on the same
+ * psxq functions, with a provider that behaves like recomp-launcher's
+ * QualityTracker (a pick writes the preset's rows; any changed preset row
+ * reports Custom from the preset). The review fixture: Ultra has
+ * geometry_correction on, High has it off; neither governs antialiasing.
+ * Start Ultra, pick High in the menu, then toggle Antialiasing: NONE. */
+struct MenuHostFixture {
+    PSXRecompV4::GameConfig gc;
+    std::vector<std::string> keys;
+    psxq::Decision run;
+    psxq::MenuSelection sel;
+    psxq::Rows live;                           /* what is in force now */
+    PSXRecompV4::UserSettings disk;
+    struct Seed { psxq::Rows rows; int preset1 = 0, base1 = 0; };
+
+    bool rows_for(int tier, psxq::Rows* out) const {
+        for (const auto& p : gc.quality_presets)
+            if (psx_quality_from_name(p.name.c_str()) == tier) {
+                *out = psxq::rows_from_runtime(p.runtime, false, 0, false, 0);
+                return true;
+            }
+        return false;
+    }
+    Seed get() const {                         /* mh_launcher_settings_get */
+        Seed s;
+        s.rows = sel.seed(live);
+        s.preset1 = run.preset >= 0 ? run.preset + 1 : 0;
+        s.base1 = run.base >= 0 ? run.base + 1 : 0;
+        return s;
+    }
+    psxq::Edit apply(const Seed& post) {       /* host_pause_service */
+        const psxq::LauncherEdit le = psxq::classify_launcher(
+            post.preset1, post.base1, post.rows, run.preset, run.base, keys,
+            [this](int t, psxq::Rows* o) { return rows_for(t, o); });
+        if (le.set_base) run.base = le.base;
+        /* psx_video_apply_live: the rows the menu shows apply now (here:
+         * antialiasing, texture filter); geometry waits for the next launch. */
+        live.antialiasing = post.rows.antialiasing;
+        live.texture_filter = post.rows.texture_filter;
+        PSXRecompV4::UserSettings us = disk;
+        us.has_antialiasing = true; us.antialiasing = post.rows.antialiasing != 0;
+        us.has_geometry_correction = true; us.geometry_correction = post.rows.geometry_correction != 0;
+        psxq::settle_save(us, disk, run, le.edit, le.picked, keys);
+        disk = save_load(us);
+        sel.record(post.rows, live);
+        return le.edit;
+    }
+    /* recomp-launcher's QualityTracker, on rows. */
+    Seed tracker_pick(Seed s, int tier) const {
+        rows_for(tier, &s.rows);
+        s.preset1 = s.base1 = tier + 1;
+        return s;
+    }
+    Seed tracker_observe(Seed s) const {
+        psxq::Rows expect;
+        if (s.preset1 >= 1 && s.preset1 <= 4 && rows_for(s.preset1 - 1, &expect) &&
+            std::memcmp(&expect, &s.rows, sizeof expect) != 0) {
+            s.base1 = s.preset1;
+            s.preset1 = PSX_QUALITY_CUSTOM + 1;
+        }
+        return s;
+    }
+};
+
+static void test_ingame_menu_host_path() {
+    fs::path p = write_game_toml("psxrecomp_quality_menu.toml",
+        "geometry_correction = true\n"
+        "[quality.ultra]\n"
+        "[quality.high]\n"
+        "geometry_correction = false\n");
+    MenuHostFixture h;
+    h.gc = PSXRecompV4::load_game_config(p);
+    fs::remove(p);
+    h.keys = psxq::governed_keys(h.gc);
+    check(std::find(h.keys.begin(), h.keys.end(), "antialiasing") == h.keys.end(),
+          "fixture: antialiasing is not governed");
+    PsxHostInfo m4 = host("Apple M4", "Apple M4", 10, 16);
+    h.disk.has_quality_preset = true; h.disk.quality_preset = "ultra";
+    h.run = psxq::decide(psxq::offered_mask(h.gc), h.disk, m4, nullptr, false, nullptr, true);
+    check(h.run.preset == PSX_QUALITY_ULTRA, "fixture: Ultra in force");
+    h.rows_for(PSX_QUALITY_ULTRA, &h.live);
+    check(h.live.geometry_correction == 1, "fixture: Ultra has geometry correction");
+
+    /* Pick High in the menu. */
+    MenuHostFixture::Seed s = h.tracker_pick(h.get(), PSX_QUALITY_HIGH);
+    check(h.apply(s) == psxq::Edit::PICK, "menu host: picking High is a PICK");
+    check(h.disk.quality_preset == "high", "menu host: High saved");
+    check(h.live.geometry_correction == 1, "menu host: geometry waits for the next launch");
+
+    /* Re-seed (the provider reopens), adopt, toggle Antialiasing only. */
+    MenuHostFixture::Seed again = h.get();
+    check(again.preset1 == PSX_QUALITY_HIGH + 1, "menu host: re-seed says High");
+    check(again.rows.geometry_correction == 0,
+          "menu host: re-seed carries High's pending geometry, not the live Ultra value");
+    check(h.tracker_observe(again).preset1 == PSX_QUALITY_HIGH + 1,
+          "menu host: the re-seed is High as the tracker sees it (no spurious Custom)");
+    again.rows.antialiasing ^= 1;
+    again = h.tracker_observe(again);   /* the tracker reports Custom from High */
+    check(h.apply(again) == psxq::Edit::NONE,
+          "menu host: Ultra -> High, then Antialiasing is NONE (not GOVERNED_EDIT)");
+    check(h.disk.quality_preset == "high", "menu host: High stays saved");
+
+    /* A governed edit after the pick still makes Custom from High. */
+    MenuHostFixture::Seed g = h.get();
+    g.rows.geometry_correction = 1;
+    g = h.tracker_observe(g);
+    check(h.apply(g) == psxq::Edit::GOVERNED_EDIT, "menu host: a governed edit is Custom");
+    check(h.disk.quality_preset == "custom" && h.disk.quality_base == "high",
+          "menu host: Custom from High");
+    check(h.get().rows.geometry_correction == 1, "menu host: the Custom override is kept");
+
+    /* A netplay match defers Smooth motion: the seed keeps the selection
+     * until the live value catches up, and other rows follow live. */
+    {
+        psxq::MenuSelection ms;
+        psxq::Rows live_now; live_now.frame_generation = 1; live_now.texture_filter = 0;
+        psxq::Rows chosen = live_now; chosen.frame_generation = 0;
+        ms.record(chosen, live_now);
+        check(ms.seed(live_now).frame_generation == 0, "netplay: a deferred row stays selected");
+        live_now.texture_filter = 3;   /* a hotkey/mod change after the apply */
+        check(ms.seed(live_now).texture_filter == 3, "netplay: other rows follow live");
+    }
+
+    /* Without the selection (the bug): the re-seed mixes High with live Ultra
+     * geometry and the same Antialiasing toggle would classify GOVERNED_EDIT. */
+    psxq::Rows ultra_live; h.rows_for(PSX_QUALITY_ULTRA, &ultra_live);
+    psxq::Rows mixed; h.rows_for(PSX_QUALITY_HIGH, &mixed);
+    mixed.geometry_correction = ultra_live.geometry_correction;
+    mixed.antialiasing ^= 1;
+    const psxq::LauncherEdit bad = psxq::classify_launcher(
+        PSX_QUALITY_CUSTOM + 1, PSX_QUALITY_HIGH + 1, mixed, PSX_QUALITY_HIGH, PSX_QUALITY_HIGH,
+        h.keys, [&](int t, psxq::Rows* o) { return h.rows_for(t, o); });
+    check(bad.edit == psxq::Edit::GOVERNED_EDIT,
+          "menu host: a live-mixed seed is what misclassified (guards the fixture)");
+}
+
 /* The supported quality-key set (docs/QUALITY_PRESETS.md): anything else in
  * a preset is a load error, and every player-editable key is masked and
  * copied (ownership enforced). */
@@ -636,6 +775,7 @@ int main() {
     test_supported_keys();
     test_launcher_classification();
     test_ingame_menu_txn();
+    test_ingame_menu_host_path();
     if (failures) {
         std::fprintf(stderr, "quality_presets_test: %d failure(s)\n", failures);
         return 1;

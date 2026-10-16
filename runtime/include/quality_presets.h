@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace PSXRecompV4 { struct UserSettings; struct GameConfig; }
+namespace PSXRecompV4 { struct UserSettings; struct GameConfig; struct RuntimeConfig; }
 struct PsxHostVideoSettings;
 
 namespace psxq {
@@ -88,6 +88,63 @@ Edit launcher_custom_edit(const std::vector<std::string>& keys, int base, int cu
                           const std::function<bool(const std::string&)>& row_changed,
                           int* picked);
 
+/* The settings-editor rows a preset can set, in the launcher ABI's encodings
+ * (RecompLauncherCSettings fields of the same names). Launcher-neutral so the
+ * host's preset logic is testable without a frontend header. */
+struct Rows {
+    int texture_filter = 0, fmv_filter = 0, antialiasing = 0;
+    int dynamic_resolution = 0, dynamic_resolution_min = 0;
+    int frame_generation = 0, render_thread = 0, present_thread = 0;
+    int geometry_correction = 0, perspective_texturing = 0;
+    int frame_interp = 0, frame_interp_fps = 0;
+};
+/* A preset's rows from its parsed [video] block. Pure: reads nothing but its
+ * arguments, so a frontend may call it from any thread (the in-game menu's
+ * draw thread included). dynres_env / dynres_min_env are the startup env
+ * overrides (< 0 / PSX_IR_UNSET-like `none` = not set; pass has_* false). */
+Rows rows_from_runtime(const PSXRecompV4::RuntimeConfig& r,
+                       bool has_dynres_env, int dynres_env,
+                       bool has_dynres_min_env, int dynres_min_env);
+/* Does the row a governed key owns differ? (preset-only keys have no row) */
+bool row_differs(const std::string& key, const Rows& a, const Rows& b);
+/* The host's classification of a frontend submission (Settings.quality_preset
+ * and quality_base, 1-based; 5 = Custom). preset_rows(tier, out) gives a
+ * tier's rows. current/current_base: the run's state before this submission.
+ *  - a tier other than the current one: PICK of that tier;
+ *  - Custom from a base: launcher_custom_edit against the base's rows (an
+ *    unrelated row is NONE, a new base with only unrelated rows is PICK);
+ *    set_base/base say the run's Custom base moves to it. */
+struct LauncherEdit {
+    Edit edit = Edit::NONE;
+    int picked = PSX_QUALITY_NONE;
+    bool set_base = false;
+    int base = PSX_QUALITY_NONE;
+    bool base_changed = false;   /* Custom moved to another base */
+};
+LauncherEdit classify_launcher(int preset1, int base1, const Rows& submitted,
+                               int current, int current_base,
+                               const std::vector<std::string>& keys,
+                               const std::function<bool(int, Rows*)>& preset_rows);
+/* The in-game menu's selected-versus-live rows. A provider is seeded with
+ * what the player selected, not with live values that only catch up later:
+ * a preset pick's rows that apply at the next launch, and rows a netplay
+ * match defers, stay pending until the live value matches. Every other row
+ * follows the live value (so a hotkey or mod change still shows). Owned by
+ * the host's main thread; providers only see seed() results. */
+class MenuSelection {
+public:
+    void reset() { valid_ = false; pending_ = 0; }
+    /* After the host applied a submission: what the player selected, and the
+     * live rows after the apply (deferred rows still differ). */
+    void record(const Rows& selected, const Rows& live_after);
+    /* The rows to seed a provider with. */
+    Rows seed(const Rows& live) const;
+    bool pending() const { return valid_ && pending_ != 0; }
+private:
+    Rows sel_{};
+    unsigned pending_ = 0;
+    bool valid_ = false;
+};
 /* Copy one governed key's settings.toml field(s) (value and presence). */
 void copy_key(PSXRecompV4::UserSettings& dst, const PSXRecompV4::UserSettings& src,
               const std::string& key);

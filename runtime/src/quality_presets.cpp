@@ -223,6 +223,102 @@ Edit launcher_custom_edit(const std::vector<std::string>& keys, int base, int cu
     return Edit::NONE;
 }
 
+Rows rows_from_runtime(const PSXRecompV4::RuntimeConfig& r,
+                       bool has_dynres_env, int dynres_env,
+                       bool has_dynres_min_env, int dynres_min_env) {
+    Rows o;
+    o.texture_filter = r.video_texture_filter;
+    int fmv = r.video_fmv_filter;   /* cfg -> launcher (cfg_fmv_filter_to_launcher) */
+    if (fmv < 0 || fmv >= PSXRecompV4::VIDEO_FMV_FILTER_COUNT)
+        fmv = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
+    o.fmv_filter = fmv + 1;
+    o.antialiasing = r.video_antialiasing ? 1 : 0;
+    o.dynamic_resolution = (has_dynres_env ? dynres_env : (r.video_dynamic_resolution ? 1 : 0)) ? 1 : 0;
+    o.dynamic_resolution_min = has_dynres_min_env ? dynres_min_env : r.video_dynamic_resolution_min;
+    o.render_thread = r.video_render_thread ? 1 : 0;
+    o.present_thread = r.video_present_thread ? 1 : 0;
+    o.frame_generation = r.video_frame_generation ? 1 : 0;
+    o.geometry_correction = r.video_geometry_correction ? 1 : 0;
+    o.perspective_texturing = r.video_perspective_texturing ? 1 : 0;
+    o.frame_interp = r.video_frame_interpolation ? 1 : 0;
+    o.frame_interp_fps = r.video_frame_interpolation_fps;
+    return o;
+}
+
+bool row_differs(const std::string& k, const Rows& a, const Rows& b) {
+    if (k == "texture_filtering") return a.texture_filter != b.texture_filter;
+    if (k == "fmv_filter") return a.fmv_filter != b.fmv_filter;
+    if (k == "antialiasing") return (a.antialiasing != 0) != (b.antialiasing != 0);
+    if (k == "dynamic_resolution") return (a.dynamic_resolution != 0) != (b.dynamic_resolution != 0);
+    if (k == "dynamic_resolution_min") return a.dynamic_resolution_min != b.dynamic_resolution_min;
+    if (k == "frame_generation") return (a.frame_generation != 0) != (b.frame_generation != 0);
+    if (k == "render_thread") return (a.render_thread != 0) != (b.render_thread != 0);
+    if (k == "present_thread") return (a.present_thread != 0) != (b.present_thread != 0);
+    if (k == "geometry_correction") return (a.geometry_correction != 0) != (b.geometry_correction != 0);
+    if (k == "perspective_texturing") return (a.perspective_texturing != 0) != (b.perspective_texturing != 0);
+    if (k == "frame_interpolation") return (a.frame_interp != 0) != (b.frame_interp != 0);
+    if (k == "frame_interpolation_fps") return a.frame_interp_fps != b.frame_interp_fps;
+    return false;   /* preset-only keys have no row */
+}
+
+LauncherEdit classify_launcher(int preset1, int base1, const Rows& submitted,
+                               int current, int current_base,
+                               const std::vector<std::string>& keys,
+                               const std::function<bool(int, Rows*)>& preset_rows) {
+    LauncherEdit out;
+    if (preset1 < 1 || preset1 > 5) return out;
+    const int preset = preset1 - 1;
+    if (preset != PSX_QUALITY_CUSTOM) {
+        if (preset != current) { out.edit = Edit::PICK; out.picked = preset; }
+        return out;
+    }
+    /* A player may pick a different tier and edit one of its rows before
+     * leaving the editor: Custom belongs to that tier. The frontends flag
+     * Custom on any row their snapshot tracks; only a row this title's
+     * presets govern makes it Custom. */
+    const int base = base1 - 1;
+    Rows expect;
+    const bool have = base >= 0 && base < PSX_QUALITY_COUNT && preset_rows && preset_rows(base, &expect);
+    if (have && current != PSX_QUALITY_CUSTOM) {
+        int picked = PSX_QUALITY_NONE;
+        const Edit e = launcher_custom_edit(
+            keys, base, current,
+            [&](const std::string& k) { return row_differs(k, submitted, expect); }, &picked);
+        if (e == Edit::NONE) return out;                       /* unrelated rows only */
+        if (e == Edit::PICK) { out.edit = e; out.picked = picked; return out; }
+    }
+    out.base_changed = have && base != current_base;
+    if (current != PSX_QUALITY_CUSTOM || out.base_changed) out.edit = Edit::GOVERNED_EDIT;
+    if (have) { out.set_base = true; out.base = base; }
+    return out;
+}
+
+namespace {
+int Rows::* const kRowFields[] = {
+    &Rows::texture_filter, &Rows::fmv_filter, &Rows::antialiasing,
+    &Rows::dynamic_resolution, &Rows::dynamic_resolution_min,
+    &Rows::frame_generation, &Rows::render_thread, &Rows::present_thread,
+    &Rows::geometry_correction, &Rows::perspective_texturing,
+    &Rows::frame_interp, &Rows::frame_interp_fps,
+};
+}  // namespace
+
+void MenuSelection::record(const Rows& selected, const Rows& live_after) {
+    sel_ = selected;
+    pending_ = 0;
+    for (unsigned i = 0; i < sizeof kRowFields / sizeof kRowFields[0]; ++i)
+        if (selected.*kRowFields[i] != live_after.*kRowFields[i]) pending_ |= 1u << i;
+    valid_ = true;
+}
+
+Rows MenuSelection::seed(const Rows& live) const {
+    Rows out = live;
+    if (!valid_) return out;
+    for (unsigned i = 0; i < sizeof kRowFields / sizeof kRowFields[0]; ++i)
+        if (pending_ & (1u << i)) out.*kRowFields[i] = sel_.*kRowFields[i];
+    return out;
+}
+
 static void copy_meta(PSXRecompV4::UserSettings& d, const PSXRecompV4::UserSettings& s) {
     d.has_quality_preset = s.has_quality_preset;     d.quality_preset = s.quality_preset;
     d.has_quality_base = s.has_quality_base;         d.quality_base = s.quality_base;
