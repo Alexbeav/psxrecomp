@@ -182,6 +182,22 @@ with tempfile.TemporaryDirectory() as temp:
             code, out, err = run(exe, 'armed', path, markers_exit=False)
             check(code == 0 and 'before=0 admitted=1 armed=1' in out,
                   f'{name} route is armed on {exe.name}', out + err)
+    # The reader admits a valid event route, but the session must fail closed
+    # until runtime event execution exists. It must never become armed.
+    def entry(tag, payload):
+        return struct.pack('<II', tag, len(payload)) + payload + bytes((-len(payload)) % 4)
+
+    event_disc = struct.pack('<I4B32s', 1, 2, 0, 0, 0, bytes(range(32)))
+    event_list = struct.pack('<II4B', 1, 0, 2, 0, 0, 0)
+    event_ext = entry(0x00000202, event_list) + entry(0x00000203, event_disc)
+    event_route = root / 'event-route.psxrti3'
+    event_route.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 8, 1, 0, len(event_ext)) +
+                            event_ext + struct.pack('<IHH', 1, 0xffff, 0))
+    for exe in (diagnostic, release):
+        code, out, err = run(exe, 'armed', event_route, markers_exit=False)
+        check(code == 0 and 'before=0 admitted=0 armed=0' in out and
+              'console event execution is not implemented' in err,
+              f'valid event route never arms on {exe.name}', out + err)
     broken = root / 'broken.psxrti'
     broken.write_bytes(legacy.read_bytes()[:-1])
     code, out, err = run(release, 'words', broken, 1, markers_exit=False)

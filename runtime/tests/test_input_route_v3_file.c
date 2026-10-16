@@ -61,6 +61,12 @@ static const char *read_bytes(size_t n, InputRouteV3 *meta)
     return error;
 }
 
+static void refuses(size_t n, InputRouteV3 *meta, const char *error, const char *what)
+{
+    const char *actual = read_bytes(n, meta);
+    check(actual && !strcmp(actual, error), what);
+}
+
 static uint32_t identity_block(unsigned char *ext, const char *pin, int omit)
 {
     Buf b = {ext, 0};
@@ -194,9 +200,12 @@ int main(void)
     check(read_bytes(n - 1, &meta) != NULL, "extension size not a multiple of 4");
     cases += 7;
 
-    /* The old bound stays frozen unless the route explicitly selects the
-     * versioned capacity contract. */
+    /* Capacity admission is exact, unique, versioned and bounded. */
     {
+        unsigned char capacity[8];
+        Buf b = {ext, 0};
+        input_route_put32(capacity, 1);
+        input_route_put32(capacity + 4, INPUT_ROUTE_V3_CAPACITY_V1_FRAMES);
         FILE *f = long_route(INPUT_ROUTE_MAX_FRAMES + 1u, 0);
         const char *err = input_route_v3_read(f, &meta, digital, NULL, markers, checkpoints);
         fclose(f);
@@ -208,7 +217,31 @@ int main(void)
         check(!err && meta.frames == INPUT_ROUTE_MAX_FRAMES + 1u &&
               meta.capacity_version == 1u && meta.steps == 1u,
               "capacity v1 admits a lossless long route");
-        cases += 2;
+        bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 8);
+        n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
+        capacity[0] = 2;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 8);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "capacity admission",
+                "unknown capacity version refused");
+        input_route_put32(capacity, 1); input_route_put32(capacity + 4, 3999999u);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 8);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "capacity admission",
+                "wrong capacity ceiling refused");
+        input_route_put32(capacity + 4, INPUT_ROUTE_V3_CAPACITY_V1_FRAMES);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 8);
+        bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 8);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "duplicate capacity admission",
+                "duplicate capacity admission refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 4);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "capacity admission",
+                "malformed capacity length refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_CAPACITY, capacity, 8);
+        n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
+        input_route_put32(bytes + 16, INPUT_ROUTE_V3_CAPACITY_V1_FRAMES);
+        refuses(n, &meta, "file size", "four-million header reaches the file-size gate");
+        input_route_put32(bytes + 16, INPUT_ROUTE_V3_CAPACITY_V1_FRAMES + 1u);
+        refuses(n, &meta, "frame count", "four-million-and-one frames refused");
+        cases += 8;
     }
 
     /* Tags. */
@@ -223,6 +256,34 @@ int main(void)
         check(!read_bytes(n, &meta) && meta.port_count == 1 &&
               meta.port_devices[0] == INPUT_ROUTE_DEVICE_DIGITAL,
               "declared digital port layout admitted");
+        bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\0\0\0\1", 5);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "duplicate port layout",
+                "duplicate port layout refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\0\0\0", 4);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "port layout length",
+                "short port layout refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\0\0\0\0\1", 5);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "port layout",
+                "zero port count refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\3\0\0\0\1\1", 6);
+        refuses(build(12, 5, 0, ext, (uint32_t)b.n), &meta, "port layout",
+                "port count overflow refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\1\0\0\1", 5);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "port layout",
+                "port reserved byte refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\0\0\0\3", 5);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "port device",
+                "unknown port device refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\0\0\0\1", 5);
+        refuses(build(12, 5, 0, ext, (uint32_t)b.n), &meta, "port record size",
+                "port record-size mismatch refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\1\0\0\0\2", 5);
+        n = (uint32_t)build(12, 5, 0, ext, (uint32_t)b.n);
+        check(!read_bytes(n, &meta) && meta.port_devices[0] == INPUT_ROUTE_DEVICE_DUALSHOCK,
+              "declared DualShock port layout admitted");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_PORT_LAYOUT, "\2\0\0\0\1\1", 6);
+        refuses(build(12, 5, 0, ext, (uint32_t)b.n), &meta,
+                "declared port layout not supported", "correctly sized two-port route refused");
         b.n = 0; bentry(&b, 0x800001ffu, "x", 1);
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
         check(read_bytes(n, &meta) != NULL, "unknown 0x800001xx refused");
@@ -232,13 +293,15 @@ int main(void)
         b.n = 0; b32(&b, 0x80000300u); b32(&b, 64);
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
         check(read_bytes(n, &meta) != NULL, "entry longer than block");
-        cases += 5;
+        cases += 14;
     }
 
     /* Console events are ordered boundary actions bound to a verified disc
      * roster. No event or disc index can be skipped or invented. */
     {
         unsigned char discs[76] = {0}, events[28] = {0};
+        unsigned char many_events[4 + 8 * (INPUT_ROUTE_V3_MAX_EVENTS + 1)] = {0};
+        unsigned char many_discs[4 + 36 * (INPUT_ROUTE_V3_MAX_DISCS + 1)] = {0};
         Buf b = {ext, 0};
         input_route_put32(discs, 2);
         discs[4] = discs[40] = INPUT_ROUTE_DISC_DIGEST_FILE;
@@ -254,16 +317,78 @@ int main(void)
         bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
         check(!read_bytes(n, &meta) && meta.event_count == 3 && meta.disc_count == 2 &&
-              meta.events[1].disc_index == 2, "event and disc set admitted");
+              meta.events[0].event == INPUT_ROUTE_EVENT_TRAY_OPEN &&
+              meta.events[1].event == INPUT_ROUTE_EVENT_DISC_SELECT &&
+              meta.events[2].event == INPUT_ROUTE_EVENT_TRAY_CLOSE &&
+              meta.events[1].frame == meta.events[2].frame && meta.events[1].disc_index == 2,
+              "same-frame event order and disc set admitted");
         b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
         n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
-        check(read_bytes(n, &meta) != NULL, "events without disc set refused");
+        refuses(n, &meta, "console events require disc set", "events without disc set refused");
+        bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "duplicate console events",
+                "duplicate console events refused");
+        input_route_put32(many_events, INPUT_ROUTE_V3_MAX_EVENTS + 1u);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, many_events, sizeof(many_events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "console events length",
+                "console event count overflow refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, 4);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "console events length",
+                "malformed console event length refused");
+        events[10] = 1;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta,
+                "console event frame/reserved/order", "console event reserved byte refused");
+        events[10] = 0; input_route_put32(events + 12, 1);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta,
+                "console event frame/reserved/order", "decreasing console event frame refused");
+        input_route_put32(events + 12, 3); input_route_put32(events + 4, 6);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta,
+                "console event frame/reserved/order", "out-of-range console event frame refused");
+        input_route_put32(events + 4, 2); events[8] = 9;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "console event kind",
+                "unknown console event kind refused");
+        events[8] = INPUT_ROUTE_EVENT_TRAY_OPEN; events[9] = 1;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "console event disc",
+                "tray event with nonzero disc refused");
+        events[9] = 0; events[16] = INPUT_ROUTE_EVENT_DISC_SELECT; events[17] = 0;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "console event disc",
+                "disc event with zero disc refused");
         events[17] = 3;
         b.n = 0; bentry(&b, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
         bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
-        n = (uint32_t)build(8, 5, 0, ext, (uint32_t)b.n);
-        check(read_bytes(n, &meta) != NULL, "event outside disc set refused");
-        cases += 3;
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "console event disc index",
+                "event outside disc set refused");
+
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+        bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "duplicate disc set",
+                "duplicate disc set refused");
+        input_route_put32(many_discs, INPUT_ROUTE_V3_MAX_DISCS + 1u);
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_DISC_SET, many_discs, sizeof(many_discs));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "disc set length",
+                "disc count overflow refused");
+        memset(many_discs, 0, sizeof(many_discs));
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_DISC_SET, many_discs, 4);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "disc set length",
+                "zero disc count refused");
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, 4);
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "disc set length",
+                "malformed disc set length refused");
+        discs[4] = 3;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "disc set kind/reserved",
+                "unknown disc digest kind refused");
+        discs[4] = INPUT_ROUTE_DISC_DIGEST_FILE; discs[5] = 1;
+        b.n = 0; bentry(&b, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+        refuses(build(8, 5, 0, ext, (uint32_t)b.n), &meta, "disc set kind/reserved",
+                "disc set reserved byte refused");
+        cases += 20;
     }
 
     /* Identity is all-or-nothing, strict, and unique. */
