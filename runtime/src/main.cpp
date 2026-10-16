@@ -16096,88 +16096,80 @@ namespace {
     /* Graphics presets in the launcher (docs/QUALITY_PRESETS.md). */
     std::string g_quality_summary_s, g_quality_reason_s;
 
-    /* Fill the launcher rows a preset sets: run the preset's [video] values
-     * through the same globals -> launcher encodings the seed uses, then put
-     * the globals back (the launch path applies the pick). */
+    /* The display height the internal-resolution rows are seeded for. Set on
+     * the main thread (pre-game fill, in-game menu setup); the mapper below
+     * only reads it. */
+    std::atomic<int> g_quality_display_h{0};
+
+    /* A preset's rows, side-effect free: computed from its parsed [video]
+     * block and startup constants (reference lines, env overrides), never
+     * from or into the live globals. Safe on any thread -- the in-game menu
+     * calls it from its draw thread while the game runs. */
+    psxq::Rows quality_rows_for(const PSXRecompV4::RuntimeConfig& r) {
+        return psxq::rows_from_runtime(r, g_video_dynres_env >= 0, g_video_dynres_env,
+                                       g_video_dynres_min_env != PSX_IR_UNSET,
+                                       g_video_dynres_min_env);
+    }
+    psxq::Rows quality_rows_of(const RecompLauncherCSettings& s) {
+        psxq::Rows r;
+        r.texture_filter = s.texture_filter;
+        r.fmv_filter = s.fmv_filter;
+        r.antialiasing = s.antialiasing;
+#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
+        r.dynamic_resolution = s.dynamic_resolution;
+        r.dynamic_resolution_min = s.dynamic_resolution_min;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
+        r.render_thread = s.render_thread;
+        r.present_thread = s.present_thread;
+        r.frame_generation = s.frame_generation;
+#endif
+        r.geometry_correction = s.geometry_correction;
+        r.perspective_texturing = s.perspective_texturing;
+        r.frame_interp = s.frame_interp;
+        r.frame_interp_fps = s.frame_interp_fps;
+        return r;
+    }
+    void quality_rows_to(const psxq::Rows& r, RecompLauncherCSettings* s) {
+        s->texture_filter = r.texture_filter;
+        s->fmv_filter = r.fmv_filter;
+        s->antialiasing = r.antialiasing;
+#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
+        s->dynamic_resolution = r.dynamic_resolution;
+        s->dynamic_resolution_min = r.dynamic_resolution_min;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
+        s->render_thread = r.render_thread;
+        s->present_thread = r.present_thread;
+        s->frame_generation = r.frame_generation;
+#endif
+        s->geometry_correction = r.geometry_correction;
+        s->perspective_texturing = r.perspective_texturing;
+        s->frame_interp = r.frame_interp;
+        s->frame_interp_fps = r.frame_interp_fps;
+    }
+    bool quality_preset_rows(int tier, psxq::Rows* out) {
+        const auto* p = quality_preset_for(tier);
+        if (!p) return false;
+        *out = quality_rows_for(p->runtime);
+        return true;
+    }
+
+    /* Fill the launcher rows a preset sets (Settings encodings). Pure. */
     void quality_launcher_apply(int preset, RecompLauncherCSettings* s) {
         const auto* p = quality_preset_for(preset - 1);
         if (!p || !s) return;
-        const int sv_scale = g_video_scale, sv_ir = g_video_internal_res,
-                  sv_dyn = g_video_dynres, sv_dynmin = g_video_dynres_min,
-                  sv_aa = g_video_aa, sv_paa = g_video_post_aa, sv_ss = g_video_ss_milli,
-                  sv_tf = g_video_texfilter, sv_fmv = g_video_fmv_filter,
-                  sv_gc = g_video_geometry_correction, sv_pt = g_video_perspective_texturing,
-                  sv_pfb = g_video_pgxp_position_fallback,
-                  sv_ppp = g_video_pgxp_preserve_projection,
-                  sv_pdb = g_video_pgxp_depth_buffer, sv_pcc = g_video_pgxp_color_correction,
-                  sv_seam = g_video_pgxp_seam, sv_rt = g_render_thread,
-                  sv_pth = g_present_thread, sv_fg = g_frame_generation,
-                  sv_fgm = g_frame_generation_method, sv_fi = g_frame_interpolation,
-                  sv_fif = g_frame_interpolation_fps;
-        const float sv_tol = g_video_pgxp_tolerance, sv_dth = g_video_pgxp_depth_threshold,
-                    sv_bloom = g_video_bloom;
-        const int sv_chroma = g_video_fmv_chroma, sv_lod = g_video_texture_lod,
-                  sv_aniso = g_video_aniso, sv_dith = g_video_dithering;
-        quality_apply_video_globals(p->runtime);
+        const PSXRecompV4::RuntimeConfig& r = p->runtime;
+        quality_rows_to(quality_rows_for(r), s);
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-        s->internal_resolution = internal_resolution_for_launcher();
+        s->internal_resolution = r.video_internal_resolution != PSX_IR_UNSET
+            ? r.video_internal_resolution
+            : psx_ir_from_supersampling(r.video_supersampling < 1 ? 1 : r.video_supersampling,
+                                        g_video_ref_lines);
 #endif
         s->supersampling = psx_ir_launcher_seed_supersampling(
-            kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
-            g_video_ref_lines, psx_sdl_display_pixel_height(nullptr));
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-        s->dynamic_resolution = dynres_requested() != 0;
-        s->dynamic_resolution_min = dynres_min_value();
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
-        s->render_thread = g_render_thread ? 1 : 0;
-        s->present_thread = g_present_thread ? 1 : 0;
-        s->frame_generation = g_frame_generation ? 1 : 0;
-#endif
-        s->antialiasing = g_video_aa ? 1 : 0;
-        s->texture_filter = g_video_texfilter;
-        s->fmv_filter = cfg_fmv_filter_to_launcher(g_video_fmv_filter);
-        s->geometry_correction = g_video_geometry_correction ? 1 : 0;
-        s->perspective_texturing = g_video_perspective_texturing ? 1 : 0;
-        s->frame_interp = g_frame_interpolation ? 1 : 0;
-        s->frame_interp_fps = g_frame_interpolation_fps;
-        g_video_scale = sv_scale; g_video_internal_res = sv_ir; g_video_dynres = sv_dyn;
-        g_video_dynres_min = sv_dynmin; g_video_aa = sv_aa; g_video_post_aa = sv_paa;
-        g_video_ss_milli = sv_ss; g_video_texfilter = sv_tf; g_video_fmv_filter = sv_fmv;
-        g_video_geometry_correction = sv_gc; g_video_perspective_texturing = sv_pt;
-        g_video_pgxp_tolerance = sv_tol; g_video_pgxp_position_fallback = sv_pfb;
-        g_video_pgxp_preserve_projection = sv_ppp; g_video_pgxp_depth_buffer = sv_pdb;
-        g_video_pgxp_color_correction = sv_pcc; g_video_pgxp_seam = sv_seam;
-        g_video_pgxp_depth_threshold = sv_dth; g_render_thread = sv_rt;
-        g_present_thread = sv_pth; g_frame_generation = sv_fg;
-        g_frame_generation_method = sv_fgm; g_frame_interpolation = sv_fi;
-        g_frame_interpolation_fps = sv_fif;
-        g_video_bloom = sv_bloom; g_video_fmv_chroma = sv_chroma;
-        g_video_texture_lod = sv_lod; g_video_aniso = sv_aniso; g_video_dithering = sv_dith;
-    }
-
-    /* Does a launcher row a governed, player-editable key owns differ between
-     * two Settings? (Host-side Custom classification: only the keys this
-     * title's presets govern count.) */
-    static bool quality_row_differs(const std::string& k, const RecompLauncherCSettings& a,
-                                    const RecompLauncherCSettings& b) {
-        if (k == "texture_filtering") return a.texture_filter != b.texture_filter;
-        if (k == "fmv_filter") return a.fmv_filter != b.fmv_filter;
-        if (k == "antialiasing") return (a.antialiasing != 0) != (b.antialiasing != 0);
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-        if (k == "dynamic_resolution") return (a.dynamic_resolution != 0) != (b.dynamic_resolution != 0);
-        if (k == "dynamic_resolution_min") return a.dynamic_resolution_min != b.dynamic_resolution_min;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
-        if (k == "frame_generation") return (a.frame_generation != 0) != (b.frame_generation != 0);
-        if (k == "render_thread") return (a.render_thread != 0) != (b.render_thread != 0);
-        if (k == "present_thread") return (a.present_thread != 0) != (b.present_thread != 0);
-#endif
-        if (k == "geometry_correction") return (a.geometry_correction != 0) != (b.geometry_correction != 0);
-        if (k == "perspective_texturing") return (a.perspective_texturing != 0) != (b.perspective_texturing != 0);
-        if (k == "frame_interpolation") return (a.frame_interp != 0) != (b.frame_interp != 0);
-        if (k == "frame_interpolation_fps") return a.frame_interp_fps != b.frame_interp_fps;
-        return false;   /* preset-only keys have no row */
+            kLauncherHasInternalResolution, r.video_internal_resolution, r.video_supersampling,
+            g_video_ref_lines, g_quality_display_h.load());
     }
 
     void quality_publish_strings(void) {
@@ -16205,6 +16197,7 @@ namespace {
     void quality_fill_game_info(RecompLauncherCGameInfo* gi) {
         if (!g_quality_offered) return;
         quality_publish_strings();
+        g_quality_display_h = psx_sdl_display_pixel_height(nullptr);
         gi->quality_offered_mask = (int)g_quality_offered;
         gi->quality_detected = (g_quality.detected >= 0 && g_quality.detected < PSX_QUALITY_COUNT)
             ? g_quality.detected + 1 : 0;
@@ -16227,50 +16220,31 @@ namespace {
      * settled when settings.toml is saved (quality_save_user_settings). */
     void quality_take_launcher(const RecompLauncherCSettings* ls,
                                PSXRecompV4::UserSettings* /*us*/, bool apply_now) {
-        if (!g_quality_offered || ls->quality_preset < 1 || ls->quality_preset > 5) return;
-        const int preset = ls->quality_preset - 1;
-        if (preset == PSX_QUALITY_CUSTOM) {
-            /* A player may pick a different tier and edit one of its rows
-             * before leaving the launcher. Custom belongs to that tier,
-             * including its values which have no launcher row. */
-            const int base = ls->quality_base - 1;
-            const auto* p = quality_preset_for(base);
-            /* The frontends flag Custom on any row their snapshot tracks;
-             * only a row this title's presets govern makes it Custom. */
-            if (p && g_quality.preset != PSX_QUALITY_CUSTOM) {
-                RecompLauncherCSettings expect = *ls;
-                quality_launcher_apply(base + 1, &expect);
-                int picked = PSX_QUALITY_NONE;
-                const psxq::Edit e = psxq::launcher_custom_edit(
-                    g_quality_keys, base, g_quality.preset,
-                    [&](const std::string& k) { return quality_row_differs(k, *ls, expect); },
-                    &picked);
-                if (e == psxq::Edit::NONE) return;              /* unrelated rows only */
-                if (e == psxq::Edit::PICK) {                    /* a pick, then unrelated rows */
-                    g_quality_edit = e;
-                    g_quality_picked = picked;
-                    if (apply_now && !g_quality.env_override) quality_apply_video_globals(p->runtime);
-                    return;
+        if (!g_quality_offered) return;
+        const psxq::LauncherEdit le = psxq::classify_launcher(
+            ls->quality_preset, ls->quality_base, quality_rows_of(*ls),
+            g_quality.preset, g_quality.base, g_quality_keys, quality_preset_rows);
+        if (le.edit == psxq::Edit::NONE && !le.set_base) return;
+        if (le.edit != psxq::Edit::NONE) g_quality_edit = le.edit;
+        if (le.edit == psxq::Edit::PICK) {
+            g_quality_picked = le.picked;
+            if (apply_now && !g_quality.env_override) {
+                if (const auto* p = quality_preset_for(le.picked)) {
+                    /* The launcher wrote this preset's values into its rows,
+                     * which the launch path applies next; this covers the rest
+                     * (supersample, PGXP extras, ...). */
+                    quality_apply_video_globals(p->runtime);
+                    if (ls->quality_preset - 1 != PSX_QUALITY_CUSTOM)
+                        std::fprintf(stdout, "psxrecomp: graphics preset %s\n",
+                                     psx_quality_name(le.picked));
                 }
             }
-            const bool changed_base = p && base != g_quality.base;
-            if (g_quality.preset != PSX_QUALITY_CUSTOM || changed_base)
-                g_quality_edit = psxq::Edit::GOVERNED_EDIT;
-            if (p) g_quality.base = base;
-            if (apply_now && changed_base) quality_apply_video_globals(p->runtime);
             return;
         }
-        if (preset == g_quality.preset) return;
-        g_quality_edit = psxq::Edit::PICK;
-        g_quality_picked = preset;
-        if (apply_now && !g_quality.env_override) {
-            if (const auto* p = quality_preset_for(preset)) {
-                /* The launcher wrote this preset's values into its rows,
-                 * which the launch path applies next; this covers the rest
-                 * (supersample, PGXP extras, ...). */
-                quality_apply_video_globals(p->runtime);
-                std::fprintf(stdout, "psxrecomp: graphics preset %s\n", psx_quality_name(preset));
-            }
+        if (le.set_base) {
+            g_quality.base = le.base;
+            if (apply_now && le.base_changed)
+                if (const auto* p = quality_preset_for(le.base)) quality_apply_video_globals(p->runtime);
         }
     }
 #endif
@@ -16558,14 +16532,52 @@ bool g_ovl_netplay = false;
 
 /* Only the main thread reads live runtime state. Provider draw callbacks
  * consume a coherent snapshot under the same mutex as their posted edits. */
+#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+/* Graphics presets in the menu: the run's preset state and the live rows a
+ * preset governs, captured on the main thread; the player's selection
+ * (psxq::MenuSelection) so a provider is re-seeded with what it chose, not
+ * with live values a pick or a netplay match defers. */
+int g_ovl_q_preset = 0, g_ovl_q_base = 0;
+std::atomic<int> g_ovl_q_detected{0};
+psxq::Rows g_ovl_q_live{};
+psxq::MenuSelection g_ovl_q_sel;
+std::string g_ovl_q_summary, g_ovl_q_reason;   /* fixed at menu setup */
+psxq::Rows mh_quality_live_rows(const PsxHostVideoSettings& v) {
+    psxq::Rows r;
+    r.texture_filter = v.texture_filter;
+    r.fmv_filter = cfg_fmv_filter_to_launcher(v.fmv_filter);
+    r.antialiasing = v.present_linear;
+    r.dynamic_resolution = v.dynamic_resolution;
+    r.dynamic_resolution_min = dynres_min_value();
+    r.frame_generation = v.frame_generation;
+    r.render_thread = v.render_thread;
+    r.present_thread = v.present_thread;
+    r.geometry_correction = g_video_geometry_correction ? 1 : 0;
+    r.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
+    r.frame_interp = g_frame_interpolation ? 1 : 0;
+    r.frame_interp_fps = g_frame_interpolation_fps;
+    return r;
+}
+#endif
+
 void mh_refresh_snapshot() {
     PsxHostVideoSettings current;
     psx_video_current(&current);
     const bool netplay = psx_netplay_active() != 0;
+#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    const psxq::Rows qlive = mh_quality_live_rows(current);
+    RecompLauncherCSettings q{};
+    quality_seed_launcher(&q);
+#endif
     std::lock_guard<std::mutex> lk(g_ovl_mu);
     g_ovl_video_current = current;
     g_ovl_video_boot = g_video_boot;
     g_ovl_netplay = netplay;
+#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    g_ovl_q_live = qlive;
+    g_ovl_q_preset = q.quality_preset;
+    g_ovl_q_base = q.quality_base;
+#endif
 }
 int mh_netplay_active(void) {
     std::lock_guard<std::mutex> lk(g_ovl_mu);
@@ -16703,6 +16715,18 @@ void mh_launcher_settings_get(RecompLauncherCSettings* out) {
     ls.renderer = v.renderer;
     ls.render_thread = v.render_thread;
     ls.present_thread = v.present_thread;
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    /* Every row a preset governs, the hidden ones included, as the player
+     * selected them (main-thread snapshot): a pick's next-launch rows and
+     * netplay-deferred rows stay selected, so the host's classification
+     * compares like for like with the preset in quality_preset/base. */
+    {
+        std::lock_guard<std::mutex> lk(g_ovl_mu);
+        quality_rows_to(g_ovl_q_sel.seed(g_ovl_q_live), &ls);
+        ls.quality_preset = g_ovl_q_preset;
+        ls.quality_base = g_ovl_q_base;
+    }
+#endif
 #if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK) && \
     defined(PSX_HAS_JOGCON_FFB_PLAYER_SETTING)
     ls.jogcon_force_feedback = psx_jogcon_ffb_player_enabled();
@@ -16722,6 +16746,9 @@ unsigned mh_launcher_settings_apply(const RecompLauncherCSettings* s) {
     }
     return mh_restart_bits(next);
 }
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+int mh_quality_redetect(void) { return g_ovl_q_detected.load(); }
+#endif
 void mh_launcher_game_info(RecompLauncherCGameInfo* out) {
     if (!out) return;
     RecompLauncherCGameInfo& gi = *out;
@@ -16739,6 +16766,21 @@ void mh_launcher_game_info(RecompLauncherCGameInfo* out) {
     gi.has_vsync = 0;
     gi.has_rewind_depth = 0;
     gi.mods = PSXRecompV4::mod_runtime_launcher_provider();
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    /* The Graphics preset contract, for providers that implement it. Only
+     * thread-safe callbacks: quality_apply is a pure preset -> rows mapping,
+     * and re-detect returns this session's detection (a fresh probe needs
+     * the GL context and mutates the run's state: it stays in the pre-game
+     * launcher). The strings were fixed on the main thread at menu setup. */
+    if (g_quality_offered) {
+        gi.quality_offered_mask = (int)g_quality_offered;
+        gi.quality_detected = g_ovl_q_detected.load();
+        gi.quality_summary = g_ovl_q_summary.c_str();
+        gi.quality_reason = g_ovl_q_reason.c_str();
+        gi.quality_apply = quality_launcher_apply;
+        gi.quality_redetect = mh_quality_redetect;
+    }
+#endif
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
     /* The same lobby the pre-game launcher drives, so the menu can host/join. */
     gi.netplay_supported = g_lnch_netplay_available ? 1 : 0;
@@ -16775,6 +16817,23 @@ void ovl_draw(int w, int h, void*) { if (g_ovl && g_ovl->draw) g_ovl->draw(g_ovl
 #endif
 
 static void recomp_overlay_setup(const char* argv0, const std::string& title) {
+#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+    /* Main thread: the preset strings and detection the menu publishes, and
+     * the display the preset rows are seeded for. Fixed before any provider
+     * attaches, never written while one can read them. */
+    if (g_quality_offered && !g_ovl_on) {
+        g_ovl_q_summary = g_quality.summary;
+        g_ovl_q_reason = g_quality.reason;
+        g_ovl_q_detected = (g_quality.detected >= 0 && g_quality.detected < PSX_QUALITY_COUNT)
+            ? g_quality.detected + 1 : 0;
+        g_quality_display_h = psx_sdl_display_pixel_height(nullptr);
+        {
+            std::lock_guard<std::mutex> lk(g_ovl_mu);
+            g_ovl_q_sel.reset();
+        }
+        mh_refresh_snapshot();
+    }
+#endif
     const char* e = std::getenv("PSX_OVERLAY");
     const PsxMenuProvider* p = psx_menu_provider();
     g_menu_host.default_selection = 0;
@@ -16860,8 +16919,29 @@ static void host_pause_service(void) {
     if (have_video) (void)psx_video_apply_live(&video);
 #if defined(RECOMP_LAUNCHER)
     if (have_ls) {
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+        /* The menu's Graphics preset row: classified like the launcher's
+         * (a pick, or a governed edit); the save below settles it. Rows the
+         * menu shows apply now, preset-only keys at the next launch. */
+        quality_take_launcher(&post, nullptr, false);
+#endif
         const PsxHostVideoSettings v = ovl_video_from(post);
         (void)psx_video_apply_live(&v);
+#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
+        /* What the player selected versus what is live now: rows that wait
+         * (a pick's next-launch rows, netplay-deferred rows) stay selected
+         * for the next seed. Then refresh the preset state the save settled. */
+        {
+            PsxHostVideoSettings now;
+            psx_video_current(&now);
+            const psxq::Rows live = mh_quality_live_rows(now);
+            {
+                std::lock_guard<std::mutex> lk(g_ovl_mu);
+                g_ovl_q_sel.record(quality_rows_of(post), live);
+            }
+            mh_refresh_snapshot();
+        }
+#endif
 #if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK) && \
     defined(PSX_HAS_JOGCON_FFB_PLAYER_SETTING)
         /* Controls > Wheel force feedback (experimental): live, and saved to
