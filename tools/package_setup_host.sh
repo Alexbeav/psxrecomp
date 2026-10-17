@@ -480,6 +480,12 @@ copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude 'build' \
   --exclude '__pycache__'
 
+# The UI checkout carries launcher state and standalone demo ROM fixtures.
+# Neither is a source input for a player's game rebuild. Apply this after
+# copying so the rsync and portable cp paths obey the same SDK policy.
+rm -f "${STAGE}/recomp-ui/keybinds.ini"
+rm -rf "${STAGE}/recomp-ui/test_data"
+
 # Never ship game generated C or common disc working trees.
 rm -rf "${STAGE}/generated" "${STAGE}/bpe" "${STAGE}/motk" "${STAGE}/disc"
 

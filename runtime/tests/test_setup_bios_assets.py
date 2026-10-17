@@ -216,6 +216,19 @@ with zipfile.ZipFile(sys.argv[-2], "w") as archive:
                 else:
                     self.assertIn("otherwise OpenBIOS is regenerated locally", readme)
 
+    def test_sdk_omits_ui_state_and_demo_rom_but_keeps_build_sources(self):
+        self.write("recomp-ui/keybinds.ini", "[player1]\ncross=X\n")
+        self.write("recomp-ui/test_data/msu1_demo_vanilla.rom", "synthetic demo ROM")
+        self.write("recomp-ui/src/common/required.h", "/* required build input */\n")
+        result = self.package(retail=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.root / "dist/test-0.0.1-linux-x64.zip") as archive:
+            names = archive.namelist()
+            self.assertNotIn("recomp-ui/keybinds.ini", names)
+            self.assertFalse(any(name.startswith("recomp-ui/test_data/") for name in names))
+            self.assertEqual(archive.read("recomp-ui/src/common/required.h"),
+                             b"/* required build input */\n")
+
     def test_sdk_omission_runs_after_overlay_and_rejects_openbios_recipe(self):
         for name in ("OpenBIOS.toml", "openbios.bin", "OpenBIOS.LICENSE"):
             self.write("overlay/bios/" + name, "overlay BIOS fixture")
