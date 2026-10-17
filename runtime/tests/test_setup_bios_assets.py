@@ -254,7 +254,7 @@ class PlatformCopyTests(unittest.TestCase):
                 readme = "1. Run {}.\n2. Provide a legal retail BIOS (required).\n".format(host)
                 if windows:
                     readme += "downloads cmake-clang-v1 toolchain pack\n"
-                    controls = "Download latest portable toolchain Select toolchain zip cmake-clang-v1"
+                    controls = "Download latest portable toolchain Select cmake-clang-v1 toolchain zip cmake-clang-v1"
                 else:
                     readme += "Install CMake, Ninja, Python 3 and a C/C++ compiler; available on PATH; native build tools\n"
                     controls = "1. Native build tools Install CMake, Ninja, Python 3, and either Clang or GCC Check tools"
@@ -267,7 +267,12 @@ class PlatformCopyTests(unittest.TestCase):
 
                 write()
                 self.assertEqual(platform_copy.audit(archive)["status"], "pass")
-                if not windows:
+                if windows:
+                    controls = controls.replace("Select cmake-clang-v1 toolchain zip", "")
+                    write()
+                    with self.assertRaisesRegex(ValueError, "Select cmake-clang-v1 toolchain zip"):
+                        platform_copy.audit(archive)
+                else:
                     write("1. Portable toolchain")
                     with self.assertRaisesRegex(ValueError, "forbidden"):
                         platform_copy.audit(archive)
