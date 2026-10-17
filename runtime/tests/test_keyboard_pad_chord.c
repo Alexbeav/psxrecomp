@@ -41,6 +41,27 @@ int main(int argc, char **argv) {
                     psx_keybinds_get_button(1, PSX_KB_SELECT));
 
     expect_word("released", 0xFFFFu, psx_keybinds_pad_word(keys, 1));
+    {
+        PsxPlayerBinds temporary = {0};
+        temporary.up = temporary.ls_up = SDL_SCANCODE_W;
+        temporary.circle = SDL_SCANCODE_SPACE;
+        expect_word("install temporary profile", 1,
+                    (uint16_t)psx_keybinds_set_session_player(1, &temporary));
+        keys[SDL_SCANCODE_W] = 1;
+        expect_word("W moves without stock R1", 0xFFEFu,
+                    psx_keybinds_pad_word(keys, 1));
+        uint8_t axes[4] = {128,128,128,128};
+        psx_keybinds_sticks(keys, 1, axes);
+        expect_word("W analog forward", 0, axes[1]);
+        expect_scancode("user R1 binding preserved", SDL_SCANCODE_W,
+                        psx_keybinds_get_button(1, PSX_KB_R1));
+        keys[SDL_SCANCODE_W] = 0; keys[SDL_SCANCODE_SPACE] = 1;
+        expect_word("Space jumps with Circle", 0xDFFFu, psx_keybinds_pad_word(keys, 1));
+        psx_keybinds_clear_session_players();
+        keys[SDL_SCANCODE_SPACE] = 0; keys[SDL_SCANCODE_W] = 1;
+        expect_word("clear restores stock W/R1", 0xF7FFu, psx_keybinds_pad_word(keys, 1));
+        keys[SDL_SCANCODE_W] = 0;
+    }
 
     keys[SDL_SCANCODE_RSHIFT] = 1;
     expect_word("select held", 0xFFFEu, psx_keybinds_pad_word(keys, 1));

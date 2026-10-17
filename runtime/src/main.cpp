@@ -1950,6 +1950,7 @@ static PSXModSessionBaseline g_mod_owned_baseline;
 static void reset_mod_owned_presentation(void) {
     psx_mod_internal_resolution_reset();
     psx_local_mouse_clear();
+    psx_keybinds_clear_session_players();
     PSXModSessionScalars live;
     live.video_vsync = g_video_vsync;
     live.frame_interpolation = g_frame_interpolation;
@@ -7240,6 +7241,17 @@ static void pad_ext_source_release(void*, int s, PsxNetPad* pad) {
 }
 static void pad_ext_source_resolve(void*, int s, const PSXModControllerState* source,
                                    int guarded, PsxNetPad* pad) {
+    if (!mod_controller_source_connected((uint32_t)s)) {
+        /* Preserve recorded latch bytes/type even when the serial endpoint is
+         * absent. A real unplug can leave these at their last analog sample. */
+        pad->buttons = (uint16_t)source->buttons;
+        pad->lx = (uint8_t)source->lx; pad->ly = (uint8_t)source->ly;
+        pad->rx = (uint8_t)source->rx; pad->ry = (uint8_t)source->ry;
+        pad->analog = source->analog ? 1 : 0;
+        pad->connected = 0;
+        sio_set_pad_connected(s, 0);
+        return;
+    }
     const bool dev_here = (dev_any_input_enabled() && s == 0);
     pad->lx = (uint8_t)source->lx; pad->ly = (uint8_t)source->ly;
     pad->rx = (uint8_t)source->rx; pad->ry = (uint8_t)source->ry;

@@ -1004,6 +1004,10 @@ typedef struct PSXModControllerState {
 } PSXModControllerState;
 typedef int (*PSXModControllerSource)(PSXModControllerState *state);
 int psx_mod_set_controller_source(uint32_t player, PSXModControllerSource source);
+/* Presence of an attached offline source (default connected). A diagnostic
+ * source may explicitly emulate an unplugged pad without falling back to a
+ * physical controller assigned to that port. Cleared on detach/session reset. */
+int psx_mod_set_controller_source_connected(uint32_t player, int connected);
 
 /* Title pad transform (stage 2b above). Offline local play only: never under
  * netplay or rollback resim (the session is vanilla), selfcheck replay or a
@@ -1140,6 +1144,9 @@ typedef struct PSXModMousePolicy {
     void (*sample)(uint64_t now_ns, PSXModMouseOutput* output);
 } PSXModMousePolicy;
 int psx_mod_set_local_mouse_policy(const PSXModMousePolicy* policy);
+/* Optional action-game capture: click once to capture, Escape to release.
+ * Later clicks reach the normal bindings. Existing hold-to-look is default. */
+int psx_mod_set_local_mouse_persistent_capture(int enabled);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.

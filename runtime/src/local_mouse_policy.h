@@ -21,6 +21,7 @@ class LocalMousePolicy {
 public:
     explicit LocalMousePolicy(LocalMouseBackend backend) : backend_(backend) {}
     bool install(const PSXModMousePolicy* policy);
+    bool persistent_capture(bool enabled);
     void clear();
     void reset();
     void update(uint64_t now, LocalMouseHost host);
@@ -45,5 +46,6 @@ private:
     bool activation_down_ = false, activation_owned_ = false;
     bool hold_active_ = false; // accepted interpretation, separate from physical state
     bool conflict_noticed_ = false, capture_failure_noticed_ = false;
+    bool persistent_ = false;
 };
 } // namespace psx

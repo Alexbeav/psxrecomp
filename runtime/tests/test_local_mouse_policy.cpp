@@ -31,6 +31,23 @@ int main() {
     uint8_t x=99,y=77; policy.update(0,host); policy.sample(0,x,y); CHECK(x==99 && y==77);
     PSXModMousePolicy callbacks{sizeof(PSXModMousePolicy),PSX_MOD_MOUSE_HOLD_RIGHT,eligible,event,sample};
     CHECK(policy.install(&callbacks)); CHECK(!policy.install(&callbacks));
+    CHECK(policy.persistent_capture(true));
+    policy.update(5*Ms,host);
+    CHECK(policy.control(5*Ms,5*Ms,psx::MouseControl::Left,true,false));
+    CHECK(policy.control(6*Ms,6*Ms,psx::MouseControl::Left,false,false));
+    CHECK(policy.captured());
+    CHECK(!policy.control(7*Ms,7*Ms,psx::MouseControl::Left,true,false));
+    CHECK(!policy.control(8*Ms,8*Ms,psx::MouseControl::Left,false,false));
+    CHECK(policy.captured());
+    CHECK(!policy.control(9*Ms,9*Ms,psx::MouseControl::Left,true,false));
+    CHECK(!policy.control(11*Ms,10*Ms,psx::MouseControl::Left,false,false));
+    CHECK(!policy.captured());
+    policy.update(11*Ms,host);
+    CHECK(policy.control(11*Ms,11*Ms,psx::MouseControl::Left,true,false));
+    CHECK(policy.control(0,12*Ms,psx::MouseControl::Left,false,false));
+    CHECK(policy.captured()); // lost up reconciles without turning capture off
+    CHECK(policy.control(12*Ms,12*Ms,psx::MouseControl::Escape,true,false));
+    CHECK(policy.persistent_capture(false));
     policy.update(10*Ms,host);
     CHECK(policy.control(10*Ms,10*Ms,psx::MouseControl::Left,true,false));
     CHECK(policy.captured() && suppressed==psx::MouseControl::Left && !active);

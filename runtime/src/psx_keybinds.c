@@ -81,6 +81,17 @@ static const PsxKeyBinds s_default_binds = PSXKB_DEFAULTS;
  * Primary OR alt asserts the input; both persist to keybinds.ini as
  * "primary, alt" on one line. */
 static PsxKeyBinds       s_alt_binds;
+static PsxPlayerBinds s_session_binds[PSXKB_MAX_PLAYERS];
+static uint8_t s_session_active[PSXKB_MAX_PLAYERS];
+int psx_keybinds_set_session_player(int player, const PsxPlayerBinds *profile) {
+    if (player < 1 || player > PSXKB_MAX_PLAYERS || !profile) return 0;
+    s_session_binds[player - 1] = *profile;
+    s_session_active[player - 1] = 1;
+    return 1;
+}
+void psx_keybinds_clear_session_players(void) {
+    memset(s_session_active, 0, sizeof s_session_active);
+}
 
 typedef struct {
     const char *name;   /* ini key */
@@ -394,6 +405,10 @@ static int held(const uint8_t *keys, const PsxPlayerBinds *pb, int i) {
     const PsxPlayerBinds *alt = &s_alt_binds.player[slot];
     SDL_Scancode p = *(const SDL_Scancode *)((const char *)pb  + s_buttons[i].offset);
     SDL_Scancode a = *(const SDL_Scancode *)((const char *)alt + s_buttons[i].offset);
+    if (s_session_active[slot]) {
+        p = *(const SDL_Scancode *)((const char *)&s_session_binds[slot] + s_buttons[i].offset);
+        a = SDL_SCANCODE_UNKNOWN;
+    }
     return held_sc(keys, p, (int)slot) || held_sc(keys, a, (int)slot);
 }
 

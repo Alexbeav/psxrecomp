@@ -23,6 +23,13 @@ void LocalMousePolicy::clear() {
     clock_valid_ = false;
     clock_ = event_clock_ = release_clock_ = 0;
     conflict_noticed_ = capture_failure_noticed_ = false;
+    persistent_ = false;
+}
+bool LocalMousePolicy::persistent_capture(bool enabled) {
+    if (!installed()) return false;
+    reset();
+    persistent_ = enabled;
+    return true;
 }
 void LocalMousePolicy::dispatch(uint32_t type, uint64_t t, double dx, double dy) {
     if (!installed()) return;
@@ -84,6 +91,14 @@ bool LocalMousePolicy::control(uint64_t t, uint64_t now, MouseControl control,
         const bool fresh = down && !activation_down_ && !repeat;
         activation_down_ = down;
         if (!down) {
+            if (persistent_ && captured_ && allowed()) {
+                const bool owned = activation_owned_;
+                activation_owned_ = false;
+                // t=0 is the backend's release reconciliation, not a queued
+                // event. Malformed real event times still release capture.
+                if (t) (void)valid_time(t, now);
+                return owned;
+            }
             // Release is unconditional: a future/backwards event time cannot
             // leave capture or the reducer's separate direction hold active.
             // A valid ordered release while still eligible owns its event
