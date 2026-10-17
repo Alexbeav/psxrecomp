@@ -229,6 +229,11 @@ if [[ "${STAGE_ONLY}" != 1 ]]; then rm -f "${DIST:?}/${ZIP_NAME:?}"; fi
 
 # --- The executable and what CMake staged beside it --------------------------
 cp -a "${EXE}" "${STAGE}/"
+# Opted-in title diagnostics stage this launcher beside the executable. Keep
+# it with the original binary so a feedback bundle can be replayed in isolation.
+if [[ -f "${EXE_DIR}/replay-diagnostics.py" ]]; then
+  cp -a "${EXE_DIR}/replay-diagnostics.py" "${STAGE}/replay-diagnostics.py"
+fi
 if [[ -f "${EXE_DIR}/psx_game_version.txt" ]]; then
   cp -a "${EXE_DIR}/psx_game_version.txt" "${STAGE}/psx_game_version.txt"
 else
