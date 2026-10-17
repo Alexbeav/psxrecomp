@@ -6260,7 +6260,22 @@ static int savestate_input_guard_active(void) {
  * the resolved type goes through the same coherent request channel as real
  * sampling — never slammed mid-
  * handshake (the v0.5.0 phantom-input lesson). */
+#ifndef PSX_NO_DEBUG_TOOLS
+static bool s_debug_profile_injected[2]{};
+static void restore_input_override_profile(int slot) {
+    if (!s_debug_profile_injected[slot]) return;
+    assert_sio_pad_profile(slot, slot == 0 && dev_any_input_enabled());
+    s_debug_profile_injected[slot] = false;
+}
+#endif
 static void apply_input_override_to_sio(int override_word) {
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (debug_server_get_pad_type_override() < 0 &&
+        debug_server_get_pad_connected_override(0) < 0)
+        restore_input_override_profile(0);
+    else
+        s_debug_profile_injected[0] = true;
+#endif
     PlayerInput& p = g_players[0];
     const uint16_t w = (uint16_t)override_word;
     sio_set_pad_state_slot(0, w);
@@ -7363,6 +7378,9 @@ static PadExtHooks pad_ext_main_hooks(void) {
 static void apply_input_override_port2(int override_word) {
     static int s_was_driven;
     if (override_word < 0) {
+#ifndef PSX_NO_DEBUG_TOOLS
+        restore_input_override_profile(1);
+#endif
         /* Ending an injection releases its buttons: with no device in the
          * port, nothing else would write the word again. A real device in
          * port 2 is resampled each frame anyway. */
@@ -7378,7 +7396,10 @@ static void apply_input_override_port2(int override_word) {
     sio_set_pad_state_slot(1, (uint16_t)override_word);
 #ifndef PSX_NO_DEBUG_TOOLS
     const int debug_connected = debug_server_get_pad_connected_override(1);
-    if (debug_connected >= 0) sio_set_pad_connected(1, debug_connected);
+    if (debug_connected >= 0) {
+        s_debug_profile_injected[1] = true;
+        sio_set_pad_connected(1, debug_connected);
+    }
 #endif
 }
 
@@ -7394,6 +7415,9 @@ static void sample_pad_into_sio(int override) {
         apply_input_override_to_sio(override);
         return;
     }
+#ifndef PSX_NO_DEBUG_TOOLS
+    restore_input_override_profile(0);
+#endif
     int n = g_offline_pad_count;
     if (n < 1) n = 1;
     if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
@@ -7455,6 +7479,9 @@ static void sample_headless_pad_into_sio(int override) {
         apply_input_override_to_sio(override);
         return;
     }
+#ifndef PSX_NO_DEBUG_TOOLS
+    restore_input_override_profile(0);
+#endif
     if (host_pad_layer(nullptr, nullptr, nullptr, nullptr)) {
         /* Debug host layer: P1 goes through the full offline resolution
          * (source, title transform) exactly as a windowed gamepad would. */
