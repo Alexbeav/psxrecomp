@@ -6314,10 +6314,16 @@ static void apply_input_override_to_sio(int override_word) {
                                          : (eff_analog ? SIO_PAD_DUALSHOCK
                                                        : SIO_PAD_DIGITAL);
 #ifndef PSX_NO_DEBUG_TOOLS
-    if (debug_type >= SIO_PAD_DIGITAL && debug_type <= SIO_PAD_JOGCON)
+    if (debug_type >= SIO_PAD_DIGITAL && debug_type <= SIO_PAD_JOGCON) {
         injected_type = debug_type;
+        sio_set_pad_config_capable(0, injected_type != SIO_PAD_DIGITAL);
+    }
 #endif
     sio_request_pad_type(0, injected_type);
+#ifndef PSX_NO_DEBUG_TOOLS
+    const int debug_connected = debug_server_get_pad_connected_override(0);
+    if (debug_connected >= 0) sio_set_pad_connected(0, debug_connected);
+#endif
     psx_selfcheck_note_pad(0, w, st[0], st[1], st[2], st[3],
                            (uint8_t)injected_type);
 }
@@ -7370,6 +7376,10 @@ static void apply_input_override_port2(int override_word) {
         sio_set_pad_analog(1, 0, 0x80, 0x80, 0x80, 0x80);
     }
     sio_set_pad_state_slot(1, (uint16_t)override_word);
+#ifndef PSX_NO_DEBUG_TOOLS
+    const int debug_connected = debug_server_get_pad_connected_override(1);
+    if (debug_connected >= 0) sio_set_pad_connected(1, debug_connected);
+#endif
 }
 
 static void sample_pad_into_sio(int override) {

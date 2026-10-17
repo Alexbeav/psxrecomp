@@ -316,6 +316,8 @@ static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
 /* Test-only controller identity override for set_input/press. -1 follows the
  * selected host device/config; 0/1/2 force digital/DualShock/JogCon. */
 static int s_pad_type_override = -1;
+/* Explicit serial presence while a set_input/press injection is active. */
+static int s_pad_connected_override[2] = { -1, -1 };
 
 /*
  * Exact guest-VBlank input route. A client queues run-length encoded digital
@@ -8097,6 +8099,10 @@ static void handle_set_input(int id, const char *json)
     char val_str[32];
     char layer[16];
     const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (json_get_str(json, "layer", layer, sizeof(layer)) &&
         strcmp(layer, "host") == 0) {
         s_host_buttons = json_get_str(json, "buttons", val_str, sizeof(val_str))
@@ -8118,12 +8124,14 @@ static void handle_set_input(int id, const char *json)
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
     }
     if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
         s_input_override_p2 = (int)(hex_to_u32(val_str) & 0xFFFFu);
         s_input_frames_p2 = 0;
         send_ok(id);
         return;
     }
     s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = (int)hex_to_u32(val_str);
     s_input_frames = 0;
     /* Optional stick override: any of lx/ly/rx/ry (0..255) arms it; omitted
@@ -8159,17 +8167,23 @@ static void handle_press(int id, const char *json)
     int buttons = json_get_int(json, "buttons", -1);
     int frames  = json_get_int(json, "frames", 2);
     const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
     if (pad_type < -1 || pad_type > 2) {
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
     }
     if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
         s_input_override_p2 = buttons & 0xFFFF;
         s_input_frames_p2   = frames;
         send_ok(id);
         return;
     }
     s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = buttons;
     s_input_frames   = frames;
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
@@ -8246,6 +8260,7 @@ static void handle_clear_input(int id, const char *json)
 {
     const int port = json_get_int(json, "port", 0);   /* 0 = both */
     if (port == 0 || port == 2) {
+        s_pad_connected_override[1] = -1;
         s_input_override_p2 = -1;
         s_input_frames_p2 = 0;
     }
@@ -8257,6 +8272,7 @@ static void handle_clear_input(int id, const char *json)
     s_input_frames   = 0;
     s_axis_override  = 0;
     s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     s_host_layer = 0;
     s_host_buttons = 0xFFFF;
@@ -8307,6 +8323,7 @@ static void handle_input_route_start(int id, const char *json)
     s_input_frames = 0;
     s_axis_override = 0;
     s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_input_route_index = 0;
     s_input_route_remaining = s_input_route[0].frames;
     const int at = json_get_int(json, "at_frame", 0);
@@ -17199,6 +17216,11 @@ int debug_server_get_host_pad(uint16_t *buttons, uint8_t st[4], uint8_t *lt,
 int debug_server_get_pad_type_override(void)
 {
     return s_pad_type_override;
+}
+
+int debug_server_get_pad_connected_override(int slot)
+{
+    return slot >= 0 && slot < 2 ? s_pad_connected_override[slot] : -1;
 }
 
 int debug_server_turbo_enabled(void)
