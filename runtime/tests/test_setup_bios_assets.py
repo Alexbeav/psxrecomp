@@ -245,6 +245,72 @@ with zipfile.ZipFile(sys.argv[-2], "w") as archive:
         self.assertIn("requires runtime.openbios=false", result.stderr)
 
 
+class RuntimeBiosStagingTests(unittest.TestCase):
+    def test_actual_runtime_staging_requires_only_linked_openbios_assets(self):
+        cmake = os.environ.get("PSX_TEST_CMAKE") or shutil.which("cmake")
+        if not cmake:
+            self.skipTest("CMake is unavailable")
+        source = (ROOT / "runtime/runtime.cmake").read_text(encoding="utf-8")
+        start = source.index("    # OpenBIOS is part of the native runtime product")
+        end = source.index("    # Mod catalog:", start)
+        # Exercise the production block, closing its outer non-oracle scope
+        # before the unrelated mod catalog code. The tiny probe is never run.
+        block = source[start:end] + "\nendif()\n"
+        cases = (
+            ("linked", "OpenBIOS;SCPH1001", True, True, False, None, True),
+            ("retail", "SCPH1001", False, False, False, None, False),
+            ("missing-rom", "OpenBIOS;SCPH1001", False, True, False,
+             "Bundled OpenBIOS image is missing", False),
+            ("missing-license", "OpenBIOS", True, False, False,
+             "Bundled OpenBIOS license is missing", False),
+            ("oracle", "OpenBIOS", False, False, True, None, False),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, linked, image, license, oracle, error, staged in cases:
+                with self.subTest(case=name):
+                    project = Path(tmp) / name
+                    project.mkdir()
+                    if image:
+                        (project / "openbios.bin").write_bytes(b"synthetic ROM")
+                    if license:
+                        (project / "OpenBIOS.LICENSE").write_text("synthetic MIT notice")
+                    (project / "probe.c").write_text("int main(void) { return 0; }\n")
+                    (project / "CMakeLists.txt").write_text(
+                        'cmake_minimum_required(VERSION 3.20)\n'
+                        'project(BiosStageProbe C)\nadd_executable(probe probe.c)\n'
+                        'set(target probe)\n'
+                        'set(PSXRECOMP_BIOS_STEMS "OpenBIOS;SCPH1001")\n'
+                        'set(_psxrt_bios_linked "' + linked + '")\n'
+                        'set(PSXRT_ORACLE ' + ("TRUE" if oracle else "FALSE") + ')\n'
+                        'set(PSXRECOMP_BUNDLED_BIOS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/openbios.bin")\n'
+                        'set(PSXRECOMP_BUNDLED_BIOS_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/OpenBIOS.LICENSE")\n'
+                        'set(PSXRECOMP_BUNDLED_BIOS_PATH "bios/openbios.bin")\n' + block)
+                    build = project / "build"
+                    command = [cmake, "-S", str(project), "-B", str(build)]
+                    ninja = os.environ.get("PSX_TEST_NINJA") or shutil.which("ninja")
+                    if ninja:
+                        command += ["-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" + ninja]
+                    if os.environ.get("PSX_TEST_CC"):
+                        command += ["-DCMAKE_C_COMPILER=" + os.environ["PSX_TEST_CC"]]
+                    configure = subprocess.run(command, capture_output=True, text=True)
+                    output = configure.stdout + configure.stderr
+                    if error:
+                        self.assertNotEqual(configure.returncode, 0, output)
+                        self.assertIn(error, output)
+                        continue
+                    self.assertEqual(configure.returncode, 0, output)
+                    compile_probe = subprocess.run(
+                        [cmake, "--build", str(build), "--parallel", "1"],
+                        capture_output=True, text=True)
+                    self.assertEqual(compile_probe.returncode, 0,
+                                     compile_probe.stdout + compile_probe.stderr)
+                    self.assertEqual((build / "bios/openbios.bin").exists(), staged)
+                    self.assertEqual((build / "bios/OpenBIOS.LICENSE").exists(), staged)
+                    if staged:
+                        self.assertEqual((build / "bios/openbios.bin").read_bytes(), b"synthetic ROM")
+                        self.assertEqual((build / "bios/OpenBIOS.LICENSE").read_text(), "synthetic MIT notice")
+
+
 class PlatformCopyTests(unittest.TestCase):
     def test_gate_requires_real_platform_copy_and_controls(self):
         with tempfile.TemporaryDirectory() as tmp:

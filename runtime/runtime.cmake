@@ -2055,10 +2055,12 @@ function(psxrecomp_add_runtime_target target)
 
     # OpenBIOS is part of the native runtime product, not a developer-machine
     # prerequisite. Stage both the exact ROM consumed by the compiled backend
-    # and its required MIT notice beside every native executable. Release
-    # packagers copy this directory as a unit.
+    # and its required MIT notice beside executables linking that backend.
+    # Desired stems may include unavailable backends; retail-only SDKs have
+    # no OpenBIOS backend or redistributable image. Packagers copy this
+    # directory as a unit when OpenBIOS is actually linked.
     if(NOT PSXRT_ORACLE)
-        list(FIND PSXRECOMP_BIOS_STEMS "OpenBIOS" _psxrt_openbios_index)
+        list(FIND _psxrt_bios_linked "OpenBIOS" _psxrt_openbios_index)
         if(NOT _psxrt_openbios_index EQUAL -1)
             if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
                 message(FATAL_ERROR
