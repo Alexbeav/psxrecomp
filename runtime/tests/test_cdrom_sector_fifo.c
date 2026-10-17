@@ -168,7 +168,71 @@ static void invalid_setloc_preserves_target(void) {
         CHECK(setloc_pending==pending && setloc_seek_far==seek_far);
     }
 }
+static void pause_read_resumes_position(void) {
+    const uint8_t reads[] = {0x06, 0x1B};
+    for (unsigned n = 0; n < sizeof reads; ++n) {
+        setup();
+        seek_min = 0; seek_sec = 2; seek_sect = 0; /* stale target, LBA 0 */
+        sector(); ack(); /* delivered 100; drive will read 101 next */
+        exec_command(0x09); ack();
+        CHECK(!reading && msf_to_lba(read_min, read_sec, read_sect) == 101);
+        exec_command(reads[n]);
+        CHECK(reading && read_cmd == reads[n] && !setloc_pending);
+        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 101);
+        ack(); sector(); request(); drain(101, 512);
+        ack();
+        /* Another pause cannot regress to the original target either. */
+        exec_command(0x09); ack(); exec_command(reads[n]);
+        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 102);
+        ack();
+        /* An explicit new Setloc still takes precedence over the drive. */
+        exec_command(0x09); ack();
+        param_fifo[0] = 0; param_fifo[1] = 4; param_fifo[2] = 0; param_count = 3;
+        exec_command(0x02); ack(); exec_command(reads[n]);
+        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 150);
+        CHECK(!setloc_pending);
+        ack(); sector(); request(); drain(150, 512);
+        /* A completed explicit seek retains its own destination too. */
+        ack(); exec_command(0x09); ack();
+        param_fifo[0] = 0; param_fifo[1] = 5; param_fifo[2] = 0; param_count = 3;
+        exec_command(0x02); ack(); exec_command(0x15); ack();
+        psx_cycle_count += 100000000; process_pending(0); ack();
+        exec_command(reads[n]);
+        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 225);
+    }
+}
+static void snapshot_setloc_and_paused_head(void) {
+    setup(); sector(); ack(); exec_command(0x09); ack();
+    param_fifo[0]=0;param_fifo[1]=4;param_fifo[2]=0;param_count=3;
+    exec_command(0x02);ack();
+    const uint32_t size=cdrom_snapshot_bytes();
+    uint8_t* wire=malloc(size);CHECK(wire);
+    cdrom_snapshot_write(wire);
+    setloc_pending=0;read_sec=9;
+    CHECK(cdrom_snapshot_read(wire,size) && setloc_pending);
+    exec_command(0x1B);ack();
+    CHECK(msf_to_lba(read_min,read_sec,read_sect)==150);
+    sector();ack();exec_command(0x09);ack();
+    cdrom_snapshot_write(wire);
+    CHECK(!setloc_pending);
+    setloc_pending=1;read_sec=9;
+    CHECK(cdrom_snapshot_read(wire,size) && !setloc_pending);
+    exec_command(0x1B);ack();
+    CHECK(msf_to_lba(read_min,read_sec,read_sect)==151);
+    wire[size-1]=2;CHECK(!cdrom_snapshot_validate(wire,size));
+    /* CDF2 states remain readable and retain the paused drive position. */
+    exec_command(0x09);ack();
+    PstW writer;pst_w_init(&writer,wire,size);
+    CHECK(cdrom_snap_emit(&writer,1) && writer.written==size-5);
+    read_sec=9;
+    CHECK(cdrom_snapshot_read(wire,size-5));
+    exec_command(0x06);
+    CHECK(msf_to_lba(read_min,read_sec,read_sect)==151);
+    free(wire);
+}
 int main(void) {
+    pause_read_resumes_position();
+    snapshot_setloc_and_paused_head();
     invalid_setloc_preserves_target();
     delayed_notification();
     dma_continuation();
