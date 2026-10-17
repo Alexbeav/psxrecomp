@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
 """Exercise the production SDK BIOS gate with synthetic files only."""
 import importlib.util
+import ast
+import types
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
+import zipfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("gate", ROOT / "tools/check_setup_bios_assets.py")
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
+spec = importlib.util.spec_from_file_location("platform_copy", ROOT / "tools/ci/audit_setup_package_platform_copy.py")
+platform_copy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(platform_copy)
+spec = importlib.util.spec_from_file_location("toolchain_pack", ROOT / "tools/toolchain_pack.py")
+toolchain_pack = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(toolchain_pack)
 
 
 class GateTests(unittest.TestCase):
@@ -152,7 +162,9 @@ class SetupPackageTests(unittest.TestCase):
         self.write("CMakeLists.txt", "# synthetic title\n")
         self.write("VERSION", "0.0.1\n")
         self.write("build/psx_game_version.txt", "0.0.1\n")
-        self.write("build/Fixture", "synthetic executable, never run\n")
+        self.write("build/Fixture", "synthetic executable, never run\n"
+                   "1. Native build tools\n"
+                   "Install CMake, Ninja, Python 3, and either Clang or GCC\nCheck tools\n")
         self.write("build/replay-diagnostics.py", "# staged replay helper\n")
         # Packaging tests exercise staging, not a system compression utility.
         # Ubuntu developer images may omit zip; write a real ZIP with stdlib.
@@ -174,7 +186,7 @@ with zipfile.ZipFile(sys.argv[-2], "w") as archive:
         self.write("game.toml", "[runtime]\noverlay_cache=true\nopenbios=" +
                    ("false" if retail else "true") + "\n")
         args = ["bash", str(ROOT / "tools/package_setup_host.sh"),
-                "--root", str(self.root), "--build-dir", "build", "--artifact", "fixture",
+                "--root", str(self.root), "--build-dir", "build", "--artifact", "linux-x64",
                 "--zip-prefix", "test", "--exe-name", "Fixture", "--recompiler-build", "emitters",
                 "--project-file", "CMakeLists.txt", "--project-file", "game.toml"]
         if retail:
@@ -188,12 +200,16 @@ with zipfile.ZipFile(sys.argv[-2], "w") as archive:
             with self.subTest(retail=retail):
                 result = self.package(retail)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                stage = self.root / "dist/stage-setup-fixture"
+                stage = self.root / "dist/stage-setup-linux-x64"
                 self.assertTrue((stage / "replay-diagnostics.py").is_file())
                 self.assertTrue((stage / "psxrecomp/bios/SCPH1001.toml").is_file())
                 for name in ("OpenBIOS.toml", "openbios.bin", "OpenBIOS.LICENSE"):
                     self.assertEqual((stage / "psxrecomp/bios" / name).exists(), not retail)
                 readme = (stage / "README-SETUP.txt").read_text()
+                self.assertIn("Install CMake, Ninja, Python 3", readme)
+                self.assertIn("native build tools", readme)
+                self.assertNotIn("cmake-clang-v1", readme)
+                self.assertEqual(platform_copy.audit(self.root / "dist/test-0.0.1-linux-x64.zip")["status"], "pass")
                 if retail:
                     self.assertIn("a legal retail BIOS dump (required)", readme)
                     self.assertNotIn("otherwise OpenBIOS", readme)
@@ -214,6 +230,97 @@ with zipfile.ZipFile(sys.argv[-2], "w") as archive:
         result = subprocess.run(args, cwd=self.root, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires runtime.openbios=false", result.stderr)
+
+
+class PlatformCopyTests(unittest.TestCase):
+    def test_gate_requires_real_platform_copy_and_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for platform in ("windows-x64", "linux-x64", "macos-arm64", "macos-x64"):
+                windows = platform.startswith("windows")
+                host = "Fixture.exe" if windows else "Fixture"
+                readme = "1. Run {}.\n2. Provide a legal retail BIOS (required).\n".format(host)
+                if windows:
+                    readme += "downloads cmake-clang-v1 toolchain pack\n"
+                    controls = "Download latest portable toolchain Select toolchain zip cmake-clang-v1"
+                else:
+                    readme += "Install CMake, Ninja, Python 3 and a C/C++ compiler; available on PATH; native build tools\n"
+                    controls = "1. Native build tools Install CMake, Ninja, Python 3, and either Clang or GCC Check tools"
+                archive = Path(tmp) / ("setup-" + platform + ".zip")
+
+                def write(extra=""):
+                    with zipfile.ZipFile(archive, "w") as output:
+                        output.writestr("README-SETUP.txt", readme)
+                        output.writestr(host, controls + extra)
+
+                write()
+                self.assertEqual(platform_copy.audit(archive)["status"], "pass")
+                if not windows:
+                    write("1. Portable toolchain")
+                    with self.assertRaisesRegex(ValueError, "forbidden"):
+                        platform_copy.audit(archive)
+
+
+class NativeToolchainTests(unittest.TestCase):
+    def test_cli_does_not_activate_cached_packs_on_posix(self):
+        tree = ast.parse((ROOT / "psxrecomp_cli.py").read_text(encoding="utf-8"))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "activate_embedded_toolchain")
+        function.returns = None
+        for argument in function.args.args:
+            argument.annotation = None
+        namespace = {"sys": types.SimpleNamespace(platform="linux"),
+                     "resolve_toolchain_bin": mock.Mock(side_effect=AssertionError("cached pack"))}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "cli_activation", "exec"), namespace)
+        self.assertFalse(namespace[function.name](Path(".")))
+        namespace["resolve_toolchain_bin"].assert_not_called()
+
+    def test_host_native_guards_precede_cache_and_download_paths(self):
+        source = (ROOT / "host/psxrecomp_codegen_host.c").read_text(encoding="utf-8")
+        for start, native, portable in (
+                ("static void activate_toolchain_path(void)", "return;", "if (!resolve_toolchain_bin"),
+                ("static int host_toolchain_is_ready(void)", "return host_system_toolchain_ready();", "migrate_legacy_psxrecomp_toolchain();"),
+                ("static int host_ensure_toolchain_with_progress(", "if (host_system_toolchain_ready())", "migrate_legacy_psxrecomp_toolchain();")):
+            body = source[source.index(start):]
+            self.assertLess(body.index("#if !defined(_WIN32)"), body.index(native))
+            self.assertLess(body.index(native), body.index(portable))
+        body = source[source.index("static int host_system_toolchain_ready(void)"):
+                      source.index("/* True when pack bin/ can compile+link")]
+        for tool in ("cmake", "ninja", "python3", "cc", "c++"):
+            self.assertIn('find_on_path("' + tool + '"', body)
+        self.assertIn("xcode-select -p", body)
+
+    def test_posix_uses_native_probes_and_never_touches_pack_cache_or_network(self):
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), \
+                 mock.patch.object(toolchain_pack.sys, "platform", platform), \
+                 mock.patch.object(toolchain_pack.shutil, "which", side_effect=lambda name: "/native/bin/" + name), \
+                 mock.patch.object(toolchain_pack.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)) as probe, \
+                 mock.patch.object(toolchain_pack, "migrate_legacy_psxrecomp_cache", side_effect=AssertionError("touched cache")):
+                self.assertEqual(toolchain_pack.ensure_toolchain(download=True), Path("/native/bin"))
+                self.assertEqual(len(probe.call_args_list), 5)
+                self.assertTrue(all(call.args[0][-1] == "--version" for call in probe.call_args_list))
+
+    def test_posix_missing_and_broken_tools_fail_without_download(self):
+        for broken in (False, True):
+            with self.subTest(broken=broken), \
+                 mock.patch.object(toolchain_pack, "sys_platform_is_windows", return_value=False), \
+                 mock.patch.object(toolchain_pack.shutil, "which", return_value="/native/cmake" if broken else None), \
+                 mock.patch.object(toolchain_pack.subprocess, "run", return_value=types.SimpleNamespace(returncode=1)), \
+                 mock.patch.object(toolchain_pack, "migrate_legacy_psxrecomp_cache", side_effect=AssertionError("touched cache")):
+                with self.assertRaisesRegex(RuntimeError, "package manager"):
+                    toolchain_pack.ensure_toolchain(download=True)
+
+    def test_windows_retains_existing_portable_pack_activation(self):
+        binary = Path("fixture-pack/bin")
+        with mock.patch.object(toolchain_pack, "sys_platform_is_windows", return_value=True), \
+             mock.patch.object(toolchain_pack, "is_windows_store_python", return_value=False), \
+             mock.patch.object(toolchain_pack, "migrate_legacy_psxrecomp_cache"), \
+             mock.patch.object(toolchain_pack, "resolve_toolchain_bin", return_value=binary), \
+             mock.patch.object(toolchain_pack, "toolchain_bin_runs", return_value=True), \
+             mock.patch.object(toolchain_pack, "register_toolchain_user_env"), \
+             mock.patch.object(toolchain_pack, "activate_toolchain_bin") as activate:
+            self.assertEqual(toolchain_pack.ensure_toolchain(download=True), binary)
+            activate.assert_called_once_with(binary, log=None)
 
 
 if __name__ == "__main__":
