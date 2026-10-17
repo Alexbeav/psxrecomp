@@ -1636,10 +1636,16 @@ static void start_read_stream(uint8_t cmd) {
         xa_reset_decode();
         spu_cd_audio_reset();
     }
+    /* Setloc names a new destination only until it is consumed. Pause keeps
+     * read_* at the next sector; a later ReadN/ReadS without Setloc resumes
+     * there. Reusing seek_* unconditionally restarts XA dialogue at its first
+     * sector while the game's subtitle clock resumes where it paused. */
+    if (setloc_pending) {
+        read_min = seek_min;
+        read_sec = seek_sec;
+        read_sect = seek_sect;
+    }
     setloc_pending = 0;
-    read_min = seek_min;
-    read_sec = seek_sec;
-    read_sect = seek_sect;
     read_cmd = cmd;
     read_delay = initial_read_delay_cycles();
     s_cd_probe_read_start_count++;
@@ -3383,6 +3389,10 @@ static int cdrom_snap_emit(PstW *w, int extended) {
             WB(s_sector_ring[slot].data);
             WI(s_sector_ring[slot].pos); WI(s_sector_ring[slot].size);
         }
+        if (extended >= 2) {
+            WU(0x33464443u); /* CDF3: unconsumed Setloc, distinct from drive head */
+            W8(setloc_pending);
+        }
     }
 
 #undef W8
@@ -3452,6 +3462,10 @@ static int cdrom_snap_parse(PstR *r, int extended) {
             RB(s_sector_ring[slot].data);
             RI(s_sector_ring[slot].pos); RI(s_sector_ring[slot].size);
         }
+        if (extended >= 2) {
+            RU(u); /* validated CDF3 marker */
+            R8(setloc_pending);
+        }
     }
 
 #undef R8
@@ -3476,9 +3490,10 @@ static uint32_t cdrom_snapshot_legacy_bytes(void) {
 
 int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
     const uint32_t legacy = cdrom_snapshot_legacy_bytes();
+    const uint32_t current = cdrom_snapshot_bytes();
     if (!p) return 0;
     if (len == legacy) return 1;
-    if (len != cdrom_snapshot_bytes()) return 0;
+    if (len != current && len != current - 5u) return 0; /* CDF3 or CDF2 */
     PstR r;
     uint32_t magic;
     int32_t index, pos, size, delay;
@@ -3496,26 +3511,33 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
             size < 0 || size > SECTOR_BUFFER_SIZE || pos < 0 || pos > size)
             return 0;
     }
+    if (len == current) {
+        uint8_t pending_loc;
+        if (!pst_r_u32(&r, &magic) || magic != 0x33464443u ||
+            !pst_r_u8(&r, &pending_loc) || pending_loc > 1) return 0;
+    }
     return r.p == r.end;
 }
 
 uint32_t cdrom_snapshot_bytes(void) {
     PstW w;
     pst_w_init(&w, NULL, 0);
-    (void)cdrom_snap_emit(&w, 1);
+    (void)cdrom_snap_emit(&w, 2);
     return (uint32_t)w.written;
 }
 void cdrom_snapshot_write(uint8_t *p) {
     PstW w;
     uint32_t n = cdrom_snapshot_bytes();
     pst_w_init(&w, p, n);
-    (void)cdrom_snap_emit(&w, 1);
+    (void)cdrom_snap_emit(&w, 2);
 }
 int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     if (!cdrom_snapshot_validate(p, len)) return 0;
     pst_r_init(&r, p, len);
-    if (!cdrom_snap_parse(&r, len != cdrom_snapshot_legacy_bytes()))
+    const int extended = len == cdrom_snapshot_legacy_bytes() ? 0 :
+                         len == cdrom_snapshot_bytes() ? 2 : 1;
+    if (!cdrom_snap_parse(&r, extended))
         return 0;
     /* Absolute host deadlines are not on the wire — rebuild from restored
      * relative read_delay (psx_cycle_count is resynced by the load caller). */
