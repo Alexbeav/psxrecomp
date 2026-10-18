@@ -324,8 +324,11 @@ static uint32_t s_input_route_count = 0;
 static uint32_t s_input_route_index = 0;
 static uint32_t s_input_route_remaining = 0;
 static int      s_input_route_active = 0;
-/* input_route_start at_frame: the route waits for this vblank count, so a
- * route replays on the same guest frames in every run (0 = start now). */
+static unsigned s_input_route_port = 1;
+static int      s_input_route_wait_load = 0;
+static void input_route_loaded(void);
+/* at_frame uses host debug history, which is not restored with a snapshot.
+ * after_load instead waits for a successful native load (0 = start now). */
 static uint64_t s_input_route_start_frame = 0;
 
 /* ---- Frontend turbo override ---- */
@@ -5040,6 +5043,7 @@ static void handle_frame(int id, const char *json)
 static int s_fp_reset_on_load = 0;
 void debug_server_note_savestate_loaded(void)
 {
+    input_route_loaded();
     if (!s_fp_reset_on_load) return;
     s_fp_reset_on_load = 0;
     s_fp = (PsxFrameFingerprint)PSX_FRAME_FINGERPRINT_INIT;
@@ -8248,14 +8252,17 @@ static void handle_pad_status(int id, const char *json)
 static void handle_clear_input(int id, const char *json)
 {
     const int port = json_get_int(json, "port", 0);   /* 0 = both */
+    if (port == 0 || port == (int)s_input_route_port) {
+        s_input_route_active = 0;
+        s_input_route_wait_load = 0;
+        s_input_route_index = 0;
+        s_input_route_remaining = 0;
+    }
     if (port == 0 || port == 2) {
         s_input_override_p2 = -1;
         s_input_frames_p2 = 0;
     }
     if (port == 2) { send_ok(id); return; }
-    s_input_route_active = 0;
-    s_input_route_index = 0;
-    s_input_route_remaining = 0;
     s_input_override = -1;
     s_input_frames   = 0;
     s_axis_override  = 0;
@@ -8272,6 +8279,7 @@ static void handle_input_route_clear(int id, const char *json)
 {
     (void)json;
     s_input_route_active = 0;
+    s_input_route_wait_load = 0;
     s_input_route_count = 0;
     s_input_route_index = 0;
     s_input_route_remaining = 0;
@@ -8306,25 +8314,42 @@ static void handle_input_route_start(int id, const char *json)
     if (s_input_route_count == 0) {
         send_err(id, "input route is empty"); return;
     }
-    s_input_override = -1;
-    s_input_frames = 0;
-    s_axis_override = 0;
-    s_pad_type_override = -1;
+    const int port = json_get_int(json, "port", 1);
+    if (port != 1 && port != 2) {
+        send_err(id, "port must be 1 or 2"); return;
+    }
+    const int at = json_get_int(json, "at_frame", 0);
+    const int after_load = json_get_int(json, "after_load", 0);
+    if (after_load < 0 || after_load > 1 || (after_load && at > 0)) {
+        send_err(id, "after_load must be 0 or 1 and cannot combine with at_frame"); return;
+    }
+    s_input_route_port = (unsigned)port;
+    if (port == 2) {
+        s_input_override_p2 = -1;
+        s_input_frames_p2 = 0;
+    } else {
+        s_input_override = -1;
+        s_input_frames = 0;
+        s_axis_override = 0;
+        s_pad_type_override = -1;
+    }
     s_input_route_index = 0;
     s_input_route_remaining = s_input_route[0].frames;
-    const int at = json_get_int(json, "at_frame", 0);
     s_input_route_start_frame = at > 0 && (uint64_t)at > s_frame_count ? (uint64_t)at : 0u;
+    s_input_route_wait_load = after_load;
     s_input_route_active = 1;
-    send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u,\"start_frame\":%llu}\n",
-             id, (unsigned)s_input_route_count,
-             (unsigned long long)(s_input_route_start_frame ? s_input_route_start_frame
-                                                            : s_frame_count));
+    send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u,\"port\":%u,\"waiting_for_load\":%s,\"start_frame\":%llu}\n",
+             id, (unsigned)s_input_route_count, s_input_route_port,
+             after_load ? "true" : "false",
+             (unsigned long long)(after_load ? 0u : s_input_route_start_frame ? s_input_route_start_frame
+                                                                            : s_frame_count));
 }
 
 static void handle_input_route_stop(int id, const char *json)
 {
     (void)json;
     s_input_route_active = 0;
+    s_input_route_wait_load = 0;
     s_input_route_remaining = 0;
     send_ok(id);
 }
@@ -8333,9 +8358,10 @@ static void handle_input_route_status(int id, const char *json)
 {
     (void)json;
     send_fmt("{\"id\":%d,\"ok\":true,\"active\":%s,\"steps\":%u,"
-             "\"index\":%u,\"remaining\":%u}\n",
+             "\"port\":%u,\"waiting_for_load\":%s,\"index\":%u,\"remaining\":%u}\n",
              id, s_input_route_active ? "true" : "false",
-             (unsigned)s_input_route_count, (unsigned)s_input_route_index,
+             (unsigned)s_input_route_count, s_input_route_port,
+             s_input_route_wait_load ? "true" : "false", (unsigned)s_input_route_index,
              (unsigned)s_input_route_remaining);
 }
 
@@ -17118,10 +17144,20 @@ int debug_server_is_connected(void)
     return s_client != SOCK_INVALID;
 }
 
-int debug_server_get_input_override(void)
+static void input_route_loaded(void)
 {
-    if (s_input_route_active && s_input_route_index < s_input_route_count &&
-        s_frame_count >= s_input_route_start_frame) {
+    if (!s_input_route_active || !s_input_route_wait_load || !s_input_route_count) return;
+    s_input_route_wait_load = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = s_input_route[0].frames;
+    s_input_route_start_frame = 0;
+}
+/* One selected guest port consumes the route once per VBlank. Reading the
+ * other port must not advance it or shorten any segment. */
+static int input_route_next(unsigned port)
+{
+    if (port == s_input_route_port && s_input_route_active && s_input_route_index < s_input_route_count &&
+        !s_input_route_wait_load && s_frame_count >= s_input_route_start_frame) {
         int current = (int)s_input_route[s_input_route_index].buttons;
         if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
             s_input_route_index++;
@@ -17134,7 +17170,14 @@ int debug_server_get_input_override(void)
         }
         return current;
     }
-    int current = s_input_override;
+    return -1;
+}
+
+int debug_server_get_input_override(void)
+{
+    int current = input_route_next(1);
+    if (current >= 0) return current;
+    current = s_input_override;
     if (s_input_override >= 0 && s_input_frames > 0) {
         if (--s_input_frames == 0)
             s_input_override = -1;
@@ -17144,7 +17187,9 @@ int debug_server_get_input_override(void)
 
 int debug_server_get_input_override_port2(void)
 {
-    int current = s_input_override_p2;
+    int current = input_route_next(2);
+    if (current >= 0) return current;
+    current = s_input_override_p2;
     if (s_input_override_p2 >= 0 && s_input_frames_p2 > 0) {
         if (--s_input_frames_p2 == 0)
             s_input_override_p2 = -1;
