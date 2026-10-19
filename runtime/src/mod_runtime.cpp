@@ -2861,6 +2861,9 @@ extern "C" int32_t psx_mod_widescreen_x_margin(void) {
 extern "C" int32_t psx_mod_widescreen_view_x_margin(void) {
     return (int32_t)gpu_ws_configured_x_reveal();
 }
+extern "C" void psx_mod_set_widescreen_view_anchor(int enabled, int32_t shift) {
+    gpu_ws_set_manual_view_anchor(enabled, shift);
+}
 
 extern "C" void psx_mod_tag_hud_primitive(uint32_t primitive, int edge) {
     gpu_ws_tag_hud_primitive(primitive, edge);

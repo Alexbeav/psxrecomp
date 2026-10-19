@@ -644,10 +644,12 @@ int gpu_ws_configured_x_reveal(void) { return ws_nw_configured_offset(); }
 int ws_nw_extra(void) { return 2 * ws_nw_offset(); }
 
 static uint32_t ws_view_camera_addr, ws_view_min_addr, ws_view_max_addr, ws_view_active_addr;
+static int ws_view_manual;
 static int ws_view_bounds_override, ws_view_bounds_min, ws_view_bounds_max;
 static WsViewAnchor ws_view;
 static uint32_t ws_view_frame = UINT32_MAX;
 void gpu_ws_set_view_anchor(uint32_t camera, uint32_t min, uint32_t max, uint32_t active) {
+    ws_view_manual = 0;
     ws_view_camera_addr = camera;
     ws_view_min_addr = min;
     ws_view_max_addr = max;
@@ -663,8 +665,27 @@ void gpu_ws_set_view_bounds_override(int enabled, int minimum, int maximum) {
     ws_view_bounds_max = maximum;
 }
 static int ws_view_enabled(void) {
-    return ws_view_camera_addr && ws_view_min_addr && ws_view_max_addr &&
-           ws_view_active_addr && ws_native_wide_active() && ws_disp_w() <= 384;
+    return (ws_view_manual || (ws_view_camera_addr && ws_view_min_addr &&
+           ws_view_max_addr && ws_view_active_addr)) &&
+           ws_native_wide_active() && ws_disp_w() <= 384;
+}
+void gpu_ws_set_manual_view_anchor(int enabled, int shift) {
+    int was_manual = ws_view_manual;
+    ws_view_manual = enabled != 0;
+    if (ws_view_manual) {
+        int extra = ws_nw_configured_offset();
+        if (shift < -extra) shift = -extra;
+        if (shift > extra) shift = extra;
+        ws_view = (WsViewAnchor){extra + shift, extra - shift, shift, 0, 0};
+        ws_view_frame = (uint32_t)s_frame_count;
+        /* Present can reuse an existing wide surface without new packets.
+         * Publish the origin now so its center cannot be replaced by native
+         * VRAM during that interval. Packet-specific HUD shifts stay separate. */
+        gr_wide_set_view(ws_view_enabled(), shift, 0, 0);
+    } else if (was_manual && !ws_view_camera_addr) {
+        ws_view_frame = UINT32_MAX;
+        gr_wide_set_view(0, 0, 0, 0);
+    }
 }
 static WsViewAnchor ws_view_current(void) {
     WsViewAnchor centered = {ws_nw_offset(), ws_nw_offset(), 0, 0, 0};
@@ -675,6 +696,7 @@ static WsViewAnchor ws_view_current(void) {
 /* Sample at the BG renderer setup, after guest camera clamp and before either
  * ring refill or packet generation. Intermediate camera writes are ignored. */
 static void ws_view_sample(void) {
+    if (ws_view_manual) return;
     if (!ws_view_enabled()) return;
     ws_view = ws_view_anchor(ws_nw_offset(),
         (int16_t)psx_read_half(ws_view_camera_addr),
@@ -1489,7 +1511,7 @@ int psx_ws_x_margin(void) {
     if (ws_native_wide_configured())
         /* A constant envelope covers both possible edge origins. Do not shrink
          * actor activation as the view slides, or prebuilt spawn lists go stale. */
-        return ws_nw_configured_offset() * (ws_view_camera_addr ? 2 : 1)
+        return ws_nw_configured_offset() * ((ws_view_camera_addr || ws_view_manual) ? 2 : 1)
                + ws_cull_guard_pixels;
     if (!ws_active()) return 0;
     return (160 * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
@@ -7049,7 +7071,7 @@ static void gp0_execute_command(void) {
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
     extern void ws_bg_phase_note(uint32_t op);
     ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
-    if (ws_view_camera_addr || g_bg2d_host_size) {
+    if (ws_view_camera_addr || ws_view_manual || g_bg2d_host_size) {
         WsViewAnchor v = ws_view_current();
         /* Draw env packets select the back-buffer band after linked-list
          * begin. Clear narrow-room padding at its first actual draw. */

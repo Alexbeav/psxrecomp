@@ -10,6 +10,25 @@ int main(void) {
     assert(textured_dot_regression_main() == 0);
     reset_gpu_state_for_test();
     configure_native_wide_16_9();
+    /* Explicit screen origins work without bg2d producers. The full reveal
+     * transfers right at a left edge, including at very wide aspect ratios. */
+    const int aspects[] = {16, 21, 32, 64};
+    for (unsigned i = 0; i < sizeof aspects / sizeof aspects[0]; ++i) {
+        ws_cfg_num = aspects[i];
+        int extra = gpu_ws_configured_x_reveal();
+        gpu_ws_set_manual_view_anchor(1, -extra);
+        assert(g_test_view_enabled && g_test_view_shift == -extra);
+        WsViewAnchor v = ws_view_current();
+        assert(ws_view_enabled() && v.left == 0 && v.right == 2 * extra);
+        assert(v.shift == -extra && v.pad_left == 0 && v.pad_right == 0);
+        assert(psx_ws_x_margin() == 2 * extra + ws_cull_guard_pixels);
+        s_frame_count += 2;
+        assert(ws_view_current().shift == 0); /* stale scene proof expires */
+        gpu_ws_set_manual_view_anchor(0, 0);
+        assert(!g_test_view_enabled);
+        assert(!ws_view_enabled() && psx_ws_x_margin() == extra + ws_cull_guard_pixels);
+    }
+    configure_native_wide_16_9();
     const uint32_t lower_sites[] = {0x80029fd0u};
     assert(!psx_ws_is_cull_bias_lower_site(lower_sites[0]));
     gpu_ws_set_bias_lower_cull_sites(lower_sites, 1);
