@@ -2238,6 +2238,12 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
+        } else if (stat_reg & (CDSTAT_SEEK | CDSTAT_READ)) {
+            /* A seek is in flight or just completed: the head is at the
+             * SetLoc target. Games (THPS2's music driver) poll GetQ until
+             * the position reaches the target — reporting the stale last
+             * sector here spun that loop forever. */
+            lba = msf_to_lba(seek_min, seek_sec, seek_sect);
         } else if (last_sector_lba >= 0) {
             lba = last_sector_lba;
         } else {
@@ -2862,13 +2868,27 @@ uint32_t cdrom_read(uint32_t addr) {
     }
 
     case 0x1F801801:
-        if (response_read < response_count) {
+        /* Volume registers (index 2/3) read back the pending values the game
+         * wrote (THPS2's audio init writes zeros, applies, then verifies the
+         * readback — FIFO leftovers there spun it forever and blocked the
+         * music system). nocash mapping: idx2 = Left-CD->Left-SPU,
+         * idx3 = Left-CD->Right-SPU on this register; the Right-CD pair
+         * lives on 0x1F801802. */
+        if (index_reg == 2) {
+            ret = cd_pending_vol[0][0];
+        } else if (index_reg == 3) {
+            ret = cd_pending_vol[0][1];
+        } else if (response_read < response_count) {
             ret = response_fifo[response_read++];
         }
         break;
 
     case 0x1F801802:
-        if (data_fifo_ready()) {
+        if (index_reg == 2) {
+            ret = cd_pending_vol[1][0];   /* Right-CD -> Left-SPU */
+        } else if (index_reg == 3) {
+            ret = cd_pending_vol[1][1];   /* Right-CD -> Right-SPU */
+        } else if (data_fifo_ready()) {
             ret = RB_.data[RB_.pos++];
         }
         break;
