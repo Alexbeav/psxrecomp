@@ -221,6 +221,11 @@ extern void     gte_precision_tracking_set(int enabled);
  * unchanged — this is a visual-only enhancement, default off. */
 extern void     gte_geometry_correction_set(int enabled);
 extern int      gte_geometry_correction_enabled(void);
+/* Frame generation's vertex sources (gte.cpp): 0 = unknown. */
+extern void     gte_fg_source_set(int enabled);
+extern int      gte_fg_source_enabled(void);
+typedef struct GteFgSrc { uint32_t id, ra; int32_t p[3], h; } GteFgSrc;
+extern int      gte_fg_source_lookup(uint32_t packed, GteFgSrc out[2]);
 /* Corrected vertices consumed since the last gte_geometry_correction_set —
  * the "is this actually doing anything on this title" counter. */
 extern uint32_t gte_geometry_correction_hits(void);
@@ -229,16 +234,26 @@ extern uint32_t gte_geometry_correction_hits(void);
 extern void     gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
                                               uint32_t *miss_unrecorded,
                                               uint32_t *miss_ambiguous);
+/* Same position-cache lookup without changing geometry-correction counters;
+ * reserved for non-rendering probes that inspect a vertex before drawing. */
+extern int      gte_geometry_correction_lookup_probe(uint32_t packed,
+                                                      int32_t *x16,
+                                                      int32_t *y16);
 
 /* Exact NCLIP audit coverage: precise = all three SXY shadows are coherent and
  * word-validated; fallback = native integer-only; disagreements counts cases
  * where sub-pixel and guest-visible integer signs differ. MAC0 stays native. */
 extern void     gte_nclip_precise_stats(uint64_t *hits, uint64_t *fallbacks,
                                         uint64_t *disagreements);
-/* Title-scoped widescreen cull consumer. Returns the exact tracked NCLIP sign
- * only when it belongs to the supplied native MAC0; otherwise preserves the
- * native comparison. This does not change guest-visible GTE state. */
-extern int      gte_nclip_precise_bltz(int32_t native_mac0);
+extern int      gte_nclip_native_wide_sign(int32_t native_mac0, int* sign);
+extern int      gte_nclip_native_wide_previous_sign(int32_t native_mac0, int* sign);
+extern int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla);
+/* Title-scoped widescreen cull consumer ([widescreen.cull] nclip_exact_sites).
+ * Returns the sign (-1/0/1) the branch at `pc` should test: the exact tracked
+ * NCLIP sign only when it belongs to the supplied native MAC0, otherwise the
+ * native sign. Counts per-site use (gte_nclip_stats.h). Does not change
+ * guest-visible GTE state. */
+extern int32_t  gte_nclip_exact_sign(int32_t native_mac0, uint32_t pc);
 
 /* PGXP dataflow-shadowing hook macros (PGXP_LOAD/STORE/ALU/MULDIV/COP2).
  * The emitter writes them unconditionally; they expand to real calls only
@@ -281,6 +296,10 @@ extern uint64_t *g_psx_bail_resolved_p;
 #define g_psx_call_bail     (*g_psx_call_bail_p)
 #define g_psx_bail_first    (*g_psx_bail_first_p)
 #define g_psx_bail_resolved (*g_psx_bail_resolved_p)
+/* The store-PC breadcrumb the emitter writes before every guest store is the
+ * runtime's, not the DLL's (ABI v24, overlay_api.h last_store_pc). */
+extern uint32_t *g_psx_last_store_pc_p;
+#define g_debug_last_store_pc (*g_psx_last_store_pc_p)
 #else
 extern int      g_psx_call_bail;
 extern uint64_t g_psx_bail_first;      /* contract violations detected      */
@@ -299,14 +318,19 @@ extern void psx_bail_record(uint32_t site_ra, uint32_t site_sp,
 /* Validate a direct call site after the callee's C return.
  * Returns 1 if the caller must `return;` immediately (bail in progress),
  * 0 if the continuation is valid.  site_ra = the call's return address,
- * site_sp = guest $sp recorded immediately before the call. */
+ * site_sp = guest $sp recorded immediately before the call.
+ *
+ * The return PC is compared in full, segment included
+ * (docs/SEGMENT_AWARE_CODE.md §5.5): site_ra is the link the call wrote, in
+ * the segment of the body that made it, and a guest returning to another
+ * segment's alias of the call site did not return to that body. The BIOS
+ * dispatch loop (full_function_emitter.cpp) applies the same rule. */
 static inline int psx_call_contract(CPUState* cpu, uint32_t site_ra,
                                     uint32_t site_sp) {
     if (g_psx_call_bail) {
         /* An inner frame began a bail unwind.  Resolve here iff the guest's
          * arrival state matches this site's contract. */
-        if (((cpu->pc ^ site_ra) & 0x1FFFFFFFu) == 0 &&
-            cpu->gpr[29] == site_sp) {
+        if (cpu->pc == site_ra && cpu->gpr[29] == site_sp) {
             g_psx_call_bail = 0;
             g_psx_bail_resolved++;
             cpu->pc = 0;
@@ -314,8 +338,7 @@ static inline int psx_call_contract(CPUState* cpu, uint32_t site_ra,
         }
         return 1;
     }
-    if (cpu->gpr[29] != site_sp ||
-        ((cpu->gpr[31] ^ site_ra) & 0x1FFFFFFFu) != 0) {
+    if (cpu->gpr[29] != site_sp || cpu->gpr[31] != site_ra) {
         /* First detection: the callee C-returned but the guest did not
          * return here.  $ra holds the wild jr's true destination (the
          * longjmp-return emission sets cpu->pc = $ra before returning,

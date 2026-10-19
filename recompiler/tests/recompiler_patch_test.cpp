@@ -157,6 +157,17 @@ p2_mode = "digital"
               controller_defaults_config.runtime.default_p2_mode ==
                   PSXRecompV4::PAD_MODE_DIGITAL,
           "parser preserves per-game controller device defaults");
+    check(!controller_defaults_config.runtime.has_multitap_default,
+          "offline multitap keeps the framework default when unset");
+
+    const auto no_multitap = write_config(root, "no-multitap", R"toml(
+[controller]
+multitap = false
+)toml");
+    const auto no_multitap_config = PSXRecompV4::load_game_config(no_multitap);
+    check(no_multitap_config.runtime.has_multitap_default &&
+              !no_multitap_config.runtime.multitap_default,
+          "parser preserves a title's offline multitap default");
 
     const auto netplay_viewport = write_config(root, "netplay-viewport", R"toml(
 [runtime]
@@ -311,6 +322,28 @@ result = 0
               keep_config.ws_cull_keep_sites[1].result == 0u,
           "parser preserves full-word-guarded maximal-participation sites");
 
+    const auto scale = write_config(root, "cull-scale", R"toml(
+[[widescreen.cull.scale]]
+address = "0x8002C734"
+expected = "0x0062182A"
+operand = "rt"
+half_extent = 160
+
+[[widescreen.cull.scale]]
+address = "0x8002C758"
+expected = "0x0043102A"
+operand = "rs"
+half_extent = 160
+)toml");
+    const auto scale_config = PSXRecompV4::load_game_config(scale);
+    check(scale_config.ws_cull_scale_sites.size() == 2 &&
+              scale_config.ws_cull_scale_sites[0].address == 0x8002C734u &&
+              scale_config.ws_cull_scale_sites[0].expected == 0x0062182Au &&
+              scale_config.ws_cull_scale_sites[0].operand == 1u &&
+              scale_config.ws_cull_scale_sites[0].half_extent == 160u &&
+              scale_config.ws_cull_scale_sites[1].operand == 0u,
+          "parser preserves register-register frustum-edge scale sites");
+
     const auto signed_bound = write_config(root, "signed-x-bound", R"toml(
 [[widescreen.signed_x_bound]]
 address = "0x8002D290"
@@ -346,13 +379,21 @@ result = 1
     const auto range = write_config(root, "range-cull", R"toml(
 [widescreen.cull]
 range_sites = ["0x80012340"]
+bias_lower_sites = ["0x80012348"]
 activation_guard_pixels = 256
 )toml");
     const auto range_config = PSXRecompV4::load_game_config(range);
     check(range_config.ws_cull_range_sites ==
               std::vector<uint32_t>{0x80012340u} &&
+              range_config.ws_cull_bias_lower_sites ==
+              std::vector<uint32_t>{0x80012348u} &&
               range_config.ws_cull_activation_guard_pixels == 256,
           "parser preserves explicit range sites and activation guard");
+    auto changed_lower_config = range_config;
+    changed_lower_config.ws_cull_bias_lower_sites.clear();
+    check(PSXRecompV4::overlay_codegen_config_hash(range_config) !=
+              PSXRecompV4::overlay_codegen_config_hash(changed_lower_config),
+          "lower activation endpoint changes overlay cache identity");
 
     const auto bad_activation_guard =
         write_config(root, "range-cull-bad-activation-guard", R"toml(
@@ -774,6 +815,27 @@ void codegen_tests() {
               std::string::npos,
           "activation bias gains the same isolated resident-object lead");
 
+    PSXRecomp::CodeGenConfig lower_bias_config;
+    lower_bias_config.ws_cull_bias_lower_sites.insert(0x80010000u);
+    for (const uint32_t opcode : {0x2082FFD0u, 0x2482FFD0u}) {
+        const std::string lower = generate_first_instruction(opcode, {}, false, lower_bias_config);
+        check(lower.find("((int32_t)-48 - psx_ws_x_margin())") != std::string::npos,
+              "ADDI/ADDIU lower endpoint expands left without changing camera source");
+        check(lower.find("PGXP_ALU(") != std::string::npos &&
+              lower.find("_pgx1 = cpu->gpr[4]") != std::string::npos,
+              "lower bound preserves native ALU precision tracking");
+    }
+    lower_bias_config.ws_cull_activation_guard_pixels = 32;
+    const std::string lower_guard = generate_first_instruction(
+        0x2482FFD0u, {}, false, lower_bias_config);
+    check(lower_guard.find("-48 - (psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 32 : 0)") !=
+              std::string::npos,
+          "lower endpoint includes activation guard only while wide");
+    const std::string lower_mismatch = generate_first_instruction(
+        0x3482FFD0u, {}, true, lower_bias_config); // ORI variant is not an add.
+    check(lower_mismatch.find("psx_ws_x_margin()") == std::string::npos,
+          "lower bias leaves a nonmatching overlay opcode unchanged");
+
     PSXRecomp::CodeGenConfig branch_keep_config;
     branch_keep_config.ws_cull_branch_keep_sites.insert(0x80010000u);
     const std::string branch_keep = generate_first_instruction(
@@ -789,10 +851,23 @@ void codegen_tests() {
     const std::string nclip_exact = generate_first_instruction(
         0x04400002u, {}, false, nclip_exact_config); // bltz v0,+2
     check(nclip_exact.find(
-              "gte_nclip_precise_bltz((int32_t)cpu->gpr[2])") !=
+              "gte_nclip_exact_sign((int32_t)cpu->gpr[2], 0x80010000u) < 0") !=
               std::string::npos &&
               nclip_exact.find("ws exact nclip") != std::string::npos,
           "codegen emits title-scoped exact NCLIP predicate");
+    for (uint32_t word : {0x18400002u, 0x1C400002u, 0x04410002u}) {
+        const std::string guarded = generate_first_instruction(word, {}, false, nclip_exact_config);
+        check(guarded.find("psx_ws_nclip_branch(0x80010000u,") != std::string::npos &&
+              guarded.find("guarded wide nclip") != std::string::npos,
+              "inclusive/keep NCLIP branches carry full-word identity to the host");
+    }
+    PSXRecomp::CodeGenConfig nclip_keep_config;
+    nclip_keep_config.ws_cull_nclip_keep_sites.insert(0x80010000u);
+    const std::string nclip_keep_blez = generate_first_instruction(
+        0x18400002u, {}, false, nclip_keep_config);
+    check(nclip_keep_blez.find("psx_ws_x_margin() > 0 ? 0 : ((int32_t)cpu->gpr[2] <= 0)") !=
+              std::string::npos,
+          "codegen NCLIP keep covers blez");
 
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);
@@ -841,6 +916,27 @@ void codegen_tests() {
     check(keep_overlay_mismatch.find("maximal object/model participation") ==
               std::string::npos,
           "overlay full-word mismatch leaves keep site unchanged");
+
+    PSXRecomp::CodeGenConfig scale_config_gen;
+    scale_config_gen.ws_cull_scale_sites.push_back(
+        {0x80010000u, 0x0062182Au, 1u, 160u}); // slt v1,v1,v0: scale rt
+    const std::string scale_rt = generate_first_instruction(
+        0x0062182Au, {}, false, scale_config_gen);
+    check(scale_rt.find("psx_ws_cull_scale((int32_t)") != std::string::npos &&
+              scale_rt.find(", 160)") != std::string::npos &&
+              scale_rt.find("(int32_t)cpu->gpr[3] < (int32_t)(uint32_t)psx_ws_cull_scale") !=
+                  std::string::npos,
+          "codegen scales the configured rt bound of a signed frustum edge");
+    scale_config_gen.ws_cull_scale_sites[0] = {0x80010000u, 0x0043102Au, 0u, 160u};
+    const std::string scale_rs = generate_first_instruction(
+        0x0043102Au, {}, false, scale_config_gen);
+    check(scale_rs.find("(int32_t)(uint32_t)psx_ws_cull_scale((int32_t)cpu->gpr[2], 160) < (int32_t)cpu->gpr[3]") !=
+              std::string::npos,
+          "codegen scales the configured rs bound of the opposite edge");
+    const std::string scale_overlay_mismatch = generate_first_instruction(
+        0x0043102Bu, {}, true, scale_config_gen); // sltu at same overlay VA
+    check(scale_overlay_mismatch.find("psx_ws_cull_scale") == std::string::npos,
+          "overlay full-word mismatch leaves scale site unchanged");
 
     PSXRecomp::CodeGenConfig angle_config;
     angle_config.ws_cull_angle_sites.push_back(
@@ -1125,6 +1221,73 @@ void cfg_codegen_load_delay_test() {
           "CFG codegen preserves MIPS-I dependent load-delay value semantics");
 }
 
+void mod_function_completion_codegen_test() {
+    PSXRecomp::CodeGenConfig config{};
+    config.mod_function_entry_funcs.insert(0x80010000u);
+    for (bool overlay : {false, true}) {
+        const auto code = generate_first_instruction(0x2402002Au, {}, overlay, config);
+        check(code.find("if (psx_mod_function_entry(cpu, 0x80010000u)) return;") != std::string::npos,
+              overlay ? "overlay body honors trusted mod completion" : "main body honors trusted mod completion");
+    }
+    const auto stock = generate_first_instruction(0x2402002Au, {}, false);
+    check(stock.find("psx_mod_function_entry(cpu,") == std::string::npos,
+          "unconfigured functions retain the stock entry path");
+}
+
+void mod_instruction_codegen_test(const fs::path& root) {
+    const auto path = write_config(root, "instruction-hooks",
+        "mod_instruction_sites = [\"0x80010000\", \"0x80010004\"]\n");
+    const auto parsed = PSXRecompV4::load_game_config(path);
+    check(parsed.mod_instruction_sites.size() == 2, "instruction sites parse");
+    auto changed = parsed;
+    changed.mod_instruction_sites.clear();
+    check(PSXRecompV4::overlay_codegen_config_hash(parsed) !=
+          PSXRecompV4::overlay_codegen_config_hash(changed), "instruction sites invalidate cached code");
+    const auto invalid = write_config(root, "instruction-unaligned",
+        "mod_instruction_sites = [\"0x80010001\"]\n");
+    check_throws([&] { PSXRecompV4::load_game_config(invalid); }, "aligned main RAM",
+                 "instruction sites reject invalid addresses");
+    PSXRecomp::CodeGenConfig config{};
+    config.mod_instruction_sites = {0x80010000u, 0x80010004u};
+    for (bool overlay : {false, true}) {
+        for (uint32_t word : {0x2402002Au, 0x10400002u}) {
+            const auto code = generate_first_instruction(word, {}, overlay, config);
+            check(code.find(fmt::format("psx_mod_instruction(cpu, 0x80010000u, 0x{:08X}u);", word)) != std::string::npos,
+                  "native/overlay emits instruction guard for ALU and branch");
+            check(code.find("psx_mod_instruction(cpu, 0x80010004u, 0x00000000u);") != std::string::npos,
+                  "native/overlay includes sequential and branch delay-slot hooks");
+        }
+    }
+    check(generate_first_instruction(0x2402002Au, {}, false).find("psx_mod_instruction(cpu,") == std::string::npos,
+          "unconfigured code emits no instruction callbacks");
+}
+
+void local_viewport_tests(const fs::path& root) {
+    const std::string prefix = "\n[netplay]\nlocal_viewport=\"vertical_split\"\nlocal_viewport_renderer=\"projection\"\n";
+    const auto cfg = PSXRecompV4::load_game_config(write_config(root,"unsplit",prefix +
+        "local_viewport_width_sites=[\"0x80010000\"]\nlocal_viewport_state_addr=\"0x80018000\"\nlocal_viewport_state_values=[\"0x0\"]\n"));
+    check(cfg.netplay_local_viewport_width_sites == std::vector<uint32_t>{0x80010000}, "unsplit width sites parse");
+    check(cfg.netplay_local_viewport_renderer == "projection" && cfg.netplay_local_viewport_state_addr == 0x80018000 &&
+        cfg.netplay_local_viewport_state_values == std::vector<uint32_t>{0}, "unsplit renderer and pause gate parse");
+    auto changed = cfg; changed.netplay_local_viewport_width_sites.clear();
+    check(PSXRecompV4::overlay_codegen_config_hash(cfg) != PSXRecompV4::overlay_codegen_config_hash(changed), "unsplit sites invalidate cached code");
+    for (auto bad : {"0x80010001", "0x1F800000", "0x80800000"}) {
+        auto path = write_config(root,"unsplit-bad",prefix+"local_viewport_width_sites=[\""+bad+"\"]\n");
+        check_throws([&]{PSXRecompV4::load_game_config(path);}, "aligned main RAM", "unsplit rejects invalid site");
+    }
+    auto dup = write_config(root,"unsplit-duplicate",prefix+"local_viewport_width_sites=[\"0x80010000\",\"0xA0010000\"]\n");
+    check_throws([&]{PSXRecompV4::load_game_config(dup);},"duplicate", "unsplit rejects aliased duplicates");
+    auto no_projection = write_config(root,"unsplit-renderer","\n[netplay]\nlocal_viewport_width_sites=[\"0x80010000\"]\n");
+    check_throws([&]{PSXRecompV4::load_game_config(no_projection);},"requires projection", "unsplit width requires projection");
+    PSXRecomp::CodeGenConfig codegen{};
+    codegen.netplay_local_viewport_width_sites.insert(0x80010000);
+    for (bool overlay : {false,true}) {
+        auto code=generate_first_instruction(0x8F820EDCu,{},overlay,codegen);
+        check(code.find("psx_ws_local_viewport_width((int32_t)psx_cyc_load_word") != std::string::npos, "unsplit keeps LW cycle accounting");
+    }
+    check(generate_first_instruction(0x8F820EDCu,{},false).find("= (uint32_t)psx_ws_local_viewport_width") == std::string::npos, "ordinary loads remain native");
+}
+
 void cfg_fallthrough_reachability_test() {
     constexpr uint32_t base = 0x80010000u;
     PSXRecomp::PS1Executable exe{};
@@ -1174,6 +1337,9 @@ int main() {
         gte_codegen_classification_tests();
         jump_table_producer_codegen_test();
         cfg_codegen_load_delay_test();
+        mod_function_completion_codegen_test();
+        mod_instruction_codegen_test(root);
+        local_viewport_tests(root);
         cfg_fallthrough_reachability_test();
     } catch (const std::exception& e) {
         fmt::print(stderr, "FAIL  unexpected exception: {}\n", e.what());

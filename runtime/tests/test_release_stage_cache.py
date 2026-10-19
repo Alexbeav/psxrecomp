@@ -30,6 +30,8 @@ on the day the tag grew a field.
 """
 
 import os
+import hashlib
+import json
 import shutil
 import sys
 import tempfile
@@ -254,6 +256,49 @@ class ModCatalogStagingTest(unittest.TestCase):
         self.assertFalse(os.path.isdir(
             os.path.join(self.stage, 'mods', 'installed')))
 
+    def _exclude(self, *ids):
+        return touch(
+            os.path.join(self.build, 'psx_mod_catalog_psx-runtime.excluded.txt'),
+            '# framework builtin mod packages psx-runtime excludes\n'
+            + ''.join('%s\n' % i for i in ids))
+
+    def _framework_source(self):
+        src = os.path.join(self.tmp, 'fw_builtin')
+        for i in ('psx.enhancement.cd-speed', 'psx.enhancement.pgxp',
+                  'psx.enhancement.fast-loading', 'psx.presentation.bezel'):
+            touch(os.path.join(src, 'packages', i, '1.0.0', 'manifest.toml'))
+        return src
+
+    def test_excluded_builtins_are_not_missing(self):
+        # Add-ModCatalog hands the framework's mods/builtin over as a
+        # --mod-source; the builtins the title declined with
+        # EXCLUDE_BUILTIN_MODS must count as absent, not as missing.
+        self._exclude('psx.enhancement.fast-loading', 'psx.presentation.bezel')
+        n = rs.stage_mods(self.build, self.stage, runtime_target='psx-runtime',
+                          extra_sources=[self._framework_source()],
+                          log=self.log)
+        self.assertEqual(n, 3)
+        self.assertTrue(any('verified absent' in m and 'psx.presentation.bezel' in m
+                            for m in self.logged), self.logged)
+
+    def test_framework_source_without_exclusions_still_demands_every_builtin(self):
+        self._exclude()  # published, but empty
+        with self.assertRaises(rs.StageError) as cm:
+            rs.stage_mods(self.build, self.stage, runtime_target='psx-runtime',
+                          extra_sources=[self._framework_source()],
+                          log=self.log)
+        self.assertIn('psx.enhancement.fast-loading', str(cm.exception))
+
+    def test_an_excluded_builtin_that_reached_the_catalog_is_refused(self):
+        self._exclude('psx.presentation.bezel')
+        touch(os.path.join(self.build, 'mods', 'bundled',
+                           'psx.presentation.bezel', 'manifest.toml'))
+        with self.assertRaises(rs.StageError) as cm:
+            rs.stage_mods(self.build, self.stage, runtime_target='psx-runtime',
+                          log=self.log)
+        self.assertIn('EXCLUDES', str(cm.exception))
+        self.assertIn('psx.presentation.bezel', str(cm.exception))
+
     def test_unverifiable_catalog_is_refused(self):
         os.remove(self.manifest)
         with self.assertRaises(rs.StageError) as cm:
@@ -330,10 +375,16 @@ class ToolchainStagingTest(unittest.TestCase):
         for d in (self.tools, self.include, self.bios, self.recomp, self.mingw):
             os.makedirs(d, exist_ok=True)
         touch(os.path.join(self.tools, 'compile_overlays.py'))
+        touch(os.path.join(self.tools, 'bios_module_build.py'))
         touch(os.path.join(self.include, 'overlay_api.h'))
         touch(os.path.join(self.include, 'overlay_dispatch_preamble.c.inc'))
+        touch(os.path.join(self.include, 'psx_bios_module_glue.c.inc'))
+        touch(os.path.join(self.include, 'psx_bios_module.h'))
         touch(os.path.join(self.bios, 'SCPH1001.toml'))
         touch(os.path.join(self.recomp, 'psxrecomp-game.exe'))
+        touch(os.path.join(self.recomp, 'psxrecomp-bios.exe'))
+        touch(os.path.join(self.framework, 'recompiler', 'seeds',
+                           'phase2_ghidra_seeds.json'))
         for d in ('libgcc_s_seh-1.dll', 'libstdc++-6.dll',
                   'libwinpthread-1.dll'):
             touch(os.path.join(self.mingw, d))
@@ -351,7 +402,10 @@ class ToolchainStagingTest(unittest.TestCase):
             'python_url': self.py_zip,
             'python_sha256': 'unused',
             'tcc_url': self.tcc_zip,
-            'tcc_sha256': 'unused',
+            # The fetch is stubbed; the version and hash are the real pin's
+            # because the staged TinyCC notice must name them.
+            'tcc_version': self.orig_pins['tcc_version'],
+            'tcc_sha256': self.orig_pins['tcc_sha256'],
         }
         rs.get_pinned_archive = lambda url, _sha, _dest, log=print: url
 
@@ -369,6 +423,133 @@ class ToolchainStagingTest(unittest.TestCase):
             'overlay_dispatch_preamble.c.inc')))
         self.assertTrue(os.path.isfile(os.path.join(
             self.stage, 'overlay_toolchain', 'bios', 'SCPH1001.toml')))
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.stage, 'overlay_toolchain', 'tcc', 'COPYING')))
+
+
+class TinyccNoticeTest(unittest.TestCase):
+    """The bundled TinyCC (LGPL-2.1) ships with its notice (issue #474)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='tcc_notice_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_every_pinned_tcc_has_a_notice_naming_it(self):
+        pinned = [p for p in rs.TOOLCHAIN_PINS.values()
+                  if p['tcc_url'] or p.get('tcc_source_url')]
+        self.assertTrue(pinned, 'no platform pins a tcc')
+        with open(rs.TCC_NOTICE, encoding='utf-8') as f:
+            text = f.read()
+        for pins in pinned:
+            self.assertIn(pins['tcc_version'], text)
+            self.assertIn(pins['tcc_sha256'], text)
+        self.assertIn('GNU LESSER GENERAL PUBLIC LICENSE', text)
+        self.assertIn('Version 2.1', text)
+
+    def test_notice_is_staged_beside_the_binary(self):
+        pins = next(p for p in rs.TOOLCHAIN_PINS.values() if p['tcc_url'])
+        rs.stage_tcc_notice(self.tmp, pins)
+        with open(os.path.join(self.tmp, 'COPYING'), encoding='utf-8') as f:
+            staged = f.read()
+        with open(rs.TCC_NOTICE, encoding='utf-8') as f:
+            self.assertEqual(staged, f.read())
+
+    def test_a_notice_for_another_version_fails_loudly(self):
+        pins = dict(next(p for p in rs.TOOLCHAIN_PINS.values() if p['tcc_url']))
+        pins['tcc_version'] = '9.9.99'
+        with self.assertRaises(rs.StageError):
+            rs.stage_tcc_notice(self.tmp, pins)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'COPYING')))
+
+
+class ExecutionStagingTest(unittest.TestCase):
+    def test_artifact_binding_and_wrong_sidecar_rejection(self):
+        with tempfile.TemporaryDirectory(prefix='psx_execution_stage_') as folder:
+            binary = os.path.join(folder, 'Game.exe')
+            manifest = os.path.join(folder, 'Game.execution.json')
+            output = os.path.join(folder, 'staged.execution.json')
+            shared = hashlib.sha256(b'').hexdigest()
+            identity = hashlib.sha256(('psx-execution-v1\nENHANCED\nshared:%s\n' % shared).encode()).hexdigest()
+            data = dict(schema=1, profile='ENHANCED', identity=identity,
+                        shared_contract_sha256=shared, implementations=[])
+            # The runtime embeds its identity. Straddle the reader's chunk
+            # boundary to catch searches that accidentally check each alone.
+            payload = b'x' * (1024 * 1024 - 7) + identity.encode() + b'code'
+            with open(binary, 'wb') as stream:
+                stream.write(payload)
+            with open(manifest, 'w') as stream:
+                json.dump(data, stream)
+            staged = rs.stage_execution(binary, manifest, output)
+            self.assertEqual(staged['binary_sha256'], hashlib.sha256(payload).hexdigest())
+            with self.assertRaises(rs.StageError):
+                rs.stage_execution(binary, manifest, binary)
+            with open(binary, 'rb') as stream:
+                self.assertEqual(stream.read(), payload)
+            # A self-consistent sidecar for another profile still cannot bind
+            # an executable that lacks that identity.
+            data['profile'] = 'REFERENCE'
+            data['identity'] = hashlib.sha256(('psx-execution-v1\nREFERENCE\nshared:%s\n' % shared).encode()).hexdigest()
+            with open(manifest, 'w') as stream:
+                json.dump(data, stream)
+            with self.assertRaises(rs.StageError):
+                rs.stage_execution(binary, manifest, output)
+            with open(output) as stream:
+                self.assertEqual(json.load(stream), staged)
+
+
+class LinuxTinyccTest(unittest.TestCase):
+    """Linux bundles a source-built tcc with musl headers (Steam Deck has no
+    compiler); compile_overlays.py drives that layout self-contained."""
+
+    def test_linux_pins_a_source_tcc_and_musl_headers(self):
+        pins = rs.TOOLCHAIN_PINS['linux']
+        self.assertEqual(pins['tcc_version'], '0.9.27')
+        self.assertTrue(pins['tcc_source_url'].endswith('tcc-0.9.27.tar.bz2'))
+        self.assertRegex(pins['tcc_sha256'], r'^[0-9a-f]{64}$')
+        self.assertRegex(pins['musl_sha256'], r'^[0-9a-f]{64}$')
+        self.assertIn(pins['musl_version'], pins['musl_url'])
+        with open(rs.TCC_NOTICE, encoding='utf-8') as f:
+            text = f.read()
+        self.assertIn(pins['tcc_sha256'], text)
+        self.assertIn('musl', text)
+
+    def test_musl_va_list_is_adapted_for_tcc(self):
+        tmp = tempfile.mkdtemp(prefix='musl_inc_')
+        try:
+            os.mkdir(os.path.join(tmp, 'bits'))
+            open(os.path.join(tmp, 'stdarg.h'), 'w').close()
+            with open(os.path.join(tmp, 'bits', 'alltypes.h'), 'w') as f:
+                f.write('typedef __builtin_va_list va_list;\n'
+                        'typedef __builtin_va_list __isoc_va_list;\n')
+            rs.adapt_musl_headers_for_tcc(tmp)
+            self.assertFalse(os.path.exists(os.path.join(tmp, 'stdarg.h')))
+            text = open(os.path.join(tmp, 'bits', 'alltypes.h')).read()
+            self.assertNotIn('__builtin_va_list', text)
+            self.assertIn('#include <stdarg.h>', text)
+            with self.assertRaises(rs.StageError):
+                rs.adapt_musl_headers_for_tcc(tmp)   # layout changed: loud
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_bundle_args_only_for_the_bundle_layout(self):
+        import compile_overlays as co_mod
+        tmp = tempfile.mkdtemp(prefix='tcc_bundle_')
+        try:
+            tcc = os.path.join(tmp, 'tcc')
+            open(tcc, 'w').close()
+            self.assertEqual(co_mod._tcc_bundle_args(tcc), [],
+                             'a bare tcc (Windows bundle, system tcc) is unchanged')
+            os.mkdir(os.path.join(tmp, 'libc-include'))
+            open(os.path.join(tmp, 'libtcc1.a'), 'w').close()
+            args = co_mod._tcc_bundle_args(tcc)
+            self.assertEqual(args[:3], ['-B' + tmp, '-nostdinc', '-nostdlib'])
+            self.assertIn(os.path.join(tmp, 'include'), args)
+            self.assertIn(os.path.join(tmp, 'libc-include'), args)
+            self.assertEqual(args[-1], os.path.join(tmp, 'libtcc1.a'))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == '__main__':

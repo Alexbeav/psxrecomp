@@ -49,7 +49,7 @@ def _print_audit(report, *, as_json: bool) -> int:
     fails = sum(1 for c in report.checks if c.status.value == "fail")
     warns = sum(1 for c in report.checks if c.status.value == "warn")
     print()
-    print(f"Summary: {fails} fail, {warns} warn  (setup-host releases only)")
+    print(f"Summary: {fails} fail, {warns} warn  (bundled releases: committed generated/ C)")
     return 1 if fails else 0
 
 
@@ -116,7 +116,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_apply(args: argparse.Namespace) -> int:
     root = Path(args.root).expanduser().resolve()
     opts = _options_from_args(args)
-    # Setup-host exclusive hard rules
+    # Hard rules: recomp-ui + wizard are the shipped game's first-run disc picker
     opts.enable_wizard = True
     opts.enable_recomp_ui = True
     if opts.players < 2:
@@ -1305,6 +1305,57 @@ def cmd_git_bulk_install_ci(args: argparse.Namespace) -> int:
     return _print_module_results(results)
 
 
+def _migrate_bundled_common(args: argparse.Namespace) -> dict:
+    return dict(
+        psxrecomp_ref=getattr(args, "psxrecomp_ref", "") or "origin/master",
+        recomp_ui_ref=getattr(args, "recomp_ui_ref", "") or "origin/master",
+        regenerate=not bool(getattr(args, "skip_generate", False)),
+        push_remote=bool(getattr(args, "push", False)),
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
+
+
+def cmd_git_bulk_migrate_bundled(args: argparse.Namespace) -> int:
+    from project_studio.bulkops import bulk_migrate_bundled
+    from project_studio.repo_index import load_index
+
+    repos = _bulk_repos_or_die(args)
+    if repos is None:
+        return 2
+    jobs = int(getattr(args, "jobs", 0) or 0) or int(getattr(load_index(), "bulk_jobs", 1) or 1)
+
+    def on_repo(label: str, results: list) -> None:
+        for r in results:
+            print(f"  [{'OK' if r.ok else 'FAIL'}] {r.message}", flush=True)
+            if r.detail:
+                for ln in r.detail.splitlines():
+                    print(f"         {ln}", flush=True)
+
+    results = bulk_migrate_bundled(repos, jobs=jobs, on_repo=on_repo, **_migrate_bundled_common(args))
+    failed = sum(1 for r in results if not r.ok)
+    print(f"bulk migrate-bundled: {len(results) - failed} ok, {failed} failed", flush=True)
+    return 1 if failed else 0
+
+
+def cmd_git_migrate_bundled(args: argparse.Namespace) -> int:
+    from project_studio.migrate_bundled import BundledMigrateOptions, migrate_to_bundled_release
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    opts = BundledMigrateOptions(
+        disc=getattr(args, "disc", None) or None,
+        bios=getattr(args, "bios", None) or None,
+        zip_prefix=getattr(args, "zip_prefix", "") or None,
+        **_migrate_bundled_common(args),
+    )
+    r = migrate_to_bundled_release(root, opts)
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    if r.detail:
+        print(r.detail)
+    return 0 if r.ok else 1
+
+
 def cmd_git_release(args: argparse.Namespace) -> int:
     from project_studio.gitops import run_release_workflow
 
@@ -1600,7 +1651,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="migrate_project",
         description=(
             "PSXRecomp Project Studio — migrate / update title repos to the "
-            "New Project Layout (setup-host releases only)."
+            "New Project Layout (bundled releases: committed generated/ C, compiled game shipped)."
         ),
     )
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -1625,9 +1676,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--enable-netplay", action="store_true")
         p.add_argument("--lobby-url", default="ws://netplay.retcomm.net:8765")
         p.add_argument("--no-recomp-ui", action="store_true",
-                       help="Ignored for setup-host apply (forced on)")
+                       help="Ignored for apply (forced on)")
         p.add_argument("--no-wizard", action="store_true",
-                       help="Ignored for setup-host apply (forced on)")
+                       help="Ignored for apply (forced on)")
         p.add_argument("--no-ci", action="store_true")
         p.add_argument("--no-boxart", action="store_true")
         p.add_argument("--no-rewrite-cmake", action="store_true")
@@ -2206,7 +2257,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_gbci = git_sub.add_parser(
         "bulk-install-ci",
-        help="Install/push setup-host release.yml on selected indexed repos",
+        help="Install/push bundled release.yml on selected indexed repos",
     )
     add_bulk_select(p_gbci)
     p_gbci.add_argument(
@@ -2221,6 +2272,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_gbci.set_defaults(func=cmd_git_bulk_install_ci)
 
+    def add_migrate_bundled_flags(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--psxrecomp-ref", default="origin/master",
+            help="psxrecomp ref to pin (must carry bundled releases; default origin/master)",
+        )
+        p.add_argument(
+            "--recomp-ui-ref", default="origin/master",
+            help="recomp-ui ref to pin (default origin/master)",
+        )
+        p.add_argument(
+            "--skip-generate", action="store_true",
+            help="Do not rebuild emitters / regenerate game C (you must before releasing)",
+        )
+        p.add_argument(
+            "--push", action="store_true",
+            help="Push the migration commit (default: commit locally only)",
+        )
+
+    p_gbmb = git_sub.add_parser(
+        "bulk-migrate-bundled",
+        help="Move selected indexed repos onto bundled releases (bump pins, "
+             "new release.yml + packager, regenerate, commit)",
+    )
+    add_bulk_select(p_gbmb)
+    add_migrate_bundled_flags(p_gbmb)
+    p_gbmb.add_argument("--jobs", type=int, default=0, help="Parallel repos (default: index setting)")
+    p_gbmb.set_defaults(func=cmd_git_bulk_migrate_bundled)
+
+    p_gmb = git_sub.add_parser(
+        "migrate-bundled",
+        help="Move one game repo onto bundled releases",
+    )
+    add_git_root(p_gmb)
+    add_migrate_bundled_flags(p_gmb)
+    p_gmb.add_argument("--disc", default="", help="Disc .cue/.bin (default: disc.cfg or the one disc/*.cue)")
+    p_gmb.add_argument("--bios", default="", help="BIOS dump for generate (default: framework bundled OpenBIOS)")
+    p_gmb.add_argument("--zip-prefix", default="", help="CI asset zip prefix (default: from existing packager)")
+    p_gmb.set_defaults(func=cmd_git_migrate_bundled)
+
     p_gr = git_sub.add_parser("release", help="gh workflow run release.yml")
     add_git_root(p_gr)
     p_gr.add_argument("--version", default="", help="Empty = auto-bump")
@@ -2233,7 +2323,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_gci = git_sub.add_parser(
         "install-ci",
-        help="Write psxrecomp setup-release.yml, commit, and push",
+        help="Write psxrecomp game-release.yml, commit, and push",
     )
     add_git_root(p_gci)
     p_gci.add_argument("--zip-prefix", default="", help="CI asset zip prefix")
@@ -2281,12 +2371,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bm.add_argument(
         "--setup-host",
         action="store_true",
-        help="CI-parity setup-host configure (FORCE_SETUP_HOST + wizard)",
+        help="Retired: setup-host configure parity (releases build the committed game C)",
     )
     p_bm.add_argument(
         "--package",
         action="store_true",
-        help="Run scripts/package_setup_release.sh after build",
+        help="Run scripts/package_release.sh after build",
     )
     p_bm.add_argument(
         "--package-only",
@@ -2419,6 +2509,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Reports print non-ASCII marks (e.g. an arrow). On a Windows console whose
+    # code page cannot encode them (cp1250, cp437, ...) print() raised
+    # UnicodeEncodeError mid-audit; degrade those characters instead.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
     ap = build_parser()
     args = ap.parse_args(argv)
     return int(args.func(args))

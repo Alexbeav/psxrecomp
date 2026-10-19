@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Write the setup-host release workflow into an existing PSX project (Windows).
+Write the bundled release workflow into an existing PSX project (Windows).
 
 .DESCRIPTION
 The logic is tools/generate_ci.py; this only finds Python and passes every

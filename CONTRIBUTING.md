@@ -27,9 +27,9 @@ record; the submodule pointer is the source of truth). The framework evolves on
 its own cadence; a game only moves to a newer framework when someone deliberately
 bumps that submodule pointer.
 
-**Starting a new title or shipping a setup-host zip?** Follow
+**Starting a new title or shipping a release?** Follow
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (layout, CI template
-under `docs/ci/templates/setup-release.yml`, release checklist). Also see
+under `docs/ci/templates/game-release.yml`, release checklist). Also see
 [Linking the framework](docs/BUILDING.md#linking-the-framework) and
 [Framework changes and the pin](#framework-changes-and-the-pin) below.
 

@@ -5,6 +5,9 @@
  */
 
 #include "cpu_state.h"
+#include "psx_memory.h"
+#include "interrupts.h"
+#include "mod_runtime.h"
 #include "psx_bss.h"
 #include "psx_runtime.h"   /* fix B: psx_exc_escape_reason_t + g_exc_escape_reason */
 #include "debug_server.h"
@@ -658,8 +661,8 @@ static int psx_request_thread_switch(CPUState* cpu, uint32_t target_tcb)
     }
     if (current_tcb == target_tcb) {
         /* Same thread — not a switch. The syscall wrapper returns 0 and falls
-         * through to its own jr $ra (CPS); the thread simply continues. No
-         * cpu->pc=0 host signal (removed with the fiber bridge). */
+         * through to its own jr $ra (CPS); the thread simply continues.
+         * psx_syscall clears cpu->pc for the interpreter's caller. */
         debug_server_log_thread_event(5, cpu, current_tcb, target_tcb, cpu->gpr[31]);
         return 1;
     }
@@ -717,6 +720,8 @@ void psx_scheduler_top_level_resume_clear(void)
     g_sched_top_level_resume = 0;
 }
 
+static int g_sched_restore_edge_check = 0;
+
 void psx_scheduler_resume_at(uint32_t resume_pc)
 {
     if (!psx_is_dispatchable(resume_pc)) {
@@ -732,6 +737,13 @@ void psx_scheduler_resume_at(uint32_t resume_pc)
     /* longjmp abandons every mid-block CPS frame — sentinel RFE must not
      * treat the new top-level dispatch as a continuable live chain. */
     g_sched_top_level_resume = 1;
+    /* Every caller is a state restore (savestate, rewind, selfcheck, rollback
+     * load). The snap was taken by a poll inside psx_check_interrupts at this
+     * very block edge, and the live run went on to evaluate delivery at that
+     * same edge. The resumed run must do the same before the block executes,
+     * or a pending IRQ (VBlank at a tick boundary) is taken one block later
+     * at a different PC than live (#636). */
+    g_sched_restore_edge_check = 1;
     /* Publish before the longjmp lands in dispatch: sticky I_STAT can deliver
      * on the first edge with take_pc=0 otherwise (LEGACY_SENTINEL fork). */
     {
@@ -810,6 +822,11 @@ void psx_scheduler_run(CPUState* cpu)
     g_sched_escape.reason = PSX_RUN_CONTINUE;
     for (;;) {
         if (setjmp(g_scheduler_jmpbuf) != 0) {
+            psx_snapshot_host_call_reset();
+            /* The jump also abandoned mod callbacks. Their native epilogues
+             * cannot clear the snapshot gate or restore callback ownership. */
+            const ModFunctionEntryContext no_callback = {0};
+            mod_runtime_function_entry_context_restore(&no_callback);
             /* A structured escape unwound the native stack to here. Reset the
              * invariants the skipped psx_dispatch_impl frames would otherwise
              * own. No exception_jmpbuf frame is ever skipped (switch fires only
@@ -885,6 +902,13 @@ void psx_scheduler_run(CPUState* cpu)
         if (from_top_resume) {
             extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
             psx_irq_arm_compiled_resume_pc(run_pc);
+            if (g_sched_restore_edge_check) {
+                g_sched_restore_edge_check = 0;
+                /* Same edge check the dispatch entry runs (deduped there by
+                 * cycle+PC), so compiled-game entries are not checked twice;
+                 * BIOS ROM and continuation resumes get the check they lacked. */
+                psx_check_interrupts_dispatch_entry(cpu, run_pc);
+            }
         }
         psx_dispatch(cpu, run_pc);
 
@@ -987,7 +1011,12 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
                  * be a transfer — return 0 so the syscall wrapper falls through
                  * to its own jr $ra and this thread resumes at its caller via
                  * the flat trampoline. Legacy ignores the return value (it uses
-                 * cpu->pc == 0 + the nested-dispatch C-return to resume). */
+                 * cpu->pc == 0 + the nested-dispatch C-return to resume).
+                 * The HLE scheduler's same-thread ChangeThread also lands here
+                 * and leaves the SYSCALL's own PC in cpu->pc. The dirty-RAM
+                 * interpreter transfers whenever cpu->pc != 0, so it re-ran the
+                 * SYSCALL forever. Clear it, as the SYS01/02 continuations do. */
+                cpu->pc = 0;
                 return 0;
             }
 
@@ -1209,7 +1238,7 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
                 int hits = 0;
                 pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
                                 "\n  RAM scan for 0x%08X:\n", needles[n]);
-                for (uint32_t off = 0; off + 4 <= 2u * 1024u * 1024u; off += 4) {
+                for (uint32_t off = 0; off + 4 <= psx_ram_live_bytes(); off += 4) {
                     uint32_t word;
                     memcpy(&word, ram + off, sizeof(word));
                     if (word != needles[n]) continue;
@@ -1220,7 +1249,7 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
                 }
                 if (!hits)
                     pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                    "    (not found in 2MB PSX RAM)\n");
+                                    "    (not found in live PSX RAM)\n");
             }
         }
 

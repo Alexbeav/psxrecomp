@@ -30,6 +30,15 @@ int main(int argc, char **argv) {
           "default fullscreen includes Alt+Return");
     check(host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_f, mod_ctrl()),
           "default fullscreen includes Ctrl+F");
+    /* A real key event carries only one side's modifier bit. */
+    check(host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_f, (int)KMOD_LCTRL),
+          "Ctrl+F matches a left-Ctrl-only press");
+    check(host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_RETURN, (int)KMOD_RALT),
+          "Alt+Return matches a right-Alt-only press");
+    check(host_keymap_match(HOST_KEYMAP_CAPTURE_MARK, (int)SDLK_m, (int)KMOD_LCTRL),
+          "default capture mark is Ctrl+M");
+    check(!host_keymap_match(HOST_KEYMAP_CAPTURE_MARK, (int)SDLK_m, 0),
+          "plain M does not trigger the capture mark");
     keys[SDL_SCANCODE_TAB] = 1;
     check(host_keymap_down(HOST_KEYMAP_TURBO, keys, 0),
           "default turbo is held by Tab");

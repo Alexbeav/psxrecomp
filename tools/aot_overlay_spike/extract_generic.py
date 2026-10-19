@@ -32,6 +32,7 @@ import extract_overlays as eo
 import compile_overlays as co
 from packed_sector_table import extract_members as extract_sector_members
 from sector_extent_archive import extract_members as extract_extent_members
+from counted_mips_relocations import parse as parse_counted_relocations
 try:
     import tomllib
 except ImportError:
@@ -52,6 +53,24 @@ def parse_cue_datatrack(cue_path):
                 return cur_bin, (int(t.group(2))==2352)
     return eo.parse_cue(cue_path)   # fallback
 
+
+def counted_relocation_inventory(data):
+    """Identify a complete container without inventing its destination or code.
+
+    The format carries image-relative pointers. Sweeping fixed link bases for
+    these bytes cannot establish their heap placement. Report the gap early so
+    a loader profile can provide placements and callback fields before play.
+    """
+    try:
+        members = parse_counted_relocations(data)
+    except ValueError:
+        return None
+    return dict(method='counted_relocated_members', placement_required=True,
+        members=[dict(index=index, image_offset=member.image_offset,
+                      image_size=len(member.image), relocation_count=len(member.relocations),
+                      image_sha256=hashlib.sha256(member.image).hexdigest())
+                 for index, member in enumerate(members)])
+
 def prologues(data, base):
     """Return framed function entries, including a proven pre-frame prelude.
 
@@ -67,19 +86,21 @@ def prologues(data, base):
     the return boundary, LUI/load opcode pair, and matching address register are
     all required data-as-code gates.
     """
-    entries=[]
-    for off in prologue_offsets(data):
-        entry=off
-        if off >= 16 and _word(data, off-16) == 0x03E00008:
-            lui=_word(data, off-8)
-            load=_word(data, off-4)
-            lui_rt=(lui >> 16) & 0x1F
-            if (lui >> 26) == 0x0F and lui_rt != 0 and \
-                    0x20 <= (load >> 26) <= 0x26 and \
-                    ((load >> 21) & 0x1F) == lui_rt:
-                entry=off-8
-        entries.append(base+entry)
-    return entries
+    return [base + framed_entry_offset(data, off)
+            for off in prologue_offsets(data)]
+
+
+def framed_entry_offset(data, off):
+    """Recover the same return-proven scheduled prelude for every frame scan."""
+    if off >= 16 and _word(data, off-16) == 0x03E00008:
+        lui=_word(data, off-8)
+        load=_word(data, off-4)
+        lui_rt=(lui >> 16) & 0x1F
+        if (lui >> 26) == 0x0F and lui_rt != 0 and \
+                0x20 <= (load >> 26) <= 0x26 and \
+                ((load >> 21) & 0x1F) == lui_rt:
+            return off-8
+    return off
 
 def prologue_offsets(data):
     """File offsets whose word is an `addiu $sp,$sp,-N` stack-frame prologue."""
@@ -402,10 +423,16 @@ def return_adjacent_framed_entries(data, base):
     instruction alone is insufficient. Require a preceding ``jr ra`` and its
     arbitrary architectural delay slot, at most six alignment NOPs, plus an
     in-frame save of ``ra`` before the new function's first control transfer.
-    Every stack-relative word save observed in that prefix must fit the frame.
+    Recover a proven LUI/load prelude before the frame allocation. Scan the
+    first basic block, rather than a fixed number of instructions: register
+    scheduling can put the RA save after many other saves/address calculations.
+    Every instruction must decode, SP must stay unchanged, and every observed
+    stack-relative word save must fit the frame. A control transfer must end
+    the prefix; truncated bytes are not a complete proof.
     """
     entries=set()
     for off in prologue_offsets(data):
+        entry=framed_entry_offset(data,off)
         word=_word(data,off)
         frame_imm=word&0xFFFF
         frame_size=0x10000-frame_imm
@@ -413,22 +440,27 @@ def return_adjacent_framed_entries(data, base):
             continue
         boundary=False
         for padding in range(7):
-            jr_off=off-8-padding*4
+            jr_off=entry-8-padding*4
             if _word(data,jr_off)!=0x03E00008:
                 continue
-            if all(_word(data,p)==0 for p in range(jr_off+8,off,4)):
+            if all(_word(data,p)==0 for p in range(jr_off+8,entry,4)):
                 boundary=True
                 break
         if not boundary:
             continue
         saved_ra=False
         consistent=True
-        for pc in range(off+4,min(len(data),off+4+12*4),4):
+        ended=False
+        for pc in range(off+4,len(data)-3,4):
             candidate=_word(data,pc)
-            if candidate is None:
+            if not co._is_valid_mips_word(candidate):
                 consistent=False
                 break
             if _is_control_flow_word(candidate):
+                ended=True
+                break
+            if co._instruction_writes_gpr(candidate,29):
+                consistent=False
                 break
             op=(candidate>>26)&0x3F
             rs=(candidate>>21)&0x1F
@@ -442,8 +474,8 @@ def return_adjacent_framed_entries(data, base):
                     break
                 if rt==31:
                     saved_ra=True
-        if consistent and saved_ra:
-            entries.add(base+off)
+        if consistent and ended and saved_ra:
+            entries.add(base+entry)
     return sorted(entries)
 
 def _is_control_flow_word(word):
@@ -646,20 +678,52 @@ def parse_full_discovery_ranges(lines):
             pending=None
     return sorted(seeds),sorted(set(aliases))
 
-def full_discovery_seeds(data, recompiler, tmp):
-    """Run NORMAL mode; return discovered entries plus exact alias recipes."""
+class DiscoveryError(RuntimeError):
+    """Normal-mode discovery could not run; the extraction must not continue."""
+
+
+# The framework this tool belongs to (tools/aot_overlay_spike/ -> root). Normal
+# mode resolves its BIOS profile against --project-root; without it the
+# recompiler probes the process cwd, so the same release run found every entry
+# from a framework checkout and none from a directory without bios/ (it exits
+# "no BIOS profile found"), shipping fewer native pairs with no error.
+FRAMEWORK_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+_project_root = None   # set by main() from --project-root
+
+
+def discovery_project_root(explicit=None):
+    """The --project-root every normal-mode run uses: explicit, else the
+    framework root. It must hold bios/SCPH1001.toml, or nothing can resolve."""
+    root = os.path.abspath(explicit or _project_root or FRAMEWORK_ROOT)
+    if not os.path.isfile(os.path.join(root, 'bios', 'SCPH1001.toml')):
+        raise DiscoveryError(f"no BIOS profile at {os.path.join(root, 'bios', 'SCPH1001.toml')}; "
+                             "pass --project-root <framework or game-project root>")
+    return root
+
+
+def full_discovery_seeds(data, recompiler, tmp, project_root=None):
+    """Run NORMAL mode; return discovered entries plus exact alias recipes.
+
+    A run that does not complete raises DiscoveryError with the recompiler's
+    own message. Falling back here would silently drop every normal-mode entry
+    and alias the producer has. (None, []) means the run completed and found
+    no entry, which the callers' prologue fallback covers."""
     exe_path = os.path.join(tmp, 'producer.exe')
     open(exe_path,'wb').write(data)
     out = os.path.join(tmp, f'disc_out_{binascii.crc32(data)&0xFFFFFFFF:08X}')
     os.makedirs(out, exist_ok=True)
+    cmd = [recompiler, exe_path, '--out-dir', out,
+           '--project-root', discovery_project_root(project_root)]
     try:
         # errors='replace': the recompiler prints non-ASCII (✓) that would raise
         # a decode error under text=True and lose the (already-written) ranges.
-        subprocess.run([recompiler, exe_path, '--out-dir', out],
-                       capture_output=True, text=True, errors='replace', timeout=300)
-    except Exception as e:
-        print(f"    full-discovery failed ({e}); falling back to prologue scan")
-        return None,[]
+        r = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise DiscoveryError(f"normal-mode discovery did not run: {' '.join(cmd)}: {e}") from e
+    if r.returncode != 0:
+        tail = '\n'.join(((r.stdout or '') + (r.stderr or '')).strip().splitlines()[-12:])
+        raise DiscoveryError(f"normal-mode discovery failed (exit {r.returncode}): "
+                             f"{' '.join(cmd)}\n{tail}")
     lines=[]
     for rf in [f for f in os.listdir(out) if f.endswith('.ranges')]:
         lines.extend(open(os.path.join(out,rf), errors='ignore'))
@@ -904,8 +968,13 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--game-toml')
     ap.add_argument('--recompiler')
+    ap.add_argument('--disc', default=None,
+                    help="cue to read (default: the game config's [game].disc)")
     ap.add_argument('--out', required=True)
     ap.add_argument('--tmp', default=None)
+    ap.add_argument('--project-root', default=None,
+                    help='root holding bios/SCPH1001.toml for normal-mode discovery '
+                         '(default: this framework)')
     ap.add_argument('--bios', default=None,
                     help='BIOS ROM for exact-hash resident-code recipes (default: '
                          'PSXRECOMP_BIOS_ROM or framework bios/SCPH1001.BIN)')
@@ -918,6 +987,8 @@ def main():
     ap.add_argument('--only-bios-resident', action='store_true',
                     help='emit only exact-hash BIOS-installed RAM code captures')
     a=ap.parse_args()
+    global _project_root
+    _project_root=a.project_root
     if a.require_bios_resident and a.no_bios_resident:
         ap.error('--require-bios-resident conflicts with --no-bios-resident')
     if a.only_bios_resident and a.no_bios_resident:
@@ -950,7 +1021,7 @@ def main():
     text_size=int(str(game.get('text_size','0x00080000')),16)
     floor = (load_addr + text_size) & 0x1FFFFFFF
     floor_page = (floor // 0x1000) * 0x1000        # page-align down
-    disc=os.path.join(root, disc_rel)
+    disc=os.path.abspath(a.disc) if a.disc else os.path.join(root, disc_rel)
     print(f"game={game.get('id')} disc={os.path.basename(disc)} load=0x{load_addr:08X} floor=0x{floor_page:08X}")
     bp,raw=parse_cue_datatrack(disc)   # multi-bin safe: pick track-1 data bin
     dr=eo.DiscReader(bp,raw=raw)
@@ -963,6 +1034,7 @@ def main():
     # The boot EXE (game.toml `exe`) is the STATIC-recompiled base, NOT an overlay.
     exe_base=os.path.basename(str(game.get('exe',''))).upper()
     records=[]; np=nh=nr=na=ne=nc=0; seen_crc=set(); header_files=[]; raw_files=[]
+    relocatable=[]
     positioned=[]
     for p,l,s in sorted(files):
         if p.upper() in hed_consumed:
@@ -971,6 +1043,13 @@ def main():
         if exe_base and os.path.basename(p).upper()==exe_base:
             continue   # skip the statically-compiled base executable
         data=dr.read_file_bytes(l,s)
+        relocation = counted_relocation_inventory(data)
+        if relocation is not None:
+            relocatable.append(dict(source_name=p, source_sha256=hashlib.sha256(data).hexdigest(),
+                                    **relocation))
+            print(f"  [counted relocations] {p}: {len(relocation['members'])} images; "
+                  'loader placement required (no fixed base inferred)')
+            continue
         # Position-fixed overlays are reused verbatim across AREA folders; dedup
         # by content so identical bytes -> one shard set, not N (same as hand tool).
         dcrc=binascii.crc32(data)&0xFFFFFFFF
@@ -1219,10 +1298,18 @@ def main():
                   f"sha256={record['bios_sha256'][:12]}...")
     with open(a.out, 'w') as f:
         json.dump(records, f)
+    with open(a.out + '.relocatable.json', 'w') as f:
+        json.dump(dict(schema='psxrecomp unresolved original-disc relocations v1',
+                       containers=relocatable), f, indent=2)
     print(f"producers: {np} PS-X EXE (full-discovery), {nh} header-table, "
           f"{nr} raw-code, {na} indexed-archive members, "
           f"{ne} HED-companion members, "
           f"{nc} adjacent composites, {nb} BIOS resident; "
           f"{len(records)} regions -> {a.out}")
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    try:
+        main()
+    except DiscoveryError as e:
+        print(f"extract_generic: FATAL: {e}", file=sys.stderr)
+        sys.exit(2)

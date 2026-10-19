@@ -103,10 +103,39 @@ struct WidescreenCullKeepSite {
 // constant with `addi[u] rt,zero,imm`; the runtime widens tan(angle) by the
 // live horizontal reveal factor. Full-word guards prevent overlay-address
 // aliases from changing unrelated immediates.
+// One register-register view-bound compare whose bound operand is widened
+// with the live reveal: `slt rd, rs, rt` where the configured operand holds
+// +/-half_extent*z (a camera-space frustum edge computed at runtime, so there
+// is no immediate to rewrite). The operand is scaled by
+// (half_extent + margin) / half_extent; identity at 4:3. Full-word guarded.
+struct WidescreenCullScaleSite {
+    uint32_t address = 0;
+    uint32_t expected = 0;     // guarded SLT/SLTU instruction
+    uint32_t operand = 1;      // 0 = scale rs, 1 = scale rt
+    uint32_t half_extent = 0;  // authored screen half-extent (e.g. 160)
+};
+
 struct WidescreenAngleSite {
     uint32_t address = 0;
     uint32_t expected = 0; // guarded ADDI/ADDIU with rs == zero
 };
+
+// [[draw_distance.clamp]]: an ordering-table range guard that a trusted mod
+// may turn from "drop the far primitive" into "keep it in the last slot".
+// While the runtime switch is on (psx_mod_set_draw_distance_clamp), `reg` is
+// clamped to `max` (signed) immediately before the instruction at `address`
+// runs. Main EXE only; the complete instruction word is the guard.
+struct DrawDistanceClampSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // the instruction; `reg` must be one of its sources
+    uint32_t reg = 0;      // 1..31
+    int32_t  max = 0;
+};
+
+// True when `instr` is an ALU instruction (I-type or SPECIAL R-type, not a
+// load, store, branch or jump) that reads GPR `reg`. These are the only
+// instructions a draw-distance clamp may precede.
+bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg);
 
 // Aspect-aware horizontal participation cone. The exact compare sites are
 // full-word guarded because overlay variants can reuse a virtual address for
@@ -253,6 +282,14 @@ struct RuntimeConfig {
     bool                  bios_hle = true;
     bool                  bios_hle_keep_intro = false;
 
+    // hide_hidden_mod_features: the launcher never presents a mod feature its
+    // package marks `hidden` -- not even while enabled -- nor a package whose
+    // every feature is hidden, and Enable/Disable all leave such features alone
+    // (recomp-ui RecompLauncherCModProvider::hide_hidden_features). The feature
+    // still runs as its package default and mods/state.toml say. Default false:
+    // a hidden feature is listed while enabled so it can be turned off.
+    bool                  hide_hidden_mod_features = false;
+
     // hle_scheduler: the HLE tier's standing SUBSYSTEM REPLACEMENT for guest
     // thread switching (deterministic TCB scheduler vs the legacy
     // non-deterministic host-fiber bridge). Default ON under BOTH BIOS
@@ -317,6 +354,15 @@ struct RuntimeConfig {
     // device events still advance exactly. Opt-in per game; the idle_skip
     // debug command and PSX_IDLE_SKIP environment variable support live A/B.
     bool                  idle_skip = false;
+    // idle_skip_store_counters: with idle_skip, also skip loops that count a
+    // stack timeout down once per iteration and span several block edges --
+    // PsyQ libetc's v_wait, the VSync(0) spin. Bit-exact (psx_cycles.c);
+    // PSX_IDLE_SKIP_EXT=0/1 overrides it for one run.
+    bool                  idle_skip_store_counters = false;
+    // idle_skip_store_counter_sites: the audited loop sites (block-edge PCs
+    // the detector anchors on) where the store-counter extension may skip.
+    // Unlisted sites are never skipped; an empty list disables the extension.
+    std::vector<uint32_t> idle_skip_store_counter_sites;
 
     // overlay_autocompile_cmd: variant-capture automation (step 2.8). A
     // shell command (run via cmd.exe /C, cwd = project root) that compiles
@@ -370,10 +416,38 @@ struct RuntimeConfig {
 
     // ---- [video] block — visual enhancement options ----
     // supersampling: internal-resolution SSAA factor (per axis). 1 = native
-    // (default, behaves exactly as before). 2..4 render geometry/shading into
+    // (default, behaves exactly as before). 2..32 render geometry/shading into
     // an N*-scaled mirror of VRAM and downsample on present — true ordered-grid
-    // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate.
+    // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate. The
+    // runtime clamps per backend: software and Vulkan at 4, OpenGL at the
+    // driver's texture limits and a memory budget (gl_scale_limits.h).
     int                   video_supersampling = 1;
+
+    // depth24_trailing_margin: columns blanked at the right edge of every
+    // 24-bit (FMV) frame, working around MDEC leaving stale pixels there.
+    // 8 is the historical default; a title whose MDEC uploads the full width
+    // can set 0 and keep those columns.
+    int                   video_depth24_trailing_margin = 8;
+
+    // internal_resolution: the "Internal resolution" preset (Settings ->
+    // Display), which supersedes supersampling when set. Encoding as in
+    // runtime/include/internal_resolution.h: 0 = unset (supersampling stands),
+    // 1 = native, -1 = match the display, N >= 2 = target output lines. In
+    // game.toml it is the shipped default ("native", "720p", "1080p",
+    // "1440p", "4k", "5k", "8k", "display", or a number of lines).
+    int                   video_internal_resolution = 0;
+    // dynamic_resolution: OpenGL only. Keep the internal resolution above as
+    // the ceiling and step the scale down (whole integer levels) only while
+    // the game would otherwise miss frames, back up when there is headroom
+    // (runtime/include/dynamic_resolution.h). Off by default; a title opts
+    // in. dynamic_resolution_min: the lowest level, a preset value as for
+    // internal_resolution (720 = "720p"; 1 = native).
+    bool                  video_dynamic_resolution = false;
+    int                   video_dynamic_resolution_min = 720;
+    // resolution_reference_lines: the title's usual display height, which a
+    // preset divides into (S = ceil(target / reference)). 240 for NTSC
+    // 320x240 games; 120..1024.
+    int                   video_resolution_reference_lines = 240;
 
     // Optional initial window width declared by the title profile. Zero keeps
     // the historical fit-to-display behavior; player settings may override it.
@@ -385,7 +459,23 @@ struct RuntimeConfig {
     // Defaults to true.
     bool                  video_antialiasing = true;
 
+    // antialiasing_mode: post-process anti-aliasing of the composed game image
+    // (OpenGL; GL_POST_AA_* in gpu_gl_renderer.h): "off" (default) | "fxaa" |
+    // "fxaa_hq". Separate from the legacy antialiasing bool above, which the
+    // launcher and settings.toml already persist as the linear present filter.
+    int                   video_antialiasing_mode = 0;
+    // bloom: opt-in glow strength, 0.0 (off, the default) .. 2.0. A plain
+    // [video] key, so [quality.*] presets can set it.
+    float                 video_bloom = 0.0f;
+    // post_shader: a post-effect chain (.pfx, docs/POST_EFFECTS.md), "" = none.
+    // Relative paths resolve against the game root.
+    std::filesystem::path video_post_shader;
+    // supersample: factor on the internal-resolution target (Match display or
+    // a line preset), 1.0..4.0, kept in thousandths (internal_resolution.h).
+    int                   video_supersample_milli = 1000;
+
     // texture_filtering: "nearest" (default, native PSX look) | "bilinear"
+    // | "xbr" (3: edge-directed magnification, OpenGL only)
     // (smooths textures and 2D backgrounds). Stored as 0/1.
     int                   video_texture_filter = 0;
 
@@ -454,17 +544,135 @@ struct RuntimeConfig {
     // pgxp_tolerance: reject a corrected vertex whose sub-pixel offset from
     // the native integer position exceeds this many pixels (the truncation-
     // agreement check already bounds offsets to < 1px; this narrows them
-    // further). Default 0.5 — user-validated on Ape Escape (2026-08-15):
+    // further). Unspecified: off in the PGXP hook flavor, 0.5 in base builds.
+    // An explicit title value wins — user-validated on Ape Escape (2026-08-15):
     // unclamped, sparse hairline background-bleed seams appear where a
     // corrected triangle borders an uncorrected one; at 0.5 the seams are
     // gone and only sub-half-pixel misalignment remains. Negative disables
     // the clamp. Live-tunable over TCP (pgxp verb).
     double                video_pgxp_tolerance = 0.5;
+    bool                  video_pgxp_tolerance_set = false;
+
+    // pgxp_position_fallback: let a vertex with no validated dataflow shadow
+    // take the fraction of the projection last cached at its integer screen
+    // position (the G1.4 exact table). Unspecified: false in the PGXP hook
+    // flavor, true in base builds. The hook flavor tracks full-word copies;
+    // the cache can assign unrelated 3D fractions to CPU-built 2D polygons.
+    // An explicit title value overrides the runtime's automatic default.
+    // Live-tunable over TCP (pgxp verb). docs/ENHANCEMENTS.md G1.11.
+    bool                  video_pgxp_position_fallback = true;
+    bool                  video_pgxp_position_fallback_set = false;
+
+    // pgxp_preserve_projection: shadow the exact projection of each vertex
+    // (from the GTE's unshifted MACs and a true divide) instead of the GTE's
+    // own integer-IR one, which removes the residual wobble of near geometry.
+    // Guest-visible GTE results are unchanged. Truncation agreement becomes a
+    // bounded window (pgxp.h PGXP_PPP_AGREE_*). Default false. Live-tunable
+    // over TCP (pgxp verb). docs/ENHANCEMENTS.md G1.11.
+    bool                  video_pgxp_preserve_projection = false;
+
+    // PGXP renderer features (GL backend; docs/ENHANCEMENTS.md G1.14), all
+    // off by default. pgxp_depth_buffer: per-vertex GTE depth with a LEQUAL
+    // depth test for opaque 3D polygons (2D / unproven polygons never test
+    // or write), cleared per drawing area, after fills and when the average
+    // SZ jumps back by pgxp_depth_threshold (SZ units, default 4096).
+    // pgxp_color_correction: perspective-correct Gouraud colour.
+    // pgxp_seam: expand depth-tested opaque 3D polygons (needs
+    // pgxp_depth_buffer) to close T-junction cracks above 1x ("off",
+    // "fine" = 1 output px, "wide" = half a native px).
+    bool                  video_pgxp_depth_buffer = false;
+    // fmv_chroma_smoothing: on 24-bit (MDEC) presents keep luma and smooth
+    // chroma over 3x3 source pixels (hides 4:2:0 colour blocks). OpenGL only.
+    bool                  video_fmv_chroma_smoothing = false;
+    // texture_lod: "off" (default) or "mipmap" — mip-level emulation for
+    // minified 3D world textures (CLUT pages have no GL mip chain; the
+    // footprint is box-averaged inside the primitive's UV bounds).
+    // anisotropic_filtering: taps along the footprint's major axis (1..16,
+    // default 1); only with texture_lod. OpenGL only.
+    int                   video_texture_lod = 0;
+    int                   video_anisotropic_filtering = 1;
+    // accurate_blending: one 8-bit basis (k*8) for every VRAM write so GL
+    // semi-transparency truncates exactly like the PS1's 5-bit blend.
+    // Default true: PS1 colour/blend correctness. OpenGL only.
+    bool                  video_accurate_blending = true;
+    // dithering: PS1 dithering of Gouraud-shaded and texture-modulated
+    // polygons while the guest sets GP0(E1h) bit 9 (hardware behaviour).
+    // 1 "on" (default; "scaled" is an alias) = pattern on the native VRAM
+    // grid, identical guest VRAM at every scale; 2 "fine" = elective pattern
+    // per internal-resolution pixel; 0 "off" = true colour. OpenGL only.
+    int                   video_dithering = 1;
+    bool                  video_pgxp_color_correction = false;
+    int                   video_pgxp_seam = 0;
+    double                video_pgxp_depth_threshold = 4096.0;
+
+    // pgxp_mod_only: the title ships PGXP through the psx.enhancement.pgxp
+    // mod (typically a default-on override of it), which is then the one
+    // switch. The [video] geometry_correction / perspective_texturing /
+    // pgxp_cpu_mode values -- game.toml's and the player's settings.toml --
+    // are not applied, and the launcher hides its Perspective textures row,
+    // so the player is never shown a second control that does nothing or
+    // keeps half of PGXP on after they switch the mod off. Netplay, which
+    // clears the mod, then runs with PGXP fully off. Default false
+    // (unchanged behaviour). game.toml only. docs/ENHANCEMENTS.md G1.12.
+    bool                  video_pgxp_mod_only = false;
 
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
     // game once visuals are validated.
     bool                  video_offer_vulkan = false;
+
+    // texture_window_batching: OpenGL only. Let textured primitives with
+    // different GP0(E2h) texture windows share one draw (the window rides in
+    // each vertex) instead of ending the batch at every window change. The
+    // image is identical; games that tile textures with per-primitive windows
+    // draw in far fewer batches. Off by default; a game opts in.
+    bool                  video_texture_window_batching = false;
+
+    // render_thread: OpenGL only. Run the GL backend on its own thread: the
+    // emulation thread records each frame's draw work and the render thread
+    // replays and presents it, so GPU driver stalls stop blocking the guest.
+    // Guest-visible results are identical (docs/RENDER_THREAD.md). Off by
+    // default; PSX_RENDER_THREAD=0/1 overrides.
+    bool                  video_render_thread = false;
+
+    // frame_generation: with render_thread, the render thread draws
+    // in-between frames at the display's refresh from the last two game
+    // frames' draw lists when it has time to spare (never by running guest
+    // code). The real frames are unchanged and come first; a breaker turns
+    // generation off for seconds after a late frame. Adds up to one game
+    // frame of latency (docs/FRAME_GENERATION.md). Off by default;
+    // PSX_FRAME_GEN=0/1 overrides.
+    bool                  video_frame_generation = false;
+    // frame_generation_method: how in-between frames are made. 0 "redraw"
+    // (default: the recorded list drawn again), 1 "reprojection" (opt-in per
+    // title: the newer real frame warped; tuned on R4). PSX_FRAME_GEN_METHOD
+    // overrides. docs/FRAME_GENERATION.md.
+    int                   video_frame_generation_method = 0;
+
+    // [timing] guest_cycle_scale (1 = faithful, 1..64) and its gate; title
+    // constants from game.toml only. See config_loader.cpp.
+    int                   guest_cycle_scale = 1;
+    bool                  guest_cycle_scale_gated = false;
+    // [timing] guest_cycle_scale_batch: batch the scaled CPU charge like the
+    // scale-1 path (psx_cyc.h). Same totals and observation points; opt-in.
+    bool                  guest_cycle_scale_batch = false;
+    // guest_cycle_scale_gate: declarative RAM gate, judged at every VBlank;
+    // the scale applies only while every predicate holds.
+    struct GuestCycleScaleGatePred {
+        uint32_t addr  = 0;           // guest main-RAM address (any segment)
+        uint32_t size  = 4;           // 1, 2 or 4 bytes, aligned
+        uint32_t mask  = 0xFFFFFFFFu;
+        uint32_t value = 0;           // open while (word & mask) == value
+    };
+    std::vector<GuestCycleScaleGatePred> guest_cycle_scale_gate;
+
+    // present_thread: with render_thread, composed frames go to offscreen
+    // slots and a present thread (second, shared GL context on the window)
+    // does the copy and the swap, so the window compositor's wait does not
+    // block rendering (docs/RENDER_THREAD.md "Present thread"). Same pixels.
+    // Off by default; PSX_PRESENT_THREAD=0/1 overrides,
+    // PSX_PRESENT_THREAD_SLOTS=2..4 (default 3).
+    bool                  video_present_thread = false;
 
     // low_latency_input: re-sample the pad after the wall-clock pacer (just
     // before present) so the next CPU frame reads near-fresh input instead of
@@ -613,11 +821,35 @@ struct RuntimeConfig {
     bool                  has_multitap_port = false;
     int                   multitap_port     = 1;
 
+    // direct_shortcut / direct_shortcut_button: one host shortcut ("rewind",
+    // "save_state_menu", "fast_forward", "fast_forward_toggle") the launcher
+    // captures as a single controller button, with that SDL GameController
+    // button name (e.g. "y") as its default binding. At run time a
+    // one-button binding acts alone only while the title's mod allows it
+    // (psx_mod_allow_direct_shortcut); otherwise it means Select + button.
+    std::string           direct_shortcut;
+    std::string           direct_shortcut_button;
+
+    // experimental_jogcon_force_feedback: EXPERIMENTAL. Drive a host wheel's
+    // SDL haptics (constant force / centring spring) from a presented
+    // JogCon's motor commands. Opt-in; gamepads are never driven; direction
+    // unverified on hardware (_invert flips it).
+    bool                  experimental_jogcon_force_feedback = false;
+    bool                  experimental_jogcon_force_feedback_invert = false;
+
     // multitap_analog: DualShock-on-tap hack (default true). When true,
     // multitap bulk seats may report 0x73 + stick bytes; when false (faithful),
     // tap seats stay plain digital. Overridable by settings.toml / match_caps.
     bool                  has_multitap_analog = false;
     bool                  multitap_analog     = true;
+
+    // multitap: title default for the offline multitap (players >= 3). false
+    // keeps offline play at two standalone pads for a title whose local game
+    // has no multitap support but whose netplay seats more players (players
+    // still sets the netplay seat ceiling). settings.toml [controller]
+    // multitap / the launcher toggle override it.
+    bool                  has_multitap_default = false;
+    bool                  multitap_default     = true;
 
     // legacy_pad_config: per-game pad-protocol compatibility opt-in. false (default)
     // = the modern DualShock config state machine (proper 0x43 enter/exit, config id
@@ -725,6 +957,37 @@ struct BiosConfig {
     // now REJECTS a [runtime] block rather than silently ignoring it.
 };
 
+struct WidescreenMaskedRejectSite {
+    uint32_t address = 0;
+    uint32_t expected = 0;
+    uint32_t reject_mask = 0;
+};
+
+// [quality.<name>] -- a named graphics preset (docs/QUALITY_PRESETS.md).
+// The table holds [video] keys; the preset's runtime config is the whole
+// game.toml parsed with those keys laid over [video], so every [video] key
+// (and its validation) works in a preset without being listed here.
+// The [video] keys a [quality.*] preset may set (docs/QUALITY_PRESETS.md).
+// Each is fully enforced: a preset in force masks the player's saved value,
+// a one-run override and an unrelated edit keep the disk value, a launcher
+// row or live change to it is a governed edit, and picking a preset applies
+// it. Player-editable (settings.toml form, launcher row): texture_filtering,
+// fmv_filter, antialiasing, dynamic_resolution, dynamic_resolution_min,
+// frame_generation, render_thread, present_thread, geometry_correction,
+// perspective_texturing, frame_interpolation, frame_interpolation_fps.
+// Preset-only (no settings.toml form, no row): supersample, texture_lod,
+// anisotropic_filtering, fmv_chroma_smoothing, bloom, dithering,
+// pgxp_depth_buffer, pgxp_color_correction, pgxp_seam. Any other key in a
+// preset is a load error.
+bool quality_key_supported(const std::string& key);
+bool quality_key_player_editable(const std::string& key);
+
+struct QualityPreset {
+    std::string              name;     // "low" | "medium" | "high" | "ultra"
+    RuntimeConfig            runtime;  // [video] with [quality.<name>] on top
+    std::vector<std::string> keys;     // the [video] keys this preset sets
+};
+
 struct GameConfig {
     std::filesystem::path config_path;
     std::filesystem::path project_root;
@@ -796,6 +1059,29 @@ struct GameConfig {
     // "16:9", "21:9", or "adaptive" (initial 16:9, live-window capped 21:9).
     // Unset keeps netplay at the title's normal mod-cleared aspect.
     std::string           netplay_local_viewport_aspect;
+    // local_viewport_renderer = "native_wide" (default) | "projection".
+    // native_wide renders extra columns beside the local half; it needs the
+    // game to submit geometry outside its own split viewport. "projection"
+    // instead widens the GTE projection into the half (squash around OFX) and
+    // stretches the half on present -- for titles whose per-viewport culling
+    // rejects everything outside the half (THPS2), as their single-player
+    // [widescreen] native_wide = false path does.
+    std::string           netplay_local_viewport_renderer;
+    // Exact LW sites loading the native per-camera width for world frusta.
+    // Projection unsplit widens that cone while retaining the half-size raster.
+    std::vector<uint32_t> netplay_local_viewport_width_sites;
+    // local_viewport_state_addr / _values: optional guest word gating the
+    // local viewport. Split frames crop to this peer's half only while the
+    // word holds one of the values (e.g. a level running); otherwise, as on a
+    // pause menu drawn across both halves, every peer sees the whole frame.
+    uint32_t              netplay_local_viewport_state_addr = 0;
+    std::vector<uint32_t> netplay_local_viewport_state_values;
+    // [netplay] content_negotiation: opt in to host-published mod plans in
+    // online/LAN lobbies, full-plan content agreement before LAN/direct guest
+    // execution, the MOTK6 LAN plan messages and headless injected-pad
+    // routing. Off (default): netplay clears every mod, and the LAN wire
+    // protocol and lobby messages stay unchanged.
+    bool                  netplay_content_negotiation = false;
 
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
@@ -836,6 +1122,16 @@ struct GameConfig {
     // the final ordering-table layer. Repeated glyph/icon rows share an anchor
     // so centred text and edge counters cannot split at thirds boundaries.
     bool                  ws_auto_ui_squash = false;
+    // auto_ui_anchor = "in_place": squash each grouped UI run about its own
+    // centre instead of pinning it to the nearest screen edge/centre third.
+    // For HUD widgets that combine flat quads with GTE-projected parts the
+    // correction cannot move (Spider-Man's compass ring and 3D arrow).
+    bool                  ws_auto_ui_in_place = false;
+    // auto_ui_size = "proportional": beyond 16:9 the auto-UI HUD shrinks by
+    // sqrt((16:9) / aspect) about each widget's anchor, so a wide window
+    // does not show a 4:3-height HUD across a much wider view. "original"
+    // (default) keeps the HUD at the display height's scale.
+    bool                  ws_auto_ui_proportional = false;
 
     // [data_shards] funcs: functions that get the memoized pure-function
     // replay entry/return hooks (psx_datashard_enter/psx_datashard_ret).
@@ -848,6 +1144,8 @@ struct GameConfig {
     // entries that dispatch trusted, statically linked mod callbacks. Empty by
     // default, so projects that do not opt in emit no callback overhead.
     std::vector<uint32_t> mod_function_entry_funcs;
+    // Opt-in pre-instruction callbacks; plugins supply exact-word guards.
+    std::vector<uint32_t> mod_instruction_sites;
 
     // [recompiler] hot_funcs: guest addresses that get __attribute__((hot))
     // on their generated C bodies (profile/host locality; no guest semantics).
@@ -890,10 +1188,14 @@ struct GameConfig {
     //                     rD = a1 + margin (caller-margin classifier variants)
     // All Ghidra-evidenced; empty by default. Changing these requires a regen.
     std::vector<uint32_t> ws_cull_bias_sites;
+    // Lower endpoint of a camera-relative activation/reset interval.
+    std::vector<uint32_t> ws_cull_bias_lower_sites;
     std::vector<uint32_t> ws_cull_range_sites;
     std::vector<uint32_t> ws_cull_a1_sites;
     // Explicit `sltiu rt,sx,W` render rejects for cases where codegen function
-    // splitting separates the paired vertical test from auto_screen_x.
+    // splitting separates the paired vertical test from auto_screen_x. Also
+    // the two forms of a screen X kept in the high half of a register:
+    // `lui rt,W` (the edge as W << 16) and `bltz` on `sx << 16`.
     std::vector<uint32_t> ws_cull_screen_x_sites;
 
     // [widescreen.cull] slti_sites — explicit signed right-edge widen sites
@@ -948,6 +1250,9 @@ struct GameConfig {
     // where maximal overdraw is preferable to range guessing. Each entry is
     // guarded by the complete MIPS word; 4:3 executes the vanilla comparison.
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
+    // Register-register frustum-edge compares whose bound operand scales
+    // with the live reveal ([[widescreen.cull.scale]]).
+    std::vector<WidescreenCullScaleSite> ws_cull_scale_sites;
     // Exact 12-bit angular half-extents used by terrain-cell frusta.
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     // Full-word-guarded model-participation cosine compares widened only in
@@ -1170,7 +1475,40 @@ struct GameConfig {
     //   reveal pixels once before the new stage background is submitted.
     uint32_t ws_bg2d_init_func    = 0;
     uint32_t ws_bg2d_packet_cap       = 1000;
+
+    // [widescreen.cull] bgez_sites -- `bgez SX, keep` sites of a signed
+    // per-vertex left-edge chain (`bgez x0,keep; ...; bltz xN,reject`). Keeps
+    // while SX >= -margin (psx_ws_cull_bgez), the exact partner of bltz_sites:
+    // bltz_sites alone still rejects a primitive whose earlier vertices sit in
+    // the revealed band. Must be REGIMM bgez (main EXE: hard error otherwise).
+    // Empty by default; identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_bgez_sites;
+    // [widescreen.cull] clip_edge_x_load_sites -- lh/lhu/lw loads of a screen-X
+    // clip bound (e.g. a scratchpad clip rectangle compared with slt). While
+    // revealed, a loaded 0 becomes -margin and a loaded clip_edge_width becomes
+    // width+margin; interior bounds (mirrors, split-screen halves) stay
+    // vanilla. Empty by default; identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_clip_edge_x_load_sites;
+    // [widescreen.cull] clip_edge_width -- the screen width a right-edge clip
+    // bound equals. 0 = the first screen_w_imms entry (0x140 by default).
+    uint32_t ws_cull_clip_edge_width = 0;
+    // Full-word-guarded BNE reg,zero rejects of packed-coordinate flags.
+    // While wide, retain only the specified rejection axes; GPU scissoring
+    // clips the expanded horizontal view. Identity at 4:3/menus/FMV.
+    std::vector<WidescreenMaskedRejectSite> ws_cull_masked_reject_sites;
+    // [[draw_distance.clamp]] -- opt-in "keep far geometry" clamps. Empty by
+    // default; inert until a mod switches them on; regen required.
+    std::vector<DrawDistanceClampSite> draw_distance_clamp_sites;
+    // [quality.low/medium/high/ultra] -- graphics presets, lowest first. Empty:
+    // the title has no presets and [video] alone applies (unchanged).
+    std::vector<QualityPreset> quality_presets;
 };
+
+// Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.
+inline uint32_t ws_cull_clip_edge_width(const GameConfig& c) {
+    if (c.ws_cull_clip_edge_width) return c.ws_cull_clip_edge_width;
+    return c.ws_cull_w_imms.empty() ? 0x140u : c.ws_cull_w_imms.front();
+}
 
 // UserSettings — the launcher-written, user-editable override layer.
 //
@@ -1191,7 +1529,17 @@ struct UserSettings {
 
     // [video]
     bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
-    bool has_supersampling  = false; int  supersampling  = 1; // 1..4
+    bool has_supersampling  = false; int  supersampling  = 1; // 1..32 (runtime clamps per backend)
+    // Internal resolution preset (RuntimeConfig::video_internal_resolution
+    // encoding). Written as a stable id ("4k") or a line count; when present
+    // it wins over supersampling, which is still written (capped at 4) so an
+    // older runtime reading the same file degrades gracefully.
+    bool has_internal_resolution = false; int internal_resolution = 0;
+    // Dynamic resolution (RuntimeConfig::video_dynamic_resolution, _min).
+    // Written only once the player changed them, so a title's default can
+    // still move in a later release.
+    bool has_dynamic_resolution = false; bool dynamic_resolution = false;
+    bool has_dynamic_resolution_min = false; int dynamic_resolution_min = 720;
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960
@@ -1209,6 +1557,9 @@ struct UserSettings {
     // 0..1; the launcher ABI carries it as an integer percent.
     bool has_scanlines         = false; bool   scanlines         = false;
     bool has_scanline_strength = false; double scanline_strength = 0.5;
+    // [video] fov_scale: GTE projection-distance multiplier (1.0 = faithful).
+    // Stored raw (int or float TOML); the runtime range-checks and warns.
+    bool has_fov_scale = false; double fov_scale = 1.0;
     bool has_auto_skip_fmv  = false; bool auto_skip_fmv  = false; // skip FMVs
     // [video] turbo_loads: DEPRECATED AND IGNORED — the legacy home of the
     // generic Turbo loads switch, back when the launcher drew a row for it.
@@ -1235,9 +1586,24 @@ struct UserSettings {
     // on a vsync-light box). vsync: 1=on (tear-free), 0=immediate (lowest
     // display latency, may tear), -1=adaptive.
     bool has_low_latency_input = false; bool low_latency_input = true;
+    // Rendering pipeline (RuntimeConfig::video_render_thread, _present_thread,
+    // _frame_generation; docs/RENDER_THREAD.md). Written only once the player
+    // changed them, so game.toml stays the default. Applied at next launch;
+    // PSX_RENDER_THREAD / PSX_PRESENT_THREAD / PSX_FRAME_GEN override one run.
+    bool has_render_thread    = false; bool render_thread    = false;
+    bool has_present_thread   = false; bool present_thread   = false;
+    bool has_frame_generation = false; bool frame_generation = false;
     bool has_vsync             = false; int  vsync             = 1;
     bool has_frame_interpolation = false; bool frame_interpolation = false;
     bool has_frame_interpolation_fps = false; int frame_interpolation_fps = 0;
+    // [video] quality_* (docs/QUALITY_PRESETS.md): the graphics preset in
+    // force ("low".."ultra", or "custom" once the player changed a setting it
+    // governs), the preset a "custom" started from, the hardware fingerprint
+    // the last detection ran on, and what that detection picked.
+    bool has_quality_preset = false;   std::string quality_preset;
+    bool has_quality_base = false;     std::string quality_base;
+    bool has_quality_hardware = false; std::string quality_hardware;
+    bool has_quality_detected = false; std::string quality_detected;
     // [launcher] — when true, boot straight into the game and skip the GUI
     // launcher window (mirrors snesrecomp's SkipLauncher). Overridable per-run:
     // `--launcher` forces the GUI back on; `PSX_NO_LAUNCHER=1` forces it off.
@@ -1321,6 +1687,10 @@ struct UserSettings {
     // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
     // Default on when unset; game.toml / global prefs may override.
     bool has_multitap_analog = false; bool multitap_analog = true;
+    // EXPERIMENTAL JogCon wheel force feedback, the player's choice
+    // (settings.toml [controller] jogcon_force_feedback). Unset = the title's
+    // game.toml experimental_jogcon_force_feedback default (off).
+    bool has_jogcon_force_feedback = false; bool jogcon_force_feedback = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
@@ -1372,6 +1742,11 @@ UserSettings load_user_settings(const std::filesystem::path& path);
 
 // Write settings.toml deterministically. Returns false on I/O failure.
 bool save_user_settings(const std::filesystem::path& path, const UserSettings& s);
+
+// `p` relative to `folder` when it lies inside it; otherwise `p` unchanged.
+// Keeps portable game folders portable once the launcher saves a path.
+std::filesystem::path relative_to_folder(const std::filesystem::path& p,
+                                         const std::filesystem::path& folder);
 
 // Surgical upsert of `key = true|false` under [controller] in game.toml.
 // Preserves comments and unrelated keys. Creates [controller] if missing.

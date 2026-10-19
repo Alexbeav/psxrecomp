@@ -25,11 +25,18 @@ typedef enum {
 
 void      gr_set_backend(GrBackend backend);  /* call before gr_init() */
 GrBackend gr_backend(void);                   /* effective backend after init */
+void      gr_refresh_backend(void);           /* re-fetch the GL table (render thread) */
 
 /* Lifecycle / global state */
 void gr_init(uint16_t *vram);
 void gr_set_scale(int scale);
 int  gr_scale(void);
+
+/* Compile-time ceiling for the OpenGL backend's internal-resolution scale. The
+ * effective scale is decided at GL context init from the driver's size limits
+ * and a memory budget (gl_scale_limits.h), so this is only an upper bound.
+ * Software and Vulkan stay at SW_MAX_INTERNAL_SCALE (4). */
+#define GL_MAX_INTERNAL_SCALE 32
 void gr_set_texture_filter(int bilinear);
 int  gr_texture_filter(void);
 
@@ -54,6 +61,14 @@ void gr_set_precise_triangle(int enabled,
  * perspective_texturing). q[i] is the normalized 1/z homogeneous weight at
  * vertex i. enabled == 0 restores the PS1's affine UV interpolation. */
 void gr_set_perspective_triangle(int enabled, float q0, float q1, float q2);
+/* GP0(E1h) bit 9 (dither enable). Only a backend with [video] dithering
+ * implements it; the default renderers stay true colour. */
+void gr_set_dither(int enabled);
+/* PGXP depth for the NEXT triangle (docs/ENHANCEMENTS.md G1.14): the GTE SZ
+ * of each vertex (1..65535), taken from validated dataflow shadows. Only a
+ * backend with a PGXP depth buffer / perspective-correct colour uses it;
+ * enabled == 0 (every 2D or unproven polygon) keeps the faithful path. */
+void gr_set_depth_triangle(int enabled, float z0, float z1, float z2);
 
 /* Primitives */
 void gr_fill_rect(int x, int y, int w, int h, uint16_t color);
@@ -96,6 +111,15 @@ int gr_render_display_hires(uint32_t *out_pixels, int out_pitch,
                             int disp_x, int disp_y, int disp_w, int disp_h);
 
 /* VRAM transfers */
+/* A0 header invalidation precedes payload writes; an interrupted transfer
+ * cannot leave a prior immutable texture identity resident. */
+void gr_vram_upload_begin(int x, int y, int w, int h);
+/* The A0 payload is complete: hand the staged words to the renderer and end
+ * the open upload. */
+void gr_vram_upload_commit(int x, int y, int w, int h, const uint16_t *data);
+/* gpu.c's GP0 state says whether an A0 payload is still streaming into its
+ * array: GP1(01h) aborts one, a savestate load can restore one. */
+void gr_vram_upload_set_open(int open);
 void gr_vram_write(int x, int y, uint16_t pixel);
 uint16_t gr_vram_read(int x, int y);
 void gr_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data);
@@ -111,11 +135,20 @@ void gr_set_draw_offset(int x, int y);
  * the canonical present path. */
 int  gr_wide_supported(void);
 void gr_wide_configure(int wide_w, int offset);
+/* Presentation-only origin and padding, independent of the symmetric budget.
+ * enabled also forbids reusing the canonical center: HUD and world may use
+ * different origins. Backends must flush queued draws before changing this. */
+void gr_wide_set_view(int enabled, int shift, int pad_left, int pad_right);
 void gr_wide_set_target(int base_x);
 void gr_wide_disable_target(void);
 void gr_wide_clear(int base_x, int y, int h, uint16_t color);
 /* sides: bit 0 = left synthetic margin, bit 1 = right. */
 void gr_wide_clear_margins(int base_x, int y, int h, uint16_t color, int sides);
+/* Draws a 15-bit framebuffer copy into the current wide surface only, sampling
+ * the wide surface of src_base (VRAM coordinates; x may lie in a band). semi
+ * is the PS1 mode 0..3 or -1 for opaque. */
+void gr_wide_feedback_rect(int src_base, int src_x, int src_y, int dst_x, int dst_y,
+                           int w, int h, int r, int g, int b, int raw, int semi);
 int  gr_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh, int base_x);
 int  gr_render_wide_display(uint32_t *out, int pitch, int base_x,
                             int disp_y, int disp_h);
@@ -142,6 +175,7 @@ typedef struct GpuRenderBackend {
                                  int32_t x1, int32_t y1,
                                  int32_t x2, int32_t y2);
     void (*set_perspective_triangle)(int enabled, float q0, float q1, float q2);
+    void (*set_dither)(int enabled);   /* optional: GP0(E1h) bit 9 */
     void (*fill_rect)(int x, int y, int w, int h, uint16_t color);
     void (*copy_rect)(int src_x, int src_y, int dst_x, int dst_y, int w, int h);
     void (*draw_flat_triangle)(int x0, int y0, int x1, int y1, int x2, int y2,
@@ -188,6 +222,7 @@ typedef struct GpuRenderBackend {
      * facade then reports gr_wide_supported() == 0 and the caller keeps the
      * canonical present). */
     void (*wide_configure)(int wide_w, int offset);
+    void (*wide_set_view)(int enabled, int shift, int pad_left, int pad_right);
     void (*wide_set_target)(int base_x);
     void (*wide_disable_target)(void);
     void (*wide_clear)(int base_x, int y, int h, uint16_t color);
@@ -199,7 +234,24 @@ typedef struct GpuRenderBackend {
      * pixel count, writes width/height to ow/oh. NULL if unsupported. */
     int  (*wide_dump_full)(uint32_t *out, int cap_pixels, int *ow, int *oh,
                            int base_x);
+    /* Appended: PGXP per-vertex depth (gr_set_depth_triangle). NULL = none. */
+    void (*set_depth_triangle)(int enabled, float z0, float z1, float z2);
+    /* HD texture-pack residency (gpu_hd_textures.h) in command order with the
+     * backend's own VRAM: op GR_HD_NOTE_*; sx/sy are the copy source for
+     * GR_HD_NOTE_BEGIN_COPY. NULL = apply it immediately. */
+    void (*hd_texture_note)(int op, int x, int y, int w, int h, int sx, int sy);
+    /* A GP0(A0) payload is (1) or is no longer (0) streaming into gpu.c's
+     * array, whatever the HD state. NULL = the backend does not care. */
+    void (*vram_upload_open)(int open);
+    /* Appended: gr_wide_feedback_rect. NULL = the bands keep no feedback. */
+    void (*wide_feedback_rect)(int src_base, int src_x, int src_y, int dst_x,
+                               int dst_y, int w, int h, int r, int g, int b,
+                               int raw, int semi);
 } GpuRenderBackend;
+
+enum { GR_HD_NOTE_INVALIDATE = 0, GR_HD_NOTE_TRACK_UPLOAD = 1,
+       GR_HD_NOTE_BEGIN_UPLOAD = 2 /* GP0(A0) header: invalidate; payload streams */,
+       GR_HD_NOTE_BEGIN_COPY = 3, GR_HD_NOTE_END_COPY = 4 };
 
 #ifdef __cplusplus
 }

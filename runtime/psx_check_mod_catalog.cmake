@@ -28,6 +28,7 @@
 # -----
 #   cmake -DPSX_MODS_DIR=<build>/mods
 #         -DPSX_CATALOG_MANIFEST=<file>            # ids this target must stage
+#        [-DPSX_CATALOG_EXCLUDED=<file>]           # builtins it must NOT stage
 #        [-DPSX_CATALOG_ALT_MANIFESTS=<f>|<f>]     # sibling targets' id sets
 #        [-DPSX_REQUIRE_STAGED=1]                  # mods/ MUST already exist
 #        [-DPSX_LABEL=psx-runtime]
@@ -280,6 +281,35 @@ if(_manifestless)
         "    ${_pretty}\n  under ${_bundled}\n\n"
         "A package directory without a manifest is not loadable; the launcher "
         "will silently ignore it.")
+endif()
+
+# ---- 5. builtins the target EXCLUDES must be absent ------------------------
+#
+# EXCLUDE_BUILTIN_MODS means "this title does not ship that package". The
+# staging step never copies an excluded id, so finding one here means some
+# other mechanism put it back (a hand-written copy, a stale merge) and the
+# release would ship a package the title declined. A sibling target sharing
+# this output directory may legitimately stage the id, so ids that belong to a
+# sibling's declared set are left to that sibling's own guard.
+if(DEFINED PSX_CATALOG_EXCLUDED AND NOT PSX_CATALOG_EXCLUDED STREQUAL "")
+    _psx_read_manifest("${PSX_CATALOG_EXCLUDED}" _excluded)
+    set(_resurrected "")
+    foreach(_id IN LISTS _excluded)
+        if("${_id}" IN_LIST _staged AND NOT "${_id}" IN_LIST _all_known)
+            list(APPEND _resurrected "${_id}")
+        endif()
+    endforeach()
+    if(_resurrected)
+        list(JOIN _resurrected "\n    " _pretty)
+        message(FATAL_ERROR
+            "[${PSX_LABEL}] package(s) this target EXCLUDES "
+            "(EXCLUDE_BUILTIN_MODS) are present in the staged catalog:\n"
+            "    ${_pretty}\n  under ${_bundled}\n\n"
+            "The framework's staging never copies an excluded builtin, so "
+            "something else put it there -- most likely a hand-written copy "
+            "into <exe-dir>/mods. A release built from this tree would ship a "
+            "package the title declined. See docs/MOD_PACKAGES.md.")
+    endif()
 endif()
 
 # Extra ids are reported but not fatal: mods/bundled is wiped and re-staged on
