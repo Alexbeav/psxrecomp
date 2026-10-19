@@ -15,7 +15,7 @@ Games can ship a **setup host**: `psx-runtime` linked **without** game C and
 `PSX_SETUP_WIZARD=ON` / `ENABLE_SETUP_WIZARD` so first-run Generate & rebuild
 actually appears. CI never
 needs BIOS dumps or private assets. First-run Generate emits OpenBIOS (from
-bundled `openbios.bin`) and optional SCPH1001 (player dump), then game C, then
+bundled `openbios.bin`) and an optional compatible retail BIOS backend, then game C, then
 rebuild links everything into `build-release/` (or the title’s
 `build_dir_name`).
 
@@ -33,28 +33,31 @@ product binary (`psxrecomp_codegen_host_forward_if_built`). Opt out with
 | `psxrecomp_cli.py` | Generate / rebuild / verify-disc (in the submodule) |
 | `tools/package_setup_host.sh` | Universal setup-host zip packager |
 | `tools/ci/*.sh` | normalize version, clear generated, record pins, build emitters |
+| `tools/ci/audit_setup_package_platform_copy.py` | Verify final setup copy and controls match the archive platform before upload |
 | `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
 | `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
 | Project `toolchain/` | Stamp file `.psxrecomp-bin` pointing at the shared pack `bin/` |
-| Shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` (Windows) or `~/.local/share/retcomm/toolchains/cmake-clang-v1/` — same tree RetComM uses |
+| Shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` on Windows — the same tree RetComM uses |
 | `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
 | Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 
-RetComM harvests emitters into the SDK cache and **downloads** `cmake-clang-v1`
-(no separate tools zip; game zips stay lean). The setup host and CLI install the
-portable pack into the **shared RetComM cache**
-(`%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/<tag>/`, or XDG equivalent)
-with host-native `curl` + `tar`/`unzip` when possible — so Microsoft Store
-Python AppData redirection cannot hide cmake. Offline zips unpack to the same
-path. A legacy `%LOCALAPPDATA%/psxrecomp/…` cache is migrated automatically.
-Override with `RETCOMM_TOOLCHAIN_DIR`. Require a floor version via
+On Windows, RetComM harvests emitters into the SDK cache and downloads
+`cmake-clang-v1` (no separate tools zip; game zips stay lean). The setup host
+and CLI install the portable pack into the shared RetComM cache at
+`%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/<tag>/`. A legacy
+`%LOCALAPPDATA%/psxrecomp/…` cache is migrated automatically. Override with
+`RETCOMM_TOOLCHAIN_DIR`. Require a floor version via
 `RETCOMM_TOOLCHAIN_MIN_VERSION` / `ensure-toolchain --min-version` (optional;
 default is none — wizard/`ensure-toolchain` fetch GitHub `/releases/latest`).
-Generate/rebuild still need Python 3
-for `psxrecomp_cli.py`.
+
+On Linux and macOS, the setup host uses native CMake, Ninja, Python 3, and C/C++
+compilers from `PATH`. It does not download the Windows portable pack. Install
+the native tools before you start the wizard. The setup host ignores cached
+Windows pack paths on these platforms. The CLI also uses the native tools and
+does not resolve or download a cached Windows pack.
 
 ## Commands
 
@@ -64,24 +67,31 @@ python psxrecomp/psxrecomp_cli.py verify-disc \
 
 python psxrecomp/psxrecomp_cli.py generate \
   --config game.toml --project-root . --disc path/to/dump.iso \
-  [--bios path/to/SCPH1001.BIN] [--force-bios] \
+  [--bios path/to/compatible-retail-bios.bin] [--force-bios] \
   [--skip-hash-check] [--force-prepare] [--json-progress]
-
-python psxrecomp/psxrecomp_cli.py ensure-toolchain \
-  [--project-root .] [--from-zip cmake-clang-v1-linux-x64.zip] [--no-download]
 
 python psxrecomp/psxrecomp_cli.py rebuild \
   --config game.toml --project-root . \
   --build-dir build-release --target psx-runtime \
   --exe-basename Bomberman_Party_Edition_Recompiled \
-  [--disc path/to/game.cue] [--toolchain-zip path/to/pack.zip] \
-  [--no-toolchain-download] [--no-pgo] [--force-pgo] [--json-progress]
+  [--disc path/to/game.cue] [--no-pgo] [--force-pgo] [--json-progress]
 
 python psxrecomp/psxrecomp_cli.py pgo-train \
   --config game.toml --build-dir build-release \
   --exe-basename Bomberman_Party_Edition_Recompiled \
   [--disc …] [--train-secs 120] [--train-runs 3] [--json-progress]
 ```
+
+On Windows, you can prepare the portable pack before a rebuild:
+
+```bash
+python psxrecomp/psxrecomp_cli.py ensure-toolchain \
+  [--project-root .] [--from-zip cmake-clang-v1-windows-x64.zip] [--no-download]
+```
+
+You can also add `--toolchain-zip path/to/pack.zip` or
+`--no-toolchain-download` to the Windows `rebuild` command. Linux and macOS
+ignore portable packs and use native build tools from `PATH`.
 
 `generate` normalizes the dump via `tools/prepare_disc.py` when needed, then
 runs `psxrecomp-game --config game.toml` into `[recompiler] out_dir`.
@@ -169,8 +179,10 @@ that leave cwd as `$HOME` still find a setup zip next to the binary.
 
 ### Toolchain update prompt (wizard)
 
-The first-run / setup wizard compares the local cmake-clang pack version against
-GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now**.
+On Windows, the first-run setup wizard compares the local cmake-clang pack
+version against GitHub `/releases/latest`. When a newer pack exists, it prompts
+**Update** or **Skip for now**. Linux and macOS use native tools and do not show
+this update prompt.
 
 - `ensure_toolchain_with_progress(..., download == 2)` forces a re-download from
   latest (update path); `download == 1` fetches only if missing; `0` is cache-only.
@@ -178,8 +190,11 @@ GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now*
 
 ### Broken toolchain heal (wizard open)
 
-`toolchain_is_ready` does not stop at `cmake --version`. It also smoke-tests
+On Windows, `toolchain_is_ready` does not stop at `cmake --version`. It also smoke-tests
 `clang` + `ld.lld` (tiny link). If that fails (missing `libicuuc.so.*`, bad
 `latest/` pointer, etc.), the host removes the broken `latest/` cache entry,
 clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a repair note
 so the player can redownload — without deleting the cache by hand.
+
+On Linux and macOS, readiness checks native CMake, Ninja, Python, and both C and
+C++ compilers. If a tool is missing, install it and restart setup.

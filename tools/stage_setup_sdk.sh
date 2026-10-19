@@ -232,8 +232,8 @@ if [[ -n "${TOOLCHAIN_DIR}" && -d "${TOOLCHAIN_DIR}" ]]; then
   fi
   echo "bundled toolchain from ${TOOLCHAIN_DIR}"
 elif [[ "${ALLOW_NO_TOOLCHAIN}" -eq 1 ]]; then
-  echo "note: no embedded toolchain/ — RetComM/wizard will download cmake-clang-v1" \
-       "(or accept an offline zip / system cmake)" >&2
+  echo "note: no embedded toolchain/ — Windows can download cmake-clang-v1;" \
+       "Linux/macOS use native build tools from PATH" >&2
 else
   echo "error: toolchain dir required (pass --toolchain-dir or set PSXRECOMP_TOOLCHAIN_DIR)" >&2
   exit 1

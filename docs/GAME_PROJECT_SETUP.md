@@ -47,7 +47,7 @@ prompt for that path.
 sh tools/new_project_layout/setup_project.sh \
   --disc /path/to/legal/game.cue \
   --dir ~/src \
-  --bios /path/to/SCPH1001.BIN   # optional; only used if you answer Y to Generate
+  --bios /path/to/compatible-retail-bios.bin  # optional; used by Generate
 ```
 
 ```powershell
@@ -63,7 +63,7 @@ Non-interactive / CI (`--yes` / `-Yes` or `PSXRECOMP_SETUP_YES=1`): requires
 | ------------------ | ------------------------------------------------------------- |
 | `--disc` / `-Disc` | **Required.** Stage cue+bins, probe identity / seeds / TOC fp |
 | `--dir` / `-Dir`   | Parent directory for the new repo (default `.`)               |
-| `--bios` / `-Bios` | Optional `SCPH1001.BIN` when Generate runs                    |
+| `--bios` / `-Bios` | Optional retail BIOS selected by `[recompiler].bios_config`   |
 | `--boot-exe`       | Optional until probe overwrites from `SYSTEM.CNF`             |
 
 
@@ -364,18 +364,39 @@ CI ships a zip **without** `generated/` game C, retail BIOS dumps, or an
 embedded `toolchain/`. The zip includes:
 
 - Setup host exe (`recomp-ui` + generate/rebuild wizard)
-- Your game sources (`game.toml`, seeds, CMake, host glue, …)
+- Your game sources (`project-manifest.toml`, `game.toml`, seeds, CMake, host glue, …)
 - `psxrecomp/` (runtime + CLI + OpenBIOS profiles + emitters)
 - `recomp-ui/` sources (needed to rebuild)
 - On Windows: MinGW runtime DLLs beside the host and emitters
 
+The packager excludes developer-only helpers and dependency test data. These
+files are not inputs for the setup SDK.
+
 Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
 run **Generate once** (wizard or RetComM Build & Install) with a legal disc.
-RetComM / the wizard download `cmake-clang-v1` from
+On Windows, RetComM or the wizard downloads `cmake-clang-v1` from
 [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
 (or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
+
+On Linux and macOS, the wizard uses native CMake, Ninja, Python 3, and C/C++
+compilers from `PATH`. Install these tools before you start setup. The wizard
+does not download the Windows portable pack on these platforms. It also ignores
+cached Windows pack paths. The rebuild CLI follows the same native-tool rule.
+The generated `README-SETUP.txt` lists these native requirements for Linux and
+macOS. It lists the portable download and offline zip only for Windows.
+
+The setup packager removes owned-input and player-state files, including files
+with backup suffixes. Audit the final ZIP independently before publication.
+The packager uses CMake to create the ZIP when the `zip` command is unavailable.
+
+Pass `--bios-hint` when a title has a non-default BIOS contract. For example,
+a PAL title that disables OpenBIOS can name its required legal retail BIOS.
+The value appears in `README-SETUP.txt`; the BIOS profile still owns validation.
+If `game.toml` sets `openbios = false`, pass `--omit-openbios`. This option
+removes the unused OpenBIOS image, profile, and notice from the final package.
+The packager repeats the BIOS payload gate after it stages the SDK.
 
 ### Player updates (after first Generate)
 
@@ -553,6 +574,7 @@ Use this before tagging a setup-host release that matches other titles
 
 ### Publish
 
+- [ ] Run `audit_setup_package_platform_copy.py` on every finished zip before upload
 - [ ] Tag `vX.Y.Z`; GitHub Release attaches all four platform zips
 - [ ] Release notes say the zip is a setup host (no disc / no retail BIOS /
   ```

@@ -516,6 +516,15 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        foreach(_t IN ITEMS
+                bundled_bios_stage_guard
+                cli_retail_bios_profile
+                setup_package_bios_hint
+                setup_package_payload_filter)
+            add_test(NAME ${_t}_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_t}.py)
+        endforeach()
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
@@ -546,6 +555,21 @@ if(BUILD_TESTING)
         add_test(NAME gl_depth24_upload_order_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_depth24_upload_order.py)
+        add_test(NAME overlay_loader_c11_source_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_loader_c11_source.py)
+        add_test(NAME fntrace_linkage_source_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_linkage_source.py)
+        add_test(NAME codegen_host_posix_toolchain_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_posix_toolchain.py)
+        add_test(NAME setup_package_platform_copy_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_package_platform_copy.py)
+        add_test(NAME setup_package_archive_platform_copy_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_package_archive_platform_copy.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,

@@ -3,8 +3,8 @@
 #
 # Stages the host exe, title sources, filtered psxrecomp/ + recomp-ui/, then
 # finishes with stage_setup_sdk.sh (emitters, OpenBIOS, MinGW DLLs).
-# Portable cmake/clang is NOT embedded by default — RetComM / the setup wizard
-# download cmake-clang-v1 from retcomm-toolchains (or accept an offline zip).
+# Build tools are NOT embedded by default. Windows can download cmake-clang-v1
+# or use an offline zip. Linux and macOS use native tools from PATH.
 #
 # Usage (from game repo root):
 #   psxrecomp/tools/package_setup_host.sh \
@@ -17,6 +17,8 @@
 #     [--project-file REL]... [--project-dir REL]... \
 #     [--runtime-dir NAME]... [--runtime-dir-optional NAME]... \
 #     [--disc-hint "your legally owned disc"] \
+#     [--bios-hint "an optional retail SCPH-1001 BIOS; otherwise OpenBIOS"] \
+#     [--omit-openbios]     # retail-BIOS-only titles; game.toml openbios=false
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
 #
@@ -48,12 +50,14 @@ DISPLAY_NAME=""
 RECOMPILER_BUILD="build-recompiler"
 VERSION_ENV="RELEASE_VERSION"
 DISC_HINT="your legally owned game disc"
+BIOS_HINT="an optional retail SCPH-1001 BIOS; otherwise OpenBIOS is regenerated locally"
 PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
 RUNTIME_DIRS_OPTIONAL=()
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
+OMIT_OPENBIOS=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
   EMBED_TOOLCHAIN=1
 fi
@@ -74,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --recompiler-build) RECOMPILER_BUILD="${2:?}"; shift 2 ;;
     --version-env) VERSION_ENV="${2:?}"; shift 2 ;;
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
+    --bios-hint) BIOS_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
     --runtime-dir) RUNTIME_DIRS+=("${2:?}"); shift 2 ;;
@@ -82,6 +87,7 @@ while [[ $# -gt 0 ]]; do
     --root) ROOT="${2:?}"; shift 2 ;;
     --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
     --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
+    --omit-openbios) OMIT_OPENBIOS=1; shift ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage 2
@@ -333,10 +339,58 @@ copy_tree_filtered "${ROOT}/psxrecomp" "${STAGE}/psxrecomp" \
 copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude '.git' \
   --exclude 'build' \
+  --exclude 'test_data' \
   --exclude '__pycache__'
+
+# These one-off overlay extraction helpers and dependency test fixtures are
+# development inputs, not setup SDK inputs. A public source package must not
+# include them.
+remove_non_sdk_helpers() {
+  rm -f \
+    "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba1_extract.py" \
+    "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba2_extract.py"
+  rm -rf "${STAGE}/recomp-ui/test_data"
+}
+
+remove_non_sdk_helpers
+
+# Never ship local player state or owned inputs copied from an ignored framework
+# path. The source tree can contain these files even when Git reports it clean.
+find "${STAGE}" -type f \( \
+  -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
+  -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
+  -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
+  -iname '*.mcd*' -o -iname '*.mcr*' \
+\) -delete
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+    \( -iname '*.bin*' -o -iname '*.rom*' \) \
+    ! -iname 'openbios.bin' -delete
+fi
 
 # Never ship game generated C or common disc working trees.
 rm -rf "${STAGE}/generated" "${STAGE}/bpe" "${STAGE}/motk" "${STAGE}/disc"
+
+# Fail closed if a future copy route bypasses the scrub above.
+FORBIDDEN_PAYLOAD="$(find "${STAGE}" -type f \( \
+  -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
+  -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
+  -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
+  -iname '*.mcd*' -o -iname '*.mcr*' \
+\) -print -quit)"
+if [[ -n "${FORBIDDEN_PAYLOAD}" ]]; then
+  echo "error: forbidden owned-input or player-state payload: ${FORBIDDEN_PAYLOAD}" >&2
+  exit 1
+fi
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  FORBIDDEN_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+    \( -iname '*.bin*' -o -iname '*.rom*' \) \
+    ! -iname 'openbios.bin' -print -quit)"
+  if [[ -n "${FORBIDDEN_BIOS}" ]]; then
+    echo "error: forbidden retail BIOS payload: ${FORBIDDEN_BIOS}" >&2
+    exit 1
+  fi
+fi
 
 STAGE_SDK="${SCRIPT_DIR}/stage_setup_sdk.sh"
 if [[ ! -f "${STAGE_SDK}" ]]; then
@@ -366,19 +420,51 @@ fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
 
+remove_non_sdk_helpers
+
+# A retail-BIOS-only title does not use OpenBIOS. Remove its redistributable
+# image, profile, and notice when the title package selects that boundary.
+if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+  rm -f \
+    "${STAGE}/psxrecomp/bios/openbios.bin" \
+    "${STAGE}/psxrecomp/bios/OpenBIOS.toml" \
+    "${STAGE}/psxrecomp/bios/OpenBIOS.LICENSE"
+fi
+
+# stage_setup_sdk.sh runs after the first scrub. Repeat the BIOS payload gate
+# against the complete stage so a later SDK change cannot restore a forbidden
+# image.
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+    FORBIDDEN_FINAL_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) -print -quit)"
+  else
+    FORBIDDEN_FINAL_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) \
+      ! -iname 'openbios.bin' -print -quit)"
+  fi
+  if [[ -n "${FORBIDDEN_FINAL_BIOS}" ]]; then
+    echo "error: forbidden final BIOS payload: ${FORBIDDEN_FINAL_BIOS}" >&2
+    exit 1
+  fi
+fi
+
 cat >"${STAGE}/README-SETUP.txt" <<EOF
 ${DISPLAY_NAME} ${VERSION} — setup package
 Platform: ${ARTIFACT}
 
 One zip for first install and updates. Does NOT include disc images, retail
-BIOS dumps, pre-generated game C, or a portable cmake/clang pack. Emitters
+BIOS dumps, pre-generated game C, or a bundled build-tool pack. Emitters
 (psxrecomp-game / psxrecomp-bios) and the CLI are inside psxrecomp/.
+EOF
 
+case "${ARTIFACT}" in
+  windows-*)
+    cat >>"${STAGE}/README-SETUP.txt" <<EOF
 Standalone:
 1. Install Python 3.
 2. Run ${EXE_BASENAME}.
-3. Provide ${DISC_HINT} (and optional retail SCPH-1001 BIOS; otherwise
-   OpenBIOS is regenerated locally).
+3. Provide ${DISC_HINT} and ${BIOS_HINT}.
 4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
    cmake-clang-v1 from TechnicallyComputers/retcomm-toolchains (or you can
    pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
@@ -388,6 +474,28 @@ RetComM uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
 EOF
+    ;;
+  linux-*|macos-*)
+    cat >>"${STAGE}/README-SETUP.txt" <<EOF
+Standalone:
+1. Install CMake, Ninja, Python 3, and a C/C++ compiler with your system
+   package manager.
+2. Make sure cmake, ninja, python3, and either clang/clang++ or gcc/g++ are
+   available on PATH.
+3. Run ${EXE_BASENAME}.
+4. Provide ${DISC_HINT} and ${BIOS_HINT}.
+5. Follow the Generate & rebuild wizard. The host checks the native build
+   tools before it continues.
+
+RetComM uses this same zip. It uses the same native build tools and preserves
+saves/user config across updates.
+EOF
+    ;;
+  *)
+    echo "error: unsupported setup README platform: ${ARTIFACT}" >&2
+    exit 1
+    ;;
+esac
 
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 
@@ -395,8 +503,10 @@ find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {
   cd "${STAGE}"
   if command -v zip >/dev/null 2>&1; then
     zip -r -q "${DIST}/${ZIP_NAME}" .
+  elif command -v cmake >/dev/null 2>&1; then
+    cmake -E tar cf "${DIST}/${ZIP_NAME}" --format=zip .
   else
-    echo "error: zip not found" >&2
+    echo "error: zip and cmake are not available" >&2
     exit 1
   fi
 )

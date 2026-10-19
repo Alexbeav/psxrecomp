@@ -1275,7 +1275,10 @@ function(psxrecomp_add_runtime_target target)
     # and its required MIT notice beside every native executable. Release
     # packagers copy this directory as a unit.
     if(NOT PSXRT_ORACLE)
-        list(FIND PSXRECOMP_BIOS_STEMS "OpenBIOS" _psxrt_openbios_index)
+        # Stage OpenBIOS only when this target links its backend. A retail-only
+        # package can omit the image and generate only its selected retail
+        # backend from the player's BIOS dump.
+        list(FIND _psxrt_bios_linked "OpenBIOS" _psxrt_openbios_index)
         if(NOT _psxrt_openbios_index EQUAL -1)
             if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
                 message(FATAL_ERROR

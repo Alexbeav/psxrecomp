@@ -6,10 +6,10 @@ allowed to redistribute — so a player can be handed a build and a disc image a
 just play. A player who prefers their own dumped retail BIOS can use that
 instead.
 
-Both recompiled BIOS backends are linked into every normal build. The OpenBIOS
-image itself and its MIT notice are staged in `bios/` beside the executable;
-the retail image is never shipped and comes from the player. Which backend runs
-is decided when the game launches, not when it is built.
+A normal build links each generated BIOS backend that is present. If it links
+OpenBIOS, CMake stages the OpenBIOS image and its MIT notice beside the
+executable. A retail-only build can omit OpenBIOS. The retail image always
+comes from the player.
 
 ## The rule
 
@@ -184,9 +184,9 @@ with the upstream source pin and build recipe in `bios/OpenBIOS.toml` and
 attribution in `THIRD_PARTY_ATTRIBUTION.md`. Builds that ship it credit the
 PCSX-Redux authors in the launcher, whether or not the licence compels it.
 
-Native runtime builds automatically stage both `bios/openbios.bin` and
-`bios/OpenBIOS.LICENSE`. Release packaging must copy that directory as a unit;
-shipping the image without its notice violates the distribution contract.
+Native runtime builds stage `bios/openbios.bin` and its license when they link
+the OpenBIOS backend. If a package includes the image, it must include the
+license. A retail-only package can omit both files.
 
 Retail BIOS images are **not** redistributable and are never shipped. A player
 using one supplies their own dump.

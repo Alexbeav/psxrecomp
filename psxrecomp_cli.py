@@ -42,7 +42,27 @@ EXIT_VERIFY = 3
 
 def resolve_embedded_toolchain_bin(project_root: Path) -> Optional[Path]:
     """Return a usable toolchain bin/ (project, env, or shared cache)."""
+    if sys.platform != "win32":
+        return None
     return resolve_toolchain_bin(project_root)
+
+
+def _native_toolchain_ready(log=None) -> bool:
+    """Return true when Unix has the build tools required by setup."""
+    groups = (
+        ("CMake", ("cmake",)),
+        ("Ninja", ("ninja",)),
+        ("C compiler", ("cc", "gcc", "clang")),
+        ("C++ compiler", ("c++", "g++", "clang++")),
+    )
+    missing = [label for label, tools in groups if not any(shutil.which(t) for t in tools)]
+    if missing:
+        if log:
+            log(f"Missing native build tools: {', '.join(missing)}")
+        return False
+    if log:
+        log("Using native CMake, Ninja, and C/C++ compilers on PATH")
+    return True
 
 
 def activate_embedded_toolchain(
@@ -50,6 +70,8 @@ def activate_embedded_toolchain(
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
     log = progress.log if progress else None
+    if sys.platform != "win32":
+        return _native_toolchain_ready(log)
     bin_dir = resolve_toolchain_bin(project_root)
     if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
         return False
@@ -68,6 +90,8 @@ def ensure_toolchain_for_rebuild(
     min_version: str = "",
 ) -> bool:
     """Ensure cmake is available via cache / download / offline zip."""
+    if sys.platform != "win32":
+        return _native_toolchain_ready(progress.log)
     try:
         _ensure_toolchain_pack(
             project_root,
@@ -834,6 +858,51 @@ def load_sections(config: Path) -> dict[str, dict[str, Any]]:
     return parse_toml_simple(config.read_text(encoding="utf-8"))
 
 
+def resolve_retail_bios_profile(
+    project_root: Path,
+    fw: Path,
+    recompiler: dict[str, Any],
+) -> tuple[str, str, Path, str]:
+    """Resolve the retail BIOS profile declared by a game project.
+
+    The profile must live in the packaged framework. Return its framework-
+    relative path, generated stem, local ROM staging path, and display id.
+    """
+    raw = str(recompiler.get("bios_config") or "").strip()
+    profile = (
+        (project_root / raw).resolve()
+        if raw
+        else (fw / "bios" / "SCPH1001.toml").resolve()
+    )
+    fw_resolved = fw.resolve()
+    try:
+        profile_rel = profile.relative_to(fw_resolved).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"recompiler.bios_config must resolve inside {fw_resolved}: {profile}"
+        ) from exc
+    if not profile.is_file():
+        raise FileNotFoundError(f"retail BIOS profile not found: {profile}")
+
+    profile_sections = load_sections(profile)
+    program = profile_sections.get("program") or {}
+    profile_recompiler = profile_sections.get("recompiler") or {}
+    stem = str(profile_recompiler.get("out_stem") or profile.stem).strip()
+    rom_rel = str(program.get("rom") or f"bios/{stem}.BIN").strip()
+    image_id = str(program.get("id") or stem).strip()
+    if not stem:
+        raise ValueError(f"retail BIOS profile has no output stem: {profile}")
+
+    rom_path = (fw / rom_rel).resolve()
+    try:
+        rom_path.relative_to(fw_resolved)
+    except ValueError as exc:
+        raise ValueError(
+            f"retail BIOS ROM path must resolve inside {fw_resolved}: {rom_path}"
+        ) from exc
+    return profile_rel, stem, rom_path, image_id
+
+
 def verify_disc_path(
     disc: Path,
     prep: dict[str, Any],
@@ -1038,6 +1107,13 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     # ---- BIOS backends (local only; CI ships none) ----
     fw = ensure_framework(project_root, progress=progress)
     try:
+        retail_profile, retail_stem, retail_dest, retail_image_id = (
+            resolve_retail_bios_profile(project_root, fw, recomp)
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        progress.error(str(exc), code=EXIT_USAGE)
+        return EXIT_USAGE
+    try:
         ensure_emitters(
             project_root,
             progress,
@@ -1059,7 +1135,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if not bios_path.is_file():
             progress.error(f"BIOS not found: {bios_path}", code=EXIT_USAGE)
             return EXIT_USAGE
-        dest = fw / "bios" / "SCPH1001.BIN"
+        dest = retail_dest
         progress.phase("bios", pct=0.15, message="Staging retail BIOS dump...")
         progress.log(f"generate --bios {bios_path}")
         try:
@@ -1070,25 +1146,26 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.error(f"failed to stage BIOS: {exc}", code=EXIT_ERROR)
             return EXIT_ERROR
         try:
-            if args.force_bios or not bios_backend_present(fw, "SCPH1001"):
+            if args.force_bios or not bios_backend_present(fw, retail_stem):
                 progress.phase(
-                    "bios", pct=0.2, message="Generating SCPH1001 BIOS C..."
+                    "bios", pct=0.2,
+                    message=f"Generating {retail_image_id} BIOS C...",
                 )
                 regen_bios_profile(
-                    project_root, "bios/SCPH1001.toml", progress=progress
+                    project_root, retail_profile, progress=progress
                 )
             else:
                 progress.log(
-                    "SCPH1001 backend already present — skipping bios regen "
+                    f"{retail_image_id} backend already present — skipping BIOS regen "
                     "(pass --force-bios to regenerate)"
                 )
             staged_retail = True
         except Exception as exc:  # noqa: BLE001
             progress.error(str(exc), code=EXIT_ERROR)
             return EXIT_ERROR
-    elif not openbios_allowed and not bios_backend_present(fw, "SCPH1001"):
+    elif not openbios_allowed and not bios_backend_present(fw, retail_stem):
         progress.error(
-            "This title requires a retail BIOS dump. Pass --bios SCPH1001.BIN "
+            f"This title requires {retail_image_id}. Pass --bios with that dump "
             "(or pick one in the setup wizard).",
             code=EXIT_USAGE,
         )
@@ -1894,7 +1971,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--bios",
         default="",
-        help="optional retail BIOS dump (staged as bios/SCPH1001.BIN + regen)",
+        help="optional retail BIOS dump selected by recompiler.bios_config",
     )
     g.add_argument(
         "--force-bios",

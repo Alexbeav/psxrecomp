@@ -57,6 +57,7 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 | `ci/clear_generated.sh` | Clear `generated/` for setup-host CI |
 | `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs (CI + scaffold) |
 | `ci/verify_pins.sh` | Optional local check vs `framework_pins.txt` (not used by release CI) |
+| `ci/audit_setup_package_platform_copy.py` | Reject a finished zip when its setup instructions or controls do not match its platform |
 | `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
 | `fetch_toolchain.sh` | Download/unpack cmake-clang-v1 (Windows emitter builds; optional embed) |
 | `stage_setup_sdk.sh` | Emitters, OpenBIOS, optional `toolchain/`, MinGW DLLs |
@@ -106,6 +107,10 @@ Release CI configures with `-DPSXRECOMP_FORCE_SETUP_HOST=ON`,
 setup-host zip never opens first-run / Generate & rebuild. The zip ships
 emitters + OpenBIOS.toml; end users Generate (OpenBIOS always; SCPH1001 if
 they have a dump) via the wizard, then rebuild.
+
+The release workflow must run `audit_setup_package_platform_copy.py` on each
+finished zip before upload. Linux and macOS zips must show native build-tool
+instructions and controls. Windows zips must show portable-toolchain controls.
 
 ## Release checklist
 

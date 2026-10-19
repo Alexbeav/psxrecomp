@@ -458,7 +458,9 @@ image identity, the relocation windows, and the runtime anchors. Two ship:
 (MIT, redistributable, shipped with the build). Normal runtimes link both
 generated backends (`PSXRECOMP_BIOS_STEMS=OpenBIOS;SCPH1001`) and select one at
 launch. The recompiler's `[recompiler] bios_config` identifies the profile used
-for game code generation; it does not choose the player's runtime BIOS.
+for game code generation. The local Generate CLI also uses that profile to name,
+stage, and emit an optional player-supplied retail BIOS backend. Runtime still
+selects only from the backends linked by `PSXRECOMP_BIOS_STEMS`.
 
 ```toml
 [program.image]              # identity; recompiler refuses a mismatched ROM
