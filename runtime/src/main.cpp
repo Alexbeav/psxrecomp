@@ -56,6 +56,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "overlay_backend.h"
 #include "gpu.h"
 #include "draw_distance.h"
+#include "mod_immediate.h"
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "pgxp_session.h"
@@ -1997,6 +1998,7 @@ static void reset_mod_owned_presentation(void) {
     psx_mod_set_retained_scene_predicate(nullptr);
     psx_mod_set_adaptive_backdrop_preload(0);
     (void)psx_mod_set_draw_distance_clamp(0);
+    psx_mod_immediate_reset();  /* [[mod_immediate.sites]] selectors */
     /* [timing] guest_cycle_scale mod gate: shut until this session's
      * activation opens it (an online match clears the plan, so a mod-gated
      * scale never carries into netplay). */
@@ -17905,6 +17907,24 @@ int main(int argc, char** argv) {
                                                         (int)sites.size());
             }
             {
+                /* [[mod_immediate.sites]]: the interpreter's copy of the
+                 * sites the generated code switches on. */
+                std::vector<PSXModImmediateSite> sites;
+                sites.reserve(gc.mod_immediate_sites.size());
+                for (const auto& site : gc.mod_immediate_sites) {
+                    PSXModImmediateSite out{};
+                    out.address = site.address;
+                    out.expected = site.expected;
+                    out.group = site.group;
+                    out.count = (uint32_t)site.values.size();
+                    for (size_t i = 0; i < site.values.size() &&
+                                       i < PSX_MOD_IMMEDIATE_VALUES_MAX; i++)
+                        out.values[i] = site.values[i];
+                    sites.push_back(out);
+                }
+                (void)psx_mod_immediate_set_sites(sites.data(), (int)sites.size());
+            }
+            {
                 std::vector<uint32_t> addresses, expected, thresholds;
                 std::vector<uint32_t> object_regs, x_regs, z_regs, y_regs;
                 std::vector<uint32_t> queue_guards;
@@ -19861,13 +19881,6 @@ int main(int argc, char** argv) {
      * activates and the session stays vanilla. */
     auto start_mod_session = [&](bool netplay) -> bool {
         mod_runtime_set_progress_hook(starvation_watchdog_heartbeat);
-        std::string save_scope, save_error;
-        if (!PSXRecompV4::mod_runtime_savestate_scope(save_scope, &save_error) ||
-            !savestate_set_content_scope(save_scope.c_str())) {
-            (void)savestate_set_content_scope("invalid");
-            std::fprintf(stderr, "psxrecomp: cannot establish save-state scope: %s\n", save_error.c_str());
-            return false;
-        }
         /* Clear game-owned controller overrides/policies and load/disc-speed
          * choices first so disabling a package cannot leave its prior state
          * latched across a soft return. */
@@ -19901,7 +19914,19 @@ int main(int argc, char** argv) {
          * sandboxed own view only; the shared game keeps the stock cull. */
         gpu_ws_set_local_view_only(
             netplay && PSXRecompV4::mod_runtime_netplay_view_active() ? 1 : 0);
+        psx_mod_immediate_begin_session(netplay ? 1 : 0);
         mod_runtime_activate_plugins();
+        if (!psx_mod_immediate_session_valid()) {
+            std::fprintf(stderr, "psxrecomp: immediate-selector enhancements are offline-only\n");
+            return false;
+        }
+        std::string save_scope, save_error;
+        if (!PSXRecompV4::mod_runtime_savestate_scope(save_scope, &save_error) ||
+            !savestate_set_content_scope(save_scope.c_str())) {
+            (void)savestate_set_content_scope("invalid");
+            std::fprintf(stderr, "psxrecomp: cannot establish save-state scope: %s\n", save_error.c_str());
+            return false;
+        }
         if (netplay && memcard_extension_codec_active()) {
             std::fprintf(stderr,
                 "psxrecomp: selected mod uses extended memory cards, which are unsupported in netplay\n");

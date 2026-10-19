@@ -39,6 +39,7 @@
 #include "psx_segment_miss.h"  /* segment misses in static game code (§5.5) */
 #include "draw_distance.h"    /* [[draw_distance.clamp]] sites */
 #include "mod_plugins.h"       /* instruction guards and effective-address adapters */
+#include "mod_immediate.h"     /* [[mod_immediate.sites]] selectors */
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -1530,6 +1531,9 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
 
     if (g_psx_mod_instruction_hooks) psx_mod_instruction(cpu, pc, insn);
     const uint32_t original_instruction = insn;
+    /* [[mod_immediate.sites]]: execute the selected immediate variant. The
+     * guest's bytes (and the guard above) stay the original instruction. */
+    if (g_psx_mod_immediate_live) insn = psx_mod_immediate_patch(pc, insn);
 
     /* op 0x20..0x26 = LB/LH/LWL/LW/LBU/LHU/LWR. LWC2 (GTE, 0x32) targets a COP2
      * register, not a GPR, so it needs no deferral here. */

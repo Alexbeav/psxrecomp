@@ -8,6 +8,7 @@
 #include "mod_packages.h"
 #include "mod_plugins.h"
 #include "mod_netplay.h"
+#include "mod_immediate.h"
 #include "psx_netplay.h"
 #include "gpu.h"
 #include "gpu_hd_textures.h"
@@ -2477,16 +2478,23 @@ bool mod_runtime_savestate_scope(std::string& scope, std::string* error) {
     }
     const bool isolated = std::any_of(s.plan.ordered.begin(), s.plan.ordered.end(),
         [](const ModPackage* package) { return package->save_compatibility == "isolated"; });
-    if (!isolated) return true;
-    const std::string& fingerprint = s.plan.fingerprint;
-    if (!s.plan.ok || fingerprint.size() != 64 ||
-        !std::all_of(fingerprint.begin(), fingerprint.end(), [](char c) {
-            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-        }) || !netplay_resources_verified(s.plan)) {
-        if (error && error->empty()) *error = "Isolated save states require a verified content plan";
-        return false;
+    if (isolated) {
+        const std::string& fingerprint = s.plan.fingerprint;
+        if (!s.plan.ok || fingerprint.size() != 64 ||
+            !std::all_of(fingerprint.begin(), fingerprint.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            }) || !netplay_resources_verified(s.plan)) {
+            if (error && error->empty()) *error = "Isolated save states require a verified content plan";
+            return false;
+        }
+        scope = fingerprint;
     }
-    scope = fingerprint;
+    if (g_psx_mod_immediate_live) {
+        std::string identity = "psxrecomp/fixed-immediates/v1\n" + scope + "\n";
+        for (uint32_t group = 0; group < PSX_MOD_IMMEDIATE_GROUPS; ++group)
+            identity += std::to_string(psx_mod_immediate_select(group)) + ",";
+        scope = sha256_text(identity);
+    }
     return true;
 }
 
@@ -2936,6 +2944,7 @@ extern "C" void mod_runtime_activate_plugins(void) {
     s.audio_tracks.clear();
     s.extent_start = 0;
     s.activating = true;
+    psx_mod_immediate_begin_activation();
     for (const ModResolution::Plugin& plugin : s.plan.plugins) {
         HostLaunchTimingScope plugin_timing(HOST_LAUNCH_PLUGIN_CALLBACK,
             plugin.package_id.c_str(), plugin.feature_id.c_str());
@@ -2943,6 +2952,7 @@ extern "C" void mod_runtime_activate_plugins(void) {
         mod_invoke_activation_plugin(plugin.id);
         plugin_timing.success();
     }
+    psx_mod_immediate_end_activation();
     s.activating = false;
     build_function_entry_hooks(s);
     timing.success();

@@ -277,6 +277,9 @@ uint32_t psx_mod_memory_address(const CPUState *cpu, uint32_t pc, uint32_t word,
     overlay_flush_cycles();
     return g_cbs.mod_memory_address ? g_cbs.mod_memory_address(cpu, pc, word, address) : address;
 }
+uint32_t psx_mod_immediate_select(uint32_t group) {
+    return g_cbs.mod_immediate_select ? g_cbs.mod_immediate_select(group) : 0u;
+}
 int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
     overlay_flush_cycles();
     return g_cbs.mod_function_entry ? g_cbs.mod_function_entry(cpu, address) : 0;
