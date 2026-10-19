@@ -2,7 +2,8 @@
 
 Also guards what must NOT change: the strict read_movie_octoshock27 path Crash is qualified on,
 and run_native.route_identity's refusal of a physical Analog press, which is the gate that keeps a
-Spyro route out of the pipeline until a runtime models the MODE rule.
+Spyro route out of the pipeline until a runtime models the MODE rule. A route this reader wrote is
+admitted with axis_model='octoshock-byte', so the pad receives every logged byte unscaled.
 """
 import io
 import json
@@ -108,10 +109,32 @@ for bad in (row(lx=200), row(buttons='.' * 16 + 'A')):
     except ValueError as error:
         assert 'no exact PSXRTI2 spelling' in str(error)
 
+# -------------------------------------------------- 2.3 and 2.7 routes reach the pad byte for byte
+import hashlib  # noqa: E402
+import struct  # noqa: E402
+import tempfile  # noqa: E402
+with tempfile.TemporaryDirectory() as tmp:
+    for version in ('2.3.0', '2.7.0'):
+        sticks = [row(lx=v, ly=255 - v, rx=(v * 7) % 256, ry=(v * 13) % 256,
+                      buttons='x' * (v % 17) + '.' * (16 - v % 17) + '.') for v in range(0, 256, 5)]
+        rows, facts = route.read_movie_octoshock_dualshock(
+            io.BytesIO(movie(sticks, header=OCTO_HEADER.replace('2.7.0', version))))
+        assert facts['declared_emu_version'] == 'Version ' + version and facts['mode_press_frames'] == 0
+        path = Path(tmp) / (version + '.psxrti2')
+        receipt = route.write_route(rows, path)
+        raw = run_native.route_identity(path, axis_model='octoshock-byte')
+        nyma = run_native.route_identity(path)
+        expected = hashlib.sha256(b''.join(struct.pack('<H5B', *r) for r in rows)).hexdigest()
+        assert raw['original_controller_sha256'] == receipt['canonical_controller_sha256'] == expected
+        assert raw['expected_protocol_sha256'] == expected != nyma['expected_protocol_sha256']
+        assert raw['controller_profile'] == 'octoshock-byte-dualshock-neutral-analog'
+
 print('synthetic octoshock dualshock tests passed')
 
 # -------------------------------------------------- real movies and the identity gate
-MOVIES = Path(r'D:\psxrecomp\validation\tas\movies')
+MOVIES = next((p for p in (Path(r'D:\psxrecomp\validation\tas\movies'),
+                            Path(r'D:\Projects\Recompilations\PS1\Library\Movies\tas')) if p.is_dir()),
+              Path(r'D:\psxrecomp\validation\tas\movies'))
 REAL = [('toastedkat_wafflewizard1-spyrothedragon.bk2', 128104, dict(allow_resaved=True)),
         ('nitrofski_lapogne36-spyroyotd.bk2', 80352, {}),
         ('wafflewizard1_jeremythompson-spyroyotd-100eggs.bk2', 163115, dict(allow_card=True))]
@@ -126,19 +149,25 @@ for name, frames, kwargs in REAL:
     print(f'{name}: {frames} frames, {facts["stick_frames"]} stick frames, '
           f'{facts["mode_press_frames"]} MODE presses, cards {facts["memcards"]}, '
           f'resaved {facts["resaved_container"]}')
+    if facts['mode_press_frames'] == 0:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'real.psxrti2'
+            receipt = route.write_route(rows, path)
+            raw = run_native.route_identity(path, axis_model='octoshock-byte')
+            assert raw['frames'] == frames and raw['steps'] == receipt['steps']
+            assert raw['expected_protocol_sha256'] == raw['original_controller_sha256'] == receipt['canonical_controller_sha256']
 
 # A route carrying a MODE press must still be refused by the pipeline: the runtime does not model
 # the rule yet, and this refusal is what will require it.
-import struct  # noqa: E402
-import tempfile  # noqa: E402
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'analog.psxrti2'
     route.write_route([(0xFFFF, 128, 128, 128, 128, 1)], path)
-    try:
-        run_native.route_identity(path)
-        raise AssertionError('route_identity must refuse a physical Analog press')
-    except ValueError as error:
-        assert 'physical Analog press' in str(error)
+    for model in ('nymashock-u16', 'octoshock-byte'):
+        try:
+            run_native.route_identity(path, axis_model=model)
+            raise AssertionError('route_identity must refuse a physical Analog press')
+        except ValueError as error:
+            assert 'physical Analog press' in str(error)
     plain = Path(tmp) / 'plain.psxrti2'
     receipt = route.write_route([(0xFFFF, 128, 128, 128, 128, 0)], plain)
     identity = run_native.route_identity(plain)

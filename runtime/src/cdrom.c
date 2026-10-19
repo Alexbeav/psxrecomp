@@ -1011,6 +1011,10 @@ static int s_source_cold_status_model;
 static int s_source_toc_seek_model;
 static int s_source_explicit_seek_model;
 static int s_nymashock_drive;
+/* PSX_CD_READ_START_MODEL=octoshock-2.2.2-pipeline: the source drive keeps two
+ * read sectors in flight before it delivers one (Octoshock 2.2.2 and 2.3
+ * SectorPipe_Count). The drive profile always runs on it. */
+static int s_source_read_pipeline;
 /* octoshock-2.7: Init takes its seek-jitter draw before its floor draw.
  * Observed on the Octoshock 2.7 and 2.10 oracles (Crash Bandicoot 7798S,
  * return 709). The nymashock-1.29.0 selector takes the floor draw first. */
@@ -2154,8 +2158,11 @@ static void start_source_cdda(int requested_track)
     }
     else if (setloc_pending)
         target = s_setloc_lba < 0 ? 0 : s_setloc_lba;
+    /* Play starts on a data track too. The drive then plays without sound: it
+     * walks, reports and pauses as on an audio track (PS1G-116, Spyro: Year of
+     * the Dragon's disc check; cdrom_source_cdda_data_track_fixtures.json). */
     int track = cdda_track_for_lba((uint32_t)target);
-    if (!track || !iso_track_is_audio(iso_handle, track)) exit(2);
+    if (!track) exit(2);
 
     int delay = source_seek_lower_bound(origin, target, (stat_reg & 2) != 0,
                                         s_source_seek_paused, mode_reg);
@@ -2246,17 +2253,21 @@ static void process_source_cdda(uint32_t cycles)
         }
 
         unsigned slot = source_cdda.pipe_at;
+        /* The oldest buffered sector reaches the SPU only while the sub-Q of
+         * the sector under the head names audio (control bit 0x40 clear). */
         if (source_cdda.pipe_count == 2) {
-            int16_t stereo[1176];
-            for (unsigned i = 0; i < 1176; ++i) {
-                int sample = source_cdda.pipe[slot][i * 2] |
-                             ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);
-                if (sample >= 32768) sample -= 65536;
-                stereo[i] = cd_muted ? 0 : (int16_t)sample;
+            if (!(last_valid_subq[0] & 0x40)) {
+                int16_t stereo[1176];
+                for (unsigned i = 0; i < 1176; ++i) {
+                    int sample = source_cdda.pipe[slot][i * 2] |
+                                 ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);
+                    if (sample >= 32768) sample -= 65536;
+                    stereo[i] = cd_muted ? 0 : (int16_t)sample;
+                }
+                cd_apply_decode_volume(stereo, 588);
+                spu_cd_audio_push(stereo, 588);
+                ++cdda_sectors_played;
             }
-            cd_apply_decode_volume(stereo, 588);
-            spu_cd_audio_push(stereo, 588);
-            ++cdda_sectors_played;
         } else {
             ++source_cdda.pipe_count;
         }
@@ -3082,12 +3093,14 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
-            /* Spec 6.7 G2b: in the drive profile an established read names
-             * the sector after the next delivery (Bio Hazard route;
-             * cdrom_source_explicit_timing_test). G2c: while the read is still
-             * seeking, GetlocP names the seek target, which is the delivery
-             * cursor (PSX-SPX "GetlocP": it works during a seek). */
-            if (s_nymashock_drive && !(stat_reg & CDSTAT_SEEK)) lba += 1;
+            /* Spec 6.7 G2b: on the source read pipeline, and so in the drive
+             * profile, an established read names the sector after the next
+             * delivery (Bio Hazard route; Spyro 4083M return 4423; oracle
+             * fixture C6-getlocp-reading; cdrom_source_explicit_timing_test).
+             * G2c: while the read is still seeking, GetlocP names the seek
+             * target, which is the delivery cursor (PSX-SPX "GetlocP": it
+             * works during a seek). */
+            if ((s_nymashock_drive || s_source_read_pipeline) && !(stat_reg & CDSTAT_SEEK)) lba += 1;
         } else if (s_nymashock_drive && source_drive_last_decoded() >= 0) {
             /* Spec 6.7 G3: idle drive, drive profile. Without a decoded
              * position the two branches below answer (G4). */
@@ -3307,6 +3320,14 @@ static void exec_command(uint8_t cmd) {
                 {0x94,0x09,0x19,0xC0}, {0x97,0x01,0x10,0xC2}
             };
             for(int i=0;i<4;i++) response_push(version[s_source_firmware_model][i]);
+            set_irq(CDIRQ_ACK);
+        } else if (param_count >= 1 && param_fifo[0] == 0x05) {
+            /* Get SCEx counters: INT3(total, success), no status byte (PSX-SPX).
+             * The counters are not modelled; the drive answers as one that
+             * received no SCEx string, as Octoshock and Mednafen do. Anti-modchip
+             * checks read them (PS1G-116, Spyro: Year of the Dragon). */
+            response_push(0x00);
+            response_push(0x00);
             set_irq(CDIRQ_ACK);
         } else {
             response_push(stat_reg);
@@ -3696,6 +3717,10 @@ void cdrom_init(const char* cue_path) {
     s_source_cold_status_model=source_boot_model("PSX_CD_COLD_STATUS_MODEL");
     s_source_toc_seek_model=source_boot_model("PSX_CD_TOC_SEEK_MODEL");
     s_source_explicit_seek_model=source_boot_model("PSX_CD_EXPLICIT_SEEK_MODEL");
+    {
+        const char *pipeline=getenv("PSX_CD_READ_START_MODEL");
+        s_source_read_pipeline=pipeline && strcmp(pipeline,"octoshock-2.2.2-pipeline")==0;
+    }
     cd_tape_free(&s_source_clock_tape);
     s_source_clock=0;s_source_command_due=0;s_source_ready_due=0;s_source_clock_calls=0;s_source_reset_due=0;
     s_source_command_phase=-1;s_source_args_remaining=0;
