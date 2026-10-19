@@ -25,7 +25,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 9;
+constexpr uint32_t kMaxFormatVersion = 10;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -43,6 +43,7 @@ std::map<std::string, MediaPreparer>& media_preparers() {
 struct RegisteredPlugin {
     void (*savestate)(void) = nullptr;
     PSXModActivationCallback activation = nullptr;
+    PSXModActivationCallback session_reset = nullptr;
     PSXModVBlankCallback vblank = nullptr;
     /* Generated-function entry hooks, keyed by guest address. One id may
      * observe several functions. */
@@ -884,7 +885,8 @@ static fs::path package_default_path(const ModPackage& package, const ModResourc
 fs::path effective_resource_path(const ModPackage& package,
                                  const ModSelection& selection,
                                  const std::string& feature_id,
-                                 const std::string& id) {
+                                 const std::string& id,
+                                 const fs::path& generated_default = {}) {
     const ModFeature* feature = find_feature(package, feature_id);
     if (!feature || feature->legacy) return {};
     const ModFeatureSelection* selected =
@@ -897,7 +899,7 @@ fs::path effective_resource_path(const ModPackage& package,
     const ModResource* declared = find_resource(package, feature_id, id);
     if (declared && !declared->default_path.empty() && !package.root.empty())
         return package_default_path(package, *declared);
-    return {};
+    return generated_default;
 }
 
 bool prospective_feature_enabled(
@@ -1491,6 +1493,19 @@ bool mod_register_activation_plugin(const std::string& id, void (*callback)(void
     return true;
 }
 
+bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void)) {
+    if (!valid_id(id) || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    if (plugin.session_reset) return false;
+    plugin.session_reset = callback;
+    return true;
+}
+
+void mod_reset_plugin_sessions() {
+    for (const auto& entry : registered_plugins())
+        if (entry.second.session_reset) entry.second.session_reset();
+}
+
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
     if (!valid_id(id) || !callback) return false;
     RegisteredPlugin& plugin = registered_plugins()[id];
@@ -1523,7 +1538,7 @@ bool mod_register_function_filter_plugin(const std::string& id, uint32_t address
 bool mod_plugin_registered(const std::string& id) {
     const auto found = registered_plugins().find(id);
     return found != registered_plugins().end() &&
-        (found->second.activation || found->second.vblank || found->second.savestate ||
+        (found->second.activation || found->second.session_reset || found->second.vblank || found->second.savestate ||
          !found->second.function_entries.empty() || !found->second.guest_functions.empty() ||
          !found->second.instructions.empty());
 }
@@ -1605,7 +1620,7 @@ void mod_clear_plugins_for_tests() {
 std::vector<std::string> mod_registered_plugin_ids() {
     std::vector<std::string> ids;
     for (const auto& entry : registered_plugins())
-        if (entry.second.activation || entry.second.vblank ||
+        if (entry.second.activation || entry.second.session_reset || entry.second.vblank ||
             !entry.second.function_entries.empty() || !entry.second.guest_functions.empty())
             ids.push_back(entry.first);
     return ids;  /* std::map keeps them sorted */
@@ -1710,6 +1725,7 @@ void ModPackageManager::set_root(fs::path mods_root) {
     packages_.clear();
     selections_.clear();
     sources_.clear();
+    generated_resource_defaults_.clear();
 }
 
 bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
@@ -2504,11 +2520,29 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 if (offset < 0)
                     throw std::runtime_error("overlay offset is negative");
                 overlay.location = (uint64_t)offset;
-                const std::string relative_file =
-                    toml::find<std::string>(v, "file");
-                if (!safe_archive_name(relative_file))
-                    throw std::runtime_error("overlay file path is unsafe");
-                overlay.file = out.root / fs::path(relative_file);
+                if (v.contains("file") == v.contains("resource"))
+                    throw std::runtime_error("overlay requires exactly one file or resource");
+                if (v.contains("resource")) {
+                    if (out.format_version < 10)
+                        throw std::runtime_error("resource overlays require format_version 10");
+                    overlay.resource_id = toml::find<std::string>(v, "resource");
+                    const auto* resource = find_resource(out, overlay.feature_id, overlay.resource_id);
+                    if (!resource || resource->input_only || resource->format != "file" ||
+                        resource->size == 0 || !valid_sha256(resource->sha256))
+                        throw std::runtime_error("overlay requires a verified same-feature file resource");
+                    const int64_t source_offset = toml::find_or<int64_t>(v, "resource_offset", 0);
+                    const int64_t size = toml::find<int64_t>(v, "size");
+                    if (source_offset < 0 || size <= 0 || uint64_t(source_offset) > resource->size ||
+                        uint64_t(size) > resource->size - uint64_t(source_offset))
+                        throw std::runtime_error("overlay resource slice is out of bounds");
+                    overlay.resource_offset = uint64_t(source_offset);
+                    overlay.size = uint64_t(size);
+                } else {
+                    const std::string relative_file = toml::find<std::string>(v, "file");
+                    if (!safe_archive_name(relative_file))
+                        throw std::runtime_error("overlay file path is unsafe");
+                    overlay.file = out.root / fs::path(relative_file);
+                }
                 overlay.sha256 = toml::find<std::string>(v, "sha256");
                 overlay.expected_sha256 = v.contains("expected_sha256")
                     ? toml::find<std::string>(v, "expected_sha256") : "";
@@ -2517,17 +2551,21 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                      !valid_sha256(overlay.expected_sha256)))
                     throw std::runtime_error(
                         "overlay hashes must be lowercase SHA-256");
-                std::string file_error;
-                std::vector<uint8_t> payload;
-                if (!read_file(overlay.file, payload, &file_error))
-                    throw std::runtime_error(file_error);
-                if (payload.empty())
-                    throw std::runtime_error("overlay payload is empty");
-                const std::string actual = fingerprint_text(std::string(
-                    (const char*)payload.data(), payload.size()));
-                if (actual != overlay.sha256)
-                    throw std::runtime_error("overlay payload checksum failed");
-                overlay.size = payload.size();
+                if (overlay.resource_id.empty()) {
+                    std::string file_error;
+                    std::vector<uint8_t> payload;
+                    if (!read_file(overlay.file, payload, &file_error))
+                        throw std::runtime_error(file_error);
+                    if (payload.empty())
+                        throw std::runtime_error("overlay payload is empty");
+                    const std::string actual = fingerprint_text(std::string(
+                        (const char*)payload.data(), payload.size()));
+                    if (actual != overlay.sha256)
+                        throw std::runtime_error("overlay payload checksum failed");
+                    overlay.size = payload.size();
+                } else if (overlay.expected_sha256.empty()) {
+                    throw std::runtime_error("resource overlay requires expected_sha256");
+                }
                 if (overlay.location >
                     std::numeric_limits<uint64_t>::max() - overlay.size)
                     throw std::runtime_error("overlay range overflows");
@@ -2599,11 +2637,13 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     const std::string netplay =
                         toml::find_or<std::string>(v, "netplay", "");
                     if (!netplay.empty() && netplay != "local_view" &&
-                        netplay != "input")
+                        netplay != "input" && netplay != "host_output")
                         throw std::runtime_error(
-                            "plugin netplay must be \"local_view\" or \"input\"");
+                            "plugin netplay must be \"local_view\", \"input\" "
+                            "or \"host_output\"");
                     plugin.netplay_local_view = netplay == "local_view";
                     plugin.netplay_input = netplay == "input";
+                    plugin.netplay_host_output = netplay == "host_output";
                 }
                 read_conditions(v, out.options, plugin.feature_id,
                                 plugin.when, "plugin");
@@ -2741,6 +2781,8 @@ bool ModPackageManager::scan_root(const fs::path& packages_root,
                     ": package path does not match manifest id/version");
                 continue;
             }
+            if (std::find(disabled_packages_.begin(), disabled_packages_.end(), package.id) != disabled_packages_.end())
+                continue;
             if (!developer_channel_ && !strip_developer_features(package)) {
                 /* Every feature was developer-channel, so on this build the
                  * package has nothing to offer. Not an error: it is the
@@ -3304,6 +3346,35 @@ std::string ModPackageManager::feature_option_value(
         feature_id, option_id);
 }
 
+bool ModPackageManager::set_generated_feature_resource_default(
+    const std::string& package_id, const std::string& feature_id,
+    const std::string& resource_id, const fs::path& relative_path,
+    std::string* error) {
+    const auto* package = selected_package(package_id);
+    const auto* resource = package ? find_resource(*package, feature_id, resource_id) : nullptr;
+    if (!resource || !resource->shared_source.empty() || relative_path.empty() ||
+        relative_path.is_absolute() || relative_path.has_root_name() || relative_path.has_root_directory()) {
+        set_error(error, "invalid generated resource default");
+        return false;
+    }
+    for (const auto& component : relative_path) if (component == "." || component == ".." || component.empty()) {
+        set_error(error, "generated resource default must stay relative to mods root");
+        return false;
+    }
+    std::error_code ec;
+    const auto path = fs::absolute(root_ / relative_path, ec);
+    if (ec) { set_error(error, ec.message()); return false; }
+    generated_resource_defaults_[{package_id, feature_id, resource_id}] = path;
+    return true;
+}
+
+fs::path ModPackageManager::generated_resource_default(
+    const std::string& package_id, const std::string& feature_id,
+    const std::string& resource_id) const {
+    const auto found = generated_resource_defaults_.find({package_id, feature_id, resource_id});
+    return found == generated_resource_defaults_.end() ? fs::path() : found->second;
+}
+
 fs::path ModPackageManager::feature_resource_path(
     const std::string& package_id,
     const std::string& feature_id,
@@ -3323,7 +3394,8 @@ fs::path ModPackageManager::feature_resource_path(
             const auto selected = selections_.find(id);
             if (selected == selections_.end()) continue;
             for (const auto& r : other->resources) if(r.shared_source == resource->shared_source) {
-                auto path = effective_resource_path(*other, selected->second, r.feature_id, r.id);
+                auto path = effective_resource_path(*other, selected->second, r.feature_id, r.id,
+                    generated_resource_default(other->id, r.feature_id, r.id));
                 if (!path.empty()) return path;
             }
         }
@@ -3333,7 +3405,8 @@ fs::path ModPackageManager::feature_resource_path(
     const ModSelection blank;
     return effective_resource_path(
         *package, found == selections_.end() ? blank : found->second,
-        feature_id, resource_id);
+        feature_id, resource_id,
+        generated_resource_default(package_id, feature_id, resource_id));
 }
 
 std::map<std::string, ModSelection> ModPackageManager::effective_selections(
@@ -3473,7 +3546,8 @@ std::string ModPackageManager::feature_option_value(
 }
 
 bool ModPackageManager::prepare_resources(const std::string& game_id,
-    const fs::path& disc_path, const fs::path& cache_root, std::string* error, bool cached_only) {
+    const fs::path& disc_path, const fs::path& cache_root, std::string* error, bool cached_only,
+    const ModPrepareProgress& progress) {
     auto effective = effective_selections(nullptr, nullptr, nullptr);
     auto pending = selections_;
     try {
@@ -3489,7 +3563,9 @@ bool ModPackageManager::prepare_resources(const std::string& game_id,
                 const auto provider = media_preparers().find(package->prepare);
                 if (provider == media_preparers().end())
                     throw std::runtime_error(package->name + ": media preparer is not installed");
-                ModPrepareContext context{*package, feature.id, disc_path, cache_root, root_.parent_path(), {}};
+                if (progress && !progress(-1.0f,"Preparing " + feature.name))
+                    throw std::runtime_error("Preparation canceled.");
+                ModPrepareContext context{*package, feature.id, disc_path, cache_root, root_.parent_path(), {}, progress};
                 for (const auto& r : package->resources) if (r.feature_id == feature.id && r.input_only) {
                     auto path = feature_resource_path(id, feature.id, r.id);
                     if (path.empty() && r.required)
@@ -3518,6 +3594,9 @@ bool ModPackageManager::prepare_resources(const std::string& game_id,
             }
         }
     } catch (const std::exception& ex) { set_error(error, ex.what()); return false; }
+    if (progress && !progress(-1.0f,"Verifying prepared content")) {
+        set_error(error,"Preparation canceled."); return false;
+    }
     selections_ = std::move(pending);
     return true;
 }
@@ -3647,6 +3726,20 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         const ModSelection blank;
         const ModSelection& selected =
             selected_it == selections.end() ? blank : selected_it->second;
+        std::map<std::pair<std::string,std::string>,
+                 std::shared_ptr<const std::vector<uint8_t>>> resource_snapshots;
+        auto load_resource = [&](const ModResource& resource,
+                                 std::shared_ptr<const std::vector<uint8_t>>& bytes,
+                                 std::string& reason) {
+            const auto key=std::make_pair(resource.feature_id,resource.id);
+            const auto found=resource_snapshots.find(key);
+            if(found!=resource_snapshots.end()) { bytes=found->second; return true; }
+            const auto path=effective_resource_path(*package,selected,resource.feature_id,resource.id);
+            if(!load_mod_media(path,resource.format,resource.size,resource.sha256,bytes,&reason))
+                return false;
+            resource_snapshots.emplace(key,bytes);
+            return true;
+        };
         if (package->resolver == "declarative") {
             for (const ModDerivedDisc& derived : package->derived_discs) {
                 const ModFeature& legacy = package->features.front();
@@ -3872,6 +3965,8 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         std::vector<const ModOverlay*> overlays;
         overlays.reserve(package->overlays.size());
         for (const ModOverlay& overlay : package->overlays) {
+            if (defer_prepared_resources && !package->prepare.empty() && !overlay.resource_id.empty())
+                continue;
             const ModFeature* feature =
                 find_feature(*package, overlay.feature_id);
             if (!feature ||
@@ -3890,7 +3985,22 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         for (const ModOverlay* overlay : overlays) {
             std::vector<uint8_t> payload;
             std::string payload_error;
-            if (!read_file(overlay->file, payload, &payload_error)) {
+            bool loaded = false;
+            if (overlay->resource_id.empty()) {
+                loaded = read_file(overlay->file, payload, &payload_error);
+            } else {
+                const auto* resource = find_resource(*package, overlay->feature_id, overlay->resource_id);
+                std::shared_ptr<const std::vector<uint8_t>> bytes;
+                if (resource && load_resource(*resource, bytes, payload_error) && bytes &&
+                    overlay->resource_offset <= bytes->size() &&
+                    overlay->size <= bytes->size() - overlay->resource_offset) {
+                    const auto begin = bytes->begin() + size_t(overlay->resource_offset);
+                    payload.assign(begin, begin + size_t(overlay->size));
+                    loaded = true;
+                }
+                if (!loaded && payload_error.empty()) payload_error = "overlay resource is unavailable or out of bounds";
+            }
+            if (!loaded) {
                 result.errors.push_back(
                     package->id + "/" + overlay->feature_id + ": " +
                     payload_error);
@@ -3945,6 +4055,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             resolved.feature_id = plugin->feature_id;
             resolved.netplay_local_view = plugin->netplay_local_view;
             resolved.netplay_input = plugin->netplay_input;
+            resolved.netplay_host_output = plugin->netplay_host_output;
             result.plugins.push_back(std::move(resolved));
         }
         for (const ModResource& resource : package->resources) {
@@ -3958,7 +4069,8 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 !is_feature_enabled(*package, selected, *feature))
                 continue;
             const fs::path path = effective_resource_path(
-                *package, selected, resource.feature_id, resource.id);
+                *package, selected, resource.feature_id, resource.id,
+                generated_resource_default(package->id, resource.feature_id, resource.id));
             if (path.empty()) {
                 if (resource.required) {
                     result.errors.push_back(
@@ -3977,8 +4089,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             resolved.sha256 = resource.sha256;
             if (!resource.sha256.empty()) {
                 std::string media_error;
-                if (!load_mod_media(path, resource.format, resource.size,
-                                    resource.sha256, resolved.bytes, &media_error)) {
+                if (!load_resource(resource, resolved.bytes, media_error)) {
                     result.errors.push_back(package->id + "/" + resource.feature_id +
                                             ": " + resource.id + ": " + media_error);
                     continue;
@@ -4196,6 +4307,12 @@ extern "C" int psx_mod_register_activation_plugin(
     const char* id, PSXModActivationCallback callback) {
     return id &&
         PSXRecompV4::mod_register_activation_plugin(id, callback) ? 1 : 0;
+}
+
+extern "C" int psx_mod_register_session_reset_plugin(
+    const char* id, PSXModActivationCallback callback) {
+    return id &&
+        PSXRecompV4::mod_register_session_reset_plugin(id, callback) ? 1 : 0;
 }
 
 extern "C" int psx_mod_register_savestate_plugin(

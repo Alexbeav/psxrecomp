@@ -399,6 +399,14 @@ if(BUILD_TESTING)
     target_include_directories(guest_tty_test PRIVATE ../runtime/include)
     add_test(NAME guest_tty_test COMMAND guest_tty_test)
 
+    # MDEC status bit 29 stays set until a decode's output is down to the last
+    # 32-word OutFIFO load (Beetle InCommand); libpress DecDCTin spins on it.
+    add_executable(mdec_busy_drain_test
+        ../runtime/tests/test_mdec_busy_drain.c
+        ../runtime/src/mdec.c)
+    target_include_directories(mdec_busy_drain_test PRIVATE ../runtime/include)
+    add_test(NAME mdec_busy_drain_test COMMAND mdec_busy_drain_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
@@ -781,6 +789,38 @@ if(BUILD_TESTING)
     )
     target_link_libraries(rewind_settings_test PRIVATE fmt)
     add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+    add_executable(jogcon_ffb_settings_test
+        tests/jogcon_ffb_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(jogcon_ffb_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(jogcon_ffb_settings_test PRIVATE fmt)
+    add_test(NAME jogcon_ffb_settings_test COMMAND jogcon_ffb_settings_test)
+
+    # Graphics presets: [quality.*] parsing, detection rules, the
+    # detect/keep/Custom decision and settings round trip.
+    add_executable(quality_presets_test
+        tests/quality_presets_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+        ../runtime/src/quality_presets.cpp
+        ../runtime/src/quality_tier.c
+    )
+    target_include_directories(quality_presets_test PRIVATE
+        include
+        src
+        ../runtime/include
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(quality_presets_test PRIVATE fmt)
+    add_test(NAME quality_presets_test COMMAND quality_presets_test)
 
     # Launcher-saved paths stay relative inside a portable game folder.
     add_executable(portable_settings_paths_test
@@ -953,12 +993,19 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_generate_aot_static.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # psxrecomp_cli.py rebuild: the pre-build mtime clamp works without
-        # lutimes (Windows), and --cmake-extra wins over the shipping
-        # PSX_DEBUG_TOOLS=OFF default.
+        # lutimes (Windows), --cmake-extra wins over the shipping
+        # PSX_DEBUG_TOOLS=OFF default, and the build runs the configuring cmake.
         add_test(
             NAME cli_rebuild_host
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # update_disc_set.py writes in-project discs relative with '/' so one
+        # game.toml resolves on every host.
+        add_test(
+            NAME update_disc_set_paths
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_update_disc_set_paths.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
         # reported at configure, a profile/CMake disagreement is an error, and
@@ -1092,6 +1139,7 @@ if(BUILD_TESTING)
         # template, scaffold, check_generated.sh, Project Studio audit/ops).
         foreach(_t IN ITEMS
                 aligned_lzss_banks
+                audit_playtest_diagnostics_package
                 bundled_release_layout
                 collect_game_misses
                 cursor_writers

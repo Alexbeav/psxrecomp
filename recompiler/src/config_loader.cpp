@@ -544,6 +544,16 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
     }
+    if (runtime.contains("idle_skip_store_counters")) {
+        rt.idle_skip_store_counters =
+            toml::find<bool>(runtime, "idle_skip_store_counters");
+    }
+    if (runtime.contains("idle_skip_store_counter_sites")) {
+        for (const auto& a : toml::find<std::vector<std::string>>(
+                 runtime, "idle_skip_store_counter_sites"))
+            rt.idle_skip_store_counter_sites.push_back(
+                parse_hex(a, "runtime.idle_skip_store_counter_sites"));
+    }
     if (runtime.contains("idle_skip")) {
         rt.idle_skip = toml::find<bool>(runtime, "idle_skip");
     }
@@ -638,6 +648,8 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         }
         if (tm.contains("guest_cycle_scale_gated"))
             rt.guest_cycle_scale_gated = toml::find<bool>(tm, "guest_cycle_scale_gated");
+        if (tm.contains("guest_cycle_scale_batch"))
+            rt.guest_cycle_scale_batch = toml::find<bool>(tm, "guest_cycle_scale_batch");
         // guest_cycle_scale_gate: one inline table or an array of them,
         // { addr, value, size = 4, mask = 0xFFFFFFFF }; all must hold.
         if (tm.contains("guest_cycle_scale_gate")) {
@@ -762,6 +774,21 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             else throw std::runtime_error(fmt::format(
                 "[video] antialiasing_mode must be \"off\", \"fxaa\" or \"fxaa_hq\": {}", mode));
         }
+        // bloom: opt-in glow (OpenGL), 0.0 (off, default) .. 2.0.
+        if (video.contains("bloom")) {
+            const auto& v = toml::find(video, "bloom");
+            const double f = v.is_integer() ? static_cast<double>(v.as_integer())
+                                            : toml::get<double>(v);
+            if (!(f >= 0.0 && f <= 2.0))
+                throw std::runtime_error(fmt::format("[video] bloom out of range (0.0..2.0): {}", f));
+            rt.video_bloom = static_cast<float>(f);
+        }
+        // post_shader: an elective post-effect chain (.pfx), relative to the
+        // game root. The runtime parses it and logs (and skips) a bad one.
+        if (video.contains("post_shader")) {
+            const std::string ps = toml::find<std::string>(video, "post_shader");
+            if (!ps.empty()) rt.video_post_shader = PSXRecompV4::host_resolve(root, ps);
+        }
         if (video.contains("supersample")) {
             const auto& v = toml::find(video, "supersample");
             const double f = v.is_integer() ? static_cast<double>(v.as_integer())
@@ -840,6 +867,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         }
         if (video.contains("accurate_blending"))
             rt.video_accurate_blending = toml::find<bool>(video, "accurate_blending");
+        if (video.contains("dithering")) {
+            const auto mode = toml::find<std::string>(video, "dithering");
+            if (mode == "off")         rt.video_dithering = 0;
+            else if (mode == "on" || mode == "scaled") rt.video_dithering = 1;
+            else if (mode == "fine")   rt.video_dithering = 2;
+            else throw std::runtime_error(fmt::format(
+                "[video] dithering must be \"on\", \"fine\" or \"off\": {}", mode));
+        }
         if (video.contains("pgxp_depth_buffer"))
             rt.video_pgxp_depth_buffer = toml::find<bool>(video, "pgxp_depth_buffer");
         if (video.contains("pgxp_color_correction"))
@@ -1080,6 +1115,12 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.direct_shortcut_button =
                 toml::find<std::string>(ct, "direct_shortcut_button");
         }
+        if (ct.contains("experimental_jogcon_force_feedback"))
+            rt.experimental_jogcon_force_feedback =
+                toml::find<bool>(ct, "experimental_jogcon_force_feedback");
+        if (ct.contains("experimental_jogcon_force_feedback_invert"))
+            rt.experimental_jogcon_force_feedback_invert =
+                toml::find<bool>(ct, "experimental_jogcon_force_feedback_invert");
         if (ct.contains("anti_deadzone")) {
             const auto n = toml::find<int64_t>(ct, "anti_deadzone");
             if (n < 0 || n > 32767)
@@ -1096,6 +1137,11 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
 fs::path find_project_root(const fs::path& config_path) {
     fs::path cur = PSXRecompV4::host_absolute(config_path).parent_path();
     const fs::path fallback = cur;
+    // A packaged game (tools/package_game_release.sh stages its licenses/
+    // beside game.toml) is its own root. Walking up from it would stop at
+    // the first ancestor with a marker -- e.g. a global ~/.gitignore -- and
+    // anchor the game's relative paths (memcard_dir = "saves") there.
+    if (fs::exists(cur / "licenses" / "psxrecomp-LICENSE")) return cur;
     for (int i = 0; i < 8; ++i) {
         for (const char* marker : { ".gitignore", ".git", "CMakeLists.txt" }) {
             if (fs::exists(cur / marker)) {
@@ -1176,6 +1222,83 @@ static std::vector<DrawDistanceClampSite> parse_draw_distance_clamps(
 // Derive the output filename stem from a rom basename. Mirrors the Python
 // audit_config.py logic: strip a trailing .BIN/.EXE (case-insensitive) but
 // preserve dotted names like "SCUS_942.36" unchanged.
+// [quality.<name>] (docs/QUALITY_PRESETS.md). Each preset is the whole
+// game.toml re-parsed with its keys laid over [video], so each key gets the
+// same validation as in [video]. Only the supported quality keys
+// (quality_key_supported) are accepted. Lowest preset first.
+static const char* const kQualityPlayerKeys[] = {
+    "texture_filtering", "fmv_filter", "antialiasing", "dynamic_resolution",
+    "dynamic_resolution_min", "frame_generation", "render_thread", "present_thread",
+    "geometry_correction", "perspective_texturing", "frame_interpolation",
+    "frame_interpolation_fps"};
+static const char* const kQualityPresetOnlyKeys[] = {
+    "supersample", "texture_lod", "anisotropic_filtering", "fmv_chroma_smoothing",
+    "bloom", "dithering", "pgxp_depth_buffer", "pgxp_color_correction", "pgxp_seam"};
+
+bool quality_key_player_editable(const std::string& key) {
+    for (const char* k : kQualityPlayerKeys) if (key == k) return true;
+    return false;
+}
+
+bool quality_key_supported(const std::string& key) {
+    if (quality_key_player_editable(key)) return true;
+    for (const char* k : kQualityPresetOnlyKeys) if (key == k) return true;
+    return false;
+}
+
+static std::vector<QualityPreset> parse_quality_presets(const toml::value& cfg,
+                                                        const fs::path& root,
+                                                        const fs::path& config_path) {
+    std::vector<QualityPreset> out;
+    if (!cfg.contains("quality")) return out;
+    const toml::value& q = toml::find(cfg, "quality");
+    if (!q.is_table())
+        throw std::runtime_error(fmt::format("{}: [quality] must be a table",
+                                             config_path.string()));
+    static const char* const kNames[] = {"low", "medium", "high", "ultra"};
+    for (const auto& kv : q.as_table()) {
+        bool known = false;
+        for (const char* n : kNames) known = known || kv.first == n;
+        if (!known)
+            throw std::runtime_error(fmt::format(
+                "{}: [quality.{}] is not a preset (low, medium, high, ultra)",
+                config_path.string(), kv.first));
+        if (!kv.second.is_table())
+            throw std::runtime_error(fmt::format(
+                "{}: [quality.{}] must be a table of [video] keys",
+                config_path.string(), kv.first));
+    }
+    for (const char* n : kNames) {
+        if (!q.contains(n)) continue;
+        QualityPreset p;
+        p.name = n;
+        toml::value merged = cfg;
+        toml::table& top = merged.as_table();
+        if (!top.count("video") || !top["video"].is_table())
+            top["video"] = toml::table{};
+        toml::table& video = top["video"].as_table();
+        for (const auto& kv : toml::find(q, n).as_table()) {
+            if (kv.second.is_table())
+                throw std::runtime_error(fmt::format(
+                    "{}: [quality.{}] {} must be a [video] value, not a table",
+                    config_path.string(), n, kv.first));
+            if (!quality_key_supported(kv.first))
+                throw std::runtime_error(fmt::format(
+                    "{}: [quality.{}] {} is not a preset key (docs/QUALITY_PRESETS.md "
+                    "lists the supported set)", config_path.string(), n, kv.first));
+            video[kv.first] = kv.second;
+            p.keys.push_back(kv.first);
+        }
+        try {
+            p.runtime = parse_runtime_block(merged, root);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(fmt::format("[quality.{}]: {}", n, e.what()));
+        }
+        out.push_back(std::move(p));
+    }
+    return out;
+}
+
 static std::string derive_out_stem(const std::string& rom_basename) {
     auto ends_with_ci = [](const std::string& s, const std::string& suffix) {
         if (s.size() < suffix.size()) return false;
@@ -2752,6 +2875,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     loaded.ws_cull_masked_reject_sites = std::move(ws_cull_masked_reject_sites);
     loaded.draw_distance_clamp_sites =
         parse_draw_distance_clamps(cfg, config_path);
+    loaded.quality_presets = parse_quality_presets(cfg, root, config_path);
     return loaded;
 }
 
@@ -2967,6 +3091,24 @@ UserSettings load_user_settings(const fs::path& path) {
             s.frame_interpolation_fps = toml::find<int>(v, "frame_interpolation_fps");
             if (s.frame_interpolation_fps == 0 || s.frame_interpolation_fps >= 90)
                 s.has_frame_interpolation_fps = true;
+        });
+        // Graphics preset state (docs/QUALITY_PRESETS.md). Values are checked
+        // by the runtime, which knows the title's presets.
+        if (v.contains("quality_preset")) try_get([&]{
+            s.quality_preset = toml::find<std::string>(v, "quality_preset");
+            s.has_quality_preset = !s.quality_preset.empty();
+        });
+        if (v.contains("quality_base")) try_get([&]{
+            s.quality_base = toml::find<std::string>(v, "quality_base");
+            s.has_quality_base = !s.quality_base.empty();
+        });
+        if (v.contains("quality_hardware")) try_get([&]{
+            s.quality_hardware = toml::find<std::string>(v, "quality_hardware");
+            s.has_quality_hardware = !s.quality_hardware.empty();
+        });
+        if (v.contains("quality_detected")) try_get([&]{
+            s.quality_detected = toml::find<std::string>(v, "quality_detected");
+            s.has_quality_detected = !s.quality_detected.empty();
         });
         if (v.contains("aspect_ratio")) try_get([&]{
             const auto m = toml::find<std::string>(v, "aspect_ratio");
@@ -3193,6 +3335,10 @@ UserSettings load_user_settings(const fs::path& path) {
             s.multitap_analog = toml::find<bool>(ct, "multitap_analog");
             s.has_multitap_analog = true;
         });
+        if (ct.contains("jogcon_force_feedback")) try_get([&]{
+            s.jogcon_force_feedback = toml::find<bool>(ct, "jogcon_force_feedback");
+            s.has_jogcon_force_feedback = true;
+        });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
             if (n >= 0 && n <= 32767) {
@@ -3322,6 +3468,14 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "frame_interpolation = " << (s.frame_interpolation ? "true" : "false") << "\n";
     if (s.has_frame_interpolation_fps)
         f << "frame_interpolation_fps = " << s.frame_interpolation_fps << "\n";
+    if (s.has_quality_preset)
+        f << "quality_preset    = \"" << s.quality_preset << "\"\n";
+    if (s.has_quality_base)
+        f << "quality_base      = \"" << s.quality_base << "\"\n";
+    if (s.has_quality_hardware)
+        f << "quality_hardware  = \"" << s.quality_hardware << "\"\n";
+    if (s.has_quality_detected)
+        f << "quality_detected  = \"" << s.quality_detected << "\"\n";
     if (s.has_aspect_ratio)
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
@@ -3389,7 +3543,7 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
 
     {
         bool any_ctrl = s.has_deadzone || s.has_multitap_enabled ||
-                        s.has_multitap_analog;
+                        s.has_multitap_analog || s.has_jogcon_force_feedback;
         for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
             if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
                 any_ctrl = true;
@@ -3418,6 +3572,9 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             if (s.has_multitap_analog)
                 f << "multitap_analog = "
                   << (s.multitap_analog ? "true" : "false") << "\n";
+            if (s.has_jogcon_force_feedback)
+                f << "jogcon_force_feedback = "
+                  << (s.jogcon_force_feedback ? "true" : "false") << "\n";
             /* Keep a global deadzone= for older readers (mirrors P1). */
             if (s.has_deadzone || s.has_p_deadzone[0])
                 f << "deadzone  = "

@@ -69,6 +69,8 @@ extern "C" void psx_write_half(uint32_t address, uint16_t value) {
     ram[offset + 1] = (uint8_t)(value >> 8);
 }
 
+/* Side-effect-free peek (memory.c); host-output observation reads. */
+extern "C" int psx_peek_word(uint32_t, uint32_t* out) { *out = 0; return 0; }
 extern "C" uint32_t psx_read_word(uint32_t address) {
     const uint32_t offset = address & 0x1fffffu;
     return (uint32_t)ram[offset] |
@@ -156,6 +158,7 @@ extern "C" int gpu_ws_configured_x_reveal(void) { return 0; }
 extern "C" void gpu_ws_tag_hud_prim(uint32_t, int) {}
 extern "C" void gpu_ws_tag_screen_mask_quad(uint32_t) {}
 extern "C" void gpu_ws_tag_radial_screen_mask_quad(uint32_t, float) {}
+extern "C" void gpu_ws_tag_feedback_rect(uint32_t) {}
 
 static CPUState* interrupted_entry_cpu;
 static void test_vblank_plugin(void) {
@@ -316,6 +319,19 @@ int iso_read_cdda_sector(void*,uint32_t,uint8_t*,int);
 }
 
 static int big_ram_activations;
+static int option_changed_hits = 0;
+static std::string option_changed_value;
+static int option_changed_refuse = 0;  /* 1 = the plugin answers "next start" */
+static int test_option_changed(const char* option_id, const char* value) {
+    char cur[32];
+    option_changed_hits++;
+    /* Runs in the plugin's context: current_option_value answers the new value. */
+    if (std::string(option_id) == "size" &&
+        psx_mod_current_option_value("size", cur, sizeof(cur)) == 1)
+        option_changed_value = cur;
+    (void)value;
+    return option_changed_refuse ? 0 : 1;
+}
 static void test_big_ram_activation(void) {
     big_ram_activations++;
 }
@@ -1080,6 +1096,53 @@ int main(int argc, char** argv) {
                                    sizeof(value)) == 1 &&
                   std::string(value) == "eight",
               "an implicit feature's plugin must read its option values");
+        /* In-game overlay P5: a live option change reaches the plugin and
+         * every later read, and is refused while netplay owns the plan. */
+        check(psx_mod_set_option_live("runtime.ram", "big-ram", "size", "four") == 0,
+              "without an option-changed callback a live set waits for restart");
+        check(psx_mod_option_value("runtime.ram", "big-ram", "size", value, sizeof(value)) == 1 &&
+                  std::string(value) == "eight",
+              "a restart-only change must not reach the running plugin");
+        check(!psx_mod_option_live_capable("runtime.ram", "big-ram"),
+              "no callback yet: not live-capable");
+        check(psx_mod_register_option_changed_plugin("runtime.big-ram", test_option_changed),
+              "option-changed hook must register");
+        check(psx_mod_option_live_capable("runtime.ram", "big-ram"),
+              "a registered callback makes the feature live-capable");
+        check(psx_mod_set_option_live("runtime.ram", "big-ram", "size", "four") == 1 &&
+                  option_changed_hits == 1 && option_changed_value == "four",
+              "the plugin must see the change in its own context");
+        check(psx_mod_option_value("runtime.ram", "big-ram", "size", value, sizeof(value)) == 1 &&
+                  std::string(value) == "four",
+              "a live override must answer later reads");
+        /* A callback that refuses ("nothing changes until next start") must
+         * leave the value the session runs with untouched. */
+        option_changed_refuse = 1;
+        check(psx_mod_set_option_live("runtime.ram", "big-ram", "size", "two") == 0 &&
+                  option_changed_hits == 2,
+              "a refused live set reports refused after asking the plugin");
+        check(psx_mod_option_value("runtime.ram", "big-ram", "size", value, sizeof(value)) == 1 &&
+                  std::string(value) == "four",
+              "a refused live set must not change the value later reads see");
+        option_changed_refuse = 0;
+        /* A new session (initialise + commit) answers its own committed
+         * plan, not the previous session's live override. */
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              "the second session must commit");
+        mod_runtime_activate_plugins();
+        check(psx_mod_option_value("runtime.ram", "big-ram", "size", value, sizeof(value)) == 1 &&
+                  std::string(value) == "eight",
+              "a live override must not outlive its session's plan");
+        check(psx_mod_set_option_live("runtime.ram", "no-such-feature", "size", "x") == 0,
+              "features outside the plan are not live-settable");
+        check(psx_mod_save_selection() == 1, "saving the selection mid-session must succeed");
+        test_netplay_active = 1;
+        check(psx_mod_set_option_live("runtime.ram", "big-ram", "size", "four") == -1,
+              "netplay must refuse live option changes");
+        test_netplay_active = 0;
         /* commit rewrites state.toml in canonical form; what matters is that
          * the player's choice survives and the derived one is never added. */
         const std::string after = read_state();
@@ -1165,6 +1228,9 @@ int main(int argc, char** argv) {
     check(!psx_mod_read_disc_file("S0",nullptr,0,&bytes),"directory rejected");
     std::vector<uint8_t> raw_iso(24*2352);
     for(unsigned i=0;i<24;++i) {
+        /* A raw sector starts with the CD sync pattern; geometry is read from
+         * it, never from the file length. */
+        raw_iso[i*2352]=0; std::fill_n(raw_iso.begin()+i*2352+1,10,(uint8_t)0xFF); raw_iso[i*2352+11]=0;
         raw_iso[i*2352+15]=2;
         std::copy_n(iso.begin()+i*2048,2048,raw_iso.begin()+i*2352+24);
     }
@@ -1173,6 +1239,45 @@ int main(int argc, char** argv) {
     check(PSXRecompV4::mod_runtime_commit(raw_path,&error),"reader mount raw disc");
     check(psx_mod_read_disc_file("S0/LEVEL.NSF",result.data(),(uint32_t)result.size(),&bytes) &&
           std::equal(result.begin(),result.end(),iso.begin()+22*2048),"raw and ISO reads identical");
+    {
+        const auto folder=root/"prepared-overlay";
+        const auto pack_path=folder/"local.pack";
+        std::vector<uint8_t> pack(3016,0x42),payload(3000);
+        for(size_t i=0;i<payload.size();++i)payload[i]=uint8_t(i*11+5);
+        std::copy(payload.begin(),payload.end(),pack.begin()+16);
+        const uint64_t offset=21*2352+2000;
+        const std::vector<uint8_t> expected(raw_iso.begin()+offset,raw_iso.begin()+offset+payload.size());
+        check(PSXRecompV4::mod_register_media_preparer("test.overlay.prepare",
+            [&](const PSXRecompV4::ModPrepareContext& context,std::map<std::string,fs::path>& outputs,std::string&) {
+                if(context.progress && !context.progress(0.5f,"Building local pack"))return false;
+                write_bytes(pack_path,pack);outputs["pack"]=pack_path;return true;
+            }),"register prepared overlay fixture");
+        write_text(folder/"bundled/prepared.overlay/1.0.0/manifest.toml",
+            "format_version = 10\nid = \"prepared.overlay\"\nversion = \"1.0.0\"\nname = \"Prepared overlay\"\nprepare = \"test.overlay.prepare\"\n"
+            "[[target]]\ngame_id = \"READER\"\ndisc_sha256 = \""+sha256_hex(raw_iso)+"\"\n"
+            "[[feature]]\nid = \"audio\"\nname = \"Audio\"\ndefault_enabled = true\n"
+            "[[resource]]\nfeature = \"audio\"\nid = \"pack\"\nlabel = \"Pack\"\nformat = \"file\"\nhidden = true\nrequired = true\nsize = 3016\nsha256 = \""+sha256_hex(pack)+"\"\n"
+            "[[overlay]]\nfeature = \"audio\"\ntarget = \"disc_raw\"\noffset = "+std::to_string(offset)+"\n"
+            "resource = \"pack\"\nresource_offset = 16\nsize = 3000\nsha256 = \""+sha256_hex(payload)+"\"\nexpected_sha256 = \""+sha256_hex(expected)+"\"\n");
+        check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"initialize prepared overlay");
+        int reports=0;
+        check(!PSXRecompV4::mod_runtime_prepare_for_launcher(raw_path,&error,
+            [&](float fraction,const std::string&){++reports;return fraction<1.0f;}),"cancel before installing prepared plan");
+        check(reports>1 && error=="Preparation canceled.","runtime propagates cooperative cancellation");
+        check(PSXRecompV4::mod_runtime_prepare_for_launcher(raw_path,&error),"prepare verified resource-backed overlay");
+        mod_runtime_enable_disc_patches();
+        fs::remove(pack_path,ec); // Committed bytes must remain immutable and resident.
+        for(unsigned lba=21;lba<=23;++lba) {
+            std::array<uint8_t,2352> sector;
+            std::copy_n(raw_iso.begin()+lba*2352,2352,sector.begin());
+            auto wanted=sector;
+            const uint64_t start=std::max<uint64_t>(offset,lba*2352);
+            const uint64_t end=std::min<uint64_t>(offset+payload.size(),(lba+1)*2352);
+            std::copy(payload.begin()+start-offset,payload.begin()+end-offset,wanted.begin()+start-lba*2352);
+            mod_runtime_patch_disc_sector(lba,1,sector.data(),sector.size());
+            check(sector==wanted,"resource overlay crosses sectors with exact untouched surroundings");
+        }
+    }
     /* Verified bytes are scoped to the committed feature, and do not depend
      * on reopening an owner file after launch. No launcher is needed here. */
     const auto media_root = root / "verified-media";
@@ -1659,6 +1764,12 @@ int main(int argc, char** argv) {
               "cold cached-only launch does not prepare missing receipt");
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc, &error) && prepare_calls == 1,
               "cold launcher creates verified preparation");
+        std::string input_stamp, output_stamp, disc_stamp, manifest_stamp;
+        const bool qualified_stamps = PSXRecompV4::host_file_identity(input_path,input_stamp) &&
+            PSXRecompV4::host_file_identity(output_path,output_stamp) &&
+            PSXRecompV4::host_file_identity(disc,disc_stamp) &&
+            PSXRecompV4::host_file_identity(manifest_path,manifest_stamp);
+        if (qualified_stamps) {
         const auto reused = startup_counter("startup.plan_reuse");
         const auto hashed = startup_counter("startup.disc_hash");
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc, &error) &&
@@ -1691,6 +1802,29 @@ int main(int argc, char** argv) {
               "missing output fails without invoking converter");
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc, &error) && prepare_calls == 4,
               "full preparation repairs missing output");
+        } else {
+            const auto hashed = startup_counter("startup.disc_hash");
+            const auto reused = startup_counter("startup.plan_reuse");
+            const auto before = prepare_calls;
+            check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc,&error) &&
+                  PSXRecompV4::mod_runtime_commit(disc,&error) && prepare_calls==before+2 &&
+                  startup_counter("startup.disc_hash")==hashed+2 &&
+                  startup_counter("startup.plan_reuse")==reused,
+                  "unqualified identities retain full preparation and hashing without tickets");
+            check(PSXRecompV4::mod_runtime_initialize(cached_root,"READER",0,{},&error) &&
+                  !PSXRecompV4::mod_runtime_try_prepare_cached(disc) && prepare_calls==before+2,
+                  "unqualified warm startup never invokes the converter or claims readiness");
+            const auto input_time=fs::last_write_time(input_path);
+            write_bytes(input_path,{4,3,2,1});fs::last_write_time(input_path,input_time);
+            check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc,&error) && prepare_calls==before+3,
+                  "restored-mtime source still goes through full preparation");
+            auto corrupt=rom;corrupt[32]^=1;write_bytes(output_path,corrupt);
+            check(!PSXRecompV4::mod_runtime_try_prepare_cached(disc) && prepare_calls==before+3,
+                  "unqualified corrupt output never obtains cached readiness");
+            fs::remove(output_path);
+            check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc,&error) && prepare_calls==before+4,
+                  "unqualified full preparation repairs missing content");
+        }
         throw_probe = true;
         check(!PSXRecompV4::mod_runtime_try_prepare_cached(disc), "throwing cached probe fails safely");
         throw_probe = false;
@@ -1722,6 +1856,7 @@ int main(int argc, char** argv) {
         mutate_on_resolve = false;
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc, &error) && prepare_calls == before_mutation + 2,
               "unstable resolve never publishes a reusable ticket");
+        if (qualified_stamps) {
         // Altering a syntactically valid digest must fail its receipt checksum.
         std::filesystem::path cache_dir;
 #if defined(_WIN32)
@@ -1747,6 +1882,7 @@ int main(int argc, char** argv) {
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(disc, &error) &&
               startup_counter("startup.disc_hash") == before_corrupt_hash + 1,
               "full launch repairs corrupted digest with authoritative source hash");
+        }
         // Catalog changes cannot certify stale in-memory parsed manifests.
         write_text(manifest_path, manifest + "\n# external catalog mutation\n");
         check(!PSXRecompV4::mod_runtime_prepare_for_launcher(disc, &error) &&
@@ -1954,6 +2090,84 @@ int main(int argc, char** argv) {
     check(!psx_mod_netplay_is_active() && psx_mod_netplay_savestates_supported() &&
           PSXRecompV4::mod_runtime_fingerprint().empty(), "profile end clears hooks and snapshot policy");
     check(read_selection() == offline_selection, "profile end preserves offline selection file");
+
+    {
+        const auto a = root / "portable-default-a";
+        const auto b = root / "portable-default-b";
+        const auto manifest = a / "bundled/portable.hd/1.0.0/manifest.toml";
+        write_text(manifest,
+            "format_version = 5\nid = \"portable.hd\"\nversion = \"1.0.0\"\nname = \"Portable HD fixture\"\nresolver = \"declarative\"\nsave_compatibility = \"shared\"\n"
+            "[[target]]\ngame_id = \"SLUS-PORTABLE\"\n"
+            "[[feature]]\nid = \"hd\"\nname = \"HD\"\ndefault_enabled = false\n"
+            "[[resource]]\nfeature = \"hd\"\nid = \"pack\"\nlabel = \"Pack\"\nformat = \"directory\"\nrequired = true\n"
+            "[[option]]\nfeature = \"hd\"\nid = \"replacements\"\nlabel = \"Load\"\ntype = \"boolean\"\ndefault = \"true\"\n"
+            "[[option]]\nfeature = \"hd\"\nid = \"dump\"\nlabel = \"Dump\"\ntype = \"boolean\"\ndefault = \"false\"\n"
+            "[[plugin]]\nfeature = \"hd\"\nid = \"psx.hd-textures\"\n");
+        check(PSXRecompV4::mod_runtime_initialize(a, "SLUS-PORTABLE", 0x80002000, {}, &error), error.c_str());
+        check(fs::is_directory(a / "texture-packs/SLUS-PORTABLE/replacements"), "disabled default was actually initialized");
+        check(PSXRecompV4::mod_runtime_commit({}, &error), error.c_str());
+        fs::copy(a, b, fs::copy_options::recursive, ec);
+        check(!ec, "copy default-disabled fixture to relocated root");
+        fs::rename(a, root / "unavailable-default-a", ec);
+        check(!ec && !fs::exists(a), "old install root is unavailable");
+        check(PSXRecompV4::mod_runtime_initialize(b, "SLUS-PORTABLE", 0x80002000, {}, &error), error.c_str());
+#if defined(RECOMP_LAUNCHER)
+        const auto* portable_provider = PSXRecompV4::mod_runtime_launcher_provider();
+        RecompLauncherCModResource portable_resource{};
+        check(portable_provider && portable_provider->feature_resource_get(portable_provider->ctx,
+              "portable.hd", "hd", 0, &portable_resource) &&
+              fs::path(portable_resource.path) == fs::absolute(b / "texture-packs/SLUS-PORTABLE"),
+              "live launcher getter exposes exact relocated B default while disabled");
+#endif
+        check(PSXRecompV4::mod_runtime_commit({}, &error), error.c_str());
+        PSXRecompV4::ModPackageManager readback(b);
+        check(readback.scan(&error) && readback.load_state(&error), error.c_str());
+        check(readback.selected_package("portable.hd") != nullptr, "portable fixture package remains selected");
+        const auto retained = readback.feature_resource_path("portable.hd", "hd", "pack");
+        check(retained.empty() || retained.lexically_relative(a).empty() ||
+              *retained.lexically_relative(a).begin() == "..",
+              "disabled generated default must not retain unavailable install root");
+        check(!fs::exists(a), "relocation does not recreate unavailable old root");
+        check(readback.set_feature_enabled("portable.hd", "hd", true, &error) && readback.save_state(&error), error.c_str());
+        check(PSXRecompV4::mod_runtime_initialize(b, "SLUS-PORTABLE", 0x80002000, {}, &error), error.c_str());
+        const auto before_cwd = fs::current_path();
+        fs::current_path(root);
+        check(PSXRecompV4::mod_runtime_commit({}, &error), error.c_str());
+        mod_runtime_activate_plugins();
+        check(fs::path(hd_root) == fs::absolute(b / "texture-packs/SLUS-PORTABLE"),
+              "enabled relocated plugin receives B default despite changed cwd");
+        fs::current_path(before_cwd);
+
+        PSXRecompV4::ModPackageManager generated(b);
+        check(generated.scan(&error) && generated.load_state(&error), error.c_str());
+        check(generated.set_generated_feature_resource_default("portable.hd", "hd", "pack",
+              "texture-packs/SLUS-PORTABLE", &error), error.c_str());
+        const auto expected = fs::absolute(b / "texture-packs/SLUS-PORTABLE");
+        check(generated.feature_resource_path("portable.hd", "hd", "pack") == expected,
+              "manager getter returns exact relocated default");
+        const auto resolved = generated.resolve("SLUS-PORTABLE");
+        check(resolved.ok && resolved.resources.size() == 1 && resolved.resources[0].path == expected,
+              "committed resolver and getter agree on B");
+        for (const auto& invalid : {fs::path("../escape"), fs::path("./escape"), expected})
+            check(!generated.set_generated_feature_resource_default("portable.hd", "hd", "pack", invalid, &error),
+                  "generated defaults reject rooted or traversal paths");
+        const auto external = root / "explicit-external-pack";
+        fs::create_directories(external);
+        check(generated.set_feature_resource_path("portable.hd", "hd", "pack", external, &error) &&
+              generated.save_state(&error), error.c_str());
+        fs::rename(external, root / "unavailable-external-pack", ec);
+        check(!ec, "explicit external fixture made unavailable");
+        PSXRecompV4::ModPackageManager legacy(b);
+        check(legacy.scan(&error) && legacy.load_state(&error) &&
+              legacy.set_generated_feature_resource_default("portable.hd", "hd", "pack",
+                  "texture-packs/SLUS-PORTABLE", &error), error.c_str());
+        check(legacy.feature_resource_path("portable.hd", "hd", "pack") == external,
+              "missing legacy absolute user selection remains unchanged");
+        const auto missing_plan = legacy.resolve("SLUS-PORTABLE");
+        check(missing_plan.resources.size() == 1 && missing_plan.resources[0].path == external,
+              "resolver preserves missing selection for existing downstream validation");
+    }
+
     fs::remove_all(root, ec);
     if (failures) return 1;
     std::cout << "mod runtime tests passed\n";
