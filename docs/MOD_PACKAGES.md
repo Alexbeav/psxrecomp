@@ -1054,6 +1054,28 @@ re-enter guest execution, because pending branch/load state is live.
 do not change guest behavior. Function entry replacement remains the separate
 `psx_mod_register_function_entry_plugin` interface.
 
+### Guarded immediate selectors
+
+A plugin that must change a constant, offset or address inside compiled game
+code (a capacity compare, a relocated table) lists the instruction under
+`[mod_immediate]` in `game.toml` and picks the variant with
+`psx_mod_set_immediate_selector(group, selector)` from its activation
+callback. The instruction bytes stay original, so static AOT code, cached
+overlays and the interpreter keep matching their guards and run the same
+variant. Selection is accepted only during offline activation, then sealed until
+restart; later attempts, including switching back to selector 0, are refused.
+Every new session starts at selector 0 (the stock instruction). Nonzero online
+activation is refused and invalidates the launch even if a plugin ignores the
+setter result. This capability does not negotiate online variants.
+
+Non-stock frozen selections join the existing save-state content scope, including
+for packages declaring shared saves. A state made with a different selection is
+outside the session's slot namespace; the chosen values do not rewind or switch
+mid-session. Memory-card paths/formats are unchanged by this selector policy. Existing
+unscoped states are not automatically assigned a non-stock selection: they do
+not record which variant created them. Config rules and the emitted switch: docs/config_schema.md "Mod
+immediates".
+
 ### Presentation bezel packages
 
 The framework registers `psx.bezel`, a trusted presentation plugin for OpenGL

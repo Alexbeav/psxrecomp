@@ -277,6 +277,8 @@ if(BUILD_TESTING)
             "${PSXRECOMP_ROOT}/tools/tests/test_counted_mips_relocations.py")
         add_test(NAME interp_mod_entry_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_entry_guards.py")
+        add_test(NAME interp_mod_immediate_guards_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_immediate_guards.py")
         add_test(NAME mirror_pc_preserved_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mirror_pc_preserved_guards.py")
         add_test(NAME segment_miss_wiring_test COMMAND "${Python3_EXECUTABLE}"
@@ -1377,6 +1379,7 @@ if(BUILD_TESTING)
     add_test(NAME netplay_content_gate_test COMMAND netplay_content_gate_test)
 
     add_executable(mod_runtime_test
+        src/mod_immediate.c
         tests/test_mod_runtime.cpp
         src/iso_reader_c.cpp
         src/host_span_ring.c

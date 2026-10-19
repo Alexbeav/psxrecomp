@@ -4,6 +4,7 @@
 #include "host_file_identity.h"
 #include "mod_packages.h"
 #include "mod_plugins.h"
+#include "mod_immediate.h"
 #include "psx_sha256.h"
 #include "psx_lobby_client.h"
 
@@ -284,7 +285,12 @@ static void test_disc_audio_plugin() {
     if(!psx_mod_append_cdda_tracks(tracks,2,starts,counts) ||
        starts[0]!=150 || starts[1]!=153 || counts[0]!=3 || counts[1]!=2) failures++;
 }
+static int immediate_activation_choice, immediate_reset_accepted;
+static void test_immediate_reset(void) {
+    immediate_reset_accepted = psx_mod_set_immediate_selector(1, 2);
+}
 static void test_media_plugin(void) {
+    if (immediate_activation_choice) psx_mod_set_immediate_selector(1, immediate_activation_choice);
     media_access = psx_mod_current_resource_bytes("rom", &media_snapshot, &media_size);
     const uint8_t* foreign = nullptr;
     uint64_t size = 0;
@@ -1388,6 +1394,38 @@ int main(int argc, char** argv) {
         std::string save_scope;
         check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope.empty(),
               "shared packages retain historical save-state paths");
+        const PSXModImmediateSite site = {0x80020000u, 0x28420020u, 1u, 2u, {64, 128}};
+        psx_mod_immediate_set_sites(&site, 1);
+        check(psx_mod_register_session_reset_plugin("immediate.test.reset",test_immediate_reset),
+              "register reset-boundary probe");
+        immediate_activation_choice = 1;
+        psx_mod_immediate_begin_session(0);
+        mod_runtime_activate_plugins();
+        check(!immediate_reset_accepted && psx_mod_immediate_select(1)==1,
+              "cleanup cannot select; active plugin selects64");
+        std::string scope64, scope128;
+        check(PSXRecompV4::mod_runtime_savestate_scope(scope64,&error) && scope64.size()==64,
+              "non-stock selectors isolate even shared-package savestates");
+        check(!psx_mod_set_immediate_selector(1, 2), "live selection refused");
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope==scope64,
+              "failed live selection preserves current state compatibility");
+        immediate_activation_choice = 2;
+        psx_mod_immediate_begin_session(0);
+        mod_runtime_activate_plugins();
+        check(psx_mod_immediate_select(1)==2, "next boot selects128");
+        check(PSXRecompV4::mod_runtime_savestate_scope(scope128,&error) && scope128.size()==64 && scope128!=scope64,
+              "128-slot session cannot read64-slot state namespace");
+        psx_mod_immediate_begin_session(1);
+        mod_runtime_activate_plugins();
+        check(!psx_mod_immediate_session_valid() && psx_mod_immediate_select(1)==0,
+              "online activation cannot enable selectors even if plugin ignores refusal");
+        immediate_activation_choice = 0;
+        psx_mod_immediate_begin_session(0);
+        mod_runtime_activate_plugins();
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope.empty(),
+              "stock selectors restore historical paths");
+        psx_mod_immediate_reset();
+        psx_mod_immediate_set_sites(nullptr, 0);
     }
     const std::string host_media_fp = PSXRecompV4::mod_runtime_plan_fingerprint_portable();
     check(host_media_fp.size() == 64, "verified external media has a portable netplay identity");

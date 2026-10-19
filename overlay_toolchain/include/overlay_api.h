@@ -126,8 +126,9 @@
  *      already holds every release-line callback; shards built against either
  *      v28 or v29 are rejected and recompiled.
  * v31/v32: reserved for the experimental selector/adapter stack.
- * v33: guarded load/store effective-address adapter on the master layout. */
-#define PSX_OVERLAY_ABI_VERSION 33
+ * v33: guarded load/store effective-address adapter on the master layout.
+ * v34: frozen, activation-only immediate selectors on the v33 layout. */
+#define PSX_OVERLAY_ABI_VERSION 34
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -391,6 +392,8 @@ typedef struct OverlayCallbacks {
     void (*mod_instruction)(CPUState*, uint32_t, uint32_t);
     /* Guarded load/store effective-address adapters (ABI v33). */
     uint32_t (*mod_memory_address)(const CPUState*, uint32_t, uint32_t, uint32_t);
+    /* [[mod_immediate.sites]] selector of a group (ABI v34); NULL = stock. */
+    uint32_t (*mod_immediate_select)(uint32_t group);
 } OverlayCallbacks;
 
 #ifdef __cplusplus

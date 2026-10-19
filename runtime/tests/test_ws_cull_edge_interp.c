@@ -20,6 +20,7 @@
  * dropped at link time (LTO plus section GC / dead_strip), so only the stubs
  * below are needed. */
 #include "../src/gpu.c"
+#include "../src/mod_immediate.c"
 #include "../src/dirty_ram_interp.c"
 
 #include <stdio.h>

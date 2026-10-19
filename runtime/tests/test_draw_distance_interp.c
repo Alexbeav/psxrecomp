@@ -22,6 +22,7 @@
 #define PSX_HAS_GAME_DISPATCH 1
 #include "../src/draw_distance.c"
 #include "../src/gpu.c"
+#include "../src/mod_immediate.c"
 #include "../src/dirty_ram_interp.c"
 
 #include <stdio.h>
@@ -51,9 +52,10 @@ uint32_t i_mask;
 uint64_t psx_cycle_count;
 uint32_t g_psx_mod_function_entry_hooks;
 uint32_t g_psx_mod_instruction_hooks;
-static uint32_t address_calls, shadow_address;
+static uint32_t address_calls, shadow_address, address_word;
 uint32_t psx_mod_memory_address(const CPUState *cpu, uint32_t pc, uint32_t word, uint32_t address) {
     (void)cpu; (void)pc; (void)word;
+    address_word = word;
     ++address_calls;
     return address + 0x1000u;
 }
@@ -355,6 +357,19 @@ static void test_memory_addresses(void) {
     step(&cpu, TEXT_LO, 0x8ca50000u); /* lw a1,0(a1) */
     CHECK(cpu.gpr[5] == 0x12345678u && shadow_address == 0x80009000u,
           "load destination may alias original base register");
+    const uint32_t original = 0x8ca30000u; /* lw v1,0(a1) */
+    const PSXModImmediateSite immediate = {TEXT_LO, original, 3u, 1u, {4}};
+    psx_mod_immediate_set_sites(&immediate, 1);
+    psx_mod_immediate_begin_session(0);
+    psx_mod_immediate_begin_activation();
+    CHECK(psx_mod_set_immediate_selector(3, 1), "select relocated offset at activation");
+    psx_mod_immediate_end_activation();
+    memset(&cpu, 0, sizeof cpu); cpu.read_word = psx_read_word;
+    cpu.gpr[5] = 0x80008000u; put_word(0x80009004u, 0x76543210u);
+    step(&cpu, TEXT_LO, original);
+    CHECK(cpu.gpr[3] == 0x76543210u && address_word == original && shadow_address == 0x80009004u,
+          "selected immediate and address adapter share original guard and resolved PGXP address");
+    psx_mod_immediate_reset(); psx_mod_immediate_set_sites(NULL, 0);
     g_psx_mod_instruction_hooks = 0;
 }
 
