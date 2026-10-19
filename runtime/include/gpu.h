@@ -46,6 +46,10 @@ typedef struct {
 } GpuDisplayInfo;
 
 void gpu_get_display_info(GpuDisplayInfo* out);
+/* Render-pass GPU register checkpoint (render_pass.c). One at a time. */
+int gpu_pass_checkpoint_save(void);
+void gpu_pass_checkpoint_restore(void);
+uint64_t gpu_pass_state_hash(void);
 
 /* Perspective-correct UV arming rate, per condition. armed/attempts is the
  * real perspective coverage: attempts counts only textured triangles, so it is
@@ -60,21 +64,33 @@ void gpu_texture_correction_stats(uint64_t *attempts, uint64_t *armed,
 int  gpu_display_is_depth24(void);
 void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
                            uint8_t* r, uint8_t* g, uint8_t* b);
+/* Same decode against any 1024x512 VRAM image (e.g. a display-ring snapshot)
+ * instead of live VRAM: 15-bit or depth24 per `di`. */
+void gpu_display_pixel_rgb_in(const uint16_t* image, const GpuDisplayInfo* di,
+                              uint32_t x, uint32_t y,
+                              uint8_t* r, uint8_t* g, uint8_t* b);
 uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y);
 /* Batch equivalent of calling gpu_display_pixel_argb(di, x, y) for x in
  * [0, count) on a depth24 (FMV) scanline — same output, far less per-pixel
  * overhead. `out` must hold at least `count` uint32_t ARGB entries. */
 void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
                              uint32_t count);
+/* Stage a depth24 frame into a w x di->screen_height ARGB canvas and
+ * black-fill trailing columns no upload covered (see gpu.c). Returns the
+ * source rows staged. */
+uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo* di, uint32_t* buf,
+                                   uint32_t w, uint32_t margin);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
  * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
  * else the covered RGB width. Present black-fills [limit, crtc_w) without
  * shrinking the CRTC-derived draw width (avoids a flickering black pillar). */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
-/* MotK intro cuts retarget GP1(07h). While hold > 0, present should skip
- * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
- * per vblank; returns non-zero while the hold is still active after tick. */
+/* MotK intro cuts retarget GP1(07h): the guest-state hold counts down at
+ * guest VBlank (gpu_vblank_tick). Returns non-zero while the latest guest
+ * VBlank was held (read-only; guest state in the GPU snap): presents should
+ * skip Swap (keep the prior frame) so stale trailing
+ * VRAM never flashes. */
 int      gpu_depth24_present_hold_tick(void);
 /* After savestate restore: clear ephemeral hold so the restored depth24
  * frame can present immediately (span/prev_h come from the GPU snap). */
@@ -84,6 +100,9 @@ void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);
 uint64_t gpu_get_gp0_count(void);  /* Total GP0 writes since init */
 void gpu_get_gp0_stats(uint64_t* nop, uint64_t* fill, uint64_t* draw, uint64_t* env, uint64_t* copy);
+/* Fixed command words; -1 denotes a terminated polyline, 0 an unknown opcode.
+ * Transfer payloads follow the returned header length. */
+int gpu_gp0_command_word_count(uint8_t opcode);
 
 typedef struct {
     uint32_t left, top, right, bottom;
@@ -94,6 +113,11 @@ void gpu_get_draw_area(GpuDrawArea* out);
  * areas. Presentation-only helpers use this to expand a local split-screen
  * viewport without changing the underlying framebuffer or netplay hashes. */
 int  gpu_last_frame_vertical_split_screen(void);
+int32_t psx_ws_local_viewport_width(int32_t vanilla);
+void gpu_ws_set_local_viewport_width_sites(const uint32_t *sites, int count);
+/* The title's local viewport uses the native-wide per-camera renderer. */
+void gpu_ws_set_local_viewport_native_wide(int enabled);
+int psx_ws_is_local_viewport_width_site(uint32_t pc);
 void gpu_vertical_split_debug(int *active, int *left_age, int *right_age);
 uint16_t gpu_vram_peek(int x, int y);
 
@@ -105,11 +129,12 @@ typedef struct {
 void gpu_arm_shaded_quad_capture(void);
 int  gpu_get_shaded_quad_capture(const GpuSqCapEntry** out);
 
-/* Per-frame GP0 command ring (always-on; query via debug server).
- * Each entry records the GP0 command header + up to 6 payload words
- * (longer commands like 0x3C shaded textured quad are truncated to 6).
+/* Per-frame GP0 command ring (always-on in debug-tool builds).
+ * Each entry records up to GPU_GP0_RING_MAX_WORDS command words, including
+ * the header; longer commands are truncated.
  * Stamped with the s_frame_count value at issue time so a debug
- * client can pull all commands for any frame in the ring window. */
+ * client can pull all commands for any frame in the ring window.
+ * PSX_NO_DEBUG_TOOLS builds report zero total/capacity and empty dumps/spans. */
 #define GPU_GP0_RING_MAX_WORDS 12
 typedef struct {
     uint32_t frame;
@@ -171,7 +196,40 @@ void gpu_ws_configure(int aspect_num, int aspect_den,
 /* [widescreen] full_2d: opt a pure-2D sprite game into the widescreen present
  * path (treat every in-game frame as gameplay, since it never tags 3D prims). */
 void gpu_ws_set_full_2d(int on);
+/* Signed 16-bit camera/min/max; active is a nonzero byte. Requires bg2d hooks.
+ * Zero addresses disable the feature. No guest memory is written. */
+void gpu_ws_set_view_anchor(uint32_t camera, uint32_t min, uint32_t max, uint32_t active);
+/* Optional authored scene bounds when native camera locks do not delimit
+ * visible geometry. Set before layer setup; disable when leaving the scene.
+ * Changes presentation only, and has no effect without view anchoring. */
+void gpu_ws_set_view_bounds_override(int enabled, int minimum, int maximum);
+/* Bracket each bg2d packet producer, with its guest packet pointer. The
+ * independent-layer mask identifies parallax backdrops that may anchor to
+ * their own map edges; linked/foreground layers retain the world origin. */
+void gpu_ws_bg2d_begin_view_layer(unsigned layer, uint32_t packet, unsigned independent_mask);
+void gpu_ws_bg2d_end_view_layer(unsigned layer, uint32_t packet);
+/* Opt-in host-produced SPRT_16 packets, 32-byte slots in enhancement DMA RAM.
+ * The 16-byte standard packet is followed by signed view shift, left/right
+ * padding and GPU_WS_BG2D_PACKET_MAGIC, optionally ORed with MIRROR_X.
+ * Coordinates use signed 16-bit X; ordinary
+ * packets retain PS1 signed 11-bit coordinates. The guest tile loop/ring stays
+ * native while this arena is registered. Allocate once during mod activation. */
+void gpu_ws_bg2d_set_host_arena(uint32_t base, uint32_t size);
+#define GPU_WS_BG2D_PACKET_MAGIC 0x58364247u
+#define GPU_WS_BG2D_BANK_PACKET_MAGIC 0x58364248u
+/* Bank packets pack signed shift in +16 low half and immutable bank ID in
+ * its high half. Their indices use the bank, but palettes remain live VRAM.
+ * Keep the original magic readable for pending packets in older snapshots. */
+#define GPU_WS_BG2D_MIRROR_X 0x80000000u
+struct WsViewAnchor;
+int gpu_ws_bg2d_get_view(unsigned layer, struct WsViewAnchor *view);
 void gpu_ws_set_auto_ui_squash(int on);
+/* [widescreen] auto_ui_anchor = "in_place": each UI run squashes about its own
+ * centre rather than an edge/centre third (default "edges"). */
+void gpu_ws_set_auto_ui_in_place(int on);
+/* [widescreen] auto_ui_size: 1 = proportional (the auto-UI HUD shrinks by
+ * sqrt((16:9) / aspect) beyond 16:9), 0 = original. */
+void gpu_ws_set_auto_ui_proportional(int on);
 /* [widescreen.bg2d] Capcom 2D background tile-loop widen — hooked at the renderer's
  * column-count / start-tile-col / start-screen-x instructions. Identity at 4:3
  * and in the engine's 512 hi-res mode. */
@@ -221,12 +279,33 @@ int psx_ws_mmx6_bg_stream_left(int x);
 int psx_ws_mmx6_bg_stream_right(int x);
 struct CPUState;
 void psx_ws_sprite_tag(struct CPUState* cpu);
+/* Explicit screen-space tags for trusted title mods. Tag the P_TAG address
+ * before submission; no guest packets are changed. Anchors/period are authored
+ * display pixels. Unlike billboard tags these do not classify a frame as 3D.
+ * Corrections are identity at 4:3 and on pure-2D screens. Tiled tags apply only
+ * to variable textured rectangles and repeat a title-proven composite period.
+ * A tiled strip reconstructs a horizontally clipped source: authored U is its
+ * left crop, so restore X-U, U=0 and source_width before repeating. */
+void gpu_ws_tag_screen_prim(uint32_t prim, int32_t anchor);
+/* Resize an untextured quad group between two independently anchored edges.
+ * Useful for health gauges that should fill the available width while their
+ * labels and neighboring timer keep their original proportions. */
+void gpu_ws_tag_stretched_prim(uint32_t prim, int32_t left, int32_t right,
+                               int32_t left_anchor, int32_t right_anchor);
+void gpu_ws_tag_tiled_strip(uint32_t prim, int32_t anchor,
+                            int32_t period, int32_t source_width);
+
 /* Native-wide (mode 2) on a game frame. ws_nw_extra() is the total width the
  * frame grows by, in display pixels (the present path widens the display read
  * by this; 0 when native-wide is inactive). */
 int  ws_native_wide_active(void);
 int  ws_nw_extra(void);
+/* Configured per-side reveal, excluding the world-culling safety envelope.
+ * Available before scene classification so first-frame overlays can fit. */
+int gpu_ws_configured_x_reveal(void);
 int  ws_nw_present_width(void);
+/* Display width (native px) the native-wide margins are derived from. */
+int  gpu_ws_display_width(void);
 void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
 int  gpu_ws_netplay_local_viewport_base_x(void);
 int  gpu_ws_netplay_local_viewport_width(void);
@@ -237,6 +316,11 @@ int  gpu_ws_present_native_43(void);
 /* Per-side X cull-margin (screen/world units) emitted into the game's draw-
  * cull immediates by the recompiler ([widescreen.cull]); 0 unless stretching. */
 int  psx_ws_x_margin(void);
+/* Netplay own-view mods: while on, psx_ws_x_margin() is 0 (the stock cull)
+ * except inside a sandboxed local-view render (render_pass.c sets the scope). */
+void gpu_ws_set_local_view_only(int on);
+void gpu_ws_set_local_view_scope(int on);
+int  gpu_ws_local_view_only(void);
 void gpu_ws_set_cull_guard_pixels(int pixels);
 /* Bias/range activation-window margin. This may include an additional
  * resident-object lead while render/terrain paths retain psx_ws_x_margin(). */
@@ -251,11 +335,25 @@ void gpu_ws_set_vxrange_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_depth_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_plane_nx_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_xclip_load_sites(const uint32_t *sites, int nsites);
+/* Interpreter copies of the explicit branch kinds ([widescreen.cull]
+ * bltz_sites, bgez_sites, branch_keep_sites) and of clip_edge_x_load_sites
+ * with its screen width (clip_edge_width). Native code compiles them in. */
+void gpu_ws_set_branch_cull_sites(const uint32_t *bltz, int nbltz,
+                                  const uint32_t *bgez, int nbgez,
+                                  const uint32_t *keep, int nkeep);
+void gpu_ws_set_clip_edge_x_load_sites(const uint32_t *sites, int nsites,
+                                       uint32_t width);
 void gpu_ws_set_cull_keep_sites(const uint32_t *addresses,
                                 const uint32_t *expected,
                                 const uint32_t *results, int nsites);
 void gpu_ws_set_angle_sites(const uint32_t *addresses,
                             const uint32_t *expected, int nsites);
+/* [[widescreen.cull.scale]]: full-word-guarded SLT/SLTU sites whose rs (0) or
+ * rt (1) operand is a runtime +/-half_extent*z frustum bound. */
+void gpu_ws_set_cull_scale_sites(const uint32_t *addresses,
+                                 const uint32_t *expected,
+                                 const uint32_t *operands,
+                                 const uint32_t *half_extents, int nsites);
 void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t *expected,
                             const uint32_t *cosine_thresholds,
@@ -273,6 +371,8 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t queue_capacities[3],
                             const uint32_t queue_type_masks[3]);
 int  psx_ws_is_cull_bias_site(uint32_t pc);
+void gpu_ws_set_bias_lower_cull_sites(const uint32_t *sites, int nsites);
+int  psx_ws_is_cull_bias_lower_site(uint32_t pc);
 int  psx_ws_is_cull_slti_site(uint32_t pc);
 int  psx_ws_is_cull_slti_lower_site(uint32_t pc);
 int  psx_ws_is_cull_negsub_site(uint32_t pc);
@@ -284,11 +384,29 @@ int  psx_ws_is_cull_plane_nx_site(uint32_t pc);
 int32_t  psx_ws_plane_nx(int32_t nx);
 int  psx_ws_is_cull_xclip_load_site(uint32_t pc);
 uint32_t psx_ws_xclip_bound(uint32_t vanilla);
+int  psx_ws_is_cull_bltz_site(uint32_t pc);
+int  psx_ws_is_cull_bgez_site(uint32_t pc);
+int  psx_ws_is_cull_branch_keep_site(uint32_t pc);
+void gpu_ws_set_masked_reject_sites(const uint32_t *addresses,
+    const uint32_t *expected, const uint32_t *masks, int count);
+int psx_ws_masked_reject(uint32_t flags, uint32_t mask);
+int psx_ws_masked_reject_site(uint32_t pc, uint32_t instr,
+    uint32_t flags, int vanilla);
+int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla);
+uint64_t gpu_ws_native_wide_nclip_rescues(void);
+int  psx_ws_is_cull_clip_edge_x_load_site(uint32_t pc);
+uint32_t psx_ws_clip_edge_width(void);
 uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced);
 int psx_ws_cull_keep_site(uint32_t pc, uint32_t instr, uint32_t vanilla,
                           uint32_t *out);
 uint32_t psx_ws_angle_widen(uint32_t vanilla);
 int psx_ws_angle_site(uint32_t pc, uint32_t instr, uint32_t *out);
+/* bound * (half_extent + margin) / half_extent; identity at 4:3. */
+int32_t psx_ws_cull_scale(int32_t bound, int32_t half_extent);
+/* Interpreter path for a configured scale site: returns 1 and the widened
+ * compare verdict in *out when (pc, instr) is a configured site. */
+int psx_ws_cull_scale_site(uint32_t pc, uint32_t instr, uint32_t rs_value,
+                           uint32_t rt_value, uint32_t *out);
 uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
                                    uint32_t object, int32_t x, int32_t z,
                                    int32_t y);
@@ -308,12 +426,27 @@ int32_t psx_ws_screen_x_bound(int32_t vanilla);
  * `sltiu rt, sx, 0x140/0x141` through this one helper so every overlay execution
  * path widens identically. Returns the sltiu verdict (1 = keep). 0 at 4:3. */
 int  psx_ws_cull_sltiu(uint32_t sx, uint32_t imm);
+/* screen_x_sites on `sltu rd, SX, W` (W in a register): -4m <= SX < W. */
+int  psx_ws_cull_sltu_band(uint32_t sx, uint32_t bound);
 /* Signed-funnel variants (min/max + center±halfwidth idioms — see
  * ws_cull_detect.h): right-edge widen for `slti v, minSX, W` and left-edge
  * widen for the paired `bltz maxSX` reject. Identity at 4:3. */
 int  psx_ws_cull_slti(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_bltz(uint32_t v);
+/* [widescreen.cull] bgez_sites: `bgez SX, keep` keeps while SX >= -margin
+ * (the exact partner of bltz_sites; see ws_cull_edge.h). Identity at 4:3. */
+int  psx_ws_cull_bgez(uint32_t v);
+/* [widescreen.cull] clip_edge_x_load_sites: a loaded screen-X clip bound of 0
+ * becomes -margin and one of `w` becomes w+margin; interior bounds and 4:3
+ * are unchanged (see ws_cull_edge.h). */
+uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w);
+/* [widescreen.cull] screen_x_sites on `lui` and `bltz`: a screen X kept in the
+ * high half of a register. The edge `lui rt, W` becomes (W + margin) << 16 and
+ * the `bltz` is taken while SX < -margin (see ws_cull_edge.h). Identity at
+ * 4:3. */
+uint32_t psx_ws_cull_lui_hi(uint32_t imm);
+int  psx_ws_cull_bltz_hi(uint32_t v);
 int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm);
 /* True if a run of instruction words carries the screen-extent reject signature
  * (a width compare AND a height compare from the configured immediate sets).
@@ -348,6 +481,10 @@ void psx_ws_note_gte_project(int nverts);
  * heuristic gameplay classification for native-wide presentation. */
 void gpu_ws_set_gameplay_state_gate(uint32_t addr,
                                     const uint32_t *values, int nvalues);
+/* [netplay] local_viewport_state_*: a split frame counts as a vertical split
+ * (netplay local viewport) only while this word holds one of the values. */
+void gpu_ws_set_local_viewport_state_gate(uint32_t addr,
+                                          const uint32_t *values, int nvalues);
 /* Native-wide HUD corner re-anchoring ([widescreen] nw_hud_corners): push
  * outer-third screen-space HUD primitives out to the true wide-frame corners
  * (they otherwise sit inset by the reveal). Runtime-only. Off by default. */
@@ -355,10 +492,42 @@ void gpu_ws_set_nw_hud_corners(int on);
 void gpu_ws_tag_hud_primitive(uint32_t primitive, int edge);
 void gpu_ws_tag_world_primitive(uint32_t primitive, int is_world);
 void gpu_ws_set_adaptive_backdrop_preload(int enabled);
-/* Explicit native-wide HUD packet anchor from a trusted title plugin.
+/* Explicit screen-space HUD packet anchor from a trusted title plugin.
+ * Native-wide translates; projection-and-stretch scales about the anchor.
  * `prim` is the address of the PsyQ P_TAG word; the drawn command starts at
  * prim+4. anchor: -1 = left, 0 = center, +1 = right. */
 void gpu_ws_tag_hud_prim(uint32_t prim, int anchor);
+/* Stretch a trusted authored background primitive about the display center in
+ * the native-wide output only (GL/SW). prim+4 is the command address, including
+ * for a command embedded inside a longer DMA packet. Only opaque polygons and
+ * variable textured rectangles (64h/65h) are accepted; address, full packet
+ * contents, and frame freshness are guarded.
+ * Tag the complete background composite before submitting its ordering table.
+ * The caller proves background identity/coverage; no guest data is modified. */
+void gpu_ws_tag_background_prim(uint32_t prim);
+/* Always-on counters for the explicit HUD-anchor and background tag tables:
+ * how many tags a title plugin offered, how many were rejected at insert
+ * (native-wide not configured / unreadable or unsupported command), and why
+ * executing primitives that matched a tagged address were or were not
+ * honoured. TCP: {"cmd":"ws_tag_stats"}. */
+typedef struct GpuWsTagStats {
+    uint64_t tag_calls;
+    uint64_t tag_rejected;
+    uint64_t hit;
+    uint64_t stale;
+    uint64_t guard_mismatch;
+    uint32_t last_tag_frame;
+    uint32_t last_hit_frame;
+} GpuWsTagStats;
+void gpu_ws_get_tag_stats(GpuWsTagStats *hud, GpuWsTagStats *background);
+/* Freeze/unfreeze the always-on GP0 command ring (capture mark). */
+void gpu_gp0_ring_set_frozen(int frozen);
+/* Fresh packet tags are eligible for background classification. */
+int gpu_ws_background_stretch_active(void);
+/* A tagged background can remain in a wide surface after its packet expires.
+ * Once used, retain full compositing until GPU reset or snapshot restoration.
+ * Packet freshness must never re-enable canonical-center overwrites. */
+int gpu_ws_background_requires_full_composite(void);
 /* Clear synthetic margins to black over an opaque 0x64/65 rectangle's Y band
  * immediately before it executes. Packet-guarded; canonical VRAM is untouched. */
 void gpu_ws_tag_black_reveal_rect(uint32_t prim);
@@ -366,6 +535,23 @@ void gpu_ws_tag_black_reveal_rect(uint32_t prim);
  * reveal margins only. The caller verifies the composite's source period.
  * Original UVs, texel density, and canonical VRAM writes are unchanged. */
 void gpu_ws_tag_repeat_rect(uint32_t prim, int32_t period);
+/* Title-identified 15-bit sprite (0x64-0x67) that copies a framebuffer 1:1,
+ * e.g. a motion trail. Where it touches the draw area's edge, native-wide
+ * continues it into the bands from the source buffer's wide surface.
+ * Packet-guarded for the current frame; canonical VRAM is untouched. */
+void gpu_ws_tag_feedback_rect(uint32_t prim);
+/* Title-identified flat screen mask: extend vertical sides or horizontal
+ * letterbox panels to adaptive edges, preserving the interior opening.
+ * Packet guarded, cleared on reset/load, inert outside native-wide gameplay. */
+void gpu_ws_tag_screen_mask_quad(uint32_t prim);
+/* Title-owned flat/Gouraud radial screen mask. Render-only scale about the
+ * display centre; guest coordinates and timing stay unchanged. Scale >= 1,
+ * inert at 4:3, packet guarded and reset alongside other transient tags. */
+void gpu_ws_tag_radial_screen_mask_quad(uint32_t prim, float scale);
+/* Pure emulation-thread predicate for a known native-only effect/scene.
+ * Nonzero forces native 4:3; zero defers. No GPU calls or guest writes inside.
+ * Host configuration survives reset/load; classification reads live state. */
+void gpu_ws_set_native_scene_predicate(int (*predicate)(void));
 /* Targeted alternative for sprite-heavy 2D games: corner-anchor only primitives
  * whose ordering-table packet lives in the configured half-open RAM range. */
 void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
@@ -380,6 +566,7 @@ void gpu_ws_restore_linked_list_rank(uint32_t rank);
  * gradient / backdrop image) to fill the wide frame, so it no longer
  * pillarboxes at the reveal margins. Runtime-only. Off by default. */
 void gpu_ws_set_nw_backdrop(int on);
+int gpu_ws_native_wide_projection_correction(uint64_t *vertices);
 /* Native-wide flat-polygon backdrop stretch ([widescreen] nw_flat_backdrop):
  * stretch untextured primitives in the wide mirror without changing the
  * canonical 4:3 framebuffer. Intended for flat-colour sky/water backdrops. */
@@ -460,7 +647,9 @@ typedef struct {
     int      xnum, xden;        /* squash factor */
     int      mode;              /* 0 = off, 1 = squash, 2 = native-wide */
     int      nw_extra;          /* native-wide frame growth (display px), 0 if off */
+    int      view_anchor, view_left, view_right, view_shift, view_pad_left, view_pad_right;
     uint64_t cur_frame;
+    uint32_t bg2d_generations; /* Game background submissions, independent of vblank. */
     uint32_t last_tag_frame;    /* frame of newest tagged prim */
     uint32_t last_3d_frame;     /* frame of newest shaded prim (diagnostic) */
     uint32_t gte_verts;         /* RTPS/RTPT verts in the last completed frame */
@@ -469,6 +658,7 @@ typedef struct {
     uint32_t last_ovh_frame;    /* newest SUSTAINED polygon-overhang frame (the
                                    2D-only-scene classifier's world signal) */
     int      auto_ui_squash;     /* final-OT grouped UI correction configured */
+    int      auto_ui_in_place;   /* runs anchor at their own centre, not thirds */
     int      auto_ui_dense;      /* current list classified as a dense menu */
     uint32_t auto_ui_ot_rank;    /* highest populated UI rank in current list */
     uint64_t auto_ui_candidates;
@@ -486,6 +676,13 @@ typedef struct {
     uint64_t angle_43_identity;
     uint32_t angle_max_vanilla;
     uint32_t angle_max_widened;
+    /* Finite 2D backdrop verdict (ws_backdrop_extent.h), newest evaluation. */
+    int      bd_veto;           /* scene presented 4:3: backdrop stops short */
+    uint32_t bd_eval_frame, bd_rects, bd_last_short;
+    int      bd_full, bd_short;
+    int32_t  bd_min_x, bd_max_x, bd_reveal;
+    uint32_t bd_canon_pct, bd_left_pct, bd_right_pct;
+    uint64_t bd_evaluations, bd_short_frames;
 } GpuWsDebug;
 void gpu_ws_get_debug(GpuWsDebug* out);
 

@@ -26,12 +26,24 @@ void (*g_overlay_flush_pending_cycles)(void);
 uint32_t g_psx_cyc_batch;
 uint32_t g_psx_cyc_batch_limit;
 uint32_t *g_psx_cyc_local_acc;
+#ifndef PSX_STUBS_REAL_PGXP
+/* memory.c drops the PGXP shadow of a DMA / host store (pgxp.cpp).
+ * pgxp_untracked_store_test links the real engine. */
+void pgxp_invalidate_word(uint32_t addr) { (void)addr; }
+#endif
+#ifndef PSX_STUBS_REAL_ICACHE
+/* The I-cache model (psx_icache.c). isc_store_test links the real one. */
 uint32_t g_psx_icache_tv[1024];
+void psx_icache_isc_store(uint32_t biu, uint32_t addr, uint32_t value) {
+    (void)biu; (void)addr; (void)value; __builtin_trap();   /* SR.IsC is never set here */
+}
+#endif
 uint64_t psx_cycle_count;
 uint64_t s_frame_count;
 uint64_t psx_next_service_cycle;
 int psx_in_device_service;
 uint32_t g_dirty_ram_dispatch_pc_bitmap[(0x00800000u / 4u + 31u) / 32u];
+uint32_t g_dirty_ram_dispatch_seg_bitmap[3][(0x00800000u / 4u + 31u) / 32u];
 uint32_t g_dirty_ram_exec_pc_bitmap[(0x00800000u / 4u + 31u) / 32u];
 uint32_t g_dirty_ram_exec_page_bitmap[((0x00800000u / 4096u) + 31u) / 32u];
 
@@ -48,13 +60,21 @@ void audio_trace_event(uint16_t k, uint32_t a, uint32_t b) { (void)k; (void)a; (
 void parity_trace_note_write(uint32_t a, uint32_t w, uint32_t pc) { (void)a; (void)w; (void)pc; }
 uint32_t ls_read_hook(uint32_t a, int s, uint32_t v) { (void)a; (void)s; return v; }
 void ls_write_hook(uint32_t a, int s, uint32_t v) { (void)a; (void)s; (void)v; }
+void ls_shadow_record_unreplayable(void) {}
 int  fntrace_is_game_started(void) { return 0; }
+void fntrace_restore_game_started(int started) { (void)started; }
 void overlay_loader_note_code_write(void) {}
 void overlay_loader_resync_validation_after_restore(void) {}
 void gte_canonicalize_cpu_state(CPUState *cpu) { (void)cpu; }
 
 /* ---- scheduler / interrupts ------------------------------------------------ */
 void psx_advance_cycles_slow(uint32_t c) { psx_cycle_count += c; }
+/* [timing] guest_cycle_scale at 1 (faithful) for the real memory.c/icache. */
+uint32_t g_psx_gcs_recip_q16 = 65536u;
+uint32_t g_psx_gcs_frac = 0u;
+uint32_t psx_guest_cycle_scale_config(void) { return 1u; }
+void psx_guest_cycle_scale_snapshot(uint32_t out[3]) { out[0] = out[1] = out[2] = 0u; }
+void psx_guest_cycle_scale_restore(const uint32_t in[3]) { (void)in; }
 void psx_devices_mmio_sync(void) {}
 void psx_devices_service_to_now(void) {}
 int  psx_get_in_exception(void) { return 0; }
@@ -91,10 +111,43 @@ void cdrom_debug_snapshot(void *out) { (void)out; }
 uint32_t cdrom_dma_sector_word_count(void) { return 0; }
 void dma_gpu_ll_start(void *s, uint32_t a, uint32_t m) { (void)s; (void)a; (void)m; }
 void dma_gpu_ll_cancel(void *s) { (void)s; }
+/* The kick's CPU hold asks for the next walk event; the stubbed start leaves
+ * the walk inactive, so the hold never loops. */
+uint32_t dma_gpu_ll_cycles_to_event(const void *s) { (void)s; return 0xFFFFFFFFu; }
 void gpu_ws_begin_linked_list(void) {}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) { (void)a; }
 void gpu_ws_restore_linked_list_rank(uint32_t r) { (void)r; }
+
+/* ---- render passes (render_pass.c; never active in this test) ------------- */
+/* memory.c routes stores through the pass store policy and dma.c walks a GPU
+ * linked list synchronously while a pass runs; with the flag at 0 neither
+ * path is taken, so the doubles trap if they ever are. */
+int g_psx_render_pass_active;
+int render_pass_mmio_read_allowed(uint32_t a, uint32_t w) { (void)a; (void)w; return 1; }
+int g_psx_guest_time_frozen;
+int render_pass_store_to(const void *t, uint32_t a, uint32_t v, uint32_t w) {
+    (void)t; (void)a; (void)v; (void)w; __builtin_trap();
+}
+void dma_gpu_ll_advance(void *s, uint32_t c, const void *ops, void *o) {
+    (void)s; (void)c; (void)ops; (void)o; __builtin_trap();
+}
+void gpu_set_gp0_linked_list_node(uint32_t a, uint32_t n) { (void)a; (void)n; }
+void gpu_ws_validate_linked_list_header(uint32_t a, uint32_t h) { (void)a; (void)h; }
+void gpu_ws_validate_linked_list_node(uint32_t a, uint32_t n) { (void)a; (void)n; }
+/* MMIO readers: the render-pass store path in memory.c keeps them in this
+ * link (mingw-w64 GCC 15 + LTO fails without them). No test access reaches
+ * MMIO, so these trap too. */
+void debug_server_trace_mmio_read(uint32_t a, uint32_t v, uint8_t w) {
+    (void)a; (void)v; (void)w; __builtin_trap();
+}
+uint32_t cdrom_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t mdec_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t gpu_read_gpustat(void) { __builtin_trap(); }
+uint32_t spu_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t timers_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t sio_read(uint32_t a) { (void)a; __builtin_trap(); }
+void sio_tick(int c) { (void)c; __builtin_trap(); }
 
 /* ---- device snapshot sections (fixed-size doubles; readers count) --------- */
 #define STUB_SECTION(name, size)                                             \
@@ -129,3 +182,6 @@ void gr_vram_transfer_in(int x, int y, int w, int h, const uint16_t *d) {
     (void)x; (void)y; memcpy(s_vram, d, (size_t)w * (size_t)h * 2u);
     g_stub_device_restores++;
 }
+void gr_vram_upload_begin(int x,int y,int w,int h) { (void)x; (void)y; (void)w; (void)h; }
+void gr_vram_upload_commit(int x,int y,int w,int h,const uint16_t *d) { gr_vram_transfer_in(x,y,w,h,d); }
+void gr_vram_upload_set_open(int open) { (void)open; }

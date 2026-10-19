@@ -35,6 +35,7 @@ extern void     psx_write_word(uint32_t addr, uint32_t val);
 extern void     psx_write_half(uint32_t addr, uint16_t val);
 extern void     psx_write_byte(uint32_t addr, uint8_t val);
 extern uint8_t *memory_get_ram_ptr(void);
+extern uint8_t *memory_get_scratchpad_ptr(void);
 
 /* Stub-side mutation counters (psx_ram_runtime_map_stubs.c). */
 extern int g_stub_device_restores;
@@ -128,6 +129,39 @@ static void check_guest_access(int expanded) {
     psx_write_byte(0x80204005u, 0x5Au);
     check((psx_read_byte(0x80004005u) == 0x5Au) == !expanded, "byte mirror");
     check(psx_read_byte(0x80204005u) == 0x5Au, "byte reads back at its own address");
+}
+
+/* ---- psx_peek_word: debug read that must never reach the bus ----------- */
+static void check_peek(int expanded) {
+    uint32_t v = 0xDEADBEEFu;
+    memset(memory_get_ram_ptr(), 0, PSX_MAIN_RAM_BACKING_BYTES);
+    psx_write_word(0x80001000u, 0x11223344u);
+    check(psx_peek_word(0x80001000u, &v) && v == 0x11223344u, "peek: KSEG0 RAM");
+    check(psx_peek_word(0x00001000u, &v) && v == 0x11223344u, "peek: KUSEG RAM");
+    check(psx_peek_word(0xA0001000u, &v) && v == 0x11223344u, "peek: KSEG1 RAM");
+    v = 0;
+    check(psx_peek_word(0x80201000u, &v) && ((v == 0x11223344u) == !expanded),
+          "peek: 2nd mirror follows the live geometry");
+    check(psx_peek_word(0x807FFFFCu, &v), "peek: top of the RAM window");
+    memory_get_scratchpad_ptr()[0x10] = 0x78; memory_get_scratchpad_ptr()[0x13] = 0x12;
+    check(psx_peek_word(0x1F800010u, &v) && (v & 0xFF) == 0x78 && (v >> 24) == 0x12,
+          "peek: scratchpad");
+    check(psx_peek_word(0x1F8003FCu, &v) && !psx_peek_word(0x1F800400u, &v),
+          "peek: scratchpad end bound");
+    check(psx_peek_word(0xBFC00000u, &v) && psx_peek_word(0x1FC7FFFCu, &v) &&
+          !psx_peek_word(0x1FC80000u, &v), "peek: BIOS ROM bounds");
+    /* Device / unmapped space is refused WITHOUT touching the bus (the stubbed
+     * psx_fatal_halt traps if a real access reached unmapped_fatal). */
+    v = 0xDEADBEEFu;
+    check(!psx_peek_word(0x1F801044u, &v), "peek: JOY_RX refused");
+    check(!psx_peek_word(0x1F801810u, &v), "peek: GPUREAD refused");
+    check(!psx_peek_word(0x1F802000u, &v), "peek: expansion-2 MMIO refused");
+    check(!psx_peek_word(0x1F000000u, &v), "peek: expansion-1 refused");
+    check(!psx_peek_word(0x80800000u, &v), "peek: past the RAM window refused");
+    check(!psx_peek_word(0xFFFE0130u, &v) && !psx_peek_word(0xC0000000u, &v),
+          "peek: KSEG2 refused");
+    check(!psx_peek_word(0x80001002u, &v), "peek: unaligned refused");
+    check(v == 0xDEADBEEFu, "peek: refused reads leave *out untouched");
 }
 
 /* ---- 3. a real DMA writing RAM from a guest-chosen MADR --------------- */
@@ -288,6 +322,7 @@ int main(void) {
     for (int expanded = 0; expanded < 2; ++expanded) {
         set_geometry(expanded);
         check_guest_access(expanded);
+        check_peek(expanded);
         check_dma(expanded);
     }
     check_savestates();

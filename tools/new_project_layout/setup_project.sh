@@ -342,8 +342,8 @@ if [ "$ENABLE_RECOMP_UI" -eq 0 ]; then
     echo "  (recomp-ui declined — skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
 else
     if [ "$SET_WIZARD" -eq 0 ]; then
-        # Default ON: setup-host CI zips need the wizard (FORCE_SETUP_HOST
-        # without PSX_SETUP_WIZARD opens no first-run UI).
+        # Default ON: the wizard is the first-run disc picker of the shipped
+        # (compiled) game.
         if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
             ENABLE_WIZARD=1
         else
@@ -388,14 +388,6 @@ if [ "$SET_CI" -eq 0 ]; then
     fi
 fi
 
-# Setup-host release CI needs PSX_SETUP_WIZARD (FORCE_SETUP_HOST alone is not enough).
-if [ "${ENABLE_CI:-0}" -eq 1 ] && [ "${ENABLE_RECOMP_UI:-0}" -eq 1 ] &&
-   [ "${ENABLE_WIZARD:-0}" -eq 0 ]; then
-    echo "error: release CI requires the first-run setup wizard." >&2
-    echo "  Pass --enable-wizard (or omit --no-wizard)." >&2
-    exit 1
-fi
-
 if [ "$SET_BOXART" -eq 0 ]; then
     if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
         FETCH_BOXART_FLAG=0
@@ -408,7 +400,7 @@ if [ "$SET_GENERATE" -eq 0 ]; then
     if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
         DO_GENERATE=0
     else
-        prompt_yn "Run Generate now (emitters + OpenBIOS + game C)?" DO_GENERATE 0
+        prompt_yn "Run Generate now (emitters + OpenBIOS + game C; generated/ is committed for release CI)?" DO_GENERATE 0
     fi
 fi
 
@@ -706,14 +698,14 @@ if [ "$ENABLE_NETPLAY" -eq 1 ] && [ ! -f psxrecomp/lib/recomp-net/CMakeLists.txt
 fi
 
 echo "== Packager stub =="
-fill_template "$TEMPLATE_DIR/package_setup_release.sh.in" \
-    "$ROOT/scripts/package_setup_release.sh"
-chmod +x "$ROOT/scripts/package_setup_release.sh"
+fill_template "$TEMPLATE_DIR/package_release.sh.in" \
+    "$ROOT/scripts/package_release.sh"
+chmod +x "$ROOT/scripts/package_release.sh"
 
 CI_WORKFLOW_OK=0
 if [ "$ENABLE_CI" -eq 1 ]; then
     echo "== CI release workflow =="
-    WF_SRC="$ROOT/psxrecomp/docs/ci/templates/setup-release.yml"
+    WF_SRC="$ROOT/psxrecomp/docs/ci/templates/game-release.yml"
     if [ -f "$WF_SRC" ]; then
         mkdir -p "$ROOT/.github/workflows"
         python3 "$FILL_TOKENS" "$WF_SRC" "$ROOT/.github/workflows/release.yml" \
@@ -964,7 +956,15 @@ if [ "$DO_GENERATE" -eq 1 ]; then
         python3 psxrecomp/psxrecomp_cli.py generate "$@"
     ) && GENERATED_OK=1
     if [ "$GENERATED_OK" -eq 1 ]; then
-        echo "  generate OK (generated/ is gitignored — not committed)"
+        # Release CI builds the compiled game from this tree, so it is part
+        # of the repo, not a local by-product.
+        if git add generated 2>/dev/null && \
+           git -c user.email=setup@localhost -c user.name=setup \
+               commit -q -m "Add generated game C" 2>/dev/null; then
+            echo "  generate OK (generated/ committed — release CI builds from it)"
+        else
+            echo "  generate OK — commit generated/ before tagging a release: git add generated"
+        fi
     else
         echo "warning: generate failed — fix seeds/disc and re-run generate by hand." >&2
         DO_BUILD=0
@@ -1086,17 +1086,18 @@ elif [ "$GENERATED_OK" -eq 1 ]; then
 
        $BUILD_HINT"
 else
-    STEP2="Build emitters, Generate, then playable runtime:
+    STEP2="Build emitters, Generate (and commit it — release CI builds from generated/), then playable runtime:
 
        ./psxrecomp/tools/ci/build_emitters.sh
        python3 psxrecomp/psxrecomp_cli.py generate \\
          --config game.toml --project-root . --disc \"$GEN_DISC_HINT\"
+       git add generated && git commit -m 'Add generated game C'
        $BUILD_HINT"
 fi
 
 CI_NOTE="CI workflow not installed (declined)."
 if [ "$ENABLE_CI" -eq 1 ] && [ "$CI_WORKFLOW_OK" -eq 1 ]; then
-    CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; submodule gitlinks pin the build)."
+    CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; builds the committed generated/ C into the shipped game; submodule gitlinks pin the build)."
     if [ "$GITHUB_PUSHED" -eq 1 ]; then
         CI_NOTE="$CI_NOTE Pushed — open Actions → Release builds (workflow_dispatch)."
     fi

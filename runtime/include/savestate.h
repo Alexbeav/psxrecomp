@@ -26,6 +26,12 @@ extern "C" {
 #define SAVESTATE_THUMB_W 128
 #define SAVESTATE_THUMB_H 96
 
+/* Session-only trusted-title policy. Blocking cancels pending requests and
+ * refuses user and synchronized-protocol save/load; it never alters files.
+ * main resets this before each mod activation (including soft returns). */
+void savestate_set_title_blocked(int blocked);
+int savestate_title_blocked(void);
+
 /* Configure the slot directory + integrity key (from main, after config load).
  *
  * When bios_token is non-empty (e.g. "openbios" / "scph1001"):
@@ -55,6 +61,12 @@ void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry
  * disc_number is 1-based; 0 disables scoping. Single-disc titles must pass 0
  * so their existing paths are untouched. */
 void savestate_set_disc_scope(int disc_number);
+
+/* Namespace slot files and their sidecars by a committed content-plan SHA-256.
+ * NULL/empty restores historical paths; invalid input blocks saves/loads rather
+ * than falling back to shared slots. Changing scope cancels pending requests.
+ * Memory-card paths and the configured save root are unaffected. */
+int savestate_set_content_scope(const char* fingerprint);
 
 /* Current slot directory (empty if not configured). */
 const char* savestate_dir(void);
@@ -140,6 +152,9 @@ void psx_frontend_on_rb_snap_loaded(void);
 /* Frontend hook (main.cpp): host OSD toast after a user save/load settles.
  * is_load: 0 = save, 1 = load. slot is 0-based. ok: 1 on success. */
 void psx_frontend_on_savestate_notify(int is_load, int slot, int ok);
+/* Frontend hook (main.cpp): a user save/load was refused before it was staged
+ * (so no notify follows). `reason` is short, plain text for the OSD. */
+void psx_frontend_on_savestate_refused(int is_load, int slot, const char *reason);
 
 /* Called every block from psx_check_interrupts (in_exception == 0). If a save is
  * pending, serialize with cpu->pc = resume_pc; if a load is pending, restore and

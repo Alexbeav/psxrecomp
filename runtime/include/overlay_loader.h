@@ -19,9 +19,64 @@
 extern "C" {
 #endif
 
+/* The segment an overlay shard is compiled for unless its manifest says
+ * otherwise (docs/SEGMENT_AWARE_CODE.md §5.7). Captures record their bytes and
+ * dispatch_entry_pcs at the KSEG0 address (overlay_capture.c), and a manifest
+ * without an S record keys its entries there. The emitter bakes a shard's
+ * segment into every PC it makes: the $ra a jal/jalr writes, its jump and
+ * exception-resume PCs, its I-cache fetch tags and its store-PC stamps. The
+ * same bytes reached through KUSEG or KSEG1 run at a different architectural
+ * PC (a different link value; KSEG1 is uncached), so capture records each
+ * dispatch's segment, compile_overlays.py builds a shard per segment with
+ * entries (KUSEG and KSEG1 ones in the seg-kuseg/ and seg-kseg1/ cache
+ * subdirectories), and a shard runs only for PCs in its own segment; a PC with
+ * no shard of its segment is interpreted at its own PC. (OpenBIOS's exception
+ * path enters its RAM patch slots at KUSEG.) */
+#define PSX_OVERLAY_CODE_SEGMENT 0x80000000u
+static inline int psx_overlay_code_segment_pc(uint32_t pc) {
+    return (pc & 0xE0000000u) == PSX_OVERLAY_CODE_SEGMENT;
+}
+
 /* Called at game handoff to set the cache root directory and game ID.
  * cache_dir: absolute path to the cache root (e.g. "build-dev/cache")
  * game_id:   product code (e.g. "SCUS-94236") */
+/* Host callback table handed to every loaded module (overlay shards and BIOS
+ * modules alike). Safe before overlay_loader_init. */
+struct OverlayCallbacks;
+const struct OverlayCallbacks *overlay_loader_callbacks(void);
+
+/* Canonical cache arch-abi tag (caches are namespaced per backend AND per
+ * target so a Windows-x64 gcc DLL and, later, a same-OS arm64 build for the
+ * same fragment never comingle). compile_overlays.py
+ * computes the IDENTICAL string; keep the two mappings in lockstep
+ * ("<os>-<arch>": win|linux|macos + x64|arm64|x86). It is this build's own
+ * architecture -- the running slice of a universal macOS binary -- and the
+ * runtime exports it as PSX_OVERLAY_ARCH_ABI to every compile it spawns
+ * (autocompile.c) and passes it to bios_module_build.py, so shards and BIOS
+ * modules are compiled for the architecture that loads them, not for the
+ * architecture of the Python or the compiler binary. */
+#if defined(_WIN32)
+#  define PSX_OVERLAY_ARCH_OS_ "win"
+#elif defined(__APPLE__)
+#  define PSX_OVERLAY_ARCH_OS_ "macos"
+#else
+#  define PSX_OVERLAY_ARCH_OS_ "linux"
+#endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+#  define PSX_OVERLAY_ARCH_CPU_ "arm64"
+#elif defined(__x86_64__) || defined(_M_X64)
+#  define PSX_OVERLAY_ARCH_CPU_ "x64"
+#elif defined(__i386__) || defined(_M_IX86)
+#  define PSX_OVERLAY_ARCH_CPU_ "x86"
+#else
+#  define PSX_OVERLAY_ARCH_CPU_ "unknown"
+#endif
+#define PSX_OVERLAY_ARCH_ABI PSX_OVERLAY_ARCH_OS_ "-" PSX_OVERLAY_ARCH_CPU_
+
+/* "<os>-<arch>" of this build (PSX_OVERLAY_ARCH_ABI), the cache layout's
+ * arch-abi segment. Also keyed into the BIOS module cache. */
+const char *overlay_loader_arch_abi(void);
+
 void overlay_loader_init(const char *cache_dir, const char *game_id,
                          uint32_t config_hash);
 
@@ -138,6 +193,13 @@ int      overlay_loader_lazy_manifest_count(void);
 int      overlay_loader_lazy_manifest_overflow(void);
 uint64_t overlay_loader_candidate_overflow(void);
 uint64_t overlay_loader_pair_aliases(void);
+/* KUSEG/KSEG1 (and unmapped-segment) dispatches the loader left to the
+ * interpreter: no shard compiled for their segment is cached or valid yet
+ * (docs/SEGMENT_AWARE_CODE.md §5.7). Capture records their segment, so a
+ * warm cache takes this to 0. */
+uint64_t overlay_loader_segment_alias_interp(void);
+/* KUSEG/KSEG1 dispatches run natively by a shard compiled for their segment. */
+uint64_t overlay_loader_segment_native(void);
 int      overlay_loader_dump_lazy_at(uint32_t addr, char *out, int cap);
 
 /* Overlay CI wrapper early-return attribution (PSX_POST_LOAD_PROBE). */
@@ -145,6 +207,11 @@ void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
                                      uint64_t *none, uint64_t *sr,
                                      uint64_t *deliv, uint64_t *enter);
 int  overlay_loader_call_unit_depth(void);
+/* Native-shard nesting (active-candidate stack depth, in-progress entry),
+ * saved before and restored after a landing that longjmps out of a shard
+ * and resumes the interrupted code (render_pass.c watchdog abort). */
+void overlay_loader_native_nesting(int *active_depth, uint32_t *inprogress);
+void overlay_loader_set_native_nesting(int active_depth, uint32_t inprogress);
 
 #ifdef __cplusplus
 }

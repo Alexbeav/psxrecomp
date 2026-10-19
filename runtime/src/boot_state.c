@@ -1,6 +1,15 @@
 #include "boot_state.h"
+#include "execution_profile.h"
+#include "fntrace.h"
 #include "mod_memory.h"
 #include "overlay_api.h"   /* PSX_OVERLAY_CODEGEN_HASH / _ABI_TAG / _CODEGEN_VER */
+
+/* Build-selected HLE may use private execution boundaries. Zero preserves
+ * the existing snapshot key for titles that do not select an implementation. */
+#ifndef PSX_SAVESTATE_IMPL_TAG
+#define PSX_SAVESTATE_IMPL_TAG 0u
+#endif
+#define BOOT_STATE_IMPLEMENTATION_KEY ((uint32_t)PSX_OVERLAY_CODEGEN_VER ^ (uint32_t)PSX_SAVESTATE_IMPL_TAG)
 #include "dirty_ram_interp.h"
 #include "gpu.h"           /* gpu_get_vram — CPU-auth mirror under dual-raster   */
 #include "gpu_render.h"    /* gr_vram_transfer_in / gr_vram_transfer_out          */
@@ -65,9 +74,11 @@ extern int      gpu_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t spu_snapshot_bytes(void);
 extern void     spu_snapshot_write(uint8_t* p);
 extern int      spu_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      spu_snapshot_len_ok(uint32_t len);
 extern uint8_t* spu_get_ram_ptr(void);
 extern uint32_t spu_get_ram_bytes(void);
 extern uint32_t cdrom_snapshot_bytes(void);
+extern int      cdrom_snapshot_validate(const uint8_t* p, uint32_t len);
 extern void     cdrom_snapshot_write(uint8_t* p);
 extern int      cdrom_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t dma_snapshot_bytes(void);
@@ -84,23 +95,25 @@ extern int      mdec_snapshot_read(const uint8_t* p, uint32_t len);
 extern int      sio_snapshot_validate(const uint8_t* p, uint32_t len);
 extern int      mdec_snapshot_validate(const uint8_t* p, uint32_t len);
 
-/* Header compatibility cookie (h.reserved): the enhancement-memory layout plus
- * the live main-RAM geometry. The RAM term is zero on retail 2 MiB, so retail
- * states are byte-identical to states written before the 8 MB map existed; a
- * state from the other geometry is rejected in the header, before any section
- * is read, with a reason that names the size. */
+/* Header compatibility cookie (h.reserved): enhancement-memory layout, live
+ * RAM geometry and the fixed execution implementation. Reject incompatible
+ * snapshots in the header, before any section changes the live machine. */
 #define BOOT_STATE_RAM_8MB_COOKIE 0x384D4252u  /* "RBM8" */
 static uint32_t boot_state_ram_cookie(void) {
     return psx_ram_8mb_active() ? BOOT_STATE_RAM_8MB_COOKIE : 0u;
 }
 static uint32_t boot_state_layout_cookie(void) {
-    return psx_mod_memory_layout_cookie() ^ boot_state_ram_cookie();
+    return psx_mod_memory_layout_cookie() ^ boot_state_ram_cookie() ^ PSX_EXECUTION_COOKIE;
 }
 
 /* CPU regs wire: 32+3+32+32+32 LE u32 = 131 * 4 = 524 bytes (no padding). */
 #define CPU_REGS_WIRE_BYTES (524u)
 /* Timer wire: 3*u16 + 3*u32 + 3*u16 + 3*i32 + 3*u32 = 48 bytes (no pad holes). */
 #define TIMER_REGS_WIRE_BYTES (48u)
+/* CPU stall wire: 2*u32 + 33 + 3*u8 + u32 = 48 bytes. */
+#define BS_CPUTIM_BYTES (48u)
+/* Set by a BS_SEC_CPUTIM load; psx_cycles_resync_after_restore consumes it. */
+int g_boot_state_cpu_timing_restored;
 
 /* ---- deferred capture state (armed before first boot, fired at handoff) ---- */
 static char     s_capture_path[512];
@@ -313,8 +326,21 @@ static int write_cpu_section(BsOut* o, const CPUState* cpu) {
         return 0;
     for (int i = 0; i < 32; i++)
         if (!pst_w_u32(&w, cpu->cop0[i])) return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gte_data[i])) return 0;
+    for (int i = 0; i < 32; i++) {
+        uint32_t v = cpu->gte_data[i];
+        /* LZCR is derived from LZCS (what MFC2 31 returns, and what a load
+         * recomputes). Serialize the derived value: the raw backing stays 0
+         * until the first LZCS write, so a live save and a replayed save of
+         * the same tick differed here although no guest could tell. */
+        if (i == 31) {
+            uint32_t bits = (cpu->gte_data[30] & 0x80000000u) ? ~cpu->gte_data[30]
+                                                             : cpu->gte_data[30];
+            v = 0;
+            if (bits == 0) v = 32;
+            else while (!(bits & 0x80000000u)) { bits <<= 1; ++v; }
+        }
+        if (!pst_w_u32(&w, v)) return 0;
+    }
     for (int i = 0; i < 32; i++)
         if (!pst_w_u32(&w, cpu->gte_ctrl[i])) return 0;
     if (w.written != CPU_REGS_WIRE_BYTES) return 0;
@@ -383,14 +409,33 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     int ok;
     memset(&h, 0, sizeof h);
     h.magic         = BOOT_STATE_MAGIC;
-    h.version       = psx_mod_memory_snapshot_bytes() ? BOOT_STATE_VERSION : 7u;
+    h.version       = BOOT_STATE_VERSION;
     h.reserved      = boot_state_layout_cookie();
     h.bios_checksum = bios_checksum;
     h.entry_pc      = entry_pc;
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
-    h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 16 + (psx_mod_memory_snapshot_bytes() ? 1u : 0u);
+    h.codegen_ver   = BOOT_STATE_IMPLEMENTATION_KEY;
+    h.section_count = 18 + (cpu ? 1u : 0u) + (psx_mod_memory_snapshot_bytes() ? 1u : 0u) +
+                      (psx_guest_cycle_scale_config() != 1u ? 1u : 0u);
+
+    /* Publish deferred cycle charges before ANY section: IRQ (cycles since
+     * VBlank) and the root counters were written before the old flush point
+     * (just ahead of CLOCK), so they lagged the saved clock by whatever batch
+     * was pending -- a host-path quantity (live vs rollback replay). */
+    psx_cyc_batch_flush();
+    /* Devices (root counters, VBlank phase, CD/SPU/DMA) are serviced lazily
+     * up to the next event deadline, so between deadlines they lag the clock
+     * by a host-path amount. A load re-anchors them at the restored clock,
+     * dropping that lag: live and replay saves of one tick then differed in
+     * cycles_since_vblank and the counters at the same clock. Bring every
+     * device to the clock first so the snap is the canonical machine at it
+     * (service_to_now replays the exact event-bounded timeline). */
+    psx_devices_service_to_now();
+    /* The SPU renders in whole samples when the host audio pump or a guest
+     * SPU access asks; between those it lags the clock by a path-dependent
+     * amount (live pumps at VBlank, rollback replay suppresses output). */
+    { extern void spu_catch_up(void); spu_catch_up(); }
 
     ok = write_header_le(o, &h);
 
@@ -480,6 +525,49 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
             if (ok) ok = write_section(o, BS_SEC_DIRTY, db, nbytes);
             free(db);
         }
+    }
+    if (ok) {
+        uint8_t handoff[4];
+        PstW w;
+        pst_w_init(&w, handoff, sizeof handoff);
+        ok = pst_w_u32(&w, fntrace_is_game_started() ? 1u : 0u) &&
+             write_section(o, BS_SEC_GAME_START, handoff, sizeof handoff);
+    }
+    if (ok) {
+        extern uint32_t spu_cd_snapshot_bytes(void);
+        extern void spu_cd_snapshot_write(uint8_t *p);
+        ok = write_module_section(o, BS_SEC_SPUCD, spu_cd_snapshot_bytes, spu_cd_snapshot_write);
+    }
+    if (ok && cpu) {
+        /* In-flight CPU stalls, relative to the clock. They used to be
+         * re-anchored at the restored clock on every load, so a GTE / mul-div
+         * op or load give-back in flight at the snap point cost the live run
+         * its remaining stall but the replay nothing: replaying a snap with
+         * the same rows ran a few cycles short of the live tick
+         * (PSX_RB_DET_SELFTEST: IRQ/TIMER drift at equal clock). */
+        uint8_t tb[BS_CPUTIM_BYTES];
+        PstW w;
+        uint64_t now = psx_cycle_count;
+        uint32_t gte_rem = cpu->gte_ts_done > now ? (uint32_t)(cpu->gte_ts_done - now) : 0u;
+        uint32_t md_rem = cpu->muldiv_ts_done > now ? (uint32_t)(cpu->muldiv_ts_done - now) : 0u;
+        pst_w_init(&w, tb, sizeof tb);
+        ok = pst_w_u32(&w, gte_rem) && pst_w_u32(&w, md_rem) &&
+             pst_w_bytes(&w, cpu->read_absorb, sizeof cpu->read_absorb) &&
+             pst_w_u8(&w, cpu->read_absorb_which) && pst_w_u8(&w, cpu->read_fudge) &&
+             pst_w_u8(&w, cpu->ld_which_t) && pst_w_u32(&w, cpu->ld_absorb) &&
+             w.written == BS_CPUTIM_BYTES &&
+             write_section(o, BS_SEC_CPUTIM, tb, sizeof tb);
+    }
+    if (ok && psx_guest_cycle_scale_config() != 1u) {
+        /* Rollback re-simulation must resume with the same carried fraction
+         * and gate verdicts, or scaled charges land a cycle apart. */
+        uint32_t g[3];
+        uint8_t gb[PSX_GCS_SNAPSHOT_BYTES];
+        PstW w;
+        psx_guest_cycle_scale_snapshot(g);
+        pst_w_init(&w, gb, sizeof gb);
+        ok = pst_w_u32(&w, g[0]) && pst_w_u32(&w, g[1]) && pst_w_u32(&w, g[2]) &&
+             write_section(o, BS_SEC_GCS, gb, sizeof gb);
     }
     return ok;
 }
@@ -617,6 +705,7 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         pst_r_init(&r, p, len);
         if (!pst_r_u64(&r, &cyc)) return 0;
         psx_cycle_count = cyc;
+        g_psx_gcs_frac = 0u;   /* BS_SEC_GCS (if present) restores it */
         return 1;
     }
     case BS_SEC_GPU:
@@ -693,6 +782,39 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
     }
     case BS_SEC_MODMEM:
         return psx_mod_memory_snapshot_read(p, len);
+    case BS_SEC_GAME_START:
+        fntrace_restore_game_started(p[0]);
+        return 1;
+    case BS_SEC_SPUCD: {
+        extern int spu_cd_snapshot_read(const uint8_t *p, uint32_t len);
+        return spu_cd_snapshot_read(p, len);
+    }
+    case BS_SEC_CPUTIM: {
+        PstR r;
+        uint32_t gte_rem, md_rem;
+        if (len != BS_CPUTIM_BYTES || !cpu) return 0;
+        pst_r_init(&r, p, len);
+        if (!pst_r_u32(&r, &gte_rem) || !pst_r_u32(&r, &md_rem) ||
+            !pst_r_bytes(&r, cpu->read_absorb, sizeof cpu->read_absorb) ||
+            !pst_r_u8(&r, &cpu->read_absorb_which) || !pst_r_u8(&r, &cpu->read_fudge) ||
+            !pst_r_u8(&r, &cpu->ld_which_t) || !pst_r_u32(&r, &cpu->ld_absorb))
+            return 0;
+        /* CLOCK precedes this section, so psx_cycle_count is restored. */
+        cpu->gte_ts_done = psx_cycle_count + gte_rem;
+        cpu->muldiv_ts_done = psx_cycle_count + md_rem;
+        g_boot_state_cpu_timing_restored = 1;
+        return 1;
+    }
+    case BS_SEC_GCS: {
+        PstR r;
+        uint32_t g[3];
+        if (len != PSX_GCS_SNAPSHOT_BYTES) return 0;
+        pst_r_init(&r, p, len);
+        if (!pst_r_u32(&r, &g[0]) || !pst_r_u32(&r, &g[1]) || !pst_r_u32(&r, &g[2]))
+            return 0;
+        psx_guest_cycle_scale_restore(g);
+        return 1;
+    }
     case BS_SEC_ICACHE: {
         PstR r;
         if (len != 1024u * 4u) return 0;
@@ -738,9 +860,9 @@ static int validate_section(uint32_t tag, const uint8_t* p, uint32_t len) {
     case BS_SEC_CLOCK:  return len == 8u;
     case BS_SEC_GPU:    return len == gpu_snapshot_bytes();
     case BS_SEC_VRAM:   return len == VRAM_SIZE;
-    case BS_SEC_SPU:    return len == spu_snapshot_bytes();
+    case BS_SEC_SPU:    return spu_snapshot_len_ok(len);
     case BS_SEC_SPURAM: return len == spu_get_ram_bytes();
-    case BS_SEC_CDROM:  return len == cdrom_snapshot_bytes();
+    case BS_SEC_CDROM:  return cdrom_snapshot_validate(p, len);
     case BS_SEC_DMA:    return len == dma_snapshot_bytes();
     case BS_SEC_SIO:    return sio_snapshot_validate(p, len);
     case BS_SEC_MDEC:   return mdec_snapshot_validate(p, len);
@@ -749,7 +871,12 @@ static int validate_section(uint32_t tag, const uint8_t* p, uint32_t len) {
     case BS_SEC_DIRTY:  return len % 4u == 0u &&
                                len / 4u <= dirty_ram_get_bitmap_word_count();
     case BS_SEC_MODMEM: return psx_mod_memory_snapshot_validate(p, len);
+    case BS_SEC_GAME_START:
+        return len == 4u && p[0] <= 1u && !p[1] && !p[2] && !p[3];
     case BS_SEC_ICACHE: return len == 1024u * 4u;
+    case BS_SEC_GCS:    return len == PSX_GCS_SNAPSHOT_BYTES;
+    case BS_SEC_CPUTIM: return len == BS_CPUTIM_BYTES;
+    case BS_SEC_SPUCD:  return len >= 4u && (len - 4u) % 4u == 0u;
     default:            return 1;
     }
 }
@@ -825,7 +952,7 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
                      (unsigned)(memory_get_ram_bytes() >> 20));
             boot_state_append_reason(reason, reason_cap, part);
         } else {
-            boot_state_append_reason(reason, reason_cap, "enhancement_memory_layout");
+            boot_state_append_reason(reason, reason_cap, "enhancement_memory_layout_or_execution_profile");
         }
         return 0;
     }
@@ -857,9 +984,9 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
                  (int)h.abi_tag, (int)PSX_OVERLAY_ABI_TAG);
         boot_state_append_reason(reason, reason_cap, part);
     }
-    if (h.codegen_ver != (uint32_t)PSX_OVERLAY_CODEGEN_VER) {
+    if (h.codegen_ver != BOOT_STATE_IMPLEMENTATION_KEY) {
         snprintf(part, sizeof(part), "codegen_ver=%u(want %u)",
-                 (unsigned)h.codegen_ver, (unsigned)PSX_OVERLAY_CODEGEN_VER);
+                 (unsigned)h.codegen_ver, (unsigned)BOOT_STATE_IMPLEMENTATION_KEY);
         boot_state_append_reason(reason, reason_cap, part);
     }
 
@@ -970,9 +1097,14 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         }
         s->tag = tag;
         if (!validate_section(tag, s->p, s->len)) { ok = 0; break; }
+        if (tag == BS_SEC_GAME_START && (seen & (1u << tag))) {
+            ok = 0; break;
+        }
         if (tag < 32) seen |= (1u << tag);
     }
     if (ok && (seen & required) != required)
+        ok = 0;
+    if (ok && h.version >= 9u && !(seen & (1u << BS_SEC_GAME_START)))
         ok = 0;
 
     /* PASS 2 -- apply. Every section passed validate_section, whose checks

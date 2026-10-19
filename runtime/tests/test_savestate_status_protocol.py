@@ -11,12 +11,16 @@ REWIND = (ROOT / "src/psx_rewind.c").read_text(encoding="utf-8")
 DIRTY = (ROOT / "src/dirty_ram_interp.c").read_text(encoding="utf-8")
 BOOT_STATE_H = (ROOT / "include/boot_state.h").read_text(encoding="utf-8")
 DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
+BOOT_STATE = (ROOT / "src/boot_state.c").read_text(encoding="utf-8")
 
 # The per-word DMA2 cursor and XA DATA_END pending bit grow the snapshot wire.
-# Lock the format change to v7 so an old file is rejected before any state
-# section is applied.
+# Keep the v7 read minimum: v8 adds enhancement memory, and all current v9
+# writers preserve the BIOS-to-game handoff latch. Older incompatible files
+# must be rejected before any live state is applied.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 7u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 9u" in BOOT_STATE_H
+assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE
+assert "h.version >= 9u && !(seen & (1u << BS_SEC_GAME_START))" in BOOT_STATE
 assert "#define BOOT_STATE_VERSION_MIN_READ 7u" in BOOT_STATE_H
 assert "Reject\n * them at the header before any section changes the live machine." in BOOT_STATE_H
 
@@ -32,6 +36,8 @@ assert "psx_irq_resume_context_snapshot_safe(void)" in INTERRUPTS
 assert "psx_irq_resume_context_snapshot_safe_at(uint32_t resume_pc)" in INTERRUPTS
 assert "psx_irq_resume_context_snapshot_pc(void)" in INTERRUPTS
 assert "g_cosim_dirty_pump_site == 0" in INTERRUPTS
+assert INTERRUPTS.index('if (psx_mod_function_entry_active()) return 0;') < INTERRUPTS.index('if (g_cosim_dirty_pump_site == 0)')
+assert 'if (psx_mod_function_entry_active()) return;' in STATE
 assert "case 1: /* transfer surface: target PC is materialized in CPUState */" in INTERRUPTS
 assert "cands[n++] = psx_irq_resume_context_snapshot_pc();" in STATE
 assert "cands[n++] = psx_irq_resume_context_snapshot_pc();" in REWIND
@@ -40,3 +46,10 @@ assert "(resume_pc == 0u && !pc_matches_cpu) || !snapshot_safe || !pc_ok" in STA
 assert "!psx_irq_resume_context_snapshot_safe_at(pc) || !resume_pc_ok(pc)" in REWIND
 assert "psx_check_interrupts_at(cpu, pc)" in DIRTY
 print("savestate status protocol guard passed")
+
+# The debug server names an out-of-range slot instead of the generic refusal.
+_handler = SERVER[SERVER.index("static void handle_savestate(int id"):]
+_handler = _handler[:_handler.index("\n}\n")]
+assert "slot >= SAVESTATE_SLOTS" in _handler
+assert _handler.index("slot >= SAVESTATE_SLOTS") < _handler.index("savestate_request_save(slot)")
+assert "out of range (0..%d)" in _handler

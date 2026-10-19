@@ -70,6 +70,40 @@ cd disc && ../../mkpsxiso/mkpsxiso-2.20-win64/mkpsxiso.exe -y cyctest.xml
 copyrighted Sony data, local only. Everything else (gen, xml, SYSTEM.CNF) is
 tracked, so each developer reproduces the disc from a disc they own.
 
+### Without mkpsxiso (macOS, Linux)
+
+`mkdisc.py` builds the same kind of disc in pure Python: an ISO9660 volume
+with `SYSTEM.CNF` and the EXE as `CYCT_001.01`, in Mode 2 Form 1 sectors with
+a correct EDC/ECC (Beetle checks them). It copies the license area (sectors
+0-15) verbatim from the raw `.bin` of a disc you own. The license is needed
+even with OpenBIOS, which does not check it: Beetle's CD controller reports a
+disc without the license string as unlicensed, and OpenBIOS then retries
+GetID forever.
+
+```bash
+python3 gen_testrom.py cycle_testrom.exe
+python3 mkdisc.py --cnf disc/SYSTEM.CNF --exe cycle_testrom.exe \
+    --exe-name CYCT_001.01 --volume CYCT00101 --out disc/cyctest.bin \
+    --license-from "<a PS1 disc you own>.bin"
+```
+
+The native side, from the framework root (the recompiled OpenBIOS comes
+from `tools/regen_bios.sh --config bios/OpenBIOS.toml`):
+
+```bash
+cd tools/cycle_testrom
+../../recompiler/build/psxrecomp-game --config game.toml --project-root ../..
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DPSX_RECOMP_UI=OFF -DPSX_DEBUG_TOOLS=ON
+ninja -C build psx-cyctest          # binary: build/Cycle_Test_ROM
+build/Cycle_Test_ROM --no-launcher --headless --game game.toml \
+    --bios ../../bios/openbios.bin --disc disc/cyctest.cue --debug-port 4600
+```
+
+`--headless` runs unpaced with no window; a plain `&` launch works on macOS.
+Beetle runs headless too: `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software
+psx-beetle ...` (see `docs/beetle-macos.md`).
+
 ## Measure
 
 ```bash
@@ -133,6 +167,29 @@ hit AND refill-miss costs are MEASURED equal to the oracle on the interp path.
 STAGE 2 (pending): charge the same model in the compiled emitters (per cache-line
 leader) and flip PSX_ICACHE on by default; validate ruler #1's cold first-hit spike
 (Beetle 84/77 vs steady 56) on the compiled path.
+
+**The icache_miss cost depends on where the loop sits in its cache line.** A
+miss charges +3 plus one cycle per word from the missed word to the end of the
+16-byte line, so each of the loop's two misses costs 4 to 7 cycles. The +14
+above was measured with the loop top at 0x80010144 (word 1 of its line: 6 per
+miss). Adding the `mmio_timer`/`mmio_spu` loops moved it to 0x80010170 (word 0:
+7 per miss), so the current 15-loop ROM reads **+16 (per-iter 19) on both
+backends**. Re-measured 2026-09-29 with psx-beetle built on macOS
+(`docs/beetle-macos.md`), OpenBIOS on both backends: the 13-loop ROM from
+0edb9355 gives +14 and the current one +16. Beetle's per-iteration cycles for
+the other loops (the mmio loops exist only on the current ROM; the rest read
+the same on both):
+
+| baseline | alu | load | load2 | load_use | div | div_spaced | mult |
+|---|---|---|---|---|---|---|---|
+| 3 | 4 | 8 | 14 | 8 | 41 | 41 | 18 |
+
+| gte_rtps | gte_nclip | gte_read_use | ld_div | mmio_timer | mmio_spu |
+|---|---|---|---|---|---|
+| 14 | 7 | 14 | 49 | 6 | 41 |
+
+(The gte rows in the 2026-06-26 table below are the warm-up values; the
+steady-state ones are these, see FAITHFUL_TIMING_PLAN.md 2026-06-27.)
 
 ## Beetle ORACLE results (2026-06-26 — the HW cost targets)
 

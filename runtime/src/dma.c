@@ -23,6 +23,7 @@
 #include "overlay_capture.h"
 #include "psx_cycles.h"
 #include "psx_memory.h"
+#include "psx_cycle_freeze.h"
 #include "spu.h"
 #include "audio_trace.h"
 #include "event_ring.h"
@@ -30,6 +31,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+#include "gpu_timeline.h"
 
 /* Word-aligned main-RAM offset of a DMA address (MADR / stepped cursor)
  * through the live geometry: retail folds to 2 MiB exactly as the DMAC's
@@ -437,7 +449,9 @@ static void cancel_async_transfer(int ch) {
 
 static void schedule_delayed_complete(int ch, uint32_t total_words,
                                       uint32_t cycles_per_word) {
-    if (total_words == 0 || cycles_per_word == 0) {
+    /* Render passes run in frozen guest time: a delayed completion would
+     * never arrive, so finish now (the pass restores DMA state after). */
+    if (total_words == 0 || cycles_per_word == 0 || g_psx_render_pass_active) {
         complete_transfer(ch);
         return;
     }
@@ -510,6 +524,39 @@ static void start_async_cdrom_transfer(void) {
         cancel_async_transfer(3);
         complete_transfer(3);
     }
+}
+
+int dma_host_cdrom_write(uint32_t dest, const uint8_t *src, uint32_t bytes, int lba) {
+    if ((dest & 3u) || (bytes & 3u) || (!src && bytes)) return 0;
+    const uint32_t addr = DMA_RAM_ADDR(dest);
+    const uint32_t live = psx_ram_live_bytes();
+    if (addr >= live || bytes > live - addr) return 0;
+    if (!bytes) return 1;
+    /* Same capture window as the real ch3 path: game data, not FMV buffers. */
+    const int capture = addr < 0x1C0000u || addr >= PSX_MAIN_RAM_RETAIL_BYTES;
+    const int saved_ch = g_dma_cur_ch;
+    const uint32_t saved_madr = g_dma_cur_madr, saved_bcr = g_dma_cur_bcr;
+    g_dma_exec_depth++;
+    g_dma_cur_ch = 3;
+    g_dma_cur_bcr = bytes / 4u;
+    if (capture) overlay_capture_before_dma(addr, bytes);
+    for (uint32_t i = 0; i < bytes; i += 4u) {
+        uint32_t word;
+        memcpy(&word, src + i, 4);
+        g_dma_cur_madr = addr + i;
+        psx_write_word(addr + i, word);
+    }
+    dirty_ram_mark_executable_range(addr, bytes);
+    if (capture) {
+        if (lba >= 0) cd_dma_log_push(lba, addr, bytes);
+        extern uint8_t *memory_get_ram_ptr(void);
+        overlay_capture_on_dma(addr, bytes, memory_get_ram_ptr() + addr);
+    }
+    g_dma_cur_ch = saved_ch;
+    g_dma_cur_madr = saved_madr;
+    g_dma_cur_bcr = saved_bcr;
+    g_dma_exec_depth--;
+    return 1;
 }
 
 static void finish_async_cdrom_transfer(uint32_t final_addr) {
@@ -727,6 +774,8 @@ static void gpu_ll_complete(void *opaque, int hit_limit) {
     (void)opaque;
     gpu_ot_stats.completes++;
     gpu_ot_record_walk_stats(psx_cycle_count - gpu_ot_start_cycle);
+    gpu_timeline_note(GTL_LL_END, gpu_linked_list.nodes_processed,
+                      gpu_linked_list.total_words);
     channels[2].madr = hit_limit ? gpu_linked_list.current_addr
                                  : 0x00FFFFFFu;
     gpu_ws_end_linked_list();
@@ -754,10 +803,92 @@ static void start_async_gpu_linked_list(void) {
      * header and payload read at its consumption boundary. */
     gpu_ws_prepass_linked_list(start_addr);
     dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);
+    gpu_timeline_note(GTL_LL_START, start_addr, 0);
     event_ring_record_aux(EV_DMA_SCHED, 2u, channels[2].chcr);
     gpu_ot_stats.starts++;
     gpu_ot_start_cycle = psx_cycle_count;
     gpu_ot_polls_this_walk = 0;
+}
+
+/* PSX-SPX "CPU Operation during DMA": DMA outruns CPU memory access, and a CPU
+ * read of RAM or I/O waits while DMA moves data. So the kicking store of a GPU
+ * linked-list transfer returns only when the walk ends: guest code that
+ * rewrites a packet right after DrawOTag (the retail SCPH1001 intro re-copies
+ * its text packets from a template, clearing the link) cannot reach it before
+ * the walk does. A cyclic list still ends at the walker's node limit. The hold
+ * also ends if an advance moves no list word. */
+/* Always-on hold observability (dma_hold_stats / dma_hold_ring). Every held
+ * kick is recorded with its guest cost, its host wall time and whether it was
+ * made from inside an exception handler: a kick from an IRQ callback runs the
+ * whole walk (and the GPU work it feeds) with in_exception set, which is what
+ * the phase profiler's exc_share then measures. */
+extern int psx_get_in_exception(void);
+static DMAGpuHoldEntry s_hold_ring[DMA_GPU_HOLD_RING_CAP];
+static DMAGpuHoldStats s_hold_stats;
+
+static uint64_t hold_host_ticks(void) {
+#ifdef _WIN32
+    LARGE_INTEGER c; QueryPerformanceCounter(&c); return (uint64_t)c.QuadPart;
+#else
+    struct timespec ts; timespec_get(&ts, TIME_UTC);   /* C11; diagnostics only */
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
+}
+
+static uint64_t hold_host_ticks_per_sec(void) {
+#ifdef _WIN32
+    LARGE_INTEGER f; QueryPerformanceFrequency(&f); return (uint64_t)f.QuadPart;
+#else
+    return 1000000000ull;
+#endif
+}
+
+static void hold_cpu_for_gpu_linked_list(void) {
+    if (psx_in_device_service || g_ls_replay_active || g_psx_guest_time_frozen)
+        return;
+    const uint64_t cyc0 = psx_cycle_count;
+    const uint64_t host0 = hold_host_ticks();
+    const uint32_t words0 = gpu_linked_list.total_words;
+    uint32_t steps = 0;
+    while (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
+           channel_enabled(2)) {
+        const uint32_t moved = gpu_linked_list.total_words;
+        psx_advance_cycles(dma_gpu_ll_cycles_to_event(&gpu_linked_list));
+        psx_devices_service_to_now();
+        steps++;
+        if (gpu_linked_list.active && gpu_linked_list.total_words == moved) break;
+    }
+    const uint64_t host_us = (hold_host_ticks() - host0) * 1000000ull /
+                             hold_host_ticks_per_sec();
+    const int in_exc = psx_get_in_exception() != 0;
+    DMAGpuHoldEntry *e = &s_hold_ring[s_hold_stats.count & (DMA_GPU_HOLD_RING_CAP - 1u)];
+    e->seq = s_hold_stats.count;
+    e->cycle = cyc0;
+    e->held_cycles = (uint32_t)(psx_cycle_count - cyc0);
+    e->words = gpu_linked_list.total_words - words0;
+    e->steps = steps;
+    e->host_us = (uint32_t)(host_us > 0xFFFFFFFFull ? 0xFFFFFFFFull : host_us);
+    e->frame = (uint32_t)s_frame_count;
+    e->kick_pc = g_debug_last_store_pc;
+    e->madr = channels[2].madr;
+    e->in_exception = (uint8_t)in_exc;
+    e->still_active = (uint8_t)(gpu_linked_list.active != 0);
+    s_hold_stats.count++;
+    s_hold_stats.held_cycles += e->held_cycles;
+    s_hold_stats.host_us += host_us;
+    s_hold_stats.words += e->words;
+    s_hold_stats.steps += steps;
+    if (in_exc) {
+        s_hold_stats.exc_count++;
+        s_hold_stats.exc_held_cycles += e->held_cycles;
+        s_hold_stats.exc_host_us += host_us;
+    }
+}
+
+void dma_debug_get_gpu_hold(DMAGpuHoldStats *out_stats,
+                            const DMAGpuHoldEntry **out_ring) {
+    if (out_stats) *out_stats = s_hold_stats;
+    if (out_ring) *out_ring = s_hold_ring;
 }
 
 static uint32_t execute_ch2_gpu(void) {
@@ -968,6 +1099,14 @@ static void try_execute(int ch) {
             if ((channels[2].chcr & 1u) != 0u &&
                 ((channels[2].chcr >> 9) & 3u) == 2u) {
                 start_async_gpu_linked_list();
+                /* Render pass: devices never advance in frozen time, so walk
+                 * the whole list now. The walk is the same event-driven code,
+                 * only with an unlimited budget; completion flags and the IRQ
+                 * latch it raises are rolled back with the pass. */
+                while (g_psx_render_pass_active && gpu_linked_list.active)
+                    dma_gpu_ll_advance(&gpu_linked_list, UINT32_MAX,
+                                       &gpu_ll_ops, NULL);
+                hold_cpu_for_gpu_linked_list();
             } else {
                 schedule_delayed_complete(2, execute_ch2_gpu(),
                                           DMA_GPU_CYCLES_PER_WORD);
@@ -1002,6 +1141,8 @@ static void try_execute(int ch) {
 /* ---- Public interface ---- */
 
 uint32_t dma_get_dicr(void) { return dicr_read_value(dicr); }
+/* A GPU linked-list walk is in flight (render passes refuse to start then). */
+int dma_gpu_linked_list_active(void) { return gpu_linked_list.active != 0; }
 uint32_t dma_get_dpcr(void) { return dpcr; }
 int dma_cdrom_transfer_active(void) {
     return cdrom_async.active &&

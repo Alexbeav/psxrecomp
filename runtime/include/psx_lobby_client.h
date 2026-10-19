@@ -10,7 +10,9 @@ extern "C" {
 
 #define PSX_LOBBY_ID_LEN 40
 #define PSX_LOBBY_NAME_LEN 64
-#define PSX_LOBBY_VERSION_LEN 32
+/* Title compatibility IDs may contain a prefix and a 160-bit source hash.
+ * Preserve the full 63-byte ID for exact list/join comparisons. */
+#define PSX_LOBBY_VERSION_LEN 64
 #define PSX_LOBBY_ENDPOINT_LEN 64
 #define PSX_LOBBY_MAX_LIST 32
 /* Player seats this framework can seat. Was what PSX_LOBBY_MAX_MEMBERS meant
@@ -29,6 +31,11 @@ extern "C" {
 #define PSX_LOBBY_SPECTATOR_SLOT_BASE 64
 #define PSX_LOBBY_MAX_LAN_EPS 4
 #define PSX_LOBBY_LANG_LEN 16
+#define PSX_LOBBY_MAX_MODS 12
+#define PSX_LOBBY_MOD_ID_LEN 96
+#define PSX_LOBBY_MOD_VER_LEN 32
+#define PSX_LOBBY_MOD_NAME_LEN 64
+#define PSX_LOBBY_MOD_FEATS_LEN 384
 
 #ifndef PSX_GAME_VERSION
 #define PSX_GAME_VERSION "dev"
@@ -79,6 +86,21 @@ typedef struct PsxLobbyOnlinePlayer {
 } PsxLobbyOnlinePlayer;
 #define PSX_LOBBY_MAX_ONLINE 64
 
+typedef struct PsxLobbyModPkg {
+    char id[PSX_LOBBY_MOD_ID_LEN];
+    char ver[PSX_LOBBY_MOD_VER_LEN];
+    char name[PSX_LOBBY_MOD_NAME_LEN];
+    char feats[PSX_LOBBY_MOD_FEATS_LEN];
+    int  builtin;
+    uint32_t size;
+} PsxLobbyModPkg;
+
+typedef struct PsxLobbyModOffer {
+    int valid;
+    int count;
+    PsxLobbyModPkg pkgs[PSX_LOBBY_MAX_MODS];
+} PsxLobbyModOffer;
+
 typedef struct PsxLobbyMember {
     /* Seat index in the shared namespace: a player seat, or
      * spectator_slot_base + gallery index. Pass it back to kick / move as-is. */
@@ -94,6 +116,9 @@ typedef struct PsxLobbyMember {
     int  bios_can_openbios;   /* linked OpenBIOS backend */
     int  bios_can_scph1001;   /* linked retail + validated dump available */
     int  bios_prefer_openbios; /* explicit OpenBIOS pick (not retail) */
+    /* CRC-32 of the retail image this seat would boot (bios_offer.retail_crc);
+     * 0 = not sent (older client). See netplay_bios_settle.h. */
+    uint32_t bios_retail_crc;
     /* Peer memory-card offer from set_ready memcard_offer (0 if legacy). */
     int  memcard_offer_valid;
     int  memcard_has_card;    /* a slot-1 card is enabled locally */
@@ -103,6 +128,15 @@ typedef struct PsxLobbyMember {
     /* Account key behind this seat; "" for a guest. See
      * PsxLobbyOnlinePlayer.account. */
     char account[PSX_LOBBY_ID_LEN];
+    /* Host-relay room: this guest's latest path_report ("direct" | "fail" |
+     * "relay"), "" when none, and whether the server still trusts it at start
+     * (recomp-net-server WS_LOBBY.md "Host relay"). */
+    char path[8];
+    int  path_fresh;
+    /* Peer mod catalog offer from join/set_ready (0 if legacy/missing). */
+    int  mod_offer_valid;
+    int  mod_count;
+    PsxLobbyModPkg mods[PSX_LOBBY_MAX_MODS];
 } PsxLobbyMember;
 
 /*
@@ -114,6 +148,9 @@ typedef struct PsxLobbyBiosOffer {
     int  can_openbios;
     int  can_scph1001;
     int  prefer_openbios; /* 1 = OpenBIOS selected; 0 = retail / willing SCPH */
+    /* CRC-32 of the retail file this peer would boot for a retail match;
+     * 0 when can_scph1001 is 0. The settle compares these, not the token. */
+    uint32_t retail_crc;
 } PsxLobbyBiosOffer;
 
 /*
@@ -168,6 +205,16 @@ typedef struct PsxLobbyMatchCaps {
     int  input_delay;      /* recomp-net delay frames (D) */
     int  input_prediction; /* invent runway frames (P); rollback only */
     int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
+    /* 0/1 -- host: ask for the HOST RELAY (match_caps.relay = "host"): the
+     * host carries the match on its own UDP port and guests dial it; the
+     * server falls back to its relay unless every guest proved the path
+     * (recomp_net/host_relay.h). Guests read it to know the room asks. */
+    int  relay_host;
+    /* 0/1 -- with relay_host: match_caps.relay_via = "ice". The host carries
+     * the match over the ICE agents the waiting room already connected (one
+     * per guest); no port is forwarded or advertised. Published by the host
+     * when psx_lobby_relay_via_ice() is on and this build has ICE. */
+    int  relay_via_ice;
     int  force_turn;       /* 0/1 — ICE relay-only (Force TURN for UDP) */
     int  rollback;         /* 0/1 — invent/rollback netplay (default on) */
     /* DualShock-on-multitap-tap hack (0/1). Host-authoritative for the match. */
@@ -181,9 +228,23 @@ typedef struct PsxLobbyMatchCaps {
      * so a toggle racing the start cannot split the room. */
     int  guest_memcard_active;
     char language[PSX_LOBBY_LANG_LEN];
-    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy). */
+    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy).
+     * "scph1001" means "the retail image named by session_bios_crc". */
     char session_bios[16];
+    /* Retail match: CRC-32 of the image every peer boots. 0 = not sent (an
+     * older host); peers then accept any retail dump, as before. */
+    uint32_t session_bios_crc;
+    /* Host-authoritative online mod plan. Empty mod_plan_fp/mod_count means vanilla. */
+    char mod_plan_fp[72];
+    int  mod_count;
+    PsxLobbyModPkg mods[PSX_LOBBY_MAX_MODS];
 } PsxLobbyMatchCaps;
+
+/* The same portable plan is used by WebSocket and LAN lobbies. No media paths
+ * or bytes are serialized. A failed/truncated message must never mean vanilla. */
+int psx_lobby_encode_match_caps(char *out, size_t cap, const PsxLobbyMatchCaps *caps);
+int psx_lobby_decode_match_caps(const char *json, PsxLobbyMatchCaps *out);
+void psx_lobby_set_local_match_caps(const PsxLobbyMatchCaps *caps);
 
 typedef struct PsxLobbyJoinInfo {
     int      ok;
@@ -213,7 +274,26 @@ typedef struct PsxLobbyJoinInfo {
     /* Launch: the host watches from the gallery but runs the match from
      * session slot 0 (pad muted); player seats sit at lobby seat + 1. */
     int      host_spectates;
-    char     last_error[64]; /* need_password | bad_password | … */
+    /* Launch: transport "host" -- no relay_endpoint; the host carries the
+     * match on host_endpoint (its advertised public port); guests dial it.
+     * force_input_relay is 0. The host binds bind_hostport and accepts the
+     * guest (2 seats) or hubs (3+). */
+    int      transport_host;
+    /* Launch: transport "ice" -- a 2-player room started on ICE
+     * (peer-to-peer, signalled over the lobby). No endpoint is dialled and
+     * force_input_relay is 0 (psx_lobby_launch_transport.h). */
+    int      transport_ice;
+    /* Launch: transport "host" AND relay_via "ice". transport_host is ALSO 1
+     * then, so test this first. Nothing is bound or dialled (bind_hostport is
+     * the placeholder 0.0.0.0:0, peer_hostport empty): the match rides the
+     * agents psx_lobby_ice_take_* hands over. A launch whose seats are not all
+     * connected is refused in the client: launch_pending stays 0 and
+     * last_error is "ice_not_connected" (psx_lobby_ice_launch_error() says
+     * which seat). */
+    int      transport_ice_hub;
+    /* A server code (need_password | bad_password | …) or, from
+     * psx_lobby_set_last_error, one sentence the launcher shows as is. */
+    char     last_error[192];
 } PsxLobbyJoinInfo;
 
 /* Default URL when PSX_NET_LOBBY_URL unset. Order:
@@ -333,8 +413,61 @@ const PsxLobbyJoinInfo *psx_lobby_join_info(void);
 /* Latest host match_caps (valid==0 until create/join/launch delivers one). */
 const PsxLobbyMatchCaps *psx_lobby_match_caps(void);
 
+/* Local mod package/version catalog advertised to the lobby on join. */
+void psx_lobby_set_mod_offer(const PsxLobbyModOffer *offer);
+const PsxLobbyModOffer *psx_lobby_mod_offer(void);
+int  psx_lobby_need_mods_count(void);
+int  psx_lobby_need_mods_get(int index, PsxLobbyModPkg *out);
+int  psx_lobby_need_mods_can_transfer(void);
+int  psx_lobby_mod_xfer_start(void);
+void psx_lobby_mod_xfer_cancel(void);
+int  psx_lobby_mod_xfer_progress(void);
+int  psx_lobby_mod_xfer_failed(char *err, size_t err_cap);
+
 /* Host: push updated caps while in lobby (clears ready via lobby_update). */
 int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps);
+
+/* Host relay (recomp_net/host_relay.h), driven from psx_lobby_pump while
+ * seated online in a room whose caps ask for it: the host holds the game port
+ * (UPnP / NAT-PMP / STUN), advertises it with set_host_endpoint and answers
+ * probes; guests probe it and send path_report. The pref is the HOST's
+ * default for rooms it creates (recomp-ui owns the setting; default on). */
+void psx_lobby_set_relay_host_pref(int on);
+int  psx_lobby_relay_host_pref(void);
+struct RNetHostRelayStatus;
+int  psx_lobby_host_relay_status(struct RNetHostRelayStatus *out);
+void psx_lobby_host_relay_release_port(void);
+
+/* Host relay over ICE (recomp_net/host_ice.h). The pref is the HOST's, default
+ * on; it only publishes relay_via "ice" when the build can run ICE. */
+void psx_lobby_set_relay_via_ice_pref(int on);
+int  psx_lobby_relay_via_ice_pref(void);
+/* 1 when this build can run ICE agents at all. */
+int  psx_lobby_ice_available(void);
+struct RNetHostIceStatus;
+/* Waiting-room per-seat state; 1 while the ICE proof is running. */
+int  psx_lobby_host_ice_status(struct RNetHostIceStatus *out);
+
+/* Launch handover (transport_ice_hub). The agents are COMPLETED and owned by
+ * the caller on success: give them to the session or release them with
+ * psx_lobby_ice_destroy_agent. TAKE BEFORE psx_lobby_clear_launch_pending's
+ * consumer finishes with the launch -- an untaken bundle is destroyed after
+ * 60 s, at the next launch, or on leave. lobby_slot is the lobby's seat
+ * namespace; the engine maps it to its own session slot. */
+struct RNetIceAgent;
+typedef struct PsxLobbyIceSeat {
+    int  lobby_slot;
+    char player_id[PSX_LOBBY_ID_LEN];
+    struct RNetIceAgent *agent;
+} PsxLobbyIceSeat;
+/* Host: n >= 1 (ownership moves to the caller) or -1. */
+int  psx_lobby_ice_take_hub(PsxLobbyIceSeat *out, int max);
+/* Guest: the one agent connected to the host, or NULL. */
+struct RNetIceAgent *psx_lobby_ice_take_guest_agent(void);
+/* Why the last launch was refused / a take failed ("" when none). */
+const char *psx_lobby_ice_launch_error(void);
+void psx_lobby_ice_discard(void);
+void psx_lobby_ice_destroy_agent(struct RNetIceAgent *agent);
 
 /* Live member table from lobby_update (and create/join). */
 int  psx_lobby_member_count(void);
@@ -394,6 +527,21 @@ int  psx_lobby_all_ready(void);
 
 /* Toggle ready in the current lobby (attaches current bios_offer). */
 int  psx_lobby_set_ready(int ready);
+/* The set_ready / start messages exactly as this client sends them (into msg,
+ * 0 = ok). The Retro hub forwards them verbatim for a seat it holds. */
+int  psx_lobby_ready_message(int ready, char *msg, size_t cap);
+int  psx_lobby_start_message(const PsxLobbyMatchCaps *caps, char *msg, size_t cap);
+/* A match the Retro hub negotiated (retcomm-launcher docs/NETPLAY_HANDOFF.md).
+ * replay_room adopts the record's identity, seat and room messages as if they
+ * had arrived on this client's socket; ingest_record also adopts its launch,
+ * after which launch_pending, join_info and match_caps answer as for an
+ * in-game match. 0 = adopted; else `why` says why. handoff_active: 1 once a
+ * record was ingested (the match ends the process, not back into a lobby). */
+int  psx_lobby_replay_room(const char *record, char *why, size_t why_cap);
+int  psx_lobby_ingest_record(const char *record, char *why, size_t why_cap);
+int  psx_lobby_handoff_active(void);
+/* A string field of a JSON object (the client's own reader); 1 = found. */
+int  psx_lobby_json_str(const char *json, const char *key, char *out, size_t cap);
 
 /* Local BIOS offer used on the next set_ready (and included in settle). */
 void psx_lobby_set_bios_offer(const PsxLobbyBiosOffer *offer);
@@ -446,14 +594,22 @@ int  psx_lobby_chat_get(int index, PsxLobbyChatMsg *out);
 void psx_lobby_chat_clear(void);
 
 /*
- * Settle session BIOS from seated peers' bios_offer (+ local offer):
- *   OpenBIOS if anyone cannot run SCPH-1001 (missing offer ⇒ cannot);
- *   else SCPH-1001 when the host prefers retail and every peer can;
- *   else OpenBIOS if anyone prefers OpenBIOS; else SCPH-1001.
- * Host preference wins over guest OpenBIOS picks when all can SCPH.
- * Writes "openbios" or "scph1001" into out. Returns 0 on success.
+ * Settle session BIOS from seated peers' bios_offer (+ local offer), by the
+ * rule in netplay_bios_settle.h: retail only when every seat offers the same
+ * retail image CRC; else OpenBIOS when every seat links it.
+ * Returns 0 and writes "openbios" or "scph1001" into out (and the retail CRC
+ * into *out_crc, 0 for OpenBIOS). Returns 1 when no BIOS suits every seat:
+ * out is "", and why (when non-NULL) says which images differ; the host must
+ * not start. Returns -1 on bad arguments.
  */
-int  psx_lobby_settle_session_bios(char *out, size_t out_cap);
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap);
+
+/*
+ * Put one sentence on the launcher's status line (through last_error, which
+ * the launcher shows as "Lobby error: <text>"). NULL or "" clears it.
+ */
+void psx_lobby_set_last_error(const char *text);
 
 /*
  * Host: ask server to broadcast launch. When match_caps is non-NULL and valid,

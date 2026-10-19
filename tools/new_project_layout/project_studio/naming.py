@@ -170,7 +170,7 @@ def netplay_configured(root: Path) -> bool:
 
 
 def ci_workflow_present(root: Path) -> bool:
-    """True if setup-host ``.github/workflows/release.yml`` exists."""
+    """True if ``.github/workflows/release.yml`` exists."""
     root = root.expanduser().resolve()
     return (root / ".github" / "workflows" / "release.yml").is_file()
 

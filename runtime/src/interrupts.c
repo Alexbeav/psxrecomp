@@ -26,6 +26,7 @@
  */
 
 #include "interrupts.h"
+#include "mod_runtime.h"
 #include "psx_memory.h"
 #include "sio.h"
 #include "timers.h"
@@ -37,6 +38,7 @@
 #include "event_ring.h"
 #include "lockstep.h"
 #include "psx_cycles.h"
+#include "psx_cycle_freeze.h"
 #include "psx_scheduler.h"
 #include "psx_video_timing.h"
 #include "spu.h"
@@ -81,9 +83,18 @@ typedef struct {
      * corrupt snapshot (0x801384AC paired with 0x801EFE80). */
     uint32_t entry_sp;     /* cpu->gpr[29] at exception entry */
     uint32_t pump_site;    /* g_cosim_dirty_pump_site at entry (which delivery path) */
+    uint64_t exit_cycle;   /* guest cycle at the exit restore decision (0 = not exited) */
 } IrqCtxEntry;
 IrqCtxEntry g_irqctx_ring[IRQCTX_RING_CAP];
 uint64_t    g_irqctx_seq = 0;
+/* Always-on per-source exception accounting (irq_exc_stats). A delivery is
+ * charged to every I_STAT&I_MASK bit pending at entry (index 11 = software
+ * interrupt only); cycles are guest cycles from entry to the exit restore
+ * decision, so a handler that stalls (e.g. a held DMA kick) shows up here. */
+uint64_t g_exc_src_deliveries[12];
+uint64_t g_exc_src_cycles[12];
+uint64_t g_exc_cycles_total;
+uint64_t g_exc_exits_total;
 extern uint64_t psx_get_cycle_count(void);
 
 /* Record an interrupt-delivery decision into the event ring. GATE outcomes are
@@ -486,6 +497,9 @@ static void fire_vblank_edge(void) {
     g_vblank_raise_count++;
     event_ring_record(EV_ISTAT_RAISE, IRQ_VBLANK);
     gpu_vblank_tick();  /* Toggle LCF (GPUSTAT bit 31) */
+    /* [timing] guest_cycle_scale_gate: RAM predicates are judged here, at a
+     * guest-time point (no-op without one). */
+    psx_guest_cycle_scale_vblank();
 #ifndef PSX_ENABLE_BLOCK_CYCLES
     timers_tick(33868); /* ~1 NTSC frame worth of cycles */
     cdrom_tick();      /* Process pending CDROM responses */
@@ -634,6 +648,15 @@ int psx_irq_resume_context_snapshot_site(void)
     return g_cosim_dirty_pump_site;
 }
 
+static unsigned s_snapshot_host_call_depth;
+void psx_snapshot_host_call_begin(void) { ++s_snapshot_host_call_depth; }
+void psx_snapshot_host_call_end(void) {
+    if (s_snapshot_host_call_depth) --s_snapshot_host_call_depth;
+}
+void psx_snapshot_host_call_reset(void) { s_snapshot_host_call_depth = 0; }
+unsigned psx_snapshot_host_call_depth(void) { return s_snapshot_host_call_depth; }
+void psx_snapshot_host_call_restore(unsigned depth) { s_snapshot_host_call_depth = depth; }
+
 uint32_t psx_irq_resume_context_snapshot_pc(void)
 {
     return g_dirty_safe_resume_pc;
@@ -641,6 +664,9 @@ uint32_t psx_irq_resume_context_snapshot_pc(void)
 
 int psx_irq_resume_context_snapshot_safe_at(uint32_t resume_pc)
 {
+    extern int psx_mod_function_entry_active(void);
+    if (psx_mod_function_entry_active()) return 0;
+    if (s_snapshot_host_call_depth) return 0;
     if (g_cosim_dirty_pump_site == 0)
         return 1;
 
@@ -1067,6 +1093,9 @@ void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
 }
 
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
+    /* Render passes and uncharged calls run in frozen guest time: nothing
+     * is delivered. */
+    if (g_psx_guest_time_frozen) return 0;
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
     if ((i_stat & i_mask) == 0) { s_skip_none++; return 0; }
 
@@ -1091,6 +1120,9 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 }
 
 void psx_check_interrupts(CPUState* cpu) {
+    /* Frozen guest time (psx_cycle_freeze.h): no delivery, and no
+     * check-boundary bookkeeping that the stock timeline would not do. */
+    if (g_psx_guest_time_frozen) return;
     psx_cyc_batch_flush();
     extern int g_ls_suppress_record;
     extern int psx_netplay_active(void);
@@ -1628,7 +1660,7 @@ irq_deliver_eval:
             g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE; /* set at the actual RFE/SYSCALL return */
         } else {
             uint32_t sentinel = PSX_EXC_SENTINEL_PC;
-            cpu->write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
+            psx_host_write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
             cpu->cop0[COP0_EPC]  = sentinel;
             g_exception_real_epc = sentinel;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_LEGACY_SENTINEL;
@@ -1654,12 +1686,15 @@ irq_deliver_eval:
         }
     }
 
+    /* Keep this delivery's EPC stable across nested handler dispatches. */
+    const uint32_t delivered_epc = g_exception_real_epc;
+
     /* Save the interrupted code's full register state.
      *
-     * On real hardware, the exception handler saves all GPRs to the
-     * TCB save area at entry, and ReturnFromException restores them
-     * before jumping back to EPC.  The interrupted code always gets
-     * its exact pre-exception register values back.
+     * The BIOS handler saves the interrupted context to the TCB and restores
+     * it before returning to EPC. Kernel scratch registers may instead retain
+     * the handler's architectural result: the qualified real-RFE path below
+     * keeps its post-handler k0. Other host-restored values use this snapshot.
      *
      * In our model, the recompiled handler runs as a C function and
      * its `return;` goes back here — not to EPC.  The handler's
@@ -1667,9 +1702,9 @@ irq_deliver_eval:
      * kernel jmpbuf (intended for longjmp to WaitEvent's caller),
      * which corrupts the interrupted code's registers.
      *
-     * We save all GPRs/HI/LO before the handler and restore them
-     * after, so the interrupted code resumes with its original state
-     * — matching real hardware behaviour. */
+     * Save all GPRs/HI/LO before the handler for the host restore policy
+     * below. Its qualified RFE path preserves the actual handler k0 result
+     * rather than overwriting it with the interrupted snapshot. */
     uint32_t saved_gpr[32];
     uint32_t saved_hi, saved_lo;
     for (int i = 0; i < 32; i++) saved_gpr[i] = cpu->gpr[i];
@@ -1800,9 +1835,18 @@ irq_deliver_eval:
      * own live frame. */
     jmp_buf saved_exception_jmpbuf;
     memcpy(&saved_exception_jmpbuf, &exception_jmpbuf, sizeof(jmp_buf));
+    ModFunctionEntryContext saved_mod_callback;
+    mod_runtime_function_entry_context_save(&saved_mod_callback);
+    const unsigned saved_host_call_depth = psx_snapshot_host_call_depth();
     g_exc_setjmp_epoch++;   /* new setjmp frame armed (see decl above) */
     for (;;) {
         int jmp_val = setjmp(exception_jmpbuf);
+        if (jmp_val != 0) {
+            /* RFE/RestoreState can skip a callback and its guest-call adapter.
+             * Preserve callbacks below this handler; discard only its scopes. */
+            mod_runtime_function_entry_context_restore(&saved_mod_callback);
+            psx_snapshot_host_call_restore(saved_host_call_depth);
+        }
         if (jmp_val == 2) {
             /* RestoreState redirect: re-dispatch to cpu->pc.
              * GPRs were already set by RestoreState — do NOT restore.
@@ -1866,9 +1910,9 @@ irq_deliver_eval:
      * interrupted — either the LEGACY sentinel exit, OR a real-EPC RFE that
      * resumes at exactly the PC we installed as EPC (no ChangeThread happened).
      *
-     * Real hardware saves and restores ALL GPRs across every exception, so a
-     * transparent same-thread interrupt must give the interrupted code its exact
-     * pre-exception registers back. The original Fix B skipped this for all
+     * The host restore preserves the interrupted context across a transparent
+     * same-thread interrupt, except for architectural post-handler k0 on the
+     * qualified real-RFE path below. The original Fix B skipped this for all
      * real-EPC resumes, trusting the recompiled BIOS handler's TCB restore — but
      * for a same-thread compiled resume that restore is incomplete, so a live
      * value held in a register across a block-leader IRQ check gets clobbered by
@@ -1984,9 +2028,35 @@ irq_deliver_eval:
         e->v1_saved    = saved_gpr[3];
         e->ra_exit     = cpu->gpr[31];
         e->ra_saved    = saved_gpr[31];
+        e->exit_cycle  = psx_get_cycle_count();
+        {
+            const uint64_t spent = e->exit_cycle - e->cycle;
+            const uint32_t pend = (e->istat & e->imask) & 0x7FFu;
+            g_exc_cycles_total += spent;
+            g_exc_exits_total++;
+            if (!pend) { g_exc_src_deliveries[11]++; g_exc_src_cycles[11] += spent; }
+            for (int b = 0; b < 11; b++) {
+                if (pend & (1u << b)) {
+                    g_exc_src_deliveries[b]++;
+                    g_exc_src_cycles[b] += spent;
+                }
+            }
+        }
     }
+    /* A real same-thread RFE leaves the handler's jump register live.
+     * Preserve its actual result only for the primary mode-1 return; legacy,
+     * syscall, nested, changed-target/global-EPC and other restore modes keep
+     * the old copy. A RestoreState redirect that returns to the original EPC
+     * with the same TCB can still qualify. */
+    const int keep_handler_k0 = do_restore && s_str_mode == 1 &&
+        same_thread_resume && g_exc_escape_reason == PSX_EXC_ESCAPE_RFE_RETURN &&
+        prev_in_exception == 0 && entry_tcb != 0u && entry_tcb == exit_tcb &&
+        delivered_epc != 0u && delivered_epc != (uint32_t)PSX_EXC_SENTINEL_PC &&
+        same_guest_pc(cpu->pc, delivered_epc) &&
+        same_guest_pc(g_exception_real_epc, delivered_epc);
     if (do_restore) {
-        for (int i = 0; i < 32; i++) cpu->gpr[i] = saved_gpr[i];
+        for (int i = 0; i < 32; i++)
+            if (i != 26 || !keep_handler_k0) cpu->gpr[i] = saved_gpr[i];
         cpu->hi = saved_hi;
         cpu->lo = saved_lo;
     }

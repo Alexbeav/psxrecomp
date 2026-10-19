@@ -103,8 +103,14 @@ static size_t root_of(size_t *parent, size_t index) {
     return index;
 }
 
+static int32_t run_anchor(int32_t x, int32_t width, int32_t display_width,
+                          int in_place) {
+    if (in_place) return x + width / 2;
+    return ws_ui_anchor_for_bounds(x, width, display_width);
+}
+
 void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
-                        int32_t display_width, int dense_menu) {
+                        int32_t display_width, int dense_menu, int in_place) {
     if (!items || count == 0 || display_width <= 0) return;
     if (dense_menu) {
         for (size_t i = 0; i < count; i++) {
@@ -117,8 +123,8 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
     size_t *parent = (size_t *)malloc(count * sizeof(*parent));
     if (!parent) {
         for (size_t i = 0; i < count; i++) {
-            items[i].anchor = ws_ui_anchor_for_bounds(
-                items[i].x, items[i].width, display_width);
+            items[i].anchor = run_anchor(
+                items[i].x, items[i].width, display_width, in_place);
             items[i].root = (uint32_t)i;   /* diag: each item stands alone */
         }
         return;
@@ -164,7 +170,7 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
                 max_x = items[j].x + items[j].width;
         }
         items[i].anchor =
-            ws_ui_anchor_for_bounds(min_x, max_x - min_x, display_width);
+            run_anchor(min_x, max_x - min_x, display_width, in_place);
         items[i].root = (uint32_t)root;
     }
     free(parent);

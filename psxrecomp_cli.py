@@ -62,6 +62,8 @@ def activate_embedded_toolchain(
     project_root: Path, progress: Optional[ProgressReporter] = None
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
+    if sys.platform != "win32":
+        return False
     log = progress.log if progress else None
     bin_dir = resolve_toolchain_bin(project_root)
     if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
@@ -157,6 +159,10 @@ def prune_after_rebuild(
             progress.log(f"Pruned build tree to binary+assets under {build_dir}")
 
 
+# Windows Python has no lutimes; follow_symlinks=False raises NotImplementedError.
+_UTIME_NOFOLLOW = os.utime in os.supports_follow_symlinks
+
+
 def clamp_future_mtimes(
     root: Path,
     *,
@@ -213,7 +219,14 @@ def clamp_future_mtimes(
                 continue
             if mtime > stamp:
                 try:
-                    os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    if _UTIME_NOFOLLOW:
+                        os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    elif p.is_symlink():
+                        # Windows cannot retime a link itself; never retime
+                        # the target it points outside the tree at.
+                        continue
+                    else:
+                        os.utime(p, (stamp, stamp))
                     n += 1
                 except OSError:
                     pass
@@ -328,9 +341,16 @@ def _find_recompiler_tool(project_root: Path, basename: str, env_name: str) -> P
         # tool would be rebuilt correctly and then never used.
         project_root / "psxrecomp" / "recompiler" / "build-analyze",
         ROOT / "recompiler" / "build-analyze",
+        # The project's own emitter tree comes before the framework's. It is
+        # what tools/ci/build_emitters.sh (CI and the scaffold) builds from the
+        # pinned submodule, while psxrecomp/recompiler/build is whatever a
+        # developer last built there and can predate the pin by months. A
+        # stale one shadowed a fresh build-recompiler on 2026-09-30 and
+        # emitted a dispatch that called a helper the pinned runtime had
+        # removed; the release failed at link on every platform.
+        project_root / "build-recompiler",
         project_root / "psxrecomp" / "recompiler" / "build",
         project_root / "psxrecomp" / "recompiler" / "build" / "Release",
-        project_root / "build-recompiler",
         ROOT / "recompiler" / "build",
         ROOT / "recompiler" / "build" / "Release",
     ]
@@ -391,12 +411,24 @@ def ensure_emitters(
     Generate & rebuild without a pre-staged setup-host SDK.
     """
     if not force:
+        # With the framework's recompiler sources present, always run the
+        # (incremental) build: a binary that merely exists may predate the
+        # sources -- a submodule moved to another revision -- and would emit
+        # code for the old framework without a word (a hook site listed in
+        # game.toml silently missing). Ninja makes the up-to-date case cheap.
+        # Without sources (an SDK pack), the staged binaries are the only ones.
         try:
-            game, bios = find_emitters(project_root)
-            progress.log(f"Emitters ready: {game.name}, {bios.name}")
-            return game, bios
+            recompiler_source_dir(project_root)
+            have_sources = True
         except FileNotFoundError:
-            pass
+            have_sources = False
+        if not have_sources:
+            try:
+                game, bios = find_emitters(project_root)
+                progress.log(f"Emitters ready: {game}, {bios}")
+                return game, bios
+            except FileNotFoundError:
+                pass
 
     progress.phase(
         "emitters",
@@ -841,6 +873,29 @@ def regen_bios_profile(
         raise RuntimeError(
             f"psxrecomp-bios failed for {profile_rel} (exit {proc.returncode})"
         )
+    write_bios_emitter_stamp(fw, profile_rel, progress=progress)
+
+
+def write_bios_emitter_stamp(
+    fw: Path, profile_rel: str, *, progress: ProgressReporter
+) -> None:
+    """Record generated/<stem>.emitter.sha like tools/regen_bios.sh, so the next
+    configure does not report the fresh BIOS as STALE."""
+    recompiler = load_sections(fw / profile_rel).get("recompiler", {})
+    stem = recompiler.get("out_stem")
+    cmake = shutil.which("cmake")
+    if not stem or not cmake:
+        progress.log(f"emitter stamp skipped for {profile_rel} (no out_stem or cmake)")
+        return
+    proc = subprocess.run(
+        [cmake, f"-DROOT={fw}", f"-DPROFILE={profile_rel}",
+         "-P", str(fw / "tools" / "bios_emitter_fingerprint.cmake")],
+        cwd=str(fw), capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"emitter fingerprint failed for {profile_rel}: {proc.stderr.strip()}")
+    out_dir = fw / str(recompiler.get("out_dir") or "generated")
+    (out_dir / f"{stem}.emitter.sha").write_text(proc.stdout, encoding="utf-8")
 
 
 def load_sections(config: Path) -> dict[str, dict[str, Any]]:
@@ -1356,7 +1411,7 @@ def generated_game_is_cps(marker: Path) -> bool:
     """True when psxrecomp-game emitted continuation-passing game C.
 
     In CPS mode the emitter writes a psx_cps_mark_game constructor into the
-    dispatch it produces (recompiler/src/main_psx.cpp); overlay C compiled into
+    dispatch it produces (recompiler/src/game_dispatch_emitter.cpp); overlay C compiled into
     the same binary must use the same contract, so this reads the output
     rather than guessing from the environment."""
     try:
@@ -1587,17 +1642,41 @@ def _pack_sysroot_cmake_args(
     return [f"-DCMAKE_SYSROOT={sysroot}", "-DOpenGL_GL_PREFERENCE=LEGACY"]
 
 
-def _read_cmake_cache_generator(cache_file: Path) -> str:
+def _read_cmake_cache_entry(cache_file: Path, key: str) -> str:
     if not cache_file.is_file():
         return ""
     try:
         text = cache_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    prefix = f"{key}:"
     for line in text.splitlines():
-        if line.startswith("CMAKE_GENERATOR:INTERNAL="):
+        if line.startswith(prefix) and "=" in line:
             return line.split("=", 1)[1].strip()
     return ""
+
+
+def _read_cmake_cache_generator(cache_file: Path) -> str:
+    return _read_cmake_cache_entry(cache_file, "CMAKE_GENERATOR")
+
+
+def _cmake_for_build_dir(build_dir: Path) -> Path:
+    """The cmake that configured *build_dir* (CMakeCache CMAKE_COMMAND).
+
+    Building must use the same cmake as configure. A bare ``cmake`` resolves
+    through PATH, and on Windows that is often an MSYS2 cmake that rewrites
+    the Windows build path as ``/f/.../F:/...`` and fails.
+    """
+    cached = _read_cmake_cache_entry(build_dir / "CMakeCache.txt", "CMAKE_COMMAND")
+    if cached and Path(cached).is_file():
+        return Path(cached)
+    found = _which_tool("cmake")
+    if found is None:
+        raise RuntimeError(
+            f"cmake not found: {build_dir} has no configured CMAKE_COMMAND "
+            "and no cmake is on PATH"
+        )
+    return found
 
 
 def _cmake_configure(
@@ -1729,7 +1808,7 @@ def _cmake_build(
         os.cpu_count() or 4
     )
     cmd = [
-        "cmake",
+        str(_cmake_for_build_dir(build_dir)),
         "--build",
         str(build_dir),
         "--parallel",
@@ -2029,8 +2108,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         "-DPSXRECOMP_ALLOW_NO_BIOS=OFF",
         "-DPSXRECOMP_REQUIRE_GAME_C=ON",
     ]
-    if args.cmake_extra:
-        cmake_extra.extend(args.cmake_extra)
+    user_extra = list(args.cmake_extra or [])
 
     clamped = clamp_future_mtimes(project_root, skip=build_dir)
     if clamped:
@@ -2060,7 +2138,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if not pgo_enabled:
             progress.phase("build", pct=0.2, message="cmake Release build...")
             _cmake_configure(
-                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"], progress=progress
+                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"] + user_extra, progress=progress
             )
             _cmake_build(build_dir, target, progress)
         else:
@@ -2080,7 +2158,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 project_root,
                 build_dir,
                 pgo="generate",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"],
+                extra=cmake_extra + user_extra + ["-DPSX_DEBUG_TOOLS=ON"],
                 progress=progress,
             )
             _cmake_build(build_dir, target, progress)
@@ -2107,7 +2185,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 project_root,
                 build_dir,
                 pgo="use",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"],
+                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"] + user_extra,
                 progress=progress,
             )
             _cmake_build(build_dir, target, progress)

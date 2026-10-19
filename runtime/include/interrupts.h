@@ -8,6 +8,14 @@ extern "C" {
 #endif
 
 struct CPUState;
+/* A host adapter that preserves registers outside guest RAM is not a
+ * serializable continuation. Defer snapshots until it returns; scheduler
+ * escapes discard the scope with the abandoned host stack. */
+void psx_snapshot_host_call_begin(void);
+void psx_snapshot_host_call_end(void);
+void psx_snapshot_host_call_reset(void);
+unsigned psx_snapshot_host_call_depth(void);
+void psx_snapshot_host_call_restore(unsigned depth);
 
 /* IRQ bit positions in I_STAT/I_MASK */
 #define IRQ_VBLANK  0

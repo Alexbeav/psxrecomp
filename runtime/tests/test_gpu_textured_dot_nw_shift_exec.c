@@ -9,21 +9,7 @@
 
 #include "../src/gpu.c"
 
-uint64_t s_frame_count;
-int g_exec_phase;
-uint32_t g_debug_current_func_addr;
-uint32_t g_debug_last_store_pc;
-CPUState *debug_cpu_ptr;
-int g_psx_vram_dirty_tracking;
-
-static uint32_t test_ram[0x00200000u / 4u];
-
-static struct {
-    int calls;
-    int x, y, w, h;
-    int u, v;
-    uint16_t clut_x, clut_y, texpage;
-} last_textured_rect;
+#include "gpu_exec_stubs.inc"
 
 static uint32_t pack_vertex(int16_t x, int16_t y) {
     return (uint16_t)x | ((uint32_t)(uint16_t)y << 16);
@@ -33,6 +19,8 @@ static void reset_gpu_state_for_test(void) {
     memset(test_ram, 0, sizeof(test_ram));
     memset(&last_textured_rect, 0, sizeof(last_textured_rect));
     memset(ws_hud_anchor_tags, 0, sizeof(ws_hud_anchor_tags));
+    memset(ws_background_tags, 0, sizeof(ws_background_tags));
+    ws_background_tags_used = 0;
     memset(ws_tags, 0, sizeof(ws_tags));
 
     s_frame_count = 100;
@@ -98,6 +86,140 @@ static void configure_native_wide_16_9(void) {
     ws_full_2d = 1;
 }
 
+static void test_background_packet_tags(void) {
+    /* The second F4 is embedded in a DMA node: its preceding word need not
+     * be a P_TAG. Only the command and its complete contents are authority. */
+    const uint32_t addr = 0x1001Cu;
+    const uint32_t packet[] = {0x28020304u, 0, 320, 240u << 16,
+                               (240u << 16) | 320u};
+    reset_gpu_state_for_test();
+    memcpy(&test_ram[addr / 4u], packet, sizeof(packet));
+    gp0_cmd_source_addr = addr;
+    gp0_words_needed = 5;
+    memcpy(gp0_cmd_buf, packet, sizeof(packet));
+    gpu_ws_tag_background_prim(addr - 4u);
+    assert(!gpu_ws_background_stretch_active());
+    assert(!gpu_ws_background_requires_full_composite());
+    assert(!ws_nw_explicit_background());
+
+    configure_native_wide_16_9();
+    gpu_ws_tag_background_prim(0x80000000u | (addr - 4u));
+    assert(gpu_ws_background_stretch_active());
+    assert(gpu_ws_background_requires_full_composite());
+    assert(ws_nw_explicit_background());
+    /* Explicit proof remains valid after a foreground phase has begun. */
+    s_bg_phase_frame = (uint32_t)s_frame_count;
+    s_bg_phase_over = 1;
+    assert(psx_ws_prim_in_backdrop() == 1);
+    assert(memcmp(&test_ram[addr / 4u], packet, sizeof(packet)) == 0);
+
+    for (unsigned i = 0; i < 5; ++i) {
+        gp0_cmd_buf[i] ^= 1u;
+        assert(!ws_nw_explicit_background());
+        gp0_cmd_buf[i] ^= 1u;
+    }
+    gp0_cmd_source_addr += 4u;
+    assert(!ws_nw_explicit_background());
+    gp0_cmd_source_addr -= 4u;
+    gp0_words_needed = 4;
+    assert(!ws_nw_explicit_background());
+    gp0_words_needed = 5;
+    s_frame_count += 2;
+    assert(ws_nw_explicit_background());
+    ++s_frame_count;
+    assert(!gpu_ws_background_stretch_active());
+    assert(!ws_nw_explicit_background());
+    /* A held display retains its stretched pixels after packet expiry. The
+     * compositor must not paste canonical 4:3 scenery over their center. */
+    assert(gpu_ws_background_requires_full_composite());
+    s_frame_count += 120;
+    assert(gpu_ws_background_requires_full_composite());
+    assert(!ws_nw_explicit_background());
+    s_frame_count = 99;
+    assert(!gpu_ws_background_stretch_active());
+    assert(gpu_ws_background_requires_full_composite());
+    s_frame_count = 100;
+    ws_mode = 0;
+    assert(!gpu_ws_background_stretch_active());
+    assert(!gpu_ws_background_requires_full_composite());
+
+    /* Reject semi-transparent polygons/rectangles, other commands, misalignment and RAM
+     * overflow; a rejected tag must not even enable the full-composite path. */
+    const uint32_t bad_prim[] = {addr - 3u, 0xFFFFFFFCu, 0x801FFFFCu,
+                                 0x1F800000u};
+    reset_gpu_state_for_test();
+    configure_native_wide_16_9();
+    assert(!gpu_ws_background_requires_full_composite());
+    for (unsigned i = 0; i < sizeof(bad_prim) / sizeof(bad_prim[0]); ++i)
+        gpu_ws_tag_background_prim(bad_prim[i]);
+    assert(!gpu_ws_background_stretch_active());
+    const uint32_t bad_op[] = {0x2Au, 0x2Eu, 0x3Eu, 0x66u, 0x67u,
+                              0x60u, 0x6Cu, 0x74u, 0x7Cu, 0x40u};
+    for (unsigned i = 0; i < sizeof(bad_op) / sizeof(bad_op[0]); ++i) {
+        test_ram[addr / 4u] = bad_op[i] << 24;
+        gpu_ws_tag_background_prim(addr - 4u);
+        assert(!gpu_ws_background_stretch_active());
+    }
+    /* The GTE-produced textured quad also qualifies, with all nine words
+     * covered by its guard, including the last UV word. */
+    test_ram[addr / 4u] = 0x2DFFFFFFu;
+    gpu_ws_tag_background_prim(addr - 4u);
+    gp0_cmd_source_addr = addr;
+    gp0_words_needed = 9;
+    memcpy(gp0_cmd_buf, &test_ram[addr / 4u], 9u * sizeof(uint32_t));
+    assert(ws_nw_explicit_background());
+    gp0_cmd_buf[8] ^= 0x10000u;
+    assert(!ws_nw_explicit_background());
+}
+
+static void test_background_sprite_tags(void) {
+    /* A compound DMA node embeds SPRT after another command, so prim+4
+     * identifies SPRT without relying on a preceding P_TAG. */
+    const uint32_t addr = 0x1001Cu;
+    for (unsigned op = 0x64u; op <= 0x65u; ++op) {
+        const uint32_t packet[] = {(op << 24) | 0x808080u,
+                                  pack_vertex(37, 42), 0x01230A0Bu,
+                                  (24u << 16) | 80u};
+        reset_gpu_state_for_test();
+        memcpy(&test_ram[addr / 4u], packet, sizeof(packet));
+        configure_native_wide_16_9();
+        gpu_ws_tag_background_prim(0x80000000u | (addr - 4u));
+        gp0_cmd_source_addr = addr;
+        gp0_words_needed = 4;
+        memcpy(gp0_cmd_buf, packet, sizeof(packet));
+        s_bg_phase_frame = (uint32_t)s_frame_count;
+        s_bg_phase_over = 1;
+        assert(psx_ws_prim_in_backdrop() == 1);
+        assert(gpu_ws_background_stretch_active());
+        assert(gpu_ws_background_requires_full_composite());
+        /* All four command words, including UV/CLUT and size, are proof. */
+        for (unsigned word = 0; word < 4; ++word) {
+            gp0_cmd_buf[word] ^= 1u;
+            assert(!ws_nw_explicit_background());
+            gp0_cmd_buf[word] ^= 1u;
+        }
+        gp0_cmd_source_addr += 4u;
+        assert(!ws_nw_explicit_background());
+        gp0_cmd_source_addr -= 4u;
+        gp0_words_needed = 3;
+        assert(!ws_nw_explicit_background());
+        gp0_words_needed = 4;
+        /* Explicit background proof reaches the renderer without changing
+         * the canonical sprite coordinates, dimensions or texture footprint. */
+        last_textured_rect.calls = 0;
+        gp0_exec_textured_rect();
+        assert(last_textured_rect.calls == 1);
+        assert(last_textured_rect.x == 37 && last_textured_rect.y == 42);
+        assert(last_textured_rect.w == 80 && last_textured_rect.h == 24);
+        assert(last_textured_rect.u == 0x0B && last_textured_rect.v == 0x0A);
+        assert(memcmp(&test_ram[addr / 4u], packet, sizeof(packet)) == 0);
+        s_frame_count += 2;
+        assert(ws_nw_explicit_background());
+        ++s_frame_count;
+        assert(!ws_nw_explicit_background());
+    }
+}
+
 int main(void) {
     reset_gpu_state_for_test();
     set_dot_packet(0x10004u, 137, 42);
@@ -120,251 +242,61 @@ int main(void) {
     draw_offset_x = 2;
     exec_dot_and_expect(54, 42);
 
-    puts("gpu_textured_dot_nw_shift_exec_test: PASS");
-    return 0;
-}
+    /* PGXP (docs/ENHANCEMENTS.md G1.11): a textured quad that is an
+     * axis-aligned rectangle in integer screen space and UV takes the 2D
+     * rectangle shortcut -- unless PGXP is correcting and all four vertices
+     * carry a dataflow-precise position, in which case it is drawn as two
+     * precise triangles so it meets its precise neighbours without a seam.
+     * With only some corners precise it keeps the shortcut (two triangles
+     * would mix precise and native vertices) and counts as rect_partial. */
+    {
+        static const uint32_t quad[9] = {
+            0x2C808080u,                          /* FT4, opaque          */
+            (73u << 16) | 98u, 0x7F0ABF1Au,       /* v0 + uv0/clut        */
+            (73u << 16) | 73u, 0x0039BF0Cu,       /* v1 + uv1/tpage       */
+            (52u << 16) | 98u, 0x2C39B01Au,       /* v2 + uv2             */
+            (52u << 16) | 73u, 0x2C39B00Cu,       /* v3 + uv3             */
+        };
+        const uint32_t base = 0x20000u;
+        for (int pass = 0; pass < 4; pass++) {
+            reset_gpu_state_for_test();
+            memcpy(gp0_cmd_buf, quad, sizeof quad);
+            gp0_cmd_source_addr = base;
+            memcpy(&test_ram[base / 4u], quad, sizeof quad);
+            last_textured_rect.calls = 0;
+            last_scaled_rect.calls = 0;
+            g_test_textured_triangles = 0;
+            g_test_precise_triangles = 0;
+            g_test_rect_bypass = 0;
+            g_test_rect_partial = 0;
+            /* pass 0: PGXP off, all precise; pass 1: on, no precise vertex
+             * (a CPU-built sprite); pass 2: on, only vertex 2 (packet word 5)
+             * precise; pass 3: on, all four (words 1, 3, 5, 7) precise. */
+            static const uint32_t k_masks[4] = { 0xAAu, 0u, 1u << 5, 0xAAu };
+            g_test_geometry_correction = pass > 0;
+            g_test_quad_base = base;
+            g_test_precise_words = k_masks[pass];
+            gp0_exec_textured_quad();
+            if (pass < 3) {
+                assert(last_textured_rect.calls + last_scaled_rect.calls == 1);
+                assert(g_test_textured_triangles == 0);
+                assert(g_test_rect_bypass == 0);
+                assert(g_test_rect_partial == (pass == 2 ? 1 : 0));
+            } else {
+                assert(last_textured_rect.calls + last_scaled_rect.calls == 0);
+                assert(g_test_textured_triangles == 2);
+                assert(g_test_precise_triangles == 2);
+                assert(g_test_rect_bypass == 1);
+                assert(g_test_rect_partial == 0);
+            }
+        }
+        g_test_geometry_correction = 0;
+        g_test_quad_base = 0xFFFFFFFFu;
+        g_test_precise_words = 0;
+    }
 
-uint32_t psx_read_word(uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys <= 0x00200000u - 4u)
-        return test_ram[phys / 4u];
-    return 0;
-}
-
-uint16_t psx_read_half(uint32_t addr) {
-    uint32_t word = psx_read_word(addr & ~3u);
-    return (uint16_t)(word >> ((addr & 2u) ? 16 : 0));
-}
-
-uint8_t psx_read_byte(uint32_t addr) {
-    uint32_t word = psx_read_word(addr & ~3u);
-    return (uint8_t)(word >> ((addr & 3u) * 8u));
-}
-
-void psx_write_half(uint32_t addr, uint16_t val) {
-    (void)addr;
-    (void)val;
-}
-
-int mdec_recently_active(uint32_t within_frames) {
-    (void)within_frames;
-    return 0;
-}
-
-void psx_fatal_halt(const char *reason) {
-    (void)reason;
-    assert(!"psx_fatal_halt called");
-}
-
-void pgxp_set_enabled(int enabled) { (void)enabled; }
-int gte_geometry_correction_enabled(void) { return 0; }
-int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
-                            int32_t int_x, int32_t int_y,
-                            int32_t *x16, int32_t *y16, uint16_t *sz) {
-    (void)addr; (void)packet_word; (void)int_x; (void)int_y;
-    (void)x16; (void)y16; (void)sz;
-    return PGXP_SRC_NATIVE;
-}
-int gte_precision_load_word(uint32_t addr, uint32_t packed,
-                            int32_t *x16, int32_t *y16, uint16_t *z) {
-    (void)addr; (void)packed; (void)x16; (void)y16; (void)z;
-    return 0;
-}
-uint32_t sw_perspective_triangle_count(void) { return 0; }
-
-uint32_t psx_ws_widen_angle_q12(uint32_t vanilla, int extent_pixels) {
-    (void)extent_pixels;
-    return vanilla;
-}
-int psx_ws_aspect_cone_contains(int32_t x, int32_t z, int32_t y,
-                                int32_t fx, int32_t fz, int32_t fy,
-                                uint32_t threshold, int extent_pixels) {
-    (void)x; (void)z; (void)y; (void)fx; (void)fz; (void)fy;
-    (void)threshold; (void)extent_pixels;
-    return 0;
-}
-void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
-                        int32_t display_width, int dense_menu) {
-    (void)items; (void)count; (void)display_width; (void)dense_menu;
-}
-int32_t ws_ui_anchor_for_bounds(int32_t x, int32_t width,
-                                int32_t display_width) {
-    (void)width;
-    if (x * 3 < display_width) return -1;
-    if (x * 3 > display_width * 2) return 1;
-    return 0;
-}
-
-void gpu_vram_dirty_mark_all(void) {}
-void gpu_vram_dirty_mark_row_impl(uint32_t y) { (void)y; }
-void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)bit; (void)detail; }
-void event_ring_record_aux(uint16_t kind, uint8_t detail, uint32_t aux) {
-    (void)kind; (void)detail; (void)aux;
-}
-int psx_get_in_exception(void) { return 0; }
-int psx_netplay_active(void) { return 0; }
-int sio_hold_present_for_card(void) { return 0; }
-uint32_t psx_compiled_irq_resume_pc(void) { return 0; }
-uint32_t psx_last_irq_check_pc(void) { return 0; }
-uint32_t psx_netplay_rb_sticky_bb_pc(void) { return 0; }
-void mod_runtime_on_vblank(void) {}
-bool screen_kind_from_name(const char *name, ScreenKind *out) {
-    (void)name;
-    if (out) *out = SCREEN_RAW;
-    return true;
-}
-ColorLut *color_lut_create(const ColorSettings *settings) {
-    (void)settings;
-    return NULL;
-}
-void color_lut_destroy(ColorLut *lut) { (void)lut; }
-bool color_lut_is_passthrough(const ColorLut *lut) {
-    (void)lut;
-    return true;
-}
-void color_lut_map555(const ColorLut *lut, uint16_t bgr555,
-                      uint8_t *r, uint8_t *g, uint8_t *b) {
-    (void)lut;
-    if (r) *r = (uint8_t)((bgr555 & 0x1Fu) << 3);
-    if (g) *g = (uint8_t)(((bgr555 >> 5) & 0x1Fu) << 3);
-    if (b) *b = (uint8_t)(((bgr555 >> 10) & 0x1Fu) << 3);
-}
-uint32_t psx_mod_gpu_dma_resolve_address(uint32_t address) { return address; }
-void text_xlate_vram_upload(int x, int y, int w, int h) {
-    (void)x; (void)y; (void)w; (void)h;
-}
-uint32_t debug_guest_ra(void) { return 0; }
-uint32_t debug_guest_sp(void) { return 0; }
-uint8_t *memory_get_ram_ptr(void) { return (uint8_t *)test_ram; }
-
-void gr_init(uint16_t *vram_ptr) { (void)vram_ptr; }
-void gr_set_scale(int scale) { (void)scale; }
-int gr_scale(void) { return 1; }
-void gr_set_texture_filter(int bilinear) { (void)bilinear; }
-int gr_texture_filter(void) { return 0; }
-void gr_set_semi_transparency(int enabled, int mode) { (void)enabled; (void)mode; }
-void gr_set_mask_bits(int set_bit, int check_bit) { (void)set_bit; (void)check_bit; }
-void gr_set_texture_window(uint32_t raw) { (void)raw; }
-void gr_set_color_modulation(int r, int g, int b, int raw_texture) {
-    (void)r; (void)g; (void)b; (void)raw_texture;
-}
-void gr_set_precise_triangle(int enabled, int32_t x0, int32_t y0,
-                             int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
-    (void)enabled; (void)x0; (void)y0; (void)x1; (void)y1; (void)x2; (void)y2;
-}
-void gr_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
-    (void)enabled; (void)q0; (void)q1; (void)q2;
-}
-void gr_fill_rect(int x, int y, int w, int h, uint16_t color) {
-    (void)x; (void)y; (void)w; (void)h; (void)color;
-}
-void gr_copy_rect(int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
-    (void)src_x; (void)src_y; (void)dst_x; (void)dst_y; (void)w; (void)h;
-}
-void gr_draw_flat_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
-                           uint16_t color) {
-    (void)x0; (void)y0; (void)x1; (void)y1; (void)x2; (void)y2; (void)color;
-}
-void gr_draw_gouraud_triangle(int x0, int y0, uint16_t c0,
-                              int x1, int y1, uint16_t c1,
-                              int x2, int y2, uint16_t c2) {
-    (void)x0; (void)y0; (void)c0; (void)x1; (void)y1; (void)c1;
-    (void)x2; (void)y2; (void)c2;
-}
-void gr_draw_textured_triangle(int x0, int y0, int u0, int v0,
-                               int x1, int y1, int u1, int v1,
-                               int x2, int y2, int u2, int v2,
-                               uint16_t clut_x, uint16_t clut_y,
-                               uint16_t texpage) {
-    (void)x0; (void)y0; (void)u0; (void)v0; (void)x1; (void)y1; (void)u1;
-    (void)v1; (void)x2; (void)y2; (void)u2; (void)v2; (void)clut_x;
-    (void)clut_y; (void)texpage;
-}
-void gr_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0,
-                                      uint32_t color0, int x1, int y1,
-                                      int u1, int v1, uint32_t color1,
-                                      int x2, int y2, int u2, int v2,
-                                      uint32_t color2, uint16_t clut_x,
-                                      uint16_t clut_y, uint16_t texpage,
-                                      int raw_texture) {
-    (void)x0; (void)y0; (void)u0; (void)v0; (void)color0; (void)x1;
-    (void)y1; (void)u1; (void)v1; (void)color1; (void)x2; (void)y2;
-    (void)u2; (void)v2; (void)color2; (void)clut_x; (void)clut_y;
-    (void)texpage; (void)raw_texture;
-}
-void gr_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
-    (void)x; (void)y; (void)w; (void)h; (void)color;
-}
-void gr_draw_textured_rect(int x, int y, int w, int h, int u, int v,
-                           uint16_t clut_x, uint16_t clut_y,
-                           uint16_t texpage) {
-    last_textured_rect.calls++;
-    last_textured_rect.x = x;
-    last_textured_rect.y = y;
-    last_textured_rect.w = w;
-    last_textured_rect.h = h;
-    last_textured_rect.u = u;
-    last_textured_rect.v = v;
-    last_textured_rect.clut_x = clut_x;
-    last_textured_rect.clut_y = clut_y;
-    last_textured_rect.texpage = texpage;
-}
-void gr_draw_textured_rect_scaled(int x, int y, int w, int h,
-                                  int u0, int v0, int u1, int v1,
-                                  uint16_t clut_x, uint16_t clut_y,
-                                  uint16_t texpage) {
-    (void)x; (void)y; (void)w; (void)h; (void)u0; (void)v0; (void)u1;
-    (void)v1; (void)clut_x; (void)clut_y; (void)texpage;
-}
-void gr_draw_line(int x0, int y0, int x1, int y1, uint16_t color) {
-    (void)x0; (void)y0; (void)x1; (void)y1; (void)color;
-}
-void gr_draw_shaded_line(int x0, int y0, uint16_t c0,
-                         int x1, int y1, uint16_t c1) {
-    (void)x0; (void)y0; (void)c0; (void)x1; (void)y1; (void)c1;
-}
-int gr_render_display(uint32_t *out, int pitch, int dx, int dy, int dw, int dh) {
-    (void)out; (void)pitch; (void)dx; (void)dy; (void)dw; (void)dh;
-    return 0;
-}
-int gr_render_display_hires(uint32_t *out, int pitch, int dx, int dy, int dw, int dh) {
-    (void)out; (void)pitch; (void)dx; (void)dy; (void)dw; (void)dh;
-    return 0;
-}
-void gr_vram_write(int x, int y, uint16_t pixel) { (void)x; (void)y; (void)pixel; }
-uint16_t gr_vram_read(int x, int y) { (void)x; (void)y; return 0; }
-void gr_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data) {
-    (void)x; (void)y; (void)w; (void)h; (void)data;
-}
-void gr_vram_transfer_out(int x, int y, int w, int h, uint16_t *data) {
-    (void)x; (void)y; (void)w; (void)h; (void)data;
-}
-void gr_set_draw_area(int x1, int y1, int x2, int y2) {
-    (void)x1; (void)y1; (void)x2; (void)y2;
-}
-void gr_get_draw_area(int *x1, int *y1, int *x2, int *y2) {
-    if (x1) *x1 = (int)draw_area_left;
-    if (y1) *y1 = (int)draw_area_top;
-    if (x2) *x2 = (int)draw_area_right;
-    if (y2) *y2 = (int)draw_area_bottom;
-}
-void gr_set_draw_offset(int x, int y) { (void)x; (void)y; }
-int gr_wide_supported(void) { return 1; }
-void gr_wide_configure(int wide_w, int offset) { (void)wide_w; (void)offset; }
-void gr_wide_set_target(int base_x) { (void)base_x; }
-void gr_wide_disable_target(void) {}
-void gr_wide_clear(int base_x, int y, int h, uint16_t color) {
-    (void)base_x; (void)y; (void)h; (void)color;
-}
-void gr_wide_clear_margins(int base_x, int y, int h, uint16_t color, int sides) {
-    (void)base_x; (void)y; (void)h; (void)color; (void)sides;
-}
-int gr_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh, int base_x) {
-    (void)out; (void)cap_pixels; (void)ow; (void)oh; (void)base_x;
-    return 0;
-}
-int gr_render_wide_display(uint32_t *out, int pitch, int base_x,
-                           int disp_y, int disp_h) {
-    (void)out; (void)pitch; (void)base_x; (void)disp_y; (void)disp_h;
+    test_background_packet_tags();
+    test_background_sprite_tags();
+    puts("gpu_textured_dot_nw_shift_exec_test: PASS (HUD and background tags)");
     return 0;
 }

@@ -2,6 +2,7 @@
 
 #include "config_loader.h"
 
+#include <unordered_set>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "bios_rom_alias.h"
+#include "../../runtime/include/internal_resolution.h"
 #include "host_path.h"
 #include "fmt/format.h"
 #include "ps1_exe_parser.h"
@@ -62,7 +64,26 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
 
     h.words("sprite_tag_funcs", c.ws_sprite_tag_funcs);
     h.words("mod_function_entry_funcs", c.mod_function_entry_funcs);
+    if (!c.ws_cull_masked_reject_sites.empty()) {
+        h.tag("cull_masked_reject");
+        auto sites = c.ws_cull_masked_reject_sites;
+        std::sort(sites.begin(), sites.end(), [](const auto& a, const auto& b) {
+            return (a.address & 0x1FFFFFFFu) < (b.address & 0x1FFFFFFFu);
+        });
+        h.u32((uint32_t)sites.size());
+        for (const auto& site : sites) {
+            h.u32(site.address & 0x1FFFFFFFu);
+            h.u32(site.expected);
+            h.u32(site.reject_mask);
+        }
+    }
+    // Appended only when used, like the other late additions: a config that
+    // does not use the feature keeps the hash (and every overlay cache) it had.
+    if (!c.mod_instruction_sites.empty())
+        h.words("mod_instruction_sites", c.mod_instruction_sites);
     h.words("cull_bias", c.ws_cull_bias_sites);
+    if (!c.ws_cull_bias_lower_sites.empty())
+        h.words("cull_bias_lower", c.ws_cull_bias_lower_sites);
     h.words("cull_range", c.ws_cull_range_sites);
     h.words("cull_a1", c.ws_cull_a1_sites);
     h.words("cull_screen_x", c.ws_cull_screen_x_sites);
@@ -81,6 +102,16 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_h_imms", c.ws_cull_h_imms);
     h.words("backdrop_x", c.ws_backdrop_x_sites);
     h.words("backdrop_unsquash", c.ws_backdrop_unsquash_funcs);
+    // Kinds added after the v1 hash layout enter the identity only when a
+    // title uses them, so every existing overlay cache stays valid.
+    if (!c.ws_cull_bgez_sites.empty())
+        h.words("cull_bgez", c.ws_cull_bgez_sites);
+    if (!c.ws_cull_clip_edge_x_load_sites.empty()) {
+        h.words("cull_clip_edge_x_load", c.ws_cull_clip_edge_x_load_sites);
+        h.u32(ws_cull_clip_edge_width(c));
+    }
+    if (!c.netplay_local_viewport_width_sites.empty())
+        h.words("local_viewport_width", c.netplay_local_viewport_width_sites);
 
     h.tag("flags");
     h.u32(c.ws_auto_screen_x_cull ? 1u : 0u);
@@ -116,6 +147,20 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(site.address);
         h.u32(site.expected);
         h.u32(site.result);
+    }
+
+    std::vector<WidescreenCullScaleSite> scale_sites = c.ws_cull_scale_sites;
+    std::sort(scale_sites.begin(), scale_sites.end(),
+              [](const auto& a, const auto& b) { return a.address < b.address; });
+    if (!scale_sites.empty()) {   // appended only when used (see above)
+        h.tag("cull_scale");
+        h.u32((uint32_t)scale_sites.size());
+        for (const auto& site : scale_sites) {
+            h.u32(site.address);
+            h.u32(site.expected);
+            h.u32(site.operand);
+            h.u32(site.half_extent);
+        }
     }
 
     std::vector<WidescreenAngleSite> angle_sites = c.ws_cull_angle_sites;
@@ -234,6 +279,13 @@ const char* pad_mode_to_string(int mode) {
 }
 
 // Parse a hex string ("0x...") to uint32_t. Throws on malformed input.
+/* A TOML number key: `0` and `0.0` both mean zero. toml::find<double>
+ * rejects an integer literal and failed the whole load on `key = 0`. */
+static double toml_number(const toml::value& table, const char* key) {
+    const toml::value& v = toml::find(table, key);
+    return v.is_integer() ? static_cast<double>(v.as_integer()) : v.as_floating();
+}
+
 static uint32_t parse_hex(const std::string& s, const std::string& field) {
     try {
         return static_cast<uint32_t>(std::stoul(s, nullptr, 16));
@@ -492,6 +544,16 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
     }
+    if (runtime.contains("idle_skip_store_counters")) {
+        rt.idle_skip_store_counters =
+            toml::find<bool>(runtime, "idle_skip_store_counters");
+    }
+    if (runtime.contains("idle_skip_store_counter_sites")) {
+        for (const auto& a : toml::find<std::vector<std::string>>(
+                 runtime, "idle_skip_store_counter_sites"))
+            rt.idle_skip_store_counter_sites.push_back(
+                parse_hex(a, "runtime.idle_skip_store_counter_sites"));
+    }
     if (runtime.contains("idle_skip")) {
         rt.idle_skip = toml::find<bool>(runtime, "idle_skip");
     }
@@ -568,17 +630,130 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.parappa_timing_extra_late = parse_window("extra_late");
     }
 
+    // Optional [timing] block — title constants, never player settings.
+    // guest_cycle_scale: no CPU is emulated; recompiled code charges the
+    // guest clock a fixed cost per instruction, and scale N charges 1/N of
+    // it, so N times as much game code fits between two VBlanks while
+    // VBlank, timers, CD, SPU and DMA keep hardware time. 1 = faithful;
+    // values outside 1..64 are rejected. guest_cycle_scale_gated: the scale applies only
+    // while the mod gate is open (psx_mod_set_guest_cycle_scale_gate); see
+    // guest_cycle_scale_gate below for the declarative RAM gate.
+    if (cfg.contains("timing")) {
+        const toml::value& tm = toml::find(cfg, "timing");
+        if (tm.contains("guest_cycle_scale")) {
+            const long long n = toml::find<long long>(tm, "guest_cycle_scale");
+            if (n < 1 || n > 64)
+                throw std::runtime_error("[timing] guest_cycle_scale must be 1..64");
+            rt.guest_cycle_scale = static_cast<int>(n);
+        }
+        if (tm.contains("guest_cycle_scale_gated"))
+            rt.guest_cycle_scale_gated = toml::find<bool>(tm, "guest_cycle_scale_gated");
+        if (tm.contains("guest_cycle_scale_batch"))
+            rt.guest_cycle_scale_batch = toml::find<bool>(tm, "guest_cycle_scale_batch");
+        // guest_cycle_scale_gate: one inline table or an array of them,
+        // { addr, value, size = 4, mask = 0xFFFFFFFF }; all must hold.
+        if (tm.contains("guest_cycle_scale_gate")) {
+            const toml::value& g = toml::find(tm, "guest_cycle_scale_gate");
+            std::vector<toml::value> preds;
+            if (g.is_array()) preds = g.as_array();
+            else preds.push_back(g);
+            if (preds.size() > 8)
+                throw std::runtime_error("[timing] guest_cycle_scale_gate: at most 8 predicates");
+            // Range-check the signed TOML integer before narrowing, so an
+            // oversized or negative value cannot wrap into a valid one.
+            auto u32_field = [](const toml::value& pv, const char* key) -> uint32_t {
+                const long long v = toml::find<long long>(pv, key);
+                if (v < 0 || v > 0xFFFFFFFFLL)
+                    throw std::runtime_error(
+                        std::string("[timing] guest_cycle_scale_gate: ") + key +
+                        " must be 0..0xFFFFFFFF");
+                return static_cast<uint32_t>(v);
+            };
+            for (const toml::value& pv : preds) {
+                RuntimeConfig::GuestCycleScaleGatePred p;
+                p.addr  = u32_field(pv, "addr");
+                p.value = u32_field(pv, "value");
+                if (pv.contains("size")) p.size = u32_field(pv, "size");
+                if (pv.contains("mask")) p.mask = u32_field(pv, "mask");
+                const uint32_t phys = p.addr & 0x1FFFFFFFu;
+                if ((p.size != 1 && p.size != 2 && p.size != 4) ||
+                    (phys & (p.size - 1u)) != 0 || phys >= 0x00800000u)
+                    throw std::runtime_error(
+                        "[timing] guest_cycle_scale_gate: addr must be an aligned "
+                        "main-RAM address and size 1, 2 or 4");
+                rt.guest_cycle_scale_gate.push_back(p);
+            }
+        }
+    }
+
     // Optional [video] block — visual enhancement options. Kept on the same
     // RuntimeConfig so main.cpp consumes them alongside the other knobs.
     if (cfg.contains("video")) {
         const toml::value& video = toml::find(cfg, "video");
         if (video.contains("supersampling")) {
             const auto n = toml::find<int64_t>(video, "supersampling");
-            if (n < 1 || n > 4) {
+            // 1..32: the runtime clamps per backend (software/Vulkan 4, OpenGL
+            // to the driver's texture limits and a memory budget).
+            if (n < 1 || n > 32) {
                 throw std::runtime_error(fmt::format(
-                    "[video] supersampling out of range (1..4): {}", n));
+                    "[video] supersampling out of range (1..32): {}", n));
             }
             rt.video_supersampling = static_cast<int>(n);
+        }
+        if (video.contains("depth24_trailing_margin")) {
+            const auto n = toml::find<int64_t>(video, "depth24_trailing_margin");
+            if (n < 0 || n > 64) {
+                throw std::runtime_error(fmt::format(
+                    "[video] depth24_trailing_margin out of range (0..64): {}", n));
+            }
+            rt.video_depth24_trailing_margin = static_cast<int>(n);
+        }
+        if (video.contains("internal_resolution")) {
+            const toml::value& ir = toml::find(video, "internal_resolution");
+            int value = 0;
+            bool ok = false;
+            if (ir.is_string()) {
+                ok = psx_ir_parse(ir.as_string().str.c_str(), &value) != 0;
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                ok = n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES;
+                value = static_cast<int>(n);
+            }
+            if (!ok) {
+                throw std::runtime_error(
+                    "[video] internal_resolution must be native, 720p, 1080p, "
+                    "1440p, 4k, 5k, 8k, display, or a number of lines");
+            }
+            rt.video_internal_resolution = value;
+        }
+        if (video.contains("dynamic_resolution")) {
+            rt.video_dynamic_resolution = toml::find<bool>(video, "dynamic_resolution");
+        }
+        if (video.contains("dynamic_resolution_min")) {
+            const toml::value& ir = toml::find(video, "dynamic_resolution_min");
+            int value = 0;
+            bool ok = false;
+            if (ir.is_string()) {
+                ok = psx_ir_parse(ir.as_string().str.c_str(), &value) != 0;
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                ok = n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES;
+                value = static_cast<int>(n);
+            }
+            if (!ok) {
+                throw std::runtime_error(
+                    "[video] dynamic_resolution_min must be native, 720p, 1080p, "
+                    "1440p, 4k, 5k, 8k, display, or a number of lines");
+            }
+            rt.video_dynamic_resolution_min = value;
+        }
+        if (video.contains("resolution_reference_lines")) {
+            const auto n = toml::find<int64_t>(video, "resolution_reference_lines");
+            if (n < 120 || n > 1024) {
+                throw std::runtime_error(fmt::format(
+                    "[video] resolution_reference_lines out of range (120..1024): {}", n));
+            }
+            rt.video_resolution_reference_lines = static_cast<int>(n);
         }
         if (video.contains("window_width")) {
             const auto n = toml::find<int64_t>(video, "window_width");
@@ -591,12 +766,46 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("antialiasing")) {
             rt.video_antialiasing = toml::find<bool>(video, "antialiasing");
         }
+        if (video.contains("antialiasing_mode")) {
+            const auto mode = toml::find<std::string>(video, "antialiasing_mode");
+            if (mode == "off")          rt.video_antialiasing_mode = 0;
+            else if (mode == "fxaa")    rt.video_antialiasing_mode = 1;
+            else if (mode == "fxaa_hq") rt.video_antialiasing_mode = 2;
+            else throw std::runtime_error(fmt::format(
+                "[video] antialiasing_mode must be \"off\", \"fxaa\" or \"fxaa_hq\": {}", mode));
+        }
+        // bloom: opt-in glow (OpenGL), 0.0 (off, default) .. 2.0.
+        if (video.contains("bloom")) {
+            const auto& v = toml::find(video, "bloom");
+            const double f = v.is_integer() ? static_cast<double>(v.as_integer())
+                                            : toml::get<double>(v);
+            if (!(f >= 0.0 && f <= 2.0))
+                throw std::runtime_error(fmt::format("[video] bloom out of range (0.0..2.0): {}", f));
+            rt.video_bloom = static_cast<float>(f);
+        }
+        // post_shader: an elective post-effect chain (.pfx), relative to the
+        // game root. The runtime parses it and logs (and skips) a bad one.
+        if (video.contains("post_shader")) {
+            const std::string ps = toml::find<std::string>(video, "post_shader");
+            if (!ps.empty()) rt.video_post_shader = PSXRecompV4::host_resolve(root, ps);
+        }
+        if (video.contains("supersample")) {
+            const auto& v = toml::find(video, "supersample");
+            const double f = v.is_integer() ? static_cast<double>(v.as_integer())
+                                            : toml::get<double>(v);
+            if (!(f >= 1.0 && f <= 4.0)) {
+                throw std::runtime_error(fmt::format(
+                    "[video] supersample out of range (1.0..4.0): {}", f));
+            }
+            rt.video_supersample_milli = static_cast<int>(f * 1000.0 + 0.5);
+        }
         if (video.contains("texture_filtering")) {
             const auto mode = toml::find<std::string>(video, "texture_filtering");
             if (mode == "nearest")       rt.video_texture_filter = 0;
             else if (mode == "bilinear") rt.video_texture_filter = 1;
+            else if (mode == "xbr")      rt.video_texture_filter = 3;
             else throw std::runtime_error(fmt::format(
-                "[video] texture_filtering must be \"nearest\" or \"bilinear\": {}", mode));
+                "[video] texture_filtering must be \"nearest\", \"bilinear\" or \"xbr\": {}", mode));
         }
         if (video.contains("fmv_filter")) {
             const auto mode = toml::find<std::string>(video, "fmv_filter");
@@ -629,7 +838,58 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         }
         if (video.contains("pgxp_tolerance")) {
             rt.video_pgxp_tolerance =
-                toml::find<double>(video, "pgxp_tolerance");
+                toml_number(video, "pgxp_tolerance");
+            rt.video_pgxp_tolerance_set = true;
+        }
+        if (video.contains("pgxp_position_fallback")) {
+            rt.video_pgxp_position_fallback =
+                toml::find<bool>(video, "pgxp_position_fallback");
+            rt.video_pgxp_position_fallback_set = true;
+        }
+        if (video.contains("pgxp_preserve_projection")) {
+            rt.video_pgxp_preserve_projection =
+                toml::find<bool>(video, "pgxp_preserve_projection");
+        }
+        if (video.contains("fmv_chroma_smoothing"))
+            rt.video_fmv_chroma_smoothing = toml::find<bool>(video, "fmv_chroma_smoothing");
+        if (video.contains("texture_lod")) {
+            const auto mode = toml::find<std::string>(video, "texture_lod");
+            if (mode == "off")         rt.video_texture_lod = 0;
+            else if (mode == "mipmap") rt.video_texture_lod = 1;
+            else throw std::runtime_error(fmt::format(
+                "[video] texture_lod must be \"off\" or \"mipmap\": {}", mode));
+        }
+        if (video.contains("anisotropic_filtering")) {
+            const auto n = toml::find<int>(video, "anisotropic_filtering");
+            if (n < 1 || n > 16) throw std::runtime_error(fmt::format(
+                "[video] anisotropic_filtering must be 1..16: {}", n));
+            rt.video_anisotropic_filtering = n;
+        }
+        if (video.contains("accurate_blending"))
+            rt.video_accurate_blending = toml::find<bool>(video, "accurate_blending");
+        if (video.contains("dithering")) {
+            const auto mode = toml::find<std::string>(video, "dithering");
+            if (mode == "off")         rt.video_dithering = 0;
+            else if (mode == "on" || mode == "scaled") rt.video_dithering = 1;
+            else if (mode == "fine")   rt.video_dithering = 2;
+            else throw std::runtime_error(fmt::format(
+                "[video] dithering must be \"on\", \"fine\" or \"off\": {}", mode));
+        }
+        if (video.contains("pgxp_depth_buffer"))
+            rt.video_pgxp_depth_buffer = toml::find<bool>(video, "pgxp_depth_buffer");
+        if (video.contains("pgxp_color_correction"))
+            rt.video_pgxp_color_correction = toml::find<bool>(video, "pgxp_color_correction");
+        if (video.contains("pgxp_depth_threshold"))
+            rt.video_pgxp_depth_threshold = toml_number(video, "pgxp_depth_threshold");
+        if (video.contains("pgxp_seam")) {
+            const auto m = toml::find<std::string>(video, "pgxp_seam");
+            if (m == "off") rt.video_pgxp_seam = 0;
+            else if (m == "fine") rt.video_pgxp_seam = 1;
+            else if (m == "wide") rt.video_pgxp_seam = 2;
+            else throw std::runtime_error("[video] pgxp_seam must be \"off\", \"fine\" or \"wide\"");
+        }
+        if (video.contains("pgxp_mod_only")) {
+            rt.video_pgxp_mod_only = toml::find<bool>(video, "pgxp_mod_only");
         }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
@@ -645,7 +905,7 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.video_scanlines = toml::find<bool>(video, "scanlines");
         }
         if (video.contains("scanline_strength")) {
-            double s = toml::find<double>(video, "scanline_strength");
+            double s = toml_number(video, "scanline_strength");
             if (s < 0.0) s = 0.0;
             if (s > 1.0) s = 1.0;
             rt.video_scanline_strength = s;
@@ -681,13 +941,37 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("low_latency_input")) {
             rt.video_low_latency_input = toml::find<bool>(video, "low_latency_input");
         }
+        if (video.contains("texture_window_batching")) {
+            rt.video_texture_window_batching =
+                toml::find<bool>(video, "texture_window_batching");
+        }
+        if (video.contains("render_thread")) {
+            rt.video_render_thread = toml::find<bool>(video, "render_thread");
+        }
+        if (video.contains("present_thread")) {
+            rt.video_present_thread = toml::find<bool>(video, "present_thread");
+        }
+        if (video.contains("frame_generation")) {
+            rt.video_frame_generation = toml::find<bool>(video, "frame_generation");
+        }
+        if (video.contains("frame_generation_method")) {
+            const auto m = toml::find<std::string>(video, "frame_generation_method");
+            if      (m == "redraw")       rt.video_frame_generation_method = 0;
+            else if (m == "reprojection") rt.video_frame_generation_method = 1;
+            else throw std::runtime_error(fmt::format(
+                "[video] frame_generation_method must be \"redraw\"|\"reprojection\": {}", m));
+        }
         if (video.contains("vsync")) {
             const auto mode = toml::find<std::string>(video, "vsync");
             if      (mode == "on"  || mode == "vsync")     rt.video_vsync = 1;
             else if (mode == "off" || mode == "immediate") rt.video_vsync = 0;
             else if (mode == "adaptive")                   rt.video_vsync = -1;
+            // vrr: variable refresh (G-Sync/FreeSync, ProMotion): present
+            // each frame when it is ready (swap interval 0), Smooth motion
+            // targets the panel's maximum refresh and never exceeds it.
+            else if (mode == "vrr")                        rt.video_vsync = 2;
             else throw std::runtime_error(fmt::format(
-                "[video] vsync must be \"on\"|\"off\"|\"immediate\"|\"adaptive\": {}", mode));
+                "[video] vsync must be \"on\"|\"off\"|\"immediate\"|\"adaptive\"|\"vrr\": {}", mode));
         }
         if (video.contains("frame_interpolation")) {
             rt.video_frame_interpolation =
@@ -803,6 +1087,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.multitap_port = static_cast<int>(n);
             rt.has_multitap_port = true;
         }
+        if (ct.contains("multitap")) {
+            rt.multitap_default = toml::find<bool>(ct, "multitap");
+            rt.has_multitap_default = true;
+        }
         if (ct.contains("multitap_analog")) {
             rt.multitap_analog = toml::find<bool>(ct, "multitap_analog");
             rt.has_multitap_analog = true;
@@ -811,6 +1099,28 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (ct.contains("legacy_pad_config")) {
             rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
         }
+        if (ct.contains("direct_shortcut")) {
+            rt.direct_shortcut = toml::find<std::string>(ct, "direct_shortcut");
+            if (rt.direct_shortcut != "rewind" &&
+                rt.direct_shortcut != "save_state_menu" &&
+                rt.direct_shortcut != "fast_forward" &&
+                rt.direct_shortcut != "fast_forward_toggle")
+                throw std::runtime_error(fmt::format(
+                    "[controller] direct_shortcut must be rewind, "
+                    "save_state_menu, fast_forward or fast_forward_toggle, "
+                    "got '{}'", rt.direct_shortcut));
+            if (!ct.contains("direct_shortcut_button"))
+                throw std::runtime_error(
+                    "[controller] direct_shortcut needs direct_shortcut_button");
+            rt.direct_shortcut_button =
+                toml::find<std::string>(ct, "direct_shortcut_button");
+        }
+        if (ct.contains("experimental_jogcon_force_feedback"))
+            rt.experimental_jogcon_force_feedback =
+                toml::find<bool>(ct, "experimental_jogcon_force_feedback");
+        if (ct.contains("experimental_jogcon_force_feedback_invert"))
+            rt.experimental_jogcon_force_feedback_invert =
+                toml::find<bool>(ct, "experimental_jogcon_force_feedback_invert");
         if (ct.contains("anti_deadzone")) {
             const auto n = toml::find<int64_t>(ct, "anti_deadzone");
             if (n < 0 || n > 32767)
@@ -827,6 +1137,11 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
 fs::path find_project_root(const fs::path& config_path) {
     fs::path cur = PSXRecompV4::host_absolute(config_path).parent_path();
     const fs::path fallback = cur;
+    // A packaged game (tools/package_game_release.sh stages its licenses/
+    // beside game.toml) is its own root. Walking up from it would stop at
+    // the first ancestor with a marker -- e.g. a global ~/.gitignore -- and
+    // anchor the game's relative paths (memcard_dir = "saves") there.
+    if (fs::exists(cur / "licenses" / "psxrecomp-LICENSE")) return cur;
     for (int i = 0; i < 8; ++i) {
         for (const char* marker : { ".gitignore", ".git", "CMakeLists.txt" }) {
             if (fs::exists(cur / marker)) {
@@ -840,9 +1155,150 @@ fs::path find_project_root(const fs::path& config_path) {
     return fallback;
 }
 
+bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg) {
+    if (reg == 0u || reg > 31u) return false;
+    const uint32_t op = instr >> 26;
+    const uint32_t rs = (instr >> 21) & 31u;
+    const uint32_t rt = (instr >> 16) & 31u;
+    // ADDI, ADDIU, SLTI, SLTIU, ANDI, ORI, XORI read rs (LUI reads nothing).
+    if (op >= 0x08u && op <= 0x0Eu) return rs == reg;
+    if (op != 0x00u) return false;
+    const uint32_t funct = instr & 0x3Fu;
+    // SLL, SRL, SRA: rt. SLLV, SRLV, SRAV: rt and rs.
+    if (funct == 0x00u || funct == 0x02u || funct == 0x03u) return rt == reg;
+    if (funct == 0x04u || funct == 0x06u || funct == 0x07u)
+        return rs == reg || rt == reg;
+    // ADD, ADDU, SUB, SUBU, AND, OR, XOR, NOR, SLT, SLTU.
+    if (funct >= 0x20u && funct <= 0x2Bu && funct != 0x28u && funct != 0x29u)
+        return rs == reg || rt == reg;
+    return false;
+}
+
+// [[draw_distance.clamp]] (docs/config_schema.md "Draw-distance clamps").
+static std::vector<DrawDistanceClampSite> parse_draw_distance_clamps(
+    const toml::value& cfg, const fs::path& config_path) {
+    std::vector<DrawDistanceClampSite> sites;
+    if (!cfg.contains("draw_distance")) return sites;
+    const toml::value& dd = toml::find(cfg, "draw_distance");
+    if (!dd.contains("clamp")) return sites;
+    const auto& items = toml::find<toml::array>(dd, "clamp");
+    std::set<uint32_t> seen;
+    for (const auto& item : items) {
+        DrawDistanceClampSite site;
+        site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                 "draw_distance.clamp.address");
+        site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                  "draw_distance.clamp.expected");
+        const int64_t reg = toml::find<int64_t>(item, "reg");
+        const int64_t max = toml::find<int64_t>(item, "max");
+        if ((site.address & 3u) != 0u)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp address 0x{:08X} is not "
+                "instruction-aligned", config_path.string(), site.address));
+        if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+            throw std::runtime_error(fmt::format(
+                "{}: duplicate draw-distance clamp address 0x{:08X}",
+                config_path.string(), site.address));
+        if (reg < 1 || reg > 31)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: reg must be 1..31",
+                config_path.string(), site.address));
+        if (max < INT32_MIN || max > INT32_MAX)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: max is not a signed "
+                "32-bit value", config_path.string(), site.address));
+        site.reg = (uint32_t)reg;
+        site.max = (int32_t)max;
+        if (!draw_distance_clamp_reads(site.expected, site.reg))
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: expected 0x{:08X} must "
+                "be an ALU instruction that reads reg {}",
+                config_path.string(), site.address, site.expected, site.reg));
+        sites.push_back(site);
+    }
+    return sites;
+}
+
 // Derive the output filename stem from a rom basename. Mirrors the Python
 // audit_config.py logic: strip a trailing .BIN/.EXE (case-insensitive) but
 // preserve dotted names like "SCUS_942.36" unchanged.
+// [quality.<name>] (docs/QUALITY_PRESETS.md). Each preset is the whole
+// game.toml re-parsed with its keys laid over [video], so each key gets the
+// same validation as in [video]. Only the supported quality keys
+// (quality_key_supported) are accepted. Lowest preset first.
+static const char* const kQualityPlayerKeys[] = {
+    "texture_filtering", "fmv_filter", "antialiasing", "dynamic_resolution",
+    "dynamic_resolution_min", "frame_generation", "render_thread", "present_thread",
+    "geometry_correction", "perspective_texturing", "frame_interpolation",
+    "frame_interpolation_fps"};
+static const char* const kQualityPresetOnlyKeys[] = {
+    "supersample", "texture_lod", "anisotropic_filtering", "fmv_chroma_smoothing",
+    "bloom", "dithering", "pgxp_depth_buffer", "pgxp_color_correction", "pgxp_seam"};
+
+bool quality_key_player_editable(const std::string& key) {
+    for (const char* k : kQualityPlayerKeys) if (key == k) return true;
+    return false;
+}
+
+bool quality_key_supported(const std::string& key) {
+    if (quality_key_player_editable(key)) return true;
+    for (const char* k : kQualityPresetOnlyKeys) if (key == k) return true;
+    return false;
+}
+
+static std::vector<QualityPreset> parse_quality_presets(const toml::value& cfg,
+                                                        const fs::path& root,
+                                                        const fs::path& config_path) {
+    std::vector<QualityPreset> out;
+    if (!cfg.contains("quality")) return out;
+    const toml::value& q = toml::find(cfg, "quality");
+    if (!q.is_table())
+        throw std::runtime_error(fmt::format("{}: [quality] must be a table",
+                                             config_path.string()));
+    static const char* const kNames[] = {"low", "medium", "high", "ultra"};
+    for (const auto& kv : q.as_table()) {
+        bool known = false;
+        for (const char* n : kNames) known = known || kv.first == n;
+        if (!known)
+            throw std::runtime_error(fmt::format(
+                "{}: [quality.{}] is not a preset (low, medium, high, ultra)",
+                config_path.string(), kv.first));
+        if (!kv.second.is_table())
+            throw std::runtime_error(fmt::format(
+                "{}: [quality.{}] must be a table of [video] keys",
+                config_path.string(), kv.first));
+    }
+    for (const char* n : kNames) {
+        if (!q.contains(n)) continue;
+        QualityPreset p;
+        p.name = n;
+        toml::value merged = cfg;
+        toml::table& top = merged.as_table();
+        if (!top.count("video") || !top["video"].is_table())
+            top["video"] = toml::table{};
+        toml::table& video = top["video"].as_table();
+        for (const auto& kv : toml::find(q, n).as_table()) {
+            if (kv.second.is_table())
+                throw std::runtime_error(fmt::format(
+                    "{}: [quality.{}] {} must be a [video] value, not a table",
+                    config_path.string(), n, kv.first));
+            if (!quality_key_supported(kv.first))
+                throw std::runtime_error(fmt::format(
+                    "{}: [quality.{}] {} is not a preset key (docs/QUALITY_PRESETS.md "
+                    "lists the supported set)", config_path.string(), n, kv.first));
+            video[kv.first] = kv.second;
+            p.keys.push_back(kv.first);
+        }
+        try {
+            p.runtime = parse_runtime_block(merged, root);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(fmt::format("[quality.{}]: {}", n, e.what()));
+        }
+        out.push_back(std::move(p));
+    }
+    return out;
+}
+
 static std::string derive_out_stem(const std::string& rom_basename) {
     auto ends_with_ci = [](const std::string& s, const std::string& suffix) {
         if (s.size() < suffix.size()) return false;
@@ -1283,8 +1739,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<std::string> netplay_required_disc_fps;
     std::string netplay_local_viewport;
     std::string netplay_local_viewport_aspect;
+    std::string netplay_local_viewport_renderer;
+    std::vector<uint32_t> netplay_local_viewport_width_sites;
+    uint32_t netplay_local_viewport_state_addr = 0;
+    std::vector<uint32_t> netplay_local_viewport_state_values;
+    bool netplay_content_negotiation = false;
     if (cfg.contains("netplay")) {
         const toml::value& np = toml::find(cfg, "netplay");
+        if (np.contains("content_negotiation"))
+            netplay_content_negotiation = toml::find<bool>(np, "content_negotiation");
         if (np.contains("require_cue"))
             netplay_require_cue = toml::find<bool>(np, "require_cue");
         if (np.contains("required_tracks"))
@@ -1326,16 +1789,74 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             if (!netplay_local_viewport_aspect.empty() &&
                 netplay_local_viewport_aspect != "16:9" &&
                 netplay_local_viewport_aspect != "21:9" &&
+                netplay_local_viewport_aspect != "fixed" &&
                 netplay_local_viewport_aspect != "adaptive") {
                 throw std::runtime_error(fmt::format(
                     "[netplay] local_viewport_aspect must be \"16:9\", "
-                    "\"21:9\", or \"adaptive\", got '{}'",
+                    "\"21:9\", \"fixed\", or \"adaptive\", got '{}'",
                     netplay_local_viewport_aspect));
             }
             if (!netplay_local_viewport_aspect.empty() &&
                 netplay_local_viewport.empty()) {
                 throw std::runtime_error(
                     "[netplay] local_viewport_aspect requires local_viewport");
+            }
+        }
+        if (np.contains("local_viewport_width_sites")) {
+            for (const auto& value : toml::find<std::vector<std::string>>(np, "local_viewport_width_sites"))
+                netplay_local_viewport_width_sites.push_back(parse_hex(value, "netplay.local_viewport_width_sites"));
+        }
+        if (np.contains("local_viewport_renderer")) {
+            netplay_local_viewport_renderer =
+                toml::find<std::string>(np, "local_viewport_renderer");
+            for (char& c : netplay_local_viewport_renderer)
+                c = (char)std::tolower((unsigned char)c);
+            if (netplay_local_viewport_renderer != "native_wide" &&
+                netplay_local_viewport_renderer != "projection") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport_renderer must be \"native_wide\" "
+                    "or \"projection\", got '{}'",
+                    netplay_local_viewport_renderer));
+            }
+            if (netplay_local_viewport.empty()) {
+                throw std::runtime_error(
+                    "[netplay] local_viewport_renderer requires local_viewport");
+            }
+        }
+        if (!netplay_local_viewport_width_sites.empty()) {
+            if (netplay_local_viewport_renderer != "projection")
+                throw std::runtime_error("[netplay] local_viewport_width_sites requires projection renderer");
+            if (netplay_local_viewport_width_sites.size() > 16)
+                throw std::runtime_error("[netplay] local_viewport_width_sites supports at most 16 sites");
+            std::unordered_set<uint32_t> unique;
+            for (uint32_t pc : netplay_local_viewport_width_sites) {
+                if ((pc & 3) || (pc & 0x1fffffff) >= 0x800000)
+                    throw std::runtime_error("[netplay] local_viewport_width_sites requires aligned main RAM addresses");
+                if (!unique.insert(pc & 0x1fffffff).second)
+                    throw std::runtime_error("[netplay] duplicate local_viewport_width_sites address");
+            }
+        }
+        {
+            const bool has_addr = np.contains("local_viewport_state_addr");
+            const bool has_values = np.contains("local_viewport_state_values");
+            if (has_addr != has_values)
+                throw std::runtime_error(
+                    "[netplay] local_viewport_state_addr and "
+                    "local_viewport_state_values must be set together");
+            if (has_addr) {
+                if (netplay_local_viewport.empty())
+                    throw std::runtime_error(
+                        "[netplay] local_viewport_state_addr requires local_viewport");
+                netplay_local_viewport_state_addr = parse_hex(
+                    toml::find<std::string>(np, "local_viewport_state_addr"),
+                    "netplay.local_viewport_state_addr");
+                for (const auto& value : toml::find<std::vector<std::string>>(
+                         np, "local_viewport_state_values"))
+                    netplay_local_viewport_state_values.push_back(parse_hex(
+                        value, "netplay.local_viewport_state_values"));
+                if (netplay_local_viewport_state_values.empty())
+                    throw std::runtime_error(
+                        "[netplay] local_viewport_state_values must not be empty");
             }
         }
     }
@@ -1447,6 +1968,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     uint32_t ws_sprite_anchor_addr = 0;
     bool ws_hud_sprt_squash = false;
     bool ws_auto_ui_squash = false;
+    bool ws_auto_ui_in_place = false;
+    bool ws_auto_ui_proportional = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
     bool ws_precise_nclip = false;
@@ -1485,6 +2008,14 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     }
     // Optional [recompiler] hot_funcs — __attribute__((hot)) on emitted C.
     // Optional trusted, statically linked game-mod entry hooks.
+    std::vector<uint32_t> mod_instruction_sites;
+    if (recomp.contains("mod_instruction_sites"))
+        for (const auto& a : toml::find<std::vector<std::string>>(recomp, "mod_instruction_sites")) {
+            const auto pc = parse_hex(a, "recompiler.mod_instruction_sites");
+            if ((pc & 3u) || pc >= 0xC0000000u || (pc & 0x1FFFFFFFu) >= 0x00800000u)
+                throw std::runtime_error("mod instruction site must be aligned main RAM");
+            mod_instruction_sites.push_back(pc);
+        }
     std::vector<uint32_t> mod_function_entry_funcs;
     if (recomp.contains("mod_function_entry_funcs")) {
         const auto& arr = toml::find<std::vector<std::string>>(
@@ -1593,6 +2124,24 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_hud_sprt_squash = toml::find<bool>(ws, "hud_sprt_squash");
         if (ws.contains("auto_ui_squash"))
             ws_auto_ui_squash = toml::find<bool>(ws, "auto_ui_squash");
+        if (ws.contains("auto_ui_anchor")) {
+            const auto anchor = toml::find<std::string>(ws, "auto_ui_anchor");
+            if (anchor == "in_place")
+                ws_auto_ui_in_place = true;
+            else if (anchor != "edges")
+                throw std::runtime_error(fmt::format(
+                    "{}: [widescreen] auto_ui_anchor must be \"edges\" or "
+                    "\"in_place\", got \"{}\"", config_path.string(), anchor));
+        }
+        if (ws.contains("auto_ui_size")) {
+            const auto size = toml::find<std::string>(ws, "auto_ui_size");
+            if (size == "proportional")
+                ws_auto_ui_proportional = true;
+            else if (size != "original")
+                throw std::runtime_error(fmt::format(
+                    "{}: [widescreen] auto_ui_size must be \"original\" or "
+                    "\"proportional\", got \"{}\"", config_path.string(), size));
+        }
         if (ws.contains("full_2d"))
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
@@ -1710,6 +2259,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
 
     // Optional [widescreen.cull] block — world-space draw-cull widening.
     std::vector<uint32_t> ws_cull_bias_sites, ws_cull_range_sites, ws_cull_a1_sites;
+    std::vector<uint32_t> ws_cull_bias_lower_sites;
     std::vector<uint32_t> ws_cull_screen_x_sites;
     std::vector<uint32_t> ws_cull_slti_sites;
     std::vector<uint32_t> ws_cull_slti_lower_sites;
@@ -1722,7 +2272,12 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_nclip_keep_sites;
     std::vector<uint32_t> ws_cull_nclip_exact_sites;
     std::vector<uint32_t> ws_cull_branch_keep_sites;
+    std::vector<uint32_t> ws_cull_bgez_sites;
+    std::vector<uint32_t> ws_cull_clip_edge_x_load_sites;
+    uint32_t ws_cull_clip_edge_width = 0;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
+    std::vector<WidescreenMaskedRejectSite> ws_cull_masked_reject_sites;
+    std::vector<WidescreenCullScaleSite> ws_cull_scale_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
     int ws_cull_guard_pixels = 0;
@@ -1744,6 +2299,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                     out.push_back(parse_hex(a, fmt::format("widescreen.cull.{}", key)));
             };
             load_sites("bias_sites",  ws_cull_bias_sites);
+            load_sites("bias_lower_sites", ws_cull_bias_lower_sites);
             load_sites("range_sites", ws_cull_range_sites);
             load_sites("a1_sites",    ws_cull_a1_sites);
             load_sites("screen_x_sites", ws_cull_screen_x_sites);
@@ -1758,6 +2314,37 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
             load_sites("nclip_exact_sites", ws_cull_nclip_exact_sites);
             load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
+            load_sites("bgez_sites", ws_cull_bgez_sites);
+            load_sites("clip_edge_x_load_sites", ws_cull_clip_edge_x_load_sites);
+            if (cull.contains("clip_edge_width")) {
+                const int64_t width = toml::find<int64_t>(cull, "clip_edge_width");
+                if (width <= 0 || width > 1024)
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull] clip_edge_width must be 1..1024",
+                        config_path.string()));
+                ws_cull_clip_edge_width = (uint32_t)width;
+            }
+            if (cull.contains("masked_reject")) {
+                std::set<uint32_t> seen;
+                for (const auto& item : toml::find<toml::array>(cull, "masked_reject")) {
+                    WidescreenMaskedRejectSite site;
+                    site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                             "widescreen.cull.masked_reject.address");
+                    site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                              "widescreen.cull.masked_reject.expected");
+                    site.reject_mask = parse_hex(toml::find<std::string>(item, "reject_mask"),
+                                                 "widescreen.cull.masked_reject.reject_mask");
+                    if ((site.address & 3u) || (site.expected >> 26) != 5u ||
+                        ((site.expected >> 16) & 31u) != 0u ||
+                        ((site.expected >> 21) & 31u) == 0u || !site.reject_mask)
+                        throw std::runtime_error("masked_reject needs aligned BNE reg,zero and nonzero reject_mask");
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error("duplicate masked_reject address");
+                    ws_cull_masked_reject_sites.push_back(site);
+                    if (ws_cull_masked_reject_sites.size() > 256)
+                        throw std::runtime_error("masked_reject supports at most 256 sites");
+                }
+            }
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
                 for (const auto& item : toml::find<toml::array>(cull, "keep")) {
@@ -1787,6 +2374,38 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                             config_path.string(), site.address));
                     }
                     ws_cull_keep_sites.push_back(site);
+                }
+            }
+            if (cull.contains("scale")) {
+                std::set<uint32_t> seen;
+                for (const auto& item : toml::find<toml::array>(cull, "scale")) {
+                    WidescreenCullScaleSite site;
+                    site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                             "widescreen.cull.scale.address");
+                    site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                              "widescreen.cull.scale.expected");
+                    const std::string operand = toml::find<std::string>(item, "operand");
+                    if (operand == "rs") site.operand = 0;
+                    else if (operand == "rt") site.operand = 1;
+                    else throw std::runtime_error(fmt::format(
+                        "{}: [[widescreen.cull.scale]] operand must be rs or rt",
+                        config_path.string()));
+                    const int half = toml::find<int>(item, "half_extent");
+                    if (half <= 0 || half > 1024) throw std::runtime_error(fmt::format(
+                        "{}: [[widescreen.cull.scale]] half_extent must be 1..1024",
+                        config_path.string()));
+                    site.half_extent = (uint32_t)half;
+                    const uint32_t op = site.expected >> 26;
+                    const uint32_t fn = site.expected & 0x3Fu;
+                    if (!(op == 0u && (fn == 0x2Au || fn == 0x2Bu)))
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.scale]] expected must be SLT/SLTU",
+                            config_path.string()));
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate [[widescreen.cull.scale]] address 0x{:08X}",
+                            config_path.string(), site.address));
+                    ws_cull_scale_sites.push_back(site);
                 }
             }
             if (cull.contains("angle")) {
@@ -2123,7 +2742,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
     }
 
-    return GameConfig{
+    GameConfig loaded{
         /*config_path*/      config_path,
         /*project_root*/     root,
         /*name*/             name,
@@ -2148,6 +2767,11 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*netplay_required_disc_fps*/ netplay_required_disc_fps,
         /*netplay_local_viewport*/ netplay_local_viewport,
         /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
+        /*netplay_local_viewport_renderer*/ netplay_local_viewport_renderer,
+        /*netplay_local_viewport_width_sites*/ netplay_local_viewport_width_sites,
+        /*netplay_local_viewport_state_addr*/ netplay_local_viewport_state_addr,
+        /*netplay_local_viewport_state_values*/ netplay_local_viewport_state_values,
+        /*netplay_content_negotiation*/ netplay_content_negotiation,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,
@@ -2161,8 +2785,11 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_sprite_anchor_addr*/ ws_sprite_anchor_addr,
         /*ws_hud_sprt_squash*/    ws_hud_sprt_squash,
         /*ws_auto_ui_squash*/      ws_auto_ui_squash,
+        /*ws_auto_ui_in_place*/    ws_auto_ui_in_place,
+        /*ws_auto_ui_proportional*/ ws_auto_ui_proportional,
         /*data_shard_funcs*/      data_shard_funcs,
         /*mod_function_entry_funcs*/ mod_function_entry_funcs,
+        /*mod_instruction_sites*/ mod_instruction_sites,
         /*hot_funcs*/             hot_funcs,
         /*load_charge_batch*/     load_charge_batch,
         /*load_charge_batch_funcs*/ load_charge_batch_funcs,
@@ -2175,6 +2802,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*vsync_event_horizon_extra_sites*/ vsync_event_horizon_extra_sites,
         /*vsync_event_horizon_any*/   vsync_event_horizon_any,
         /*ws_cull_bias_sites*/    ws_cull_bias_sites,
+        /*ws_cull_bias_lower_sites*/ ws_cull_bias_lower_sites,
         /*ws_cull_range_sites*/   ws_cull_range_sites,
         /*ws_cull_a1_sites*/      ws_cull_a1_sites,
         /*ws_cull_screen_x_sites*/ ws_cull_screen_x_sites,
@@ -2190,6 +2818,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_nclip_exact_sites*/ ws_cull_nclip_exact_sites,
         /*ws_cull_branch_keep_sites*/ ws_cull_branch_keep_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
+        /*ws_cull_scale_sites*/   ws_cull_scale_sites,
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,
         /*ws_aspect_cone*/         ws_aspect_cone,
         /*ws_cull_guard_pixels*/  ws_cull_guard_pixels,
@@ -2239,6 +2868,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_bg2d_init_func*/     ws_bg2d_init_func,
         /*ws_bg2d_packet_cap*/    ws_bg2d_packet_cap,
     };
+    loaded.ws_cull_bgez_sites = std::move(ws_cull_bgez_sites);
+    loaded.ws_cull_clip_edge_x_load_sites =
+        std::move(ws_cull_clip_edge_x_load_sites);
+    loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
+    loaded.ws_cull_masked_reject_sites = std::move(ws_cull_masked_reject_sites);
+    loaded.draw_distance_clamp_sites =
+        parse_draw_distance_clamps(cfg, config_path);
+    loaded.quality_presets = parse_quality_presets(cfg, root, config_path);
+    return loaded;
 }
 
 // ---- GameOptions (game_options.toml) — the game's own native settings ----
@@ -2313,11 +2951,43 @@ UserSettings load_user_settings(const fs::path& path) {
         });
         if (v.contains("supersampling")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "supersampling");
-            if (n >= 1 && n <= 4) { s.supersampling = (int)n; s.has_supersampling = true; }
+            if (n >= 1 && n <= 32) { s.supersampling = (int)n; s.has_supersampling = true; }
+        });
+        if (v.contains("internal_resolution")) try_get([&]{
+            const toml::value& ir = toml::find(v, "internal_resolution");
+            int value = 0;
+            if (ir.is_string()) {
+                if (psx_ir_parse(ir.as_string().str.c_str(), &value)) {
+                    s.internal_resolution = value; s.has_internal_resolution = true;
+                }
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                if (n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES) {
+                    s.internal_resolution = (int)n; s.has_internal_resolution = true;
+                }
+            }
+        });
+        if (v.contains("dynamic_resolution")) try_get([&]{
+            s.dynamic_resolution = toml::find<bool>(v, "dynamic_resolution");
+            s.has_dynamic_resolution = true;
+        });
+        if (v.contains("dynamic_resolution_min")) try_get([&]{
+            const toml::value& ir = toml::find(v, "dynamic_resolution_min");
+            int value = 0;
+            if (ir.is_string()) {
+                if (psx_ir_parse(ir.as_string().str.c_str(), &value)) {
+                    s.dynamic_resolution_min = value; s.has_dynamic_resolution_min = true;
+                }
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                if (n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES) {
+                    s.dynamic_resolution_min = (int)n; s.has_dynamic_resolution_min = true;
+                }
+            }
         });
         if (v.contains("window_width")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "window_width");
-            if (n >= 640 && n <= 3840) { s.window_width = (int)n; s.has_window_width = true; }
+            if (n >= 640 && n <= 7680) { s.window_width = (int)n; s.has_window_width = true; }
         });
         if (v.contains("antialiasing")) try_get([&]{
             s.antialiasing = toml::find<bool>(v, "antialiasing"); s.has_antialiasing = true;
@@ -2326,6 +2996,7 @@ UserSettings load_user_settings(const fs::path& path) {
             const auto m = toml::find<std::string>(v, "texture_filtering");
             if (m == "nearest") { s.texture_filter = 0; s.has_texture_filter = true; }
             else if (m == "bilinear") { s.texture_filter = 1; s.has_texture_filter = true; }
+            else if (m == "xbr") { s.texture_filter = 3; s.has_texture_filter = true; }
         });
         if (v.contains("fmv_filter")) try_get([&]{
             const auto m = toml::find<std::string>(v, "fmv_filter");
@@ -2350,10 +3021,17 @@ UserSettings load_user_settings(const fs::path& path) {
             s.scanlines = toml::find<bool>(v, "scanlines"); s.has_scanlines = true;
         });
         if (v.contains("scanline_strength")) try_get([&]{
-            double d = toml::find<double>(v, "scanline_strength");
+            double d = toml_number(v, "scanline_strength");
             if (d < 0.0) d = 0.0;
             if (d > 1.0) d = 1.0;
             s.scanline_strength = d; s.has_scanline_strength = true;
+        });
+        if (v.contains("fov_scale")) try_get([&]{
+            const auto& n = toml::find(v, "fov_scale");
+            if (n.is_floating())     s.fov_scale = n.as_floating();
+            else if (n.is_integer()) s.fov_scale = static_cast<double>(n.as_integer());
+            else return;
+            s.has_fov_scale = true;
         });
         if (v.contains("auto_skip_fmv")) try_get([&]{
             s.auto_skip_fmv = toml::find<bool>(v, "auto_skip_fmv"); s.has_auto_skip_fmv = true;
@@ -2386,11 +3064,24 @@ UserSettings load_user_settings(const fs::path& path) {
             s.low_latency_input = toml::find<bool>(v, "low_latency_input");
             s.has_low_latency_input = true;
         });
+        if (v.contains("render_thread")) try_get([&]{
+            s.render_thread = toml::find<bool>(v, "render_thread");
+            s.has_render_thread = true;
+        });
+        if (v.contains("present_thread")) try_get([&]{
+            s.present_thread = toml::find<bool>(v, "present_thread");
+            s.has_present_thread = true;
+        });
+        if (v.contains("frame_generation")) try_get([&]{
+            s.frame_generation = toml::find<bool>(v, "frame_generation");
+            s.has_frame_generation = true;
+        });
         if (v.contains("vsync")) try_get([&]{
             const auto m = toml::find<std::string>(v, "vsync");
             if      (m == "on"  || m == "vsync")    { s.vsync = 1;  s.has_vsync = true; }
             else if (m == "off" || m == "immediate"){ s.vsync = 0;  s.has_vsync = true; }
             else if (m == "adaptive")               { s.vsync = -1; s.has_vsync = true; }
+            else if (m == "vrr")                    { s.vsync = 2;  s.has_vsync = true; }
         });
         if (v.contains("frame_interpolation")) try_get([&]{
             s.frame_interpolation = toml::find<bool>(v, "frame_interpolation");
@@ -2400,6 +3091,24 @@ UserSettings load_user_settings(const fs::path& path) {
             s.frame_interpolation_fps = toml::find<int>(v, "frame_interpolation_fps");
             if (s.frame_interpolation_fps == 0 || s.frame_interpolation_fps >= 90)
                 s.has_frame_interpolation_fps = true;
+        });
+        // Graphics preset state (docs/QUALITY_PRESETS.md). Values are checked
+        // by the runtime, which knows the title's presets.
+        if (v.contains("quality_preset")) try_get([&]{
+            s.quality_preset = toml::find<std::string>(v, "quality_preset");
+            s.has_quality_preset = !s.quality_preset.empty();
+        });
+        if (v.contains("quality_base")) try_get([&]{
+            s.quality_base = toml::find<std::string>(v, "quality_base");
+            s.has_quality_base = !s.quality_base.empty();
+        });
+        if (v.contains("quality_hardware")) try_get([&]{
+            s.quality_hardware = toml::find<std::string>(v, "quality_hardware");
+            s.has_quality_hardware = !s.quality_hardware.empty();
+        });
+        if (v.contains("quality_detected")) try_get([&]{
+            s.quality_detected = toml::find<std::string>(v, "quality_detected");
+            s.has_quality_detected = !s.quality_detected.empty();
         });
         if (v.contains("aspect_ratio")) try_get([&]{
             const auto m = toml::find<std::string>(v, "aspect_ratio");
@@ -2626,6 +3335,10 @@ UserSettings load_user_settings(const fs::path& path) {
             s.multitap_analog = toml::find<bool>(ct, "multitap_analog");
             s.has_multitap_analog = true;
         });
+        if (ct.contains("jogcon_force_feedback")) try_get([&]{
+            s.jogcon_force_feedback = toml::find<bool>(ct, "jogcon_force_feedback");
+            s.has_jogcon_force_feedback = true;
+        });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
             if (n >= 0 && n <= 32767) {
@@ -2644,6 +3357,19 @@ UserSettings load_user_settings(const fs::path& path) {
     return s;
 }
 
+fs::path relative_to_folder(const fs::path& p, const fs::path& folder) {
+    if (p.empty() || folder.empty() || !p.is_absolute()) return p;
+    std::error_code ec;
+    const fs::path base = fs::weakly_canonical(folder, ec);
+    if (ec) return p;
+    const fs::path full = fs::weakly_canonical(p, ec);
+    if (ec) return p;
+    const fs::path r = full.lexically_relative(base);
+    // Outside the folder (other drive, or a "../" climb) stays absolute.
+    if (r.empty() || r.is_absolute() || *r.begin() == "..") return p;
+    return r;
+}
+
 bool save_user_settings(const fs::path& path, const UserSettings& s) {
     std::error_code ec;
     if (!path.parent_path().empty())
@@ -2652,11 +3378,15 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     std::ofstream f(path, std::ios::trunc);
     if (!f.is_open()) return false;
 
-    // TOML strings use forward slashes so backslash escaping is never an issue.
+    // Windows paths use forward slashes so separators need no TOML escaping.
     auto fwd = [](const fs::path& p) {
-        std::string str = p.generic_string();
-        return str;
+        return host_path_forward_slashes(p);
     };
+    // Paths inside the game folder are stored relative to it, so a portable
+    // folder still finds its disc, BIOS and memory cards after it is moved or
+    // copied to another PC. Readers anchor relative paths on the exe
+    // directory, which is where settings.toml lives.
+    auto rel = [&](const fs::path& p) { return fwd(relative_to_folder(p, path.parent_path())); };
 
     f << "# psxrecomp user settings - written by the launcher. Safe to hand-edit.\n";
     f << "# Overrides the bundled game.toml; the command line overrides this file.\n\n";
@@ -2668,12 +3398,29 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
           << "\"\n";
     if (s.has_supersampling)
         f << "supersampling     = " << s.supersampling << "\n";
+    if (s.has_internal_resolution && psx_ir_value_valid(s.internal_resolution)) {
+        const char* id = psx_ir_id_for(s.internal_resolution);
+        if (id)
+            f << "internal_resolution = \"" << id << "\"\n";
+        else
+            f << "internal_resolution = " << s.internal_resolution << "\n";
+    }
+    if (s.has_dynamic_resolution)
+        f << "dynamic_resolution = " << (s.dynamic_resolution ? "true" : "false") << "\n";
+    if (s.has_dynamic_resolution_min &&
+        psx_ir_value_valid(s.dynamic_resolution_min)) {
+        const char* id = psx_ir_id_for(s.dynamic_resolution_min);
+        if (id)
+            f << "dynamic_resolution_min = \"" << id << "\"\n";
+        else
+            f << "dynamic_resolution_min = " << s.dynamic_resolution_min << "\n";
+    }
     if (s.has_window_width)
         f << "window_width      = " << s.window_width << "\n";
     if (s.has_antialiasing)
         f << "antialiasing      = " << (s.antialiasing ? "true" : "false") << "\n";
     if (s.has_texture_filter)
-        f << "texture_filtering = \"" << (s.texture_filter ? "bilinear" : "nearest") << "\"\n";
+        f << "texture_filtering = \"" << (s.texture_filter == 3 ? "xbr" : s.texture_filter ? "bilinear" : "nearest") << "\"\n";
     if (s.has_fmv_filter)
         f << "fmv_filter        = \"" << video_fmv_filter_name(s.fmv_filter) << "\"\n";
     if (s.has_geometry_correction)
@@ -2692,6 +3439,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "scanlines         = " << (s.scanlines ? "true" : "false") << "\n";
     if (s.has_scanline_strength)
         f << "scanline_strength = " << s.scanline_strength << "\n";
+    if (s.has_fov_scale)
+        f << "fov_scale         = " << s.fov_scale << "\n";
     if (s.has_auto_skip_fmv)
         f << "auto_skip_fmv     = " << (s.auto_skip_fmv ? "true" : "false") << "\n";
     /* turbo_loads is deliberately NOT written back: it is deprecated and no
@@ -2706,12 +3455,27 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "fullscreen        = " << s.fullscreen << "\n";
     if (s.has_low_latency_input)
         f << "low_latency_input = " << (s.low_latency_input ? "true" : "false") << "\n";
+    if (s.has_render_thread)
+        f << "render_thread = " << (s.render_thread ? "true" : "false") << "\n";
+    if (s.has_present_thread)
+        f << "present_thread = " << (s.present_thread ? "true" : "false") << "\n";
+    if (s.has_frame_generation)
+        f << "frame_generation = " << (s.frame_generation ? "true" : "false") << "\n";
     if (s.has_vsync)
-        f << "vsync             = \"" << (s.vsync == 0 ? "immediate" : s.vsync < 0 ? "adaptive" : "on") << "\"\n";
+        f << "vsync             = \"" << (s.vsync == 0 ? "immediate" : s.vsync < 0 ? "adaptive"
+                                         : s.vsync == 2 ? "vrr" : "on") << "\"\n";
     if (s.has_frame_interpolation)
         f << "frame_interpolation = " << (s.frame_interpolation ? "true" : "false") << "\n";
     if (s.has_frame_interpolation_fps)
         f << "frame_interpolation_fps = " << s.frame_interpolation_fps << "\n";
+    if (s.has_quality_preset)
+        f << "quality_preset    = \"" << s.quality_preset << "\"\n";
+    if (s.has_quality_base)
+        f << "quality_base      = \"" << s.quality_base << "\"\n";
+    if (s.has_quality_hardware)
+        f << "quality_hardware  = \"" << s.quality_hardware << "\"\n";
+    if (s.has_quality_detected)
+        f << "quality_detected  = \"" << s.quality_detected << "\"\n";
     if (s.has_aspect_ratio)
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
@@ -2752,11 +3516,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "lobby_url = \"" << s.netplay_lobby_url << "\"\n";
     }
     if (s.has_bios_path)
-        f << "\n[bios]\npath = \"" << fwd(s.bios_path) << "\"\n";
+        f << "\n[bios]\npath = \"" << rel(s.bios_path) << "\"\n";
     if (s.has_disc_path || s.has_disc_index) {
         f << "\n[disc]\n";
         if (s.has_disc_path)
-            f << "path = \"" << fwd(s.disc_path) << "\"\n";
+            f << "path = \"" << rel(s.disc_path) << "\"\n";
         /* Only meaningful for a multi-disc title; harmless (and informative)
          * for a single-disc one, where it is always 1. */
         if (s.has_disc_index)
@@ -2766,11 +3530,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         s.has_memcard1_enabled || s.has_memcard2_enabled) {
         f << "\n[memcard]\n";
         if (s.has_memcard_dir)
-            f << "dir     = \"" << fwd(s.memcard_dir) << "\"\n";
+            f << "dir     = \"" << rel(s.memcard_dir) << "\"\n";
         if (s.has_memcard1_path)
-            f << "card1   = \"" << fwd(s.memcard1_path) << "\"\n";
+            f << "card1   = \"" << rel(s.memcard1_path) << "\"\n";
         if (s.has_memcard2_path)
-            f << "card2   = \"" << fwd(s.memcard2_path) << "\"\n";
+            f << "card2   = \"" << rel(s.memcard2_path) << "\"\n";
         if (s.has_memcard1_enabled)
             f << "enable1 = " << (s.memcard1_enabled ? "true" : "false") << "\n";
         if (s.has_memcard2_enabled)
@@ -2779,7 +3543,7 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
 
     {
         bool any_ctrl = s.has_deadzone || s.has_multitap_enabled ||
-                        s.has_multitap_analog;
+                        s.has_multitap_analog || s.has_jogcon_force_feedback;
         for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
             if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
                 any_ctrl = true;
@@ -2808,6 +3572,9 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             if (s.has_multitap_analog)
                 f << "multitap_analog = "
                   << (s.multitap_analog ? "true" : "false") << "\n";
+            if (s.has_jogcon_force_feedback)
+                f << "jogcon_force_feedback = "
+                  << (s.jogcon_force_feedback ? "true" : "false") << "\n";
             /* Keep a global deadzone= for older readers (mirrors P1). */
             if (s.has_deadzone || s.has_p_deadzone[0])
                 f << "deadzone  = "

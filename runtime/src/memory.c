@@ -25,7 +25,11 @@
 #include "dirty_ram_interp.h"
 #include "guest_tty.h"
 #include "psx_cycles.h"
+#include "psx_icache.h"
 #include "psx_memory.h"
+#include "pgxp.h"
+#include "render_pass.h"
+#include "render_pass_plan.h"
 #include "starvation_ring.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -35,8 +39,11 @@
 #define RAM_SIZE        PSX_MAIN_RAM_BACKING_BYTES
 #define SCRATCHPAD_SIZE 1024
 #define BIOS_ROM_SIZE   (512 * 1024)
-#define MOD_MEMORY_BASE 0x1F000000u
-#define MOD_MEMORY_SIZE (1u * 1024u * 1024u)
+#define MOD_MEMORY_BASE PSX_MOD_MEMORY_BASE
+#define MOD_MEMORY_SIZE PSX_MOD_MEMORY_SIZE
+#define RP_MOD_PAGE 4096u
+static int rp_mod_journal(uint8_t *base, uint32_t page_base, uint32_t off,
+                          uint32_t width);
 
 static uint8_t ram[RAM_SIZE];
 static uint8_t scratchpad[SCRATCHPAD_SIZE];
@@ -86,6 +93,14 @@ int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size) {
     if (!psx_mod_memory_snapshot_validate(data, size)) return 0;
     cpu_bytes = mod_memory_used;
     dma_bytes = mod_gpu_dma_memory_used;
+    // Draw-entry replay may restore an earlier image inside a frozen pass.
+    // Journal the completed live image first so rollback never retains that
+    // earlier arena or backs up already-restored primitive tags.
+    if (g_psx_render_pass_active &&
+        ((cpu_bytes && !rp_mod_journal(mod_memory, 0, 0, cpu_bytes)) ||
+         (dma_bytes && !rp_mod_journal(mod_gpu_dma_memory,
+                                      MOD_MEMORY_SIZE / RP_MOD_PAGE, 0, dma_bytes))))
+        return 0;
     memcpy(mod_memory, data + 16u, cpu_bytes);
     memcpy(mod_gpu_dma_memory, data + 16u + cpu_bytes, dma_bytes);
     return 1;
@@ -141,6 +156,14 @@ uint32_t psx_mod_gpu_dma_resolve_address(uint32_t address) {
         address, mod_gpu_dma_memory_used);
 }
 
+int psx_mod_gpu_dma_memory_contains(uint32_t address,uint32_t bytes) {
+    return bytes!=0 && mod_gpu_dma_memory_offset(address&0x1FFFFFFFu,bytes,NULL);
+}
+
+uint32_t psx_gpu_packet_key(uint32_t address) {
+    return psx_gpu_packet_key_for(address, mod_gpu_dma_memory_used);
+}
+
 /* Exposed for inlined main-RAM load helpers in psx_cyc.h (VLC/decode hot path). */
 uint8_t *g_psx_ram = ram;
 /* PSX_LOAD_DELAY gate (default on). −1 = unread; 0/1 after first resolve. */
@@ -161,6 +184,28 @@ static inline uint32_t psx_phys_addr_store(uint32_t addr) {
 /* Expose RAM pointer for oracle comparison (find_first_divergence). */
 uint8_t *memory_get_ram_ptr(void) { return ram; }
 uint8_t *memory_get_scratchpad_ptr(void) { return scratchpad; }
+
+/* Side-effect-FREE aligned word peek for the debug/observability path ONLY:
+ * main RAM (every KUSEG/KSEG0/KSEG1 mirror), scratchpad and BIOS ROM. Never
+ * touches MMIO, the lockstep/DS read hooks, read watches, or unmapped_fatal.
+ * Returns 1 and fills *out when addr is backed by one of those; 0 otherwise. */
+int psx_peek_word(uint32_t addr, uint32_t *out) {
+    uint32_t phys, off;
+    const uint8_t *p;
+    if (addr >= 0xC0000000u || (addr & 3u)) return 0;
+    phys = addr & 0x1FFFFFFFu;
+    if (psx_ram_resolve(addr, 4u, &off)) {
+        p = &ram[off];
+    } else if (phys >= 0x1F800000u && phys <= 0x1F8003FCu) {
+        p = &scratchpad[phys - 0x1F800000u];
+    } else if (phys >= 0x1FC00000u && phys <= 0x1FC7FFFCu) {
+        p = &bios_rom[phys - 0x1FC00000u];
+    } else {
+        return 0;
+    }
+    if (out) memcpy(out, p, sizeof(*out));
+    return 1;
+}
 void memory_clear_low_boot_scratch(void) {
     memset(ram, 0, 0x10u);
 }
@@ -544,7 +589,14 @@ static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) 
     }
 }
 
+/* PSX_FORCE_INTERP=1 (tooling, defined below): no game text is native-safe,
+ * so every dispatch into it takes the dirty-RAM interpreter. The byte
+ * compare in the two checks below would otherwise pass for untouched text
+ * and run the compiled image, since force-interp only marks pages dirty. */
+static int dirty_ram_force_interp(void);
+
 int dirty_ram_text_native_ok(uint32_t phys) {
+    if (dirty_ram_force_interp() && phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return 0;
     if (!text_ref_image || phys < text_ref_lo || phys >= text_ref_hi)
         return !dirty_ram_is_dirty(phys);
 
@@ -595,6 +647,7 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
                                          uint32_t count,
                                          uint32_t exec_pc) {
     if (!text_ref_image || !lo_len_pairs || count == 0) return 0;
+    if (dirty_ram_force_interp()) return 0;
     (void)exec_pc;
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
@@ -822,8 +875,7 @@ void dirty_ram_reset_for_boot(void) {
     memset(overlay_page_gen, 0, sizeof(overlay_page_gen));
     memset(g_dirty_ram_exec_page_bitmap, 0, sizeof(g_dirty_ram_exec_page_bitmap));
     memset(g_dirty_ram_exec_pc_bitmap, 0, sizeof(g_dirty_ram_exec_pc_bitmap));
-    memset(g_dirty_ram_dispatch_pc_bitmap, 0,
-           sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    dirty_ram_dispatch_evidence_clear(0u, DIRTY_RAM_EXEC_BITMAP_WORDS);
     g_dirty_ram_code_gen++;
 }
 
@@ -926,8 +978,7 @@ static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {
         uint32_t bitmap_word = pg * (4096u / 4u / 32u);
         memset(&g_dirty_ram_exec_pc_bitmap[bitmap_word], 0,
                (4096u / 4u / 32u) * sizeof(uint32_t));
-        memset(&g_dirty_ram_dispatch_pc_bitmap[bitmap_word], 0,
-               (4096u / 4u / 32u) * sizeof(uint32_t));
+        dirty_ram_dispatch_evidence_clear(bitmap_word, 4096u / 4u / 32u);
         g_dirty_ram_exec_page_bitmap[pg >> 5] &= ~(1u << (pg & 31u));
     }
     if ((overlay_watch_bitmap[pg >> 5] >> (pg & 31u)) & 1u) {
@@ -960,9 +1011,8 @@ uint64_t g_kseg2_ignored_writes;
 static uint32_t cache_ctrl;
 
 /* Pointer to cpu->cop0[12] (SR).  Set once at init.
- * Used by write functions to check the IsC (Isolate Cache) bit.
- * When IsC is set, RAM/scratchpad writes are silently dropped — the
- * real R3000A sends them to the data cache only. */
+ * Used by write functions to check the IsC (Isolate Cache) bit: while it is
+ * set, a CPU store goes to the caches and never reaches the bus (isc_store). */
 static const uint32_t *sr_ptr;
 
 /* Interrupt controller — non-static so hardware subsystems can set I_STAT bits. */
@@ -992,6 +1042,13 @@ uint64_t g_mmio_access_count = 0;
  * ANY store is not a pure poll loop. CPU stores and in-flight DMA writes
  * both funnel through the psx_write_*_raw chokepoints. */
 uint64_t g_guest_store_count = 0;
+/* The last guest word store, for the idle-loop detector's store-counter
+ * loops (psx_cycles.c, [runtime] idle_skip_store_counters). Recorded only
+ * while that option is on (g_psx_track_last_store); main.cpp hands these to
+ * the detector with psx_idle_skip_set_store_tracker. */
+int      g_psx_track_last_store = 0;
+uint32_t g_guest_last_store_addr = 0xFFFFFFFFu;
+uint32_t g_guest_last_store_val = 0;
 
 /* ---- Card protocol trace: tracks I_MASK bit 7 transitions ---- */
 #define IMASK_TRACE_CAP 4096
@@ -1111,6 +1168,34 @@ static inline uint16_t read_ram_half(uint32_t phys) {
     return (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
 }
 
+/* SCPH-1001 store-PC keys for code that runs relocated (docs/SEGMENT_AWARE_CODE.md
+ * §9). `pc` is the PC the CPU executes the store at, which the compiled BIOS
+ * (BiosAddressModel::runtime_pc) and the interpreter both stamp; `rom` is the
+ * store's address in the image. A RAM PC alone is ambiguous: another BIOS, or
+ * game code once the region is reused, can run a store there. So the key
+ * matches only SCPH-1001's own instruction: the active image is SCPH-1001 and
+ * the RAM word at `pc` is still the ROM word it was copied from. That limits
+ * each key to the one store its ROM-address key named before the re-key, now
+ * whichever backend runs it. */
+#include "psx_bios_known_images.h"
+static inline int scph1001_relocated_store(uint32_t pc, uint32_t rom) {
+    if (g_debug_last_store_pc != pc) return 0;
+    static uint32_t s_scph1001_crc = 0;
+    if (!s_scph1001_crc) {
+        const PsxKnownBiosImage* img = psx_known_bios_by_stem("SCPH1001");
+        s_scph1001_crc = img ? img->crc32 : 0xFFFFFFFFu;
+    }
+    if (psx_bios_image.image_crc32 != s_scph1001_crc) return 0;
+    const uint32_t phys = pc & 0x1FFFFFFFu;
+    const uint32_t off = rom & (BIOS_ROM_SIZE - 1u);
+    if (phys + 4u > RAM_SIZE) return 0;
+    const uint32_t rom_word = (uint32_t)bios_rom[off]
+                            | ((uint32_t)bios_rom[off + 1] << 8)
+                            | ((uint32_t)bios_rom[off + 2] << 16)
+                            | ((uint32_t)bios_rom[off + 3] << 24);
+    return read_ram_word(phys) == rom_word;
+}
+
 /* SPU registers are now handled by spu.c */
 
 void memory_set_sr_ptr(const uint32_t *p) { sr_ptr = p; }
@@ -1208,7 +1293,10 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
         return ram_size_reg;
     }
     /* Interrupts: 0x1F801070, 0x1F801074 */
-    if (addr == 0x1F801070u) { sio_tick(0); return i_stat; }
+    if (addr == 0x1F801070u) {
+        if (!g_psx_render_pass_active) sio_tick(0);
+        return i_stat;
+    }
     if (addr == 0x1F801074u) return i_mask;
     /* DMA: 0x1F801080..0x1F8010FF */
     if (addr >= 0x1F801080u && addr <= 0x1F8010FFu) {
@@ -1243,6 +1331,7 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
  * single (side-effecting) read. Callers use mmio_read32; the body is _impl, so
  * the device read executes exactly once. */
 static uint32_t mmio_read32(uint32_t addr) {
+    if (g_psx_render_pass_active && !render_pass_mmio_read_allowed(addr, 4)) return 0;
     psx_devices_mmio_sync();
     uint32_t v = mmio_read32_impl(addr);
     debug_server_trace_mmio_read(addr, v, 4);
@@ -1289,10 +1378,13 @@ static void mmio_write32(uint32_t addr, uint32_t val) {
     /* GPU GP0: 0x1F801810, GP1: 0x1F801814 */
     if (addr == 0x1F801810u) {
         uint32_t src = addr;
-        if (g_debug_last_store_pc == 0xBFC38B1Cu && debug_cpu_ptr) {
-            /* Word-aligned RAM key through the live geometry (retail: the
-             * 0x1FFFFC fold, identical to the DMA/GPU source keys). */
-            src = psx_ram_canonical_offset(debug_cpu_ptr->gpr[4] - 4u) & ~3u;
+        /* SCPH-1001 shell store to GP0. The shell runs relocated at
+         * 0x80030000, so ROM 0xBFC38B1C executes at 0x80050B1C
+         * (scph1001_relocated_store). */
+        if (debug_cpu_ptr && scph1001_relocated_store(0x80050B1Cu, 0xBFC38B1Cu)) {
+            /* The same packet key as the DMA/GPU source keys (retail: the
+             * 0x1FFFFC fold). */
+            src = psx_gpu_packet_key(debug_cpu_ptr->gpr[4] - 4u);
         }
         gpu_set_gp0_source(src);
         gpu_write_gp0(val);
@@ -1331,7 +1423,7 @@ static uint16_t mmio_read16_impl(uint32_t addr) {
     }
     /* Interrupts */
     if (addr >= 0x1F801070u && addr <= 0x1F801072u) {
-        sio_tick(0);
+        if (!g_psx_render_pass_active) sio_tick(0);
         uint32_t shift = (addr & 2u) ? 16u : 0u;
         return (uint16_t)(i_stat >> shift);
     }
@@ -1362,6 +1454,7 @@ static uint16_t mmio_read16_impl(uint32_t addr) {
 }
 
 static uint16_t mmio_read16(uint32_t addr) {
+    if (g_psx_render_pass_active && !render_pass_mmio_read_allowed(addr, 2)) return 0;
     psx_devices_mmio_sync();
     uint16_t v = mmio_read16_impl(addr);
     debug_server_trace_mmio_read(addr, (uint32_t)v, 2);
@@ -1447,7 +1540,7 @@ static uint8_t mmio_read8_impl(uint32_t addr) {
     }
     /* Interrupts: 0x1F801070..0x1F801077 (I_STAT, I_MASK) */
     if (addr >= 0x1F801070u && addr <= 0x1F801077u) {
-        if (addr < 0x1F801074u) sio_tick(0);
+        if (addr < 0x1F801074u && !g_psx_render_pass_active) sio_tick(0);
         uint32_t val = (addr < 0x1F801074u) ? i_stat : i_mask;
         return (uint8_t)(val >> (8 * (addr & 3)));
     }
@@ -1481,6 +1574,7 @@ static uint8_t mmio_read8_impl(uint32_t addr) {
 }
 
 static uint8_t mmio_read8(uint32_t addr) {
+    if (g_psx_render_pass_active && !render_pass_mmio_read_allowed(addr, 1)) return 0;
     psx_devices_mmio_sync();
     uint8_t v = mmio_read8_impl(addr);
     debug_server_trace_mmio_read(addr, (uint32_t)v, 1);
@@ -1703,10 +1797,179 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
     e->frame = (uint32_t)s_frame_count;
 }
 
+/* ---- Render-pass stores (render_pass.c, docs/RENDER_PASSES.md) -------------
+ * A render pass runs guest draw code in frozen time and afterwards restores
+ * RAM, scratchpad, CPU, GPU and DMA state byte-for-byte. Its stores therefore
+ * bypass every observer of the live timeline (code-page tracking, overlay
+ * watch, write traces, card/parity hooks) and go straight to memory. MMIO is
+ * an allow-list: the GPU (GP0, and GP1 DMA-direction / info queries), the GPU
+ * and OTC DMA channels with DPCR/DICR, and I_STAT/I_MASK -- all of which the
+ * pass restores. Everything else (SPU key-ons, CD, timers, SIO, MDEC, memory
+ * control, other DMA channels) would escape the restore, so it is dropped and
+ * counted instead. */
+uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
+
+/* SR.IsC (Isolate Cache, bit 16). While it is set, a CPU store goes to the
+ * caches, never to the bus. This is Beetle PS_CPU::WriteMemory's IsC branch
+ * (mednafen/psx/cpu.cpp:482-512), which runs before any address decode:
+ *   - I-cache enabled (BIU bit 11) with a tag-test, invalidate or lock mode
+ *     bit: the store rewrites the tag and valid bits of its line
+ *     (psx_icache_isc_store). FlushCache (A 44h) invalidates the I-cache this
+ *     way.
+ *   - I-cache enabled, no mode bit: Beetle writes an instruction word, which
+ *     the model does not hold.
+ *   - D-cache enabled and lock mode clear ((BIU & 0x81) == 0x80): the store
+ *     lands in the scratchpad, the D-cache array, at addr & 0x3FF, whatever
+ *     region addr is in.
+ * Nothing else happens: an isolated store to RAM, MMIO or the BIU register
+ * itself is dropped (Beetle routes 0xFFFE0130 through MemRW, libretro.cpp:1053,
+ * which only non-isolated stores reach). DMA is not a CPU store; Beetle's DMA
+ * writes RAM directly, so IsC does not apply while a transfer moves data.
+ * Neither is a host store (psx_host_write_*: mods, FMV skip, debug pokes,
+ * enhancement fills); like DMA it reaches memory whatever SR says. */
+int g_host_store_depth;   /* >0 inside psx_host_write_* */
+
+/* DMA and host stores have no instruction hook to carry or reset a PGXP
+ * shadow. Validation on read cannot catch one that rewrites the identical
+ * word: two projections that round to the same integers differ in their
+ * fractions and depth, so the old shadow would be believed for a value it
+ * did not produce. Drop the touched word's shadow instead. */
+static inline void pgxp_untracked_store(uint32_t phys) {
+    if (g_dma_exec_depth > 0 || g_host_store_depth > 0)
+        pgxp_invalidate_word(phys);
+}
+
+static inline int cpu_store_isolated(void) {
+    return sr_ptr && (*sr_ptr & 0x10000u) && g_dma_exec_depth == 0 &&
+           g_host_store_depth == 0;
+}
+
+static void isc_store(uint32_t addr, uint32_t val, uint32_t width) {
+    /* The overlay shadow replay cannot redo this (lockstep.h). */
+    if (g_ls_mode == 1) ls_shadow_record_unreplayable();
+    psx_icache_isc_store(cache_ctrl, addr, val);
+    if ((cache_ctrl & (PSX_BIU_DCACHE_ENABLE | PSX_BIU_LOCK)) ==
+        PSX_BIU_DCACHE_ENABLE) {
+        uint32_t off = addr & 0x3FFu;
+#ifndef PSX_NO_DEBUG_TOOLS
+        uint32_t old = 0;
+        for (uint32_t i = 0; i < width; i++)
+            old |= (uint32_t)scratchpad[(off + i) & 0x3FFu] << (8u * i);
+        debug_server_trace_write_check(0x1F800000u + off, old, val, (uint8_t)width);
+#endif
+        for (uint32_t i = 0; i < width; i++)
+            scratchpad[(off + i) & 0x3FFu] = (uint8_t)(val >> (8u * i));
+    }
+}
+
+static void render_pass_mmio_write(uint32_t phys, uint32_t val,
+                                   uint32_t width) {
+    if (width == 4) mmio_write32(phys, val);
+    else if (width == 2) mmio_write16(phys, (uint16_t)val);
+    else mmio_write8(phys, (uint8_t)val);
+}
+
+/* The policy is render_pass_store_to (render_pass_plan.c, unit-tested by
+ * render_pass_sandbox_test); this only wires it to memory.c's arrays. */
+/* Mod arenas (Expansion-1 mod memory, the GPU-DMA aperture) are guest
+ * memory a pass may draw into: a title that moves its primitive buffers there
+ * (an extended draw distance) has its passes build their packets there. Each
+ * arena page a pass writes is backed up on its first write and put back by
+ * render_pass_mod_arenas_rollback(), with the rest of the pass restore. */
+#define RP_MOD_PAGES ((MOD_MEMORY_SIZE + PSX_MOD_GPU_DMA_APERTURE_SIZE) / RP_MOD_PAGE)
+typedef struct { uint8_t *page; uint32_t index; uint8_t data[RP_MOD_PAGE]; } RpModPage;
+static uint8_t  s_rp_mod_bits[RP_MOD_PAGES / 8u];
+static RpModPage *s_rp_mod_log = NULL;
+static uint32_t s_rp_mod_n = 0, s_rp_mod_cap = 0;
+static int      s_rp_mod_lossy = 0;
+uint64_t g_render_pass_mod_pages = 0;              /* pages journaled, total */
+
+static int rp_mod_journal(uint8_t *base, uint32_t page_base, uint32_t off,
+                          uint32_t width) {
+    for (uint32_t pg = off / RP_MOD_PAGE; pg <= (off + width - 1u) / RP_MOD_PAGE; pg++) {
+        const uint32_t index = page_base + pg;
+        const uint8_t bit = (uint8_t)(1u << (index & 7u));
+        if (s_rp_mod_bits[index >> 3] & bit) continue;
+        if (s_rp_mod_n == s_rp_mod_cap) {
+            uint32_t cap = s_rp_mod_cap ? s_rp_mod_cap * 2u : 64u;
+            RpModPage *p = (RpModPage *)realloc(s_rp_mod_log, cap * sizeof *p);
+            if (!p) { s_rp_mod_lossy = 1; return 0; }
+            s_rp_mod_log = p;
+            s_rp_mod_cap = cap;
+        }
+        s_rp_mod_bits[index >> 3] |= bit;
+        s_rp_mod_log[s_rp_mod_n].page = base + pg * RP_MOD_PAGE;
+        s_rp_mod_log[s_rp_mod_n].index = index;
+        memcpy(s_rp_mod_log[s_rp_mod_n].data, base + pg * RP_MOD_PAGE, RP_MOD_PAGE);
+        s_rp_mod_n++;
+        g_render_pass_mod_pages++;
+    }
+    return 1;
+}
+
+/* 1 when the store landed in a mod arena (journaled and written). */
+static int render_pass_mod_store(uint32_t addr, uint32_t val, uint32_t width) {
+    uint32_t phys, off;
+    uint8_t *base = NULL;
+    uint32_t page_base = 0;
+    if (addr >= 0xC0000000u) return 0;
+    phys = addr & 0x1FFFFFFFu;
+    if (phys < psx_ram_live_bytes()) return 0;
+    if (phys < 0x00800000u && psx_ram_live_bytes() < 0x00800000u) return 0;   /* mirrors */
+    if (mod_gpu_dma_memory_offset(phys, width, &off)) {
+        base = mod_gpu_dma_memory;
+        page_base = MOD_MEMORY_SIZE / RP_MOD_PAGE;
+    } else if (mod_memory_offset(phys, width, &off)) {
+        base = mod_memory;
+    } else {
+        return 0;
+    }
+    if (!rp_mod_journal(base, page_base, off, width)) return 1;   /* lossy: drop */
+    for (uint32_t i = 0; i < width; i++) base[off + i] = (uint8_t)(val >> (8u * i));
+    return 1;
+}
+
+void render_pass_mod_arenas_rollback(void) {
+    for (uint32_t i = s_rp_mod_n; i-- > 0;) {
+        memcpy(s_rp_mod_log[i].page, s_rp_mod_log[i].data, RP_MOD_PAGE);
+        s_rp_mod_bits[s_rp_mod_log[i].index >> 3] &=
+            (uint8_t)~(1u << (s_rp_mod_log[i].index & 7u));
+    }
+    s_rp_mod_n = 0;
+    s_rp_mod_lossy = 0;
+}
+
+/* FNV-1a over the used part of both arenas (PSX_RENDER_PASS_VERIFY). */
+uint64_t render_pass_mod_arenas_hash(void) {
+    uint64_t h = 1469598103934665603ULL;
+    for (uint32_t i = 0; i < mod_memory_used; i++) h = (h ^ mod_memory[i]) * 1099511628211ULL;
+    for (uint32_t i = 0; i < mod_gpu_dma_memory_used; i++)
+        h = (h ^ mod_gpu_dma_memory[i]) * 1099511628211ULL;
+    return h;
+}
+
+static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
+    RenderPassStoreTarget t;
+    int cls;
+    if (render_pass_mod_store(addr, val, width)) return;
+    t.ram = ram;
+    t.ram_size = psx_ram_live_bytes();   /* live geometry, as psx_ram_map_write */
+    t.scratchpad = scratchpad;
+    t.scratchpad_size = SCRATCHPAD_SIZE;
+    t.isolate_cache = cpu_store_isolated();
+    /* Same cache effect as outside a pass; the pass checkpoint restores the
+     * I-cache tags and the scratchpad when it ends. */
+    if (t.isolate_cache) isc_store(addr, val, width);
+    t.mmio_write = render_pass_mmio_write;
+    cls = render_pass_store_to(&t, addr, val, width);
+    if (cls >= 0) g_render_pass_dropped_writes[cls]++;
+}
+
 static void psx_write_word_raw(uint32_t addr, uint32_t val);
 void psx_write_word(uint32_t addr, uint32_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 4); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 4, val); return; }
     if (g_ds_recording) {
         if (g_dma_exec_depth > 0) ds_note_dma_write();
@@ -1720,17 +1983,18 @@ void psx_write_word(uint32_t addr, uint32_t val) {
 }
 static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     g_guest_store_count++;
-    /* (pgxp) plain-store shadow invalidation retired: the PGXP engine
-     * validates tracked words against the actual packet word on read, so an
-     * overwritten word can never be believed (docs/ENHANCEMENTS.md G1). */
+    if (g_psx_track_last_store) {
+        g_guest_last_store_addr = addr;
+        g_guest_last_store_val = val;
+    }
+    /* (pgxp) CPU stores carry their shadow through the PGXP_STORE hook;
+     * DMA and host stores drop it below (pgxp_untracked_store). */
+    /* IsC first, before any decode (cpu_store_isolated). */
+    if (cpu_store_isolated()) { isc_store(addr, val, 4); return; }
     /* KSEG2 cache control — before physical translation. */
     if (addr == 0xFFFE0130u) { cache_ctrl = val; return; }
     /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
-
-    /* IsC (Isolate Cache): when set, writes go to D-cache only.
-     * We have no cache model, so silently discard RAM/scratchpad writes. */
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
 
     uint32_t phys = psx_phys_addr_store(addr);
 
@@ -1738,9 +2002,12 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
      * boot. On hardware this mirror copy is not visible in RAM; only the real
      * exception vector at 0x80000080 is. Tomba 2 later passes buffer=0 to the
      * BIOS card write routine, so stale mirror bytes at 0 corrupt the sector 63
-     * management write and leave the load menu stuck checking the card. */
+     * management write and leave the load menu stuck checking the card.
+     * Keys for relocated SCPH-1001 code go through scph1001_relocated_store()
+     * (runtime PC, ROM address); Kernel Part 2 runs at 0x500 from ROM
+     * 0xBFC10000. */
     if (fntrace_is_game_started() &&
-        phys < 0x10u && g_debug_last_store_pc == 0xBFC10A00u) return;
+        phys < 0x10u && scph1001_relocated_store(0x00000F00u, 0xBFC10A00u)) return;
 
     /* BIOS helpers use RAM address zero as a tiny delay-loop scratch between
      * device-register polls. Treat these two dummy stores as non-visible; real
@@ -1748,20 +2015,22 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
      * when it passes buffer=0 to _card_write. */
     if (fntrace_is_game_started() && phys == 0u) {
         switch (g_debug_last_store_pc) {
-        case 0xBFC04E90u:
+        case 0xBFC04E90u:   /* ROM, runs in place */
         case 0xBFC04EF0u:
         case 0xBFC05164u:
         case 0xBFC0D634u:
-        case 0xBFC3EEB4u:
-        case 0xBFC405E4u:
-        case 0xBFC40788u:
-        case 0xBFC41C50u:
         case 0x80012434u:
         case 0x800125ACu:
             return;
         default:
             break;
         }
+        /* SCPH-1001 shell, which runs relocated at 0x80030000. */
+        if (scph1001_relocated_store(0x80056EB4u, 0xBFC3EEB4u) ||
+            scph1001_relocated_store(0x800585E4u, 0xBFC405E4u) ||
+            scph1001_relocated_store(0x80058788u, 0xBFC40788u) ||
+            scph1001_relocated_store(0x80059C50u, 0xBFC41C50u))
+            return;
     }
 
     if (phys < RAM_SIZE) {
@@ -1786,7 +2055,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
             }
             if (s_tomb_evcb_protect &&
                 fntrace_is_game_started() &&
-                g_debug_last_store_pc == 0xBFC117E4u &&
+                scph1001_relocated_store(0x00001CE4u, 0xBFC117E4u) &&  /* kernel */
                 val == 0x2000u &&
                 phys >= 4u && (phys + 8u) < RAM_SIZE &&
                 read_ram_word(phys) == 0x4000u &&
@@ -1801,7 +2070,9 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
             }
         }
         if (phys == D44_PHYS) d44_note(phys, read_ram_word(phys), val);
+#ifndef PSX_NO_DEBUG_TOOLS
         debug_server_trace_write_check(phys, read_ram_word(phys), val, 4);
+#endif
         parity_trace_note_write(phys, 4, effective_store_pc());
         card_data_writes_check(phys, val, 4);
         dirty_ram_mark_kernel_write(phys);
@@ -1810,6 +2081,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
 #ifdef PSX_COSIM
         { extern void cosim_note_ram_write(uint32_t,uint32_t); cosim_note_ram_write(phys, 4); }
 #endif
+        pgxp_untracked_store(phys);
         ram[phys]     = (uint8_t)(val);
         ram[phys + 1] = (uint8_t)(val >> 8);
         ram[phys + 2] = (uint8_t)(val >> 16);
@@ -1834,12 +2106,15 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
+#ifndef PSX_NO_DEBUG_TOOLS
         debug_server_trace_write_check(phys,
             (uint32_t)scratchpad[off]
           | ((uint32_t)scratchpad[off + 1] << 8)
           | ((uint32_t)scratchpad[off + 2] << 16)
           | ((uint32_t)scratchpad[off + 3] << 24),
             val, 4);
+#endif
+        pgxp_untracked_store(phys);
         scratchpad[off]     = (uint8_t)(val);
         scratchpad[off + 1] = (uint8_t)(val >> 8);
         scratchpad[off + 2] = (uint8_t)(val >> 16);
@@ -1909,6 +2184,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val);
 void psx_write_half(uint32_t addr, uint16_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 2); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 2, val); return; }
     if (g_ds_recording) {
         if (g_dma_exec_depth > 0) ds_note_dma_write();
@@ -1922,14 +2198,17 @@ void psx_write_half(uint32_t addr, uint16_t val) {
 }
 static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     g_guest_store_count++;
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
+    if (g_psx_track_last_store) g_guest_last_store_addr = 0xFFFFFFFFu;
+    if (cpu_store_isolated()) { isc_store(addr, val, 2); return; }
 
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
     uint32_t phys = psx_phys_addr_store(addr);
 
     if (phys < RAM_SIZE) {
+#ifndef PSX_NO_DEBUG_TOOLS
         debug_server_trace_write_check(phys, (uint32_t)read_ram_half(phys), (uint32_t)val, 2);
+#endif
         parity_trace_note_write(phys, 2, effective_store_pc());
         card_data_writes_check(phys, (uint32_t)val, 2);
         dirty_ram_mark_kernel_write(phys);
@@ -1938,6 +2217,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
 #ifdef PSX_COSIM
         { extern void cosim_note_ram_write(uint32_t,uint32_t); cosim_note_ram_write(phys, 2); }
 #endif
+        pgxp_untracked_store(phys);
         ram[phys]     = (uint8_t)(val);
         ram[phys + 1] = (uint8_t)(val >> 8);
         return;
@@ -1961,9 +2241,12 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
+#ifndef PSX_NO_DEBUG_TOOLS
         debug_server_trace_write_check(phys,
             (uint32_t)scratchpad[off] | ((uint32_t)scratchpad[off + 1] << 8),
             (uint32_t)val, 2);
+#endif
+        pgxp_untracked_store(phys);
         scratchpad[off]     = (uint8_t)(val);
         scratchpad[off + 1] = (uint8_t)(val >> 8);
         return;
@@ -2050,6 +2333,10 @@ extern int g_event_step_conservative;
 extern int g_ls_replay_active;
 static inline void psx_load_charge_cycles(uint32_t cycles) {
     if (g_ls_replay_active || cycles == 0u) return;
+    if (PSX_GCS_ACTIVE()) {
+        psx_cpu_charge(cycles);
+        return;
+    }
     uint64_t next = psx_cycle_count + (uint64_t)cycles;
     if (!g_event_step_conservative && g_psx_cycle_fast_limit != 0u &&
         next >= psx_cycle_count && next <= g_psx_cycle_fast_limit) {
@@ -2060,7 +2347,7 @@ static inline void psx_load_charge_cycles(uint32_t cycles) {
 }
 #else
 static inline void psx_load_charge_cycles(uint32_t cycles) {
-    psx_advance_cycles(cycles);
+    psx_cpu_charge(cycles);
 }
 #endif
 
@@ -2120,7 +2407,7 @@ static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
     uint32_t cost = region + compl_cost;               /* LDAbsorb = region + completion */
     uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
     cpu->ld_absorb = cost;
-    psx_advance_cycles(fudge + cost);
+    psx_cpu_charge(fudge + cost);   /* CPU charge: [timing] guest_cycle_scale */
     cpu->ld_which_t = (uint8_t)arm_rt;
     /* PROOF GATE (PSX_POLL_PROOF=N, default 0/off): a FLAT, non-absorbed extra N
      * cycles per main-RAM data read — replicates the historical "+6 cyc/main-RAM
@@ -2252,6 +2539,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val);
 void psx_write_byte(uint32_t addr, uint8_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 1); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 1, val); return; }
     if (g_ls_mode != 1 || s_ls_op_active || g_ls_suppress_record || g_dma_exec_depth > 0) { psx_write_byte_raw(addr, val); return; }
     if (!psx_get_in_exception()) ls_write_hook(addr, 1, val);
@@ -2259,16 +2547,38 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
     psx_write_byte_raw(addr, val);
     s_ls_op_active = 0;
 }
+
+/* Host stores: the same paths as a guest store, but never cache-isolated
+ * (cpu_store_isolated). */
+void psx_host_write_word(uint32_t addr, uint32_t val) {
+    g_host_store_depth++;
+    psx_write_word(addr, val);
+    g_host_store_depth--;
+}
+void psx_host_write_half(uint32_t addr, uint16_t val) {
+    g_host_store_depth++;
+    psx_write_half(addr, val);
+    g_host_store_depth--;
+}
+void psx_host_write_byte(uint32_t addr, uint8_t val) {
+    g_host_store_depth++;
+    psx_write_byte(addr, val);
+    g_host_store_depth--;
+}
+
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
+    if (g_psx_track_last_store) g_guest_last_store_addr = 0xFFFFFFFFu;
+    if (cpu_store_isolated()) { isc_store(addr, val, 1); return; }
 
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
     uint32_t phys = psx_phys_addr_store(addr);
 
     if (phys < RAM_SIZE) {
+#ifndef PSX_NO_DEBUG_TOOLS
         debug_server_trace_write_check(phys, (uint32_t)ram[phys], (uint32_t)val, 1);
+#endif
         parity_trace_note_write(phys, 1, effective_store_pc());
         card_data_writes_check(phys, (uint32_t)val, 1);
         dirty_ram_mark_kernel_write(phys);
@@ -2277,6 +2587,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
 #ifdef PSX_COSIM
         { extern void cosim_note_ram_write(uint32_t,uint32_t); cosim_note_ram_write(phys, 1); }
 #endif
+        pgxp_untracked_store(phys);
         ram[phys] = val;
         return;
     }
@@ -2296,8 +2607,11 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
+#ifndef PSX_NO_DEBUG_TOOLS
         debug_server_trace_write_check(phys, (uint32_t)scratchpad[phys - 0x1F800000u],
                                        (uint32_t)val, 1);
+#endif
+        pgxp_untracked_store(phys);
         scratchpad[phys - 0x1F800000u] = val;
         return;
     }

@@ -1,4 +1,4 @@
-﻿# Shared psxrecomp runtime CMake helpers.
+# Shared psxrecomp runtime CMake helpers.
 #
 # Include this from either the framework runtime build or a sibling game
 # project. SDL3 is the default; set -DPSX_SDL_BACKEND=SDL2 for the legacy
@@ -15,11 +15,18 @@ endif()
 set(PSX_PGO "" CACHE STRING "PGO mode: empty, generate, or use")
 set_property(CACHE PSX_PGO PROPERTY STRINGS "" generate use)
 include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_execution_profile.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_sha256_file.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_build_revision.cmake")
 
 include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_windows_manifest.cmake")
 include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
+include("${PSXRECOMP_ROOT}/runtime/openxr_dependency.cmake")
 include("${PSXRECOMP_ROOT}/runtime/overlay_static_sources.cmake")
+include("${PSXRECOMP_ROOT}/runtime/netplay_dependency.cmake")
+include("${PSXRECOMP_ROOT}/runtime/texture_image_dependency.cmake")
+include("${PSXRECOMP_ROOT}/runtime/guest_implementation.cmake")
 
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
 # generated C; with no CMAKE_BUILD_TYPE the compiler emits it at -O0 and the game
@@ -48,7 +55,16 @@ if(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER)
     if(DEFINED ENV{RETCOMM_TOOLCHAIN_DIR} AND NOT "$ENV{RETCOMM_TOOLCHAIN_DIR}" STREQUAL "")
         list(APPEND _psx_ccache_hints "$ENV{RETCOMM_TOOLCHAIN_DIR}/bin")
     endif()
-    find_program(CCACHE_PROGRAM NAMES ccache ccache.exe HINTS ${_psx_ccache_hints})
+    # Only a Windows host can run ccache.exe. Under WSL the Windows PATH is
+    # appended to the Linux one, so a WinLibs ccache.exe would otherwise win
+    # and fail to exec a Linux (or osxcross) compiler.
+    if(CMAKE_HOST_WIN32)
+        set(_psx_ccache_names ccache ccache.exe)
+    else()
+        set(_psx_ccache_names ccache)
+    endif()
+    find_program(CCACHE_PROGRAM NAMES ${_psx_ccache_names} HINTS ${_psx_ccache_hints})
+    unset(_psx_ccache_names)
     unset(_psx_ccache_hints)
     if(CCACHE_PROGRAM)
         set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
@@ -71,6 +87,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"
 else()
     option(PSX_DEBUG_TOOLS "Build with TCP debug server + heartbeat + per-block recording" ON)
 endif()
+
+# A title may opt in only after auditing every trusted media preparer used by
+# its mod commit. Older recomp-ui pins ignore this capability and remain sync.
+option(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE
+    "Title certifies preboot mod commit/preparers have no UI or thread affinity" OFF)
 
 # PSX_STATIC_RUNTIME: produce a 100% self-contained MinGW exe.
 #
@@ -98,6 +119,9 @@ endif()
 # release when no system package is available, so a default build does not
 # silently fall back to SDL2. SDL2 remains an explicit, fully supported A/B
 # backend.
+# Dev-only: the lobby browser lists every version of this title instead of
+# pinning to our exact game_version. Joining still requires an exact match.
+option(PSX_LOBBY_DEV_LIST "Lobby browser ignores game_version (dev testing only)" OFF)
 set(PSX_SDL_BACKEND "SDL3" CACHE STRING "SDL backend (SDL3 or SDL2)")
 set_property(CACHE PSX_SDL_BACKEND PROPERTY STRINGS SDL3 SDL2)
 string(TOUPPER "${PSX_SDL_BACKEND}" _psx_sdl_backend)
@@ -170,7 +194,18 @@ include(CheckIncludeFile)
 function(_psx_header_compiles out header)
     cmake_parse_arguments(_psx_hc "" "" "INCLUDES;LIBRARIES" ${ARGN})
     set(CMAKE_REQUIRED_INCLUDES ${_psx_hc_INCLUDES})
-    set(CMAKE_REQUIRED_LIBRARIES ${_psx_hc_LIBRARIES})
+    set(CMAKE_REQUIRED_LIBRARIES "")
+    foreach(_library IN LISTS _psx_hc_LIBRARIES)
+        # Older CMake try_compile cannot export an alias of a local imported
+        # target (system SDL3 on Ubuntu). Pass its underlying imported target.
+        if(TARGET "${_library}")
+            get_target_property(_alias "${_library}" ALIASED_TARGET)
+            if(_alias)
+                set(_library "${_alias}")
+            endif()
+        endif()
+        list(APPEND CMAKE_REQUIRED_LIBRARIES "${_library}")
+    endforeach()
     set(CMAKE_REQUIRED_QUIET ON)
     string(MAKE_C_IDENTIFIER
            "_psx_have_${header}_${_psx_hc_INCLUDES}_${_psx_hc_LIBRARIES}"
@@ -331,6 +366,9 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_jogcon_ffb_sdl.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/local_mouse_policy.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/local_mouse_sdl.cpp
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_ram_geometry.c
     ${PSXRECOMP_ROOT}/runtime/src/kernel_patch_ranges.c
@@ -341,7 +379,23 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vram_dirty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_thread.c
+    ${PSXRECOMP_ROOT}/runtime/src/present_thread.c
+    ${PSXRECOMP_ROOT}/runtime/src/frame_gen.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
+    ${PSXRECOMP_ROOT}/runtime/src/gl_batch_policy_lle.c
+    ${PSXRECOMP_ROOT}/runtime/src/gl_batch_policy_hle.c
+    ${PSXRECOMP_ROOT}/runtime/src/gl_batch_policy_select.c
+    ${PSXRECOMP_ROOT}/runtime/src/gpu_hd_textures.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/hd_texture_pack.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/duckstation_texture_pack.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_openxr.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_controller_source.c
+    ${PSXRECOMP_ROOT}/runtime/src/pad_external_input.c
+    ${PSXRECOMP_ROOT}/runtime/src/host_overlay.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_menu_host.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_pad_transform.c
+    ${PSXRECOMP_ROOT}/runtime/src/vr_pose_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/dma_gpu_ll.c
     ${PSXRECOMP_ROOT}/runtime/src/dma.c
@@ -351,14 +405,27 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_video_timing.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_pacing.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_interpolation.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass_plan.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass_motion.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass_projection.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass_frame.c
+    ${PSXRECOMP_ROOT}/runtime/src/dynamic_resolution.c
     ${PSXRECOMP_ROOT}/runtime/src/host_time.c
+    ${PSXRECOMP_ROOT}/runtime/src/quality_tier.c
+    ${PSXRECOMP_ROOT}/runtime/src/quality_probe.c
+    ${PSXRECOMP_ROOT}/runtime/src/quality_presets.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/game_mode.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
     ${PSXRECOMP_ROOT}/runtime/src/memcard.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_server.c
+    ${PSXRECOMP_ROOT}/runtime/src/host_sampler.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_trace_ranges.c
     ${PSXRECOMP_ROOT}/runtime/src/dirty_ram_interp.c
+    ${PSXRECOMP_ROOT}/runtime/src/draw_distance.c
     ${PSXRECOMP_ROOT}/runtime/src/game_dispatch_compat.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_segment_miss.c
     ${PSXRECOMP_ROOT}/runtime/src/fntrace.c
     ${PSXRECOMP_ROOT}/runtime/src/text_xlate.cpp
     ${PSXRECOMP_ROOT}/runtime/src/parity_trace.c
@@ -373,6 +440,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
+    ${PSXRECOMP_ROOT}/runtime/src/video_texture_filter.c
+    ${PSXRECOMP_ROOT}/runtime/src/video_telemetry.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_savestate_menu.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_rewind.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
@@ -384,7 +453,9 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/freeze_dump_policy.c
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/projection_scale_config.cpp
     ${PSXRECOMP_ROOT}/runtime/src/pgxp.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/pgxp_session.cpp
     ${PSXRECOMP_ROOT}/runtime/src/nd_intro_ot.c
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_sha256.c
@@ -402,7 +473,10 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_cycles.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_icache.c
     ${PSXRECOMP_ROOT}/runtime/src/starvation_ring.c
+    ${PSXRECOMP_ROOT}/runtime/src/guest_cycle_profile.c
     ${PSXRECOMP_ROOT}/runtime/src/latency_ring.c
+    ${PSXRECOMP_ROOT}/runtime/src/present_image_ring.c
+    ${PSXRECOMP_ROOT}/runtime/src/gpu_timeline.c
     ${PSXRECOMP_ROOT}/runtime/src/data_shards.c
     ${PSXRECOMP_ROOT}/runtime/src/load_accel.c
     ${PSXRECOMP_ROOT}/runtime/src/card_read_summary.c
@@ -418,20 +492,39 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_speed.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_pgxp.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_internal_resolution.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_bezel.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_ram.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_hd_textures.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/mod_media.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/mod_netplay.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_resident.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/mod_guest_services.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_texture_banks.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_bios_backend.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_bios_module.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_net_pad.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_pad_apply.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_exit_reason.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_ice_hub.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp
     ${PSXRECOMP_ROOT}/recompiler/src/ps1_exe_parser.cpp
     # (sljit Tier-2 in-process JIT backend removed 2026-07-15 — was disabled by
     # default since 2026-06-25; gaps fall to the interpreter, gcc/tcc unaffected.)
 )
+# TCP `disasm` command only (debug_server.c); stripped with the rest of the TCP
+# server when PSX_DEBUG_TOOLS is OFF.
+if(PSX_DEBUG_TOOLS)
+    list(APPEND PSXRECOMP_RUNTIME_SOURCES
+        ${PSXRECOMP_ROOT}/recompiler/src/mips_decoder.cpp
+        ${PSXRECOMP_ROOT}/runtime/src/disasm_shim.cpp)
+endif()
 
 # Optional delay-sync netplay (recomp-net). Auto-discovers a sibling checkout
 # (…/recomp-net next to the game repo or next to psxrecomp). Override with
@@ -472,6 +565,7 @@ if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt
         # clone (AppImage LD_LIBRARY_PATH breaks system git-remote-https).
         set(RNET_ENABLE_ICE ON CACHE BOOL
             "Build libjuice ICE transport (default ON with PSX_NETPLAY)")
+        psxrecomp_netplay_libjuice("${RECOMP_NET_ROOT}")
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")
     endif()
     set(PSXRECOMP_HAS_RECOMP_NET TRUE)
@@ -528,6 +622,18 @@ else()
             "  or -DRECOMP_RBENGINE_ROOT=/path/to/retcomm-rbengine")
     endif()
 endif()
+
+# OpenGL textured-batch grouping tier (runtime/src/gl_batch_policy.h;
+# recomp-template HLE.md). LLE, the reference, draws every semi-transparent
+# primitive alone. HLE draws painter-ordered runs of opaque primitives and
+# blend modes 0/1/3 as one dual-source draw. Build-time only: use separate
+# build directories. Both tiers always compile.
+set(PSX_GL_BATCH_IMPL "LLE" CACHE STRING "OpenGL textured batching: LLE or HLE")
+set_property(CACHE PSX_GL_BATCH_IMPL PROPERTY STRINGS LLE HLE)
+if(NOT PSX_GL_BATCH_IMPL MATCHES "^(LLE|HLE)$")
+    message(FATAL_ERROR "PSX_GL_BATCH_IMPL must be LLE or HLE")
+endif()
+message(STATUS "psxrecomp: GL textured batching = ${PSX_GL_BATCH_IMPL}")
 
 # Local rewind: full rbengine when netplay is on; otherwise compile snap_ring.c
 # only (no recomp-net / sched / hash_confirm). Never both — duplicate symbols.
@@ -735,12 +841,12 @@ file(WRITE "${_psxrt_registry_c}"
 "
 "${_psxrt_registry_externs}"
 "
-const PsxBiosBackend *const psx_bios_registry[] = {
+const PsxBiosBackend *const psx_bios_builtin_registry[] = {
 "
 "${_psxrt_registry_entries}"
 "};
 "
-"const uint32_t psx_bios_registry_count = ${_psxrt_bios_count}u;
+"const uint32_t psx_bios_builtin_registry_count = ${_psxrt_bios_count}u;
 ")
 list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 
@@ -751,35 +857,58 @@ list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 # the emitter (this caused a 4439-vs-4406 drift). regen_bios.sh records an emitter
 # fingerprint in generated/<stem>.emitter.sha; recompute it here (same profile
 # argument as regen_bios.sh passes) and WARN on a mismatch so the staleness is
-# impossible to miss. Non-fatal: a stale-but-consistent
-# BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
+# impossible to miss. Non-fatal by default: a stale-but-consistent BIOS still
+# builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON. Release CI passes
+# -DPSXRECOMP_BIOS_STALE_FATAL=ON: the BIOS C is COMMITTED in generated/, so a
+# stamp that predates the emitter means a release would link C the current
+# emitter did not produce (the 2026-09-30 descriptor drift was exactly that,
+# caught only at compile). Every LINKED stem is checked, not just the primary.
+option(PSXRECOMP_BIOS_STALE_FATAL
+    "Fail configure when a linked BIOS stem's generated/ stamp predates the emitter"
+    OFF)
+# The fingerprint is a CMake script run with THIS cmake, never a bash found on
+# PATH: on the windows-2022 runner the bash CMake located hashed differently
+# from the step shell's, and a byte-identical tree read as STALE there only.
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
-    find_program(_psxrt_bash NAMES bash)
-    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
-    if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
-        execute_process(
-            COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
-                    "${PSXRECOMP_BIOS_PROFILE}"
-            WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
-            OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
-        if(_psxrt_fp_rc EQUAL 0 AND _psxrt_cur_fp)
-            set(_psxrt_saved_fp "")
-            if(EXISTS "${_psxrt_stamp}")
-                file(READ "${_psxrt_stamp}" _psxrt_saved_fp)
-                string(STRIP "${_psxrt_saved_fp}" _psxrt_saved_fp)
+    if(EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.cmake")
+        foreach(_psxrt_chk_stem IN LISTS _psxrt_bios_linked)
+            set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${_psxrt_chk_stem}.emitter.sha")
+            set(_psxrt_chk_profile "${PSXRECOMP_ROOT}/bios/${_psxrt_chk_stem}.toml")
+            if(NOT EXISTS "${_psxrt_chk_profile}")
+                continue()
             endif()
-            if(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
-                message(WARNING
-                    "BIOS generated/ is STALE vs the recompiler emitter "
-                    "(fingerprint mismatch).\n"
-                    "  Linking generated/${PSXRECOMP_BIOS_STEM}_*.c that may not "
-                    "match the current emitter source, seeds, ROM or profile.\n"
-                    "  Fix:  tools/regen_bios.sh --config <profile>   (rebuilds "
-                    "psxrecomp-bios + regenerates the BIOS)\n"
-                    "  (Suppress: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}" "-DROOT=${PSXRECOMP_ROOT}"
+                        "-DPROFILE=${_psxrt_chk_profile}"
+                        -P "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.cmake"
+                WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
+                OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
+            if(_psxrt_fp_rc EQUAL 0 AND _psxrt_cur_fp)
+                set(_psxrt_saved_fp "")
+                if(EXISTS "${_psxrt_stamp}")
+                    file(READ "${_psxrt_stamp}" _psxrt_saved_fp)
+                    string(STRIP "${_psxrt_saved_fp}" _psxrt_saved_fp)
+                endif()
+                if(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
+                    if(PSXRECOMP_BIOS_STALE_FATAL)
+                        set(_psxrt_stale_sev FATAL_ERROR)
+                    else()
+                        set(_psxrt_stale_sev WARNING)
+                    endif()
+                    message(${_psxrt_stale_sev}
+                        "BIOS generated/${_psxrt_chk_stem}_*.c is STALE vs the recompiler "
+                        "emitter (fingerprint mismatch).\n"
+                        "  stamp ${_psxrt_saved_fp}\n"
+                        "  now   ${_psxrt_cur_fp}\n"
+                        "  The committed C may not match the current emitter source, "
+                        "seeds or profile.\n"
+                        "  Fix:  tools/regen_bios.sh --config bios/${_psxrt_chk_stem}.toml "
+                        "and commit generated/${_psxrt_chk_stem}_*.c + .emitter.sha\n"
+                        "  (Suppress locally: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
+                endif()
             endif()
-        endif()
+        endforeach()
     endif()
 endif()
 
@@ -913,9 +1042,9 @@ endfunction()
 #   * configure time -- a title that has mods/preloaded/packages in its source
 #     tree but did not declare it is a hard configure error, because that is
 #     exactly the missed-title state, and it is detectable before any build.
-#   * build time -- runtime/psx_check_mod_catalog.cmake runs as the LAST
-#     POST_BUILD step (registered via cmake_language(DEFER), so it lands after
-#     anything the title itself registered) and fails the build if a declared
+#   * build time -- a small catalog-staging target runs before its game target.
+#     It re-stages only package files, never recompiles or relinks the game,
+#     then runs runtime/psx_check_mod_catalog.cmake and fails if a declared
 #     package did not reach mods/bundled, or if any package this build stages
 #     turned up in the legacy mods/packages instead.
 #
@@ -951,10 +1080,9 @@ function(_psxrt_write_if_changed path content)
 endfunction()
 
 # Registered via cmake_language(DEFER) so it runs at the END of the directory
-# that created the runtime targets. POST_BUILD commands execute in registration
-# order, so deferring is what puts this check AFTER any add_custom_command a
-# title registered after its psxrecomp_add_runtime_target() call -- including
-# the stray legacy copy this check exists to catch.
+# that created the runtime targets. The staging targets already exist by then;
+# this function adds sibling-aware validation targets after it has collected all
+# targets sharing an output directory.
 #
 # Takes NO arguments and reads the pending targets out of global properties:
 # cmake_language(DEFER CALL <fn> <arg>) does not carry a function-local
@@ -966,6 +1094,7 @@ function(_psxrt_finalize_mod_catalog_guards)
     get_property(_manifests GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS)
     get_property(_dirs      GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_DIRS)
     get_property(_excludeds GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_EXCLUDED)
+    get_property(_stage_targets GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_STAGE_TARGETS)
     list(LENGTH _targets _n)
     if(_n EQUAL 0)
         return()
@@ -979,15 +1108,18 @@ function(_psxrt_finalize_mod_catalog_guards)
     set(_here_targets "")
     set(_here_manifests "")
     set(_here_excludeds "")
+    set(_here_stage_targets "")
     foreach(_i RANGE 0 ${_last})
         list(GET _dirs ${_i} _d)
         if(_d STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
             list(GET _targets ${_i} _t)
             list(GET _manifests ${_i} _m)
             list(GET _excludeds ${_i} _x)
+            list(GET _stage_targets ${_i} _s)
             list(APPEND _here_targets "${_t}")
             list(APPEND _here_manifests "${_m}")
             list(APPEND _here_excludeds "${_x}")
+            list(APPEND _here_stage_targets "${_s}")
         endif()
     endforeach()
     list(LENGTH _here_targets _n_here)
@@ -1000,6 +1132,7 @@ function(_psxrt_finalize_mod_catalog_guards)
         list(GET _here_targets ${_i} _t)
         list(GET _here_manifests ${_i} _own)
         list(GET _here_excludeds ${_i} _own_excluded)
+        list(GET _here_stage_targets ${_i} _stage_target)
 
         # Sibling runtime targets in this directory. Two of them can share one
         # output directory (Tomba 2's US and Italian runtimes both land in the
@@ -1015,7 +1148,8 @@ function(_psxrt_finalize_mod_catalog_guards)
         # cmake list separator and would split the -D into two arguments.
         list(JOIN _alts "|" _alts_joined)
 
-        add_custom_command(TARGET ${_t} POST_BUILD
+        set(_guard_target "${_t}_mod_catalog_check")
+        add_custom_target("${_guard_target}"
             COMMAND ${CMAKE_COMMAND}
                 "-DPSX_MODS_DIR=$<TARGET_FILE_DIR:${_t}>/mods"
                 "-DPSX_CATALOG_MANIFEST=${_own}"
@@ -1026,12 +1160,23 @@ function(_psxrt_finalize_mod_catalog_guards)
                 -P "${PSXRECOMP_ROOT}/runtime/psx_check_mod_catalog.cmake"
             COMMENT "Verifying staged mod catalog for ${_t}"
             VERBATIM)
+        add_dependencies("${_guard_target}" "${_stage_target}")
+        add_dependencies(${_t} "${_guard_target}")
+        # Siblings can share one output directory (above; and every
+        # PSX_PGXP_VARIANT clone sits beside its base). Each staging step
+        # wipes and rewrites mods/bundled, so under a parallel build one
+        # sibling's wipe raced the other's staging or check. Stage siblings
+        # one after another: each after the previous one staged and verified.
+        if(_i GREATER 0)
+            add_dependencies("${_stage_target}" "${_prev_guard_target}")
+        endif()
+        set(_prev_guard_target "${_guard_target}")
     endforeach()
 
     # One ctest, registered against the first staging target's output
     # directory. REQUIRE_STAGED is 0 here: `ctest` may run in a tree where the
     # runtime was never built, and a skip is more useful there than a spurious
-    # failure. The POST_BUILD invocations above pass 1, since they run
+    # failure. The staging validation targets above pass 1, since they run
     # immediately after staging where an absent catalog IS the defect.
     get_property(_test_done GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TEST_ADDED)
     if(BUILD_TESTING AND NOT _test_done)
@@ -1211,26 +1356,6 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
         list(APPEND _purge "${_out}/mods/packages/${_id}")
     endforeach()
 
-    list(LENGTH _ids _n_ids)
-    add_custom_command(TARGET ${target} POST_BUILD
-        # Wipe first: copy_directory MERGES, so a package deleted from source
-        # would otherwise survive in the build output forever and keep
-        # appearing on the Mods page (and inflate release catalog assertions).
-        #
-        # Scoped to mods/bundled, which is build output and nothing else.
-        # mods/installed/ is the launcher's (player-installed .psxmod archives)
-        # and mods/state.toml is user selection state; a build must never touch
-        # either. Before the split this wipe was scoped to mods/packages, which
-        # ALSO held everything the player had installed -- so a rebuild,
-        # including the one a self-compiling setup release runs on the player's
-        # own machine, deleted their mods without a word.
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_out}/mods/bundled"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_purge}
-        ${_copy}
-        ${_readme_copy}
-        COMMENT "Staging mod catalog for ${target} (${_n_ids} package(s) -> mods/bundled)"
-        VERBATIM)
-
     # The id list the build-time guard and the ctest assert against.
     set(_manifest "${CMAKE_CURRENT_BINARY_DIR}/psx_mod_catalog_${target}.txt")
     list(SORT _ids)
@@ -1250,9 +1375,56 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
     endforeach()
     _psxrt_write_if_changed("${_excluded_manifest}" "${_excluded_text}")
 
+    # A custom target, rather than LINK_DEPENDS + POST_BUILD, is portable to
+    # Ninja, Make, Visual Studio, and Xcode. It is intentionally always
+    # out-of-date: the catalog is small, and that makes added/removed package
+    # assets correct without forcing CMake to reconfigure or the game to link.
+    # The target is wired as a prerequisite below, so building the game always
+    # stages the catalog first while leaving its code objects untouched.
+    set(_stage_target "${target}_mod_catalog_stage")
+    list(LENGTH _ids _n_ids)
+    add_custom_target("${_stage_target}"
+        # Wipe first: copy_directory MERGES, so a package deleted from source
+        # would otherwise survive in the build output forever and keep
+        # appearing on the Mods page (and inflate release catalog assertions).
+        #
+        # Scoped to mods/bundled, which is build output and nothing else.
+        # mods/installed/ is the launcher's (player-installed .psxmod archives)
+        # and mods/state.toml is user selection state; a build must never touch
+        # either. Before the split this wipe was scoped to mods/packages, which
+        # ALSO held everything the player had installed -- so a rebuild,
+        # including the one a self-compiling setup release runs on the player's
+        # own machine, deleted their mods without a word.
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_out}/mods/bundled"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_purge}
+        ${_copy}
+        ${_readme_copy}
+        COMMENT "Staging mod catalog for ${target} (${_n_ids} package(s) -> mods/bundled)"
+        VERBATIM)
+    # Every trusted plugin the executable registers must be selectable by an
+    # authored manifest [[plugin]] id; the resolved plan activates plugins by
+    # manifest id only, so an undeclared id (typically a hook registered under
+    # a sub-id of its package's plugin) is dead code that fails silently.
+    # Audits the AUTHORED trees, so developer packages a release catalog
+    # strips still count as declarations.
+    if(BUILD_TESTING)
+        set(_audit_roots "${PSXRECOMP_ROOT}/mods/builtin")
+        if(NOT preloaded_dir STREQUAL "" AND NOT preloaded_dir STREQUAL "NONE"
+           AND IS_DIRECTORY "${preloaded_dir}")
+            list(APPEND _audit_roots "${preloaded_dir}")
+        endif()
+        get_target_property(_extra_roots ${target} PSXRT_AUDIT_MOD_DIRS)
+        if(_extra_roots)
+            list(APPEND _audit_roots ${_extra_roots})
+        endif()
+        add_test(NAME psx_mod_plugin_audit_${target}
+            COMMAND $<TARGET_FILE:${target}> --audit-mod-plugins ${_audit_roots})
+    endif()
+
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_TARGETS "${target}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS "${_manifest}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_EXCLUDED "${_excluded_manifest}")
+    set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_STAGE_TARGETS "${_stage_target}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}")
     # Schedule the guard pass once per directory, not once per target.
@@ -1309,7 +1481,13 @@ function(psxrecomp_add_runtime_target target)
     # mods/builtin/packages) this target does not ship. They are left out of
     # <exe-dir>/mods/bundled entirely -- absent, not hidden -- so no packager
     # can ship them either. An id that is not a builtin fails configure.
-    set(multiValueArgs EXTRAS_SOURCES GAME_GENERATED_FULL_C EXCLUDE_BUILTIN_MODS)
+    #
+    # AUDIT_MOD_DIRS names further authored package trees (manifest.toml files
+    # are found recursively) that declare plugins this executable registers but
+    # no bundled catalog ships, e.g. development-only packages. They are
+    # audited, never staged.
+    set(multiValueArgs EXTRAS_SOURCES GAME_GENERATED_FULL_C EXCLUDE_BUILTIN_MODS
+        AUDIT_MOD_DIRS)
     cmake_parse_arguments(PSXRT "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     # DEBUG_PORT and WINDOW_TITLE were previously required cmake-time defaults.
@@ -1445,9 +1623,22 @@ function(psxrecomp_add_runtime_target target)
         ${generated_sources}
         ${PSXRT_EXTRAS_SOURCES}
     )
-    target_link_libraries(${target} PRIVATE chdr-static)
-    # UTF-8 process code page on Windows (issue #371).
+    target_link_libraries(${target} PRIVATE chdr-static psx_texture_image_decode)
     psxrecomp_windows_manifest(${target})
+    psxrecomp_sha256_file(${target})
+    set(_execution_contract
+        "${PSXRECOMP_ROOT}/runtime/src/gte.cpp"
+        "${PSXRECOMP_ROOT}/runtime/src/pgxp.cpp"
+        "${PSXRECOMP_ROOT}/runtime/include/hle_gte.h"
+        "${PSXRECOMP_ROOT}/runtime/include/cpu_state.h"
+        "${PSXRECOMP_ROOT}/runtime/include/gte.h"
+        "${PSXRECOMP_ROOT}/runtime/include/pgxp.h"
+        "${PSXRECOMP_ROOT}/runtime/include/render_pass_projection.h")
+    if(PSXRT_ORACLE)
+        psxrecomp_execution_profile(${target} PROFILE REFERENCE CONTRACT_FILES ${_execution_contract})
+    else()
+        psxrecomp_execution_profile(${target} CONTRACT_FILES ${_execution_contract})
+    endif()
     # audio_trace.c uses C11 atomics. Make the runtime's actual language
     # requirement explicit instead of relying on a parent project's global
     # CMAKE_C_STANDARD setting. cxx_std_17 likewise — game CMakeLists may omit
@@ -1596,13 +1787,34 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSXRT_APP_ICON AND EXISTS "${PSXRT_APP_ICON}")
         if(WIN32)
-            # The RC language is enabled (and its compiler required) by
-            # cmake/psx_windows_manifest.cmake.
-            string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
-            set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
-            file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
-            target_sources(${target} PRIVATE "${_psxrt_rc}")
-            message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
+            # clang/llvm-mingw CI needs an RC compiler or the .rc is ignored and
+            # the PE ships without an embedded icon.
+            enable_language(RC)
+            if(NOT CMAKE_RC_COMPILER)
+                find_program(CMAKE_RC_COMPILER
+                    NAMES llvm-rc llvm-windres windres
+                    HINTS
+                        "$ENV{RETCOMM_TOOLCHAIN}/bin"
+                        "$ENV{CMAKE_CLANG_V1}/bin"
+                    DOC "Windows resource compiler for APP_ICON .rc")
+            endif()
+            if(CMAKE_RC_COMPILER)
+                string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
+                set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
+                file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
+                # The icon has no dependency on runtime macros or headers.
+                # Compile it separately: windres launches a preprocessor through
+                # a shell, which cannot round-trip the executable's quoted
+                # string definitions (notably the pipe-separated BIOS stems).
+                add_library(${target}_app_icon OBJECT "${_psxrt_rc}")
+                target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_app_icon>)
+                message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
+            else()
+                message(WARNING
+                    "psxrecomp ${target}: APP_ICON set but no RC compiler "
+                    "(llvm-rc/windres) — PE will have no embedded icon; "
+                    "runtime still loads assets/psxrecomp.png via SDL")
+            endif()
         else()
             message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (window icon via PNG)")
         endif()
@@ -1750,12 +1962,7 @@ function(psxrecomp_add_runtime_target target)
     # can be correlated to an exact build (issue #1 user reports had no version).
     # Computed at configure time from the psxrecomp repo (this file's dir); empty
     # on failure (no git / not a repo) -> crash_trace.c falls back to "unknown".
-    execute_process(
-        COMMAND git -C "${CMAKE_CURRENT_FUNCTION_LIST_DIR}" describe --always --dirty --tags
-        OUTPUT_VARIABLE PSX_GIT_REV OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(NOT PSX_GIT_REV)
-        set(PSX_GIT_REV "unknown")
-    endif()
+    psxrecomp_build_revision(PSX_GIT_REV "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
 
     # Release pin for lobby matching (create/join/list). Override via
     # GAME_VERSION arg or -DPSX_GAME_VERSION=...; default "dev".
@@ -1809,7 +2016,8 @@ function(psxrecomp_add_runtime_target target)
     # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c"
-        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\""
+        PROPERTIES COMPILE_DEFINITIONS
+            "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\";$<$<BOOL:${PSX_LOBBY_DEV_LIST}>:PSX_LOBBY_DEV_LIST=1>"
     )
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"
@@ -1850,10 +2058,12 @@ function(psxrecomp_add_runtime_target target)
 
     # OpenBIOS is part of the native runtime product, not a developer-machine
     # prerequisite. Stage both the exact ROM consumed by the compiled backend
-    # and its required MIT notice beside every native executable. Release
-    # packagers copy this directory as a unit.
+    # and its required MIT notice beside executables linking that backend.
+    # Desired stems may include unavailable backends; retail-only SDKs have
+    # no OpenBIOS backend or redistributable image. Packagers copy this
+    # directory as a unit when OpenBIOS is actually linked.
     if(NOT PSXRT_ORACLE)
-        list(FIND PSXRECOMP_BIOS_STEMS "OpenBIOS" _psxrt_openbios_index)
+        list(FIND _psxrt_bios_linked "OpenBIOS" _psxrt_openbios_index)
         if(NOT _psxrt_openbios_index EQUAL -1)
             if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
                 message(FATAL_ERROR
@@ -1896,7 +2106,14 @@ function(psxrecomp_add_runtime_target target)
     # letting it stage would have it wipe and re-stage the runtime's catalog
     # with only the framework half.
     if(NOT PSXRT_COSIM)
-        _psxrt_stage_mod_catalog("${target}" "${PSXRT_PRELOADED_MODS_DIR}"
+        foreach(_audit_dir IN LISTS PSXRT_AUDIT_MOD_DIRS)
+        if(NOT IS_DIRECTORY "${_audit_dir}")
+            message(FATAL_ERROR
+                "AUDIT_MOD_DIRS for target '${target}' is not a directory: ${_audit_dir}")
+        endif()
+    endforeach()
+    set_property(TARGET ${target} PROPERTY PSXRT_AUDIT_MOD_DIRS "${PSXRT_AUDIT_MOD_DIRS}")
+    _psxrt_stage_mod_catalog("${target}" "${PSXRT_PRELOADED_MODS_DIR}"
             ${PSXRT_EXCLUDE_BUILTIN_MODS})
     endif()
     endif()
@@ -1911,6 +2128,9 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSX_SHELLWIN_INTERP)
         target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
+    endif()
+    if(PSX_GL_BATCH_IMPL STREQUAL "HLE")
+        target_compile_definitions(${target} PRIVATE PSX_GL_BATCH_HLE=1)
     endif()
 
     # Developer-channel mod features do not ship. A contributor reaches them by
@@ -1927,6 +2147,9 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSX_MOD_DEVELOPER_CHANNEL)
         target_compile_definitions(${target} PRIVATE PSX_MOD_DEVELOPER_CHANNEL=1)
+    endif()
+    if(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
+        target_compile_definitions(${target} PRIVATE PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE=1)
     endif()
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)
@@ -2066,12 +2289,16 @@ function(psxrecomp_add_runtime_target target)
             RECOMP_UI_PSX_HAS_REWIND=$<BOOL:${PSXRECOMP_HAS_RBENGINE_SNAP}>)
     endif()
 
+    if(PSX_OPENXR)
+        target_compile_definitions(${target} PRIVATE PSX_OPENXR=1)
+        target_link_libraries(${target} PRIVATE openxr_loader)
+    endif()
     if(WIN32 OR MINGW)
         # opengl32: GL backend (gpu_gl_renderer.c). GL 1.x is exported directly
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
         # iphlpapi: GetAdaptersAddresses in the launcher's netplay
         # local-address discovery (MSVC does not link it implicitly).
-        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32)
+        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32 shell32)
         # Newer mingw-w64 maps clock_gettime → clock_gettime64 in libwinpthread.
         # Link it even when netplay code prefers Win32 clocks, so any residual
         # POSIX time refs (third-party / debug tools) resolve under -static.
@@ -2111,6 +2338,20 @@ function(psxrecomp_add_runtime_target target)
         # the lobby client all use pthread on Unix.
         find_package(Threads REQUIRED)
         target_link_libraries(${target} PRIVATE Threads::Threads)
+        # musl declares getcontext/makecontext/swapcontext (psx_fiber.c) but
+        # does not implement them; libucontext does.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            include(CheckSymbolExists)
+            check_symbol_exists(getcontext "ucontext.h" PSX_HAVE_GETCONTEXT)
+            if(NOT PSX_HAVE_GETCONTEXT)
+                find_library(PSX_UCONTEXT_LIBRARY ucontext)
+                if(NOT PSX_UCONTEXT_LIBRARY)
+                    message(FATAL_ERROR
+                        "getcontext is missing (musl?): install libucontext")
+                endif()
+                target_link_libraries(${target} PRIVATE "${PSX_UCONTEXT_LIBRARY}")
+            endif()
+        endif()
     endif()
 
     # ---- Vulkan backend (gpu_vk_renderer.c) --------------------------------
@@ -2223,7 +2464,7 @@ function(psxrecomp_add_runtime_target target)
             endif()
         endif()
         if(NOT PSX_PYTHON)
-            find_program(PSX_PYTHON NAMES python python3)
+            find_program(PSX_PYTHON NAMES python3 python)
         endif()
         if(NOT PSX_PYTHON)
             message(FATAL_ERROR
@@ -2266,6 +2507,20 @@ function(psxrecomp_add_runtime_target target)
         target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:C>:-fzero-initialized-in-bss>
             $<$<COMPILE_LANGUAGE:CXX>:-fzero-initialized-in-bss>)
+    endif()
+
+    # Netplay compares guest state bit-for-bit across hosts. Clang contracts
+    # a*b+c into an FMA by default on arm64 (-ffp-contract=on) while x86-64
+    # GCC without -mfma never fuses, so the software rasterizer's float edge /
+    # shading math produced +-1 colour steps on single pixels between a Mac
+    # and a Windows peer (VRAM, hence the av digest, diverged from ~sim 1800
+    # in every cross-machine R4 race; rollback baselines then aborted on
+    # "baseline av mismatch" and the realigns forked the session). Keep IEEE
+    # results identical everywhere: never contract.
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-ffp-contract=off>
+            $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
     endif()
 
     if(MINGW)
@@ -2361,12 +2616,20 @@ endfunction()
 #     ENABLE_SETUP_WIZARD
 #     PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
 #     EXCLUDE_BUILTIN_MODS psx.presentation.bezel   # optional; builtins not shipped
+#     PGXP                     # optional; the runtime is the PGXP hook flavor
 #   )
 #
 # Remaining args are forwarded to psxrecomp_add_runtime_target.
 # ---------------------------------------------------------------------------
 function(psxrecomp_add_game_runtime target)
-    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD)
+    # PGXP: build the title's ONE runtime as the PGXP hook flavor (see the PGXP
+    # option of psxrecomp_add_runtime_target): -DPSX_PGXP=1, overlay flavor 2,
+    # no _pgxp suffix and no clone beside it. The generated C already carries
+    # the PGXP_*() hook sites, so committed generated/ does not change; only
+    # the compile define does. Parsed here rather than left to the unparsed
+    # tail so it cannot be swallowed by a multi-value argument written before
+    # it (CODEGEN_SETUP_SOURCES would take it as a source file).
+    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD PGXP)
     set(oneValueArgs
         GEN_MARKER
         GEN_FULL_FALLBACK
@@ -2559,6 +2822,9 @@ function(psxrecomp_add_game_runtime target)
     endif()
 
     set(_psxg_forwarded_args ${PSXG_UNPARSED_ARGUMENTS})
+    if(PSXG_PGXP)
+        list(APPEND _psxg_forwarded_args PGXP)
+    endif()
     if(NOT "${PSXG_PRELOADED_MODS_DIR}" STREQUAL "")
         list(APPEND _psxg_forwarded_args
             PRELOADED_MODS_DIR "${PSXG_PRELOADED_MODS_DIR}")

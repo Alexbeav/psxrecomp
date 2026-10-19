@@ -87,6 +87,17 @@ These are the SDL3-default prerequisites. For the SDL2 fallback, additionally
 install `mingw-w64-x86_64-SDL2`, `sdl2`, or `libsdl2-dev` respectively, plus
 `pkg-config` outside MSVC.
 
+**macOS from Linux (osxcross):** `cmake/toolchain-macos-osxcross.cmake`
+cross-builds a game for macOS (x86_64 or arm64) on a Linux host. Build
+[osxcross](https://github.com/tpoechtrager/osxcross) with an Apple SDK
+packaged from a Mac you own, then configure the game with:
+```sh
+cmake -S . -B build-macos-x64 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=psxrecomp/cmake/toolchain-macos-osxcross.cmake \
+  -DPSX_DARWIN_ARCH=x86_64 -DOSXCROSS_ROOT=/opt/osxcross
+```
+The toolchain hides the host's pkg-config files from the macOS build.
+
 ## Build the framework
 
 Two CMake trees: the recompiler (a tool) and the runtime (the engine).

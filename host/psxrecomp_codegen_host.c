@@ -492,9 +492,9 @@ static int find_python(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if defined(_WIN32)
     if (find_toolchain_python(out, cap))
         return 1;
-#if defined(_WIN32)
     /* Prefer python.org / py-launcher installs over the Microsoft Store
      * stub: Store Python redirects LocalAppData writes into LocalCache. */
     char resolved[1100];
@@ -799,6 +799,10 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
+#if !defined(_WIN32)
+    /* A cached portable pack must not shadow Linux/macOS native tools. */
+    return;
+#endif
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
@@ -907,6 +911,9 @@ static int find_cmake(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if !defined(_WIN32)
+    return find_on_path("cmake", out, cap);
+#endif
     char tc[1100], cand[1200];
     if (resolve_toolchain_bin(tc, sizeof(tc))) {
 #if defined(_WIN32)
@@ -3064,6 +3071,44 @@ static int cmake_path_runs(const char* cmake_path) {
     return run_cmd_exit_zero(cmd);
 }
 
+#if !defined(_WIN32)
+/* Native release kits probe host tools; setup never installs system packages. */
+static int posix_command_runs(const char* command) {
+    char cmd[1600];
+    if (!command || !command[0])
+        return 0;
+    snprintf(cmd, sizeof(cmd), "\"%s\" --version >/dev/null 2>&1", command);
+    return run_cmd_exit_zero(cmd);
+}
+
+static int host_system_toolchain_ready(void) {
+    char python[1200], tool[1200];
+#if defined(__APPLE__)
+    /* Avoid xcrun prompting to install tools during a readiness check. */
+    if (!run_cmd_exit_zero("xcode-select -p >/dev/null 2>&1"))
+        return 0;
+#endif
+    if (!find_on_path("cmake", g_cmake, sizeof(g_cmake)) ||
+        !posix_command_runs(g_cmake))
+        return 0;
+    if (!(find_on_path("python3", python, sizeof(python)) ||
+          find_on_path("python", python, sizeof(python))) ||
+        !posix_command_runs(python))
+        return 0;
+    if (!find_on_path("ninja", tool, sizeof(tool)) || !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("cc", tool, sizeof(tool)) ||
+          find_on_path("gcc", tool, sizeof(tool)) ||
+          find_on_path("clang", tool, sizeof(tool))) || !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("c++", tool, sizeof(tool)) ||
+          find_on_path("g++", tool, sizeof(tool)) ||
+          find_on_path("clang++", tool, sizeof(tool))) || !posix_command_runs(tool))
+        return 0;
+    return 1;
+}
+#endif
+
 /* True when pack bin/ can compile+link a tiny C program (catches broken
  * ld.lld / missing libicuuc.so.* etc. that cmake --version still passes). */
 static int toolchain_bin_compiler_works(const char* bin) {
@@ -3367,6 +3412,9 @@ static int host_toolchain_is_ready(void) {
     if (!g_project_root[0])
         return 0;
     g_tc_repair_note[0] = '\0';
+#if !defined(_WIN32)
+    return host_system_toolchain_ready();
+#endif
     migrate_legacy_psxrecomp_toolchain();
     /* Wizard open: drop broken latest/ before treating the pack as ready. */
     heal_broken_toolchain_pointers();
@@ -3538,6 +3586,9 @@ static int host_toolchain_update_available(char* local_ver, size_t local_cap,
         local_ver[0] = '\0';
     if (remote_ver && remote_cap)
         remote_ver[0] = '\0';
+#if !defined(_WIN32)
+    return 0;
+#endif
     if (skip && skip[0] && skip[0] != '0')
         return 0;
     if (!g_project_root[0])
@@ -3568,6 +3619,16 @@ static int host_ensure_toolchain_with_progress(
         snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
+#if !defined(_WIN32)
+    if (on_progress)
+        on_progress(progress_ctx, 0.02f, "Checking native build tools…");
+    if (host_system_toolchain_ready())
+        return 1;
+    snprintf(err_msg, err_cap,
+             "Native build tools are missing. Install CMake, Ninja, Python 3, "
+             "and C/C++ compilers with your package manager, then check tools again.");
+    return 0;
+#endif
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
     if (!force && host_portable_cmake_ready())
@@ -4702,10 +4763,12 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
 
     /* Master switch for recomp-ui: first-run wizard + Generate & rebuild. */
     gi->setup_wizard_supported = 1;
-    /* Setup SDKs often link OpenBIOS only (retail C comes from Generate).
-     * psx_bios_has_selectable() is then 0 and would hide the BIOS row — keep
-     * the optional SCPH1001 picker so prepare can ingest a dump first. */
-    gi->has_bios = 1;
+    /* has_bios is NOT forced here. A setup SDK links OpenBIOS only and needs
+     * the retail picker so prepare can ingest a dump, but a shipped bundled
+     * build has no CLI, sources or toolchain to compile one in, and forcing
+     * the row there offered "Generate & rebuild" that could never run.
+     * main.cpp decides after this returns, from whether prepare_with_progress
+     * was actually wired below (or nothing is linked yet). */
 
     if (!discover_project_root(g_project_root, sizeof(g_project_root))) {
         /* Still force the wizard when generated/ is missing — discover may

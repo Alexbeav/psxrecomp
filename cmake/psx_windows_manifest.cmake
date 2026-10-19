@@ -55,7 +55,10 @@ function(psxrecomp_windows_manifest target)
         if(NOT _old STREQUAL _content)
             file(WRITE "${_rc}" "${_content}")
         endif()
-        target_sources(${target} PRIVATE "${_rc}")
+        # Isolate RC from executable definitions: windres cannot preserve
+        # quoted pipe-separated BIOS names through its shell preprocessor.
+        add_library(${target}_manifest OBJECT "${_rc}")
+        target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_manifest>)
         set_property(SOURCE "${_rc}" APPEND PROPERTY
             OBJECT_DEPENDS "${PSXRECOMP_WINDOWS_MANIFEST}")
     endif()

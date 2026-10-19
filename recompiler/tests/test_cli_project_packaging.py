@@ -62,7 +62,8 @@ def main() -> int:
 
     for profile in (
             "OpenBIOS.toml", "SCPH1001.toml",
-            "SCPH101.toml", "SCPH5552.toml"):
+            "SCPH101.toml", "SCPH5500.toml", "SCPH5501.toml",
+            "SCPH5552.toml"):
         require(package, f'"{profile}"',
                 f"CLI package omits BIOS profile {profile}")
     require(package, 'shutil.copy2(ROOT / ".gitignore", framework)',

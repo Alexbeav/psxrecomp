@@ -1,4 +1,4 @@
-"""Apply migration plan steps (setup-host exclusively)."""
+"""Apply migration plan steps (bundled releases: committed generated/ C, compiled game shipped)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from fill_tokens import derive_zip_prefix
@@ -23,7 +24,14 @@ from .naming import (
     window_title_from_cmake,
     window_title_from_name,
 )
-from .paths import ci_setup_release_template, psxrecomp_root_from_toolkit, templates_dir, toolkit_dir
+from .paths import ci_release_template, psxrecomp_root_from_toolkit, templates_dir, toolkit_dir
+
+# The title's packager wrapper (bundled release) and the retired setup-host one.
+PACKAGER_WRAPPER = "package_release.sh"
+LEGACY_PACKAGER_WRAPPER = "package_setup_release.sh"
+# A .gitignore line that hides the release's inputs: `/generated/`, `generated/`,
+# `generated`, with optional surrounding whitespace.
+_GENERATED_IGNORE_RE = re.compile(r"^\s*/?generated/?\s*$")
 
 
 def _run(cmd: list[str], cwd: Path, dry_run: bool) -> tuple[bool, str]:
@@ -660,8 +668,9 @@ def op_merge_gitignore(root: Path, options: MigrateOptions) -> ApplyResult:
 
     dst = root / ".gitignore"
     existing = dst.read_text(encoding="utf-8") if dst.is_file() else ""
+    # generated/ is deliberately NOT here: releases build from the committed
+    # game C, so an ignore rule for it is removed below, never added.
     required = [
-        "/generated/",
         "/disc/",
         "/bios/",
         "/dist/",
@@ -684,21 +693,35 @@ def op_merge_gitignore(root: Path, options: MigrateOptions) -> ApplyResult:
         _write(dst, template if not template.startswith("@") else "\n".join(required) + "\n", options.dry_run)
         return ApplyResult("merge_gitignore", True, "Wrote .gitignore from template", [".gitignore"])
 
-    if not additions:
+    # The setup-host layout ignored generated/; a bundled release is built
+    # from it, so that rule hides the release's inputs from CI. Drop it.
+    kept_lines = []
+    dropped = 0
+    for line in existing.splitlines():
+        if _GENERATED_IGNORE_RE.match(line):
+            dropped += 1
+            continue
+        kept_lines.append(line)
+    if dropped:
+        existing = "\n".join(kept_lines) + ("\n" if existing.endswith("\n") else "")
+
+    if not additions and not dropped:
         return ApplyResult("merge_gitignore", True, "No gitignore changes needed", [])
 
-    block = (
-        "\n# --- PSXRecomp setup-host (project studio) ---\n"
-        + "\n".join(additions)
-        + "\n"
-    )
-    _write(dst, existing.rstrip() + "\n" + block, options.dry_run)
-    return ApplyResult(
-        "merge_gitignore",
-        True,
-        f"Appended {len(additions)} ignore rules",
-        [".gitignore"],
-    )
+    text = existing.rstrip() + "\n"
+    if additions:
+        text += (
+            "\n# --- PSXRecomp (project studio) ---\n"
+            + "\n".join(additions)
+            + "\n"
+        )
+    _write(dst, text, options.dry_run)
+    parts = []
+    if additions:
+        parts.append(f"appended {len(additions)} ignore rule(s)")
+    if dropped:
+        parts.append("un-ignored generated/ (releases build from the committed game C)")
+    return ApplyResult("merge_gitignore", True, "; ".join(parts).capitalize(), [".gitignore"])
 
 
 def op_emit_mods_preloaded(root: Path, options: MigrateOptions) -> ApplyResult:
@@ -851,9 +874,8 @@ def op_ensure_app_icon(root: Path, options: MigrateOptions) -> ApplyResult:
 
 def op_rewrite_cmake_setup_host(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
-    # Force wizard for setup-host policy
+    # The wizard is the shipped game's first-run disc picker; keep it on.
     if not options.enable_wizard and options.enable_recomp_ui:
-        # Still rewrite with wizard ON — exclusive setup-host
         options = MigrateOptions(**{**options.to_dict(), "enable_wizard": True})
         tokens = _resolve_tokens(root, options)
 
@@ -886,7 +908,7 @@ def op_rewrite_cmake_setup_host(root: Path, options: MigrateOptions) -> ApplyRes
 
     if extras_bits and not options.dry_run:
         extras_note.write_text(
-            "Preserved notes after setup-host CMake rewrite:\n\n"
+            "Preserved notes after the CMake rewrite:\n\n"
             + "\n".join(f"- {b}" for b in extras_bits)
             + "\n\nFull previous file: CMakeLists.txt.pre_migrate.bak\n",
             encoding="utf-8",
@@ -896,25 +918,25 @@ def op_rewrite_cmake_setup_host(root: Path, options: MigrateOptions) -> ApplyRes
     return ApplyResult(
         "rewrite_cmake_setup_host",
         True,
-        "Wrote setup-host CMakeLists.txt (backup .pre_migrate.bak)",
+        "Wrote CMakeLists.txt (psxrecomp_add_game_runtime; backup .pre_migrate.bak)",
         changed,
     )
 
 
 def op_emit_packager(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
-    dst = root / "scripts" / "package_setup_release.sh"
+    dst = root / "scripts" / PACKAGER_WRAPPER
     if dst.is_file() and not options.force:
         return ApplyResult("emit_packager", True, "Packager already present", [])
-    _fill(templates_dir() / "package_setup_release.sh.in", dst, tokens, options.dry_run)
+    _fill(templates_dir() / (PACKAGER_WRAPPER + ".in"), dst, tokens, options.dry_run)
     if not options.dry_run:
         dst.chmod(dst.stat().st_mode | 0o111)
-    return ApplyResult(
-        "emit_packager",
-        True,
-        "Wrote scripts/package_setup_release.sh",
-        ["scripts/package_setup_release.sh"],
-    )
+    msg = f"Wrote scripts/{PACKAGER_WRAPPER} (bundled release: compiled game)"
+    legacy = root / "scripts" / LEGACY_PACKAGER_WRAPPER
+    if legacy.is_file():
+        msg += (f"; scripts/{LEGACY_PACKAGER_WRAPPER} is the retired setup-host "
+                "wrapper and can be deleted")
+    return ApplyResult("emit_packager", True, msg, [f"scripts/{PACKAGER_WRAPPER}"])
 
 
 _PACKAGER_BLURB = {
@@ -937,13 +959,24 @@ def op_sync_packager_project_dirs(root: Path, options: MigrateOptions) -> ApplyR
     routinely hand-extended with extra --project-file lines, and rewriting from
     the template would silently drop them.
     """
-    from .detect import packager_missing_optional_paths, packager_missing_paths
+    from .detect import (
+        packager_missing_optional_paths,
+        packager_missing_paths,
+        packager_wrapper,
+        packager_is_bundled,
+    )
 
-    dst = root / "scripts" / "package_setup_release.sh"
-    if not dst.is_file():
+    dst = packager_wrapper(root)
+    if dst is None:
         return ApplyResult(
-            "sync_packager_project_dirs", False, "No scripts/package_setup_release.sh", []
+            "sync_packager_project_dirs", False, f"No scripts/{PACKAGER_WRAPPER}", []
         )
+    if packager_is_bundled(dst):
+        # A bundled release ships the compiled game and no sources, so there
+        # is no source allowlist to keep in step with CMakeLists.txt.
+        return ApplyResult(
+            "sync_packager_project_dirs", True,
+            "Bundled packager ships no sources; nothing to stage", [])
     missing = sorted(set(packager_missing_paths(root)) |
                      set(packager_missing_optional_paths(root)))
     if not missing:
@@ -977,11 +1010,12 @@ def op_sync_packager_project_dirs(root: Path, options: MigrateOptions) -> ApplyR
 
     text = text.replace(anchor, "\n" + block + anchor, 1)
     _write(dst, text, options.dry_run)
+    rel = dst.relative_to(root).as_posix()
     return ApplyResult(
         "sync_packager_project_dirs",
         True,
-        "Staged " + ", ".join(added) + " in scripts/package_setup_release.sh",
-        ["scripts/package_setup_release.sh"],
+        "Staged " + ", ".join(added) + f" in {rel}",
+        [rel],
     )
 
 
@@ -1001,26 +1035,44 @@ def _ci_step_names(text: str) -> list[str]:
     return names
 
 
+# Steps earlier templates defined that the current one deliberately dropped. An
+# installed workflow still running one is stale even though it lacks nothing
+# the template has: the setup-host wipe and the CI-side OpenBIOS emission both
+# call scripts that no longer exist in the pinned framework, so the job dies
+# at that step. A step-name comparison that only looked for MISSING steps
+# called such a file current (TM4 v0.3.34, first attempt).
+RETIRED_CI_STEPS = (
+    "Setup host mode (no game C / BIOS backends in CI)",
+    "Generate OpenBIOS backend C",
+)
+
+
 def _ci_steps_missing_from(installed: Path, template: Path) -> list[str]:
-    """Template step names absent from the installed workflow."""
+    """Template step names absent from the installed workflow, plus retired
+    step names the installed workflow still carries (reported as
+    'retired: <name>')."""
     try:
-        have = set(_ci_step_names(installed.read_text(encoding="utf-8", errors="replace")))
+        have_list = _ci_step_names(installed.read_text(encoding="utf-8", errors="replace"))
+        have = set(have_list)
         want = _ci_step_names(template.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return []
     # Names carrying a token cannot be compared literally -- the installed copy
     # has them substituted -- so they are not evidence either way.
-    return [n for n in want if n not in have and "@" not in n]
+    missing = [n for n in want if n not in have and "@" not in n]
+    retired = [f"retired: {n}" for n in RETIRED_CI_STEPS if n in have]
+    return missing + retired
 
 
 def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
-    src = ci_setup_release_template(root)
+    src = ci_release_template(root)
     if src is None:
         return ApplyResult(
             "emit_ci_workflow",
             False,
-            "Cannot find docs/ci/templates/setup-release.yml (need psxrecomp submodule)",
+            "Cannot find docs/ci/templates/game-release.yml (need a psxrecomp "
+            "submodule pinned at or after bundled releases)",
             [],
         )
     dst = root / ".github" / "workflows" / "release.yml"
@@ -1054,37 +1106,135 @@ def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     return ApplyResult(
         "emit_ci_workflow",
         True,
-        "Wrote .github/workflows/release.yml (setup-host)",
+        "Wrote .github/workflows/release.yml (bundled release: builds the committed generated/ C)",
         [".github/workflows/release.yml"],
     )
 
 
 def op_annotate_legacy_packaging(root: Path, options: MigrateOptions) -> ApplyResult:
-    note = root / "packaging" / "SETUP_HOST_MIGRATION.txt"
+    note = root / "packaging" / "PACKAGING_MIGRATION.txt"
     text = (
-        "This title is migrating to setup-host releases only.\n"
-        "Do not ship prebuilt generated game C.\n"
-        "Use scripts/package_setup_release.sh + .github/workflows/release.yml\n"
-        "(see psxrecomp/docs/GAME_PROJECT_SETUP.md and docs/ci/HOST_ONLY_RELEASES.md).\n"
-        "Legacy package_release scripts in this folder are obsolete for public releases.\n"
+        "This title releases through the shared bundled-release flow:\n"
+        f"scripts/{PACKAGER_WRAPPER} + .github/workflows/release.yml build the\n"
+        "COMMITTED generated/ game C and ship the compiled game\n"
+        "(see psxrecomp/docs/GAME_PROJECT_SETUP.md and docs/ci/BUNDLED_RELEASES.md).\n"
+        "Hand-forked packagers in this folder (package_release.ps1,\n"
+        "package_appimage.sh, ...) are superseded and can be deleted once CI is green.\n"
     )
     if (root / "packaging").is_dir():
         _write(note, text, options.dry_run)
         return ApplyResult(
             "annotate_legacy_packaging",
             True,
-            "Wrote packaging/SETUP_HOST_MIGRATION.txt",
-            ["packaging/SETUP_HOST_MIGRATION.txt"],
+            "Wrote packaging/PACKAGING_MIGRATION.txt",
+            ["packaging/PACKAGING_MIGRATION.txt"],
         )
     # tools-only legacy
-    tools_note = root / "tools" / "SETUP_HOST_MIGRATION.txt"
+    tools_note = root / "tools" / "PACKAGING_MIGRATION.txt"
     _write(tools_note, text, options.dry_run)
     return ApplyResult(
         "annotate_legacy_packaging",
         True,
-        "Wrote tools/SETUP_HOST_MIGRATION.txt",
-        ["tools/SETUP_HOST_MIGRATION.txt"],
+        "Wrote tools/PACKAGING_MIGRATION.txt",
+        ["tools/PACKAGING_MIGRATION.txt"],
     )
+
+
+# probe_disc.py renders a whole scaffold game.toml and seed list. On a project
+# that already has them (every migration), only the disc identity is the
+# probe's to write; titles carry hand-tuned runtime, widescreen and overlay
+# configuration and curated seeds. Overwriting them would have replaced
+# THPS2's cull config and 1,891-seed list during its migration (2026-10-01).
+_PROBE_OWNED_SECTIONS = ("prepare_disc", "netplay")
+_PROBE_GAME_KEYS = ("name", "id", "players", "exe", "disc", "load_address",
+                    "entry_pc", "text_size", "stack_base")
+_TOML_HEADER = re.compile(r"^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
+_TOML_KEY = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=")
+_SEED = re.compile(r"^\s*(0x[0-9A-Fa-f]+)\b")
+
+
+def _toml_chunks(text: str) -> list[tuple[str | None, list[str]]]:
+    """Split TOML text at table headers. Comment/blank lines directly above a
+    header travel with that header's chunk. Chunk 0 (name None) is preamble."""
+    chunks: list[tuple[str | None, list[str]]] = [(None, [])]
+    for line in text.splitlines():
+        m = _TOML_HEADER.match(line)
+        if m:
+            prev = chunks[-1][1]
+            lead: list[str] = []
+            while prev and (not prev[-1].strip() or prev[-1].lstrip().startswith("#")):
+                lead.insert(0, prev.pop())
+            chunks.append((m.group(1).strip(), lead + [line]))
+        else:
+            chunks[-1][1].append(line)
+    return chunks
+
+
+def _emit_section(out: list[str], lines: list[str]) -> None:
+    """Append a probe section separated from what precedes it by one blank."""
+    body = list(lines)
+    while body and not body[0].strip():
+        body.pop(0)
+    while out and not out[-1].strip():
+        out.pop()
+    if out:
+        out.append("")
+    out.extend(body)
+
+
+def merge_probe_game_toml(existing: str, probed: str) -> str:
+    """Existing config wins. Probe-owned identity sections are replaced (or
+    inserted after [game] / appended), and [game] gains only the identity keys
+    it lacks. Merging the same probe output twice is a no-op."""
+    probed_by_name = {name: lines for name, lines in _toml_chunks(probed) if name}
+    chunks = _toml_chunks(existing)
+    present = {name for name, _ in chunks}
+    out: list[str] = []
+    placed: set[str] = set()
+    for name, lines in chunks:
+        if name in _PROBE_OWNED_SECTIONS and name in probed_by_name:
+            _emit_section(out, probed_by_name[name])
+            placed.add(name)
+            continue
+        if name == "game" and "game" in probed_by_name:
+            have = {m.group(1) for m in map(_TOML_KEY.match, lines) if m}
+            body = list(lines)
+            for line in probed_by_name["game"]:
+                m = _TOML_KEY.match(line)
+                if m and m.group(1) in _PROBE_GAME_KEYS and m.group(1) not in have:
+                    body.append(line)
+            _emit_section(out, body)
+            if "prepare_disc" in probed_by_name and "prepare_disc" not in present:
+                _emit_section(out, probed_by_name["prepare_disc"])
+                placed.add("prepare_disc")
+            continue
+        if name is None:
+            out.extend(lines)
+        else:
+            _emit_section(out, lines)
+    for name in _PROBE_OWNED_SECTIONS:
+        if name in placed or name not in probed_by_name:
+            continue
+        _emit_section(out, probed_by_name[name])
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def merge_seed_files(existing: str, probed: str) -> tuple[str, int]:
+    """Keep the existing (curated) seed file verbatim and append any probed
+    address it lacks. Returns (text, number added)."""
+    have = {int(m.group(1), 16) for m in map(_SEED.match, existing.splitlines()) if m}
+    new: list[str] = []
+    for line in probed.splitlines():
+        m = _SEED.match(line)
+        if m and int(m.group(1), 16) not in have:
+            have.add(int(m.group(1), 16))
+            new.append(f"0x{int(m.group(1), 16):08X}")
+    if not new:
+        return existing, 0
+    text = existing.rstrip("\n") + "\n"
+    text += f"# Added by probe_disc refresh: {len(new)} boot-EXE JAL target(s)\n"
+    text += "\n".join(new) + "\n"
+    return text, len(new)
 
 
 def op_probe_disc_refresh(root: Path, options: MigrateOptions) -> ApplyResult:
@@ -1105,43 +1255,82 @@ def op_probe_disc_refresh(root: Path, options: MigrateOptions) -> ApplyResult:
 
     name = options.project_name or infer_project_name(root)
     players = options.players
-    cmd = [
-        sys.executable,
-        str(probe),
-        str(disc),
-        "--write-game-toml",
-        str(root / "game.toml"),
-        "--write-catalog",
-        str(root / "catalog_identity.json"),
-        "--write-seeds",
-        str(root / "seeds" / "ghidra_funcs.txt"),
-        "--out-dir",
-        "disc",
-        "--disc-rel",
-        "disc/" + disc.name,
-        "--players",
-        str(players),
-        "--display-name",
-        name,
-    ]
-    if options.dry_run:
-        return ApplyResult(
-            "probe_disc_refresh",
-            True,
-            "dry-run: " + " ".join(cmd),
-            ["game.toml", "catalog_identity.json", "seeds/ghidra_funcs.txt"],
-        )
+    game_toml = root / "game.toml"
+    seeds = root / "seeds" / "ghidra_funcs.txt"
+    files = ["game.toml", "catalog_identity.json", "seeds/ghidra_funcs.txt"]
+    with tempfile.TemporaryDirectory(prefix="probe_refresh_") as tmp:
+        tmp_toml = Path(tmp) / "game.toml"
+        tmp_seeds = Path(tmp) / "ghidra_funcs.txt"
+        cmd = [
+            sys.executable,
+            str(probe),
+            str(disc),
+            "--write-game-toml",
+            str(tmp_toml),
+            "--write-catalog",
+            str(root / "catalog_identity.json"),
+            "--write-seeds",
+            str(tmp_seeds),
+            "--out-dir",
+            "disc",
+            "--disc-rel",
+            "disc/" + disc.name,
+            "--players",
+            str(players),
+            "--display-name",
+            name,
+        ]
+        if options.dry_run:
+            return ApplyResult(
+                "probe_disc_refresh",
+                True,
+                "dry-run: " + " ".join(cmd) + " (disc identity merged into any "
+                "existing game.toml / seeds; nothing else replaced)",
+                files,
+            )
 
-    (root / "seeds").mkdir(parents=True, exist_ok=True)
-    ok, out = _run(cmd, root, dry_run=False)
-    if not ok:
-        return ApplyResult("probe_disc_refresh", False, out, [])
-    return ApplyResult(
-        "probe_disc_refresh",
-        True,
-        out or "probe_disc completed",
-        ["game.toml", "catalog_identity.json", "seeds/ghidra_funcs.txt"],
-    )
+        ok, out = _run(cmd, root, dry_run=False)
+        if not ok:
+            return ApplyResult("probe_disc_refresh", False, out, [])
+        notes = [out or "probe_disc completed"]
+        probed_toml = tmp_toml.read_text(encoding="utf-8")
+        if game_toml.is_file():
+            _write(game_toml, merge_probe_game_toml(
+                game_toml.read_text(encoding="utf-8"), probed_toml), False)
+            notes.append("merged disc identity into existing game.toml")
+        else:
+            _write(game_toml, probed_toml, False)
+        probed_seeds = tmp_seeds.read_text(encoding="utf-8")
+        if seeds.is_file():
+            text, added = merge_seed_files(seeds.read_text(encoding="utf-8"), probed_seeds)
+            _write(seeds, text, False)
+            notes.append(f"kept existing seeds, added {added}")
+        else:
+            _write(seeds, probed_seeds, False)
+    return ApplyResult("probe_disc_refresh", True, "; ".join(notes), files)
+
+
+def _record_pins_via_git(root: Path, dst: Path, options: MigrateOptions) -> ApplyResult:
+    """Pure-Python pin snapshot: git rev-parse HEAD in each submodule."""
+    lines = []
+    for name in ("psxrecomp", "recomp-ui"):
+        sub = root / name
+        if not sub.is_dir():
+            continue
+        ok, out = _run(["git", "rev-parse", "HEAD"], sub, options.dry_run)
+        if ok and out:
+            short = out[:7] if not options.dry_run else "dryrun"
+            lines.append(f"{name}={short} ({out})")
+    if not lines:
+        return ApplyResult(
+            "record_framework_pins",
+            False,
+            "No psxrecomp submodule to record pins from",
+            [],
+        )
+    text = "\n".join(lines) + "\n"
+    _write(dst, text, options.dry_run)
+    return ApplyResult("record_framework_pins", True, "Wrote framework_pins.txt", ["framework_pins.txt"])
 
 
 def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult:
@@ -1152,27 +1341,12 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
             record = cand
             break
     dst = root / "framework_pins.txt"
-    if record is None:
-        # Best-effort: git rev-parse in submodules
-        lines = []
-        for name in ("psxrecomp", "recomp-ui"):
-            sub = root / name
-            if not sub.is_dir():
-                continue
-            ok, out = _run(["git", "rev-parse", "HEAD"], sub, options.dry_run)
-            if ok and out:
-                short = out[:7] if not options.dry_run else "dryrun"
-                lines.append(f"{name}={short} ({out})")
-        if not lines:
-            return ApplyResult(
-                "record_framework_pins",
-                False,
-                "No psxrecomp submodule to record pins from",
-                [],
-            )
-        text = "\n".join(lines) + "\n"
-        _write(dst, text, options.dry_run)
-        return ApplyResult("record_framework_pins", True, "Wrote framework_pins.txt", ["framework_pins.txt"])
+    # Resolve bash through PATH. A bare "bash" given to CreateProcess on
+    # Windows searches System32 first and launches WSL's bash, which cannot
+    # see D:/ paths (and a CRLF checkout of the script breaks any bash).
+    bash = shutil.which("bash")
+    if record is None or bash is None:
+        return _record_pins_via_git(root, dst, options)
 
     if options.dry_run:
         return ApplyResult(
@@ -1182,7 +1356,8 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
             ["framework_pins.txt"],
         )
     proc = subprocess.run(
-        ["bash", str(record), "--root", str(root)],
+        # POSIX-style paths: Git Bash / MSYS2 read backslashes as escapes.
+        [bash, record.as_posix(), "--root", root.as_posix()],
         capture_output=True,
         text=True,
         check=False,
@@ -1190,12 +1365,8 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
     )
     body = (proc.stdout or "").strip()
     if proc.returncode != 0 and not body:
-        return ApplyResult(
-            "record_framework_pins",
-            False,
-            (proc.stderr or f"exit {proc.returncode}").strip(),
-            [],
-        )
+        # The script could not run here; the git fallback records the same pins.
+        return _record_pins_via_git(root, dst, options)
     if body:
         dst.write_text(body + "\n", encoding="utf-8")
     return ApplyResult(

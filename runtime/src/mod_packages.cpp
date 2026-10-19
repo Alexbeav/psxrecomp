@@ -1,7 +1,9 @@
 #include "mod_packages.h"
+#include "host_launch_timing.h"
 
 #include "crc32.h"
 #include "mod_plugins.h"
+#include "mod_media.h"
 #include "psx_sha256.h"
 #include "toml.hpp"
 
@@ -23,7 +25,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 7;
+constexpr uint32_t kMaxFormatVersion = 10;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -32,12 +34,22 @@ std::map<std::string, ModBuiltinResolver>& builtin_resolvers() {
     return value;
 }
 
+struct MediaPreparer { ModMediaPreparer prepare, probe; };
+std::map<std::string, MediaPreparer>& media_preparers() {
+    static std::map<std::string, MediaPreparer> value;
+    return value;
+}
+
 struct RegisteredPlugin {
+    void (*savestate)(void) = nullptr;
     PSXModActivationCallback activation = nullptr;
+    PSXModActivationCallback session_reset = nullptr;
     PSXModVBlankCallback vblank = nullptr;
     /* Generated-function entry hooks, keyed by guest address. One id may
      * observe several functions. */
-    std::vector<std::pair<uint32_t, PSXModFunctionEntryCallback>> function_entries;
+    std::vector<ModFunctionEntryHook> function_entries;
+    std::vector<ModFunctionEntryHook> guest_functions;
+    std::vector<ModInstructionHook> instructions;
 };
 
 std::map<std::string, RegisteredPlugin>& registered_plugins() {
@@ -760,7 +772,13 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
     }
     for (const ModResolution::Resource& resource : resources) {
         out << "resource:" << resource.package_id << ':' << resource.feature_id
-            << ':' << resource.id << '=' << resource.path.string() << '\n';
+            << ':' << resource.id << '=';
+        if (resource.bytes)
+            out << resource.format << ':' << resource.bytes->size() << ':'
+                << resource.sha256;
+        else
+            out << resource.path.u8string();
+        out << '\n';
     }
     return out.str();
 }
@@ -844,18 +862,44 @@ std::string effective_option_value(const ModPackage& package,
     return option ? option->default_value : std::string();
 }
 
+/* A resource's package-relative default, only when it exists with the
+ * resource's kind (folder or file) and its real path (symlinks resolved)
+ * stays inside the package: the manifest check is text-only, and a symlink
+ * the package ships could point anywhere. {} otherwise (the resource is then
+ * unset, so a required one blocks launch as before). */
+static fs::path package_default_path(const ModPackage& package, const ModResource& resource) {
+    std::error_code ec;
+    const fs::path candidate = package.root / fs::u8path(resource.default_path);
+    const bool folder = resource.format == "directory" || resource.format == "folder";
+    if (folder ? !fs::is_directory(candidate, ec) : !fs::is_regular_file(candidate, ec))
+        return {};
+    const fs::path real = fs::canonical(candidate, ec);
+    if (ec) return {};
+    const fs::path base = fs::canonical(package.root, ec);
+    if (ec) return {};
+    const auto rel = real.lexically_relative(base);
+    if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") return {};
+    return candidate;
+}
+
 fs::path effective_resource_path(const ModPackage& package,
                                  const ModSelection& selection,
                                  const std::string& feature_id,
-                                 const std::string& id) {
+                                 const std::string& id,
+                                 const fs::path& generated_default = {}) {
     const ModFeature* feature = find_feature(package, feature_id);
     if (!feature || feature->legacy) return {};
     const ModFeatureSelection* selected =
         find_feature_selection(package, selection, feature_id);
-    if (!selected) return {};
-    const auto resource = selected->resources.find(id);
-    return resource == selected->resources.end() ? fs::path{} :
-                                                   fs::path(resource->second);
+    if (selected) {
+        const auto resource = selected->resources.find(id);
+        if (resource != selected->resources.end() && !resource->second.empty())
+            return fs::u8path(resource->second);
+    }
+    const ModResource* declared = find_resource(package, feature_id, id);
+    if (declared && !declared->default_path.empty() && !package.root.empty())
+        return package_default_path(package, *declared);
+    return generated_default;
 }
 
 bool prospective_feature_enabled(
@@ -1428,6 +1472,10 @@ std::string fingerprint_text(const std::string& text) {
 
 } // namespace
 
+bool mod_register_media_preparer(const std::string& id, ModMediaPreparer callback, ModMediaPreparer cache_probe) {
+    return valid_id(id) && callback && media_preparers().emplace(id, MediaPreparer{std::move(callback), std::move(cache_probe)}).second;
+}
+
 bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver resolver) {
     if (!valid_id(id) || !resolver) return false;
     return builtin_resolvers().emplace(id, std::move(resolver)).second;
@@ -1445,6 +1493,19 @@ bool mod_register_activation_plugin(const std::string& id, void (*callback)(void
     return true;
 }
 
+bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void)) {
+    if (!valid_id(id) || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    if (plugin.session_reset) return false;
+    plugin.session_reset = callback;
+    return true;
+}
+
+void mod_reset_plugin_sessions() {
+    for (const auto& entry : registered_plugins())
+        if (entry.second.session_reset) entry.second.session_reset();
+}
+
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
     if (!valid_id(id) || !callback) return false;
     RegisteredPlugin& plugin = registered_plugins()[id];
@@ -1459,16 +1520,78 @@ bool mod_register_function_entry_plugin(const std::string& id, uint32_t address,
     RegisteredPlugin& plugin = registered_plugins()[id];
     /* Code addresses alias across KUSEG/KSEG0/KSEG1; one function is one hook. */
     for (const auto& hook : plugin.function_entries)
-        if (((hook.first ^ address) & 0x1FFFFFFFu) == 0u) return false;
-    plugin.function_entries.emplace_back(address, callback);
+        if (((hook.address ^ address) & 0x1FFFFFFFu) == 0u) return false;
+    plugin.function_entries.push_back({address, callback, nullptr});
+    return true;
+}
+
+bool mod_register_function_filter_plugin(const std::string& id, uint32_t address,
+                                         PSXModFunctionFilterCallback callback) {
+    if (!valid_id(id) || !address || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    for (const auto& hook : plugin.function_entries)
+        if (((hook.address ^ address) & 0x1FFFFFFFu) == 0u) return false;
+    plugin.function_entries.push_back({address, nullptr, callback});
     return true;
 }
 
 bool mod_plugin_registered(const std::string& id) {
     const auto found = registered_plugins().find(id);
     return found != registered_plugins().end() &&
-        (found->second.activation || found->second.vblank ||
-         !found->second.function_entries.empty());
+        (found->second.activation || found->second.session_reset || found->second.vblank || found->second.savestate ||
+         !found->second.function_entries.empty() || !found->second.guest_functions.empty() ||
+         !found->second.instructions.empty());
+}
+
+bool mod_register_guest_function_plugin(const std::string& id, uint32_t address,
+                                        PSXModFunctionEntryCallback callback) {
+    const uint32_t key = address & 0x1FFFFFFFu;
+    if (!valid_id(id) || !callback || (address & 3u) ||
+        key < 0x0F000000u || key >= 0x10000000u || address >= 0xC0000000u)
+        return false;
+    for (const auto& plugin : registered_plugins())
+        for (const auto& function : plugin.second.guest_functions)
+            if (function.address == key) return false;
+    registered_plugins()[id].guest_functions.push_back({key, callback, nullptr});
+    return true;
+}
+
+std::vector<ModFunctionEntryHook> mod_guest_functions(const std::string& id) {
+    const auto found = registered_plugins().find(id);
+    return found == registered_plugins().end()
+        ? std::vector<ModFunctionEntryHook>{} : found->second.guest_functions;
+}
+
+bool mod_register_instruction_plugin(const std::string& id, uint32_t address,
+                                      uint32_t expected, PSXModFunctionEntryCallback callback) {
+    if (!valid_id(id) || !callback || (address & 3u) || address >= 0xC0000000u ||
+        (address & 0x1FFFFFFFu) >= 0x00800000u) return false;
+    auto& hooks = registered_plugins()[id].instructions;
+    const uint32_t key = address & 0x1FFFFFFFu;
+    for (const auto& hook : hooks)
+        if (hook.address == key) return false;
+    hooks.push_back({key, expected, callback});
+    return true;
+}
+
+std::vector<ModInstructionHook> mod_instruction_hooks(const std::string& id) {
+    const auto found = registered_plugins().find(id);
+    return found == registered_plugins().end()
+        ? std::vector<ModInstructionHook>{} : found->second.instructions;
+}
+
+bool mod_register_savestate_plugin(const std::string& id, void (*callback)(void)) {
+    if (!valid_id(id) || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    if (plugin.savestate) return false;
+    plugin.savestate = callback;
+    return true;
+}
+
+void mod_invoke_savestate_plugin(const std::string& id) {
+    const auto found = registered_plugins().find(id);
+    if (found != registered_plugins().end() && found->second.savestate)
+        found->second.savestate();
 }
 
 void mod_invoke_activation_plugin(const std::string& id) {
@@ -1487,13 +1610,52 @@ std::vector<ModFunctionEntryHook> mod_function_entry_hooks(const std::string& id
     std::vector<ModFunctionEntryHook> hooks;
     const auto found = registered_plugins().find(id);
     if (found == registered_plugins().end()) return hooks;
-    for (const auto& hook : found->second.function_entries)
-        hooks.push_back(ModFunctionEntryHook{hook.first, hook.second});
-    return hooks;
+    return found->second.function_entries;
 }
 
 void mod_clear_plugins_for_tests() {
     registered_plugins().clear();
+}
+
+std::vector<std::string> mod_registered_plugin_ids() {
+    std::vector<std::string> ids;
+    for (const auto& entry : registered_plugins())
+        if (entry.second.activation || entry.second.session_reset || entry.second.vblank ||
+            !entry.second.function_entries.empty() || !entry.second.guest_functions.empty())
+            ids.push_back(entry.first);
+    return ids;  /* std::map keeps them sorted */
+}
+
+ModPluginAudit mod_audit_registered_plugins(
+    const std::vector<fs::path>& manifest_roots) {
+    ModPluginAudit audit;
+    std::set<std::string> declared;
+    for (const fs::path& root : manifest_roots) {
+        std::error_code ec;
+        if (!fs::is_directory(root, ec)) {
+            audit.errors.push_back(root.string() + ": not a directory");
+            continue;
+        }
+        for (fs::recursive_directory_iterator it(root, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file(ec) || it->path().filename() != "manifest.toml")
+                continue;
+            ModPackage package;
+            std::string error;
+            if (!ModPackageManager::read_manifest(it->path(), package, &error)) {
+                audit.errors.push_back(it->path().string() + ": " + error);
+                continue;
+            }
+            ++audit.manifests;
+            for (const ModPlugin& plugin : package.plugins)
+                declared.insert(plugin.id);
+        }
+        if (ec) audit.errors.push_back(root.string() + ": " + ec.message());
+    }
+    audit.declared.assign(declared.begin(), declared.end());
+    for (const std::string& id : mod_registered_plugin_ids())
+        if (!declared.count(id)) audit.undeclared.push_back(id);
+    return audit;
 }
 
 const char* mod_channel_name(ModChannel channel) {
@@ -1562,6 +1724,8 @@ void ModPackageManager::set_root(fs::path mods_root) {
     root_ = std::move(mods_root);
     packages_.clear();
     selections_.clear();
+    sources_.clear();
+    generated_resource_defaults_.clear();
 }
 
 bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
@@ -1624,6 +1788,9 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
         if (out.save_compatibility != "shared" && out.save_compatibility != "isolated")
             throw std::runtime_error("save_compatibility must be shared or isolated");
 
+        out.prepare = toml::find_or<std::string>(cfg, "prepare", "");
+        if (!out.prepare.empty() && (out.format_version < 9 || !valid_id(out.prepare)))
+            throw std::runtime_error("media preparation requires format_version 9 and a valid provider id");
         if (cfg.contains("target")) {
             for (const toml::value& v : toml::find(cfg, "target").as_array()) {
                 ModTarget target;
@@ -1795,6 +1962,37 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     toml::find_or<std::string>(v, "format", "file");
                 resource.required =
                     toml::find_or<bool>(v, "required", false);
+                if (v.contains("size") || v.contains("sha256") ||
+                    resource.format == "n64-rom" || resource.format == "psx-disc") {
+                    if (out.format_version < 8)
+                        throw std::runtime_error("verified media requires format_version 8");
+                    const int64_t size = toml::find<int64_t>(v, "size");
+                    resource.sha256 = toml::find<std::string>(v, "sha256");
+                    if (size <= 0 || size > 512ll * 1024 * 1024 ||
+                        !valid_sha256(resource.sha256) ||
+                        (resource.format != "file" && resource.format != "n64-rom" &&
+                         resource.format != "psx-disc"))
+                        throw std::runtime_error("invalid verified media identity or format");
+                    resource.size = static_cast<uint64_t>(size);
+                }
+                resource.shared_source = toml::find_or<std::string>(v, "shared_source", "");
+                resource.input_only = toml::find_or<bool>(v, "input_only", false);
+                resource.hidden = toml::find_or<bool>(v, "hidden", false);
+                resource.default_path = toml::find_or<std::string>(v, "default", "");
+                if (!resource.default_path.empty() &&
+                    (!safe_archive_name(resource.default_path) ||
+                     !resource.sha256.empty() || resource.input_only ||
+                     !resource.shared_source.empty() ||
+                     (resource.format != "file" && resource.format != "directory" &&
+                      resource.format != "folder")))
+                    throw std::runtime_error(
+                        "resource default must be a safe package-relative file or folder");
+                if ((resource.input_only || resource.hidden || !resource.shared_source.empty()) && out.format_version < 9)
+                    throw std::runtime_error("source bindings require format_version 9");
+                if (!resource.shared_source.empty() && (!resource.input_only || !valid_id(resource.shared_source)))
+                    throw std::runtime_error("shared_source requires an input resource and valid id");
+                if (resource.input_only && out.prepare.empty())
+                    throw std::runtime_error("source inputs require a trusted preparer");
                 if (!find_feature(out, resource.feature_id))
                     throw std::runtime_error(
                         "resource references unknown feature");
@@ -1807,9 +2005,11 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     throw std::runtime_error("resource label is empty");
                 if (resource.format != "file" &&
                     resource.format != "directory" &&
-                    resource.format != "folder")
+                    resource.format != "folder" &&
+                    resource.format != "n64-rom" &&
+                    resource.format != "psx-disc")
                     throw std::runtime_error(
-                        "resource format must be file or directory");
+                        "unsupported resource format");
                 out.resources.push_back(std::move(resource));
             }
         }
@@ -2320,11 +2520,29 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 if (offset < 0)
                     throw std::runtime_error("overlay offset is negative");
                 overlay.location = (uint64_t)offset;
-                const std::string relative_file =
-                    toml::find<std::string>(v, "file");
-                if (!safe_archive_name(relative_file))
-                    throw std::runtime_error("overlay file path is unsafe");
-                overlay.file = out.root / fs::path(relative_file);
+                if (v.contains("file") == v.contains("resource"))
+                    throw std::runtime_error("overlay requires exactly one file or resource");
+                if (v.contains("resource")) {
+                    if (out.format_version < 10)
+                        throw std::runtime_error("resource overlays require format_version 10");
+                    overlay.resource_id = toml::find<std::string>(v, "resource");
+                    const auto* resource = find_resource(out, overlay.feature_id, overlay.resource_id);
+                    if (!resource || resource->input_only || resource->format != "file" ||
+                        resource->size == 0 || !valid_sha256(resource->sha256))
+                        throw std::runtime_error("overlay requires a verified same-feature file resource");
+                    const int64_t source_offset = toml::find_or<int64_t>(v, "resource_offset", 0);
+                    const int64_t size = toml::find<int64_t>(v, "size");
+                    if (source_offset < 0 || size <= 0 || uint64_t(source_offset) > resource->size ||
+                        uint64_t(size) > resource->size - uint64_t(source_offset))
+                        throw std::runtime_error("overlay resource slice is out of bounds");
+                    overlay.resource_offset = uint64_t(source_offset);
+                    overlay.size = uint64_t(size);
+                } else {
+                    const std::string relative_file = toml::find<std::string>(v, "file");
+                    if (!safe_archive_name(relative_file))
+                        throw std::runtime_error("overlay file path is unsafe");
+                    overlay.file = out.root / fs::path(relative_file);
+                }
                 overlay.sha256 = toml::find<std::string>(v, "sha256");
                 overlay.expected_sha256 = v.contains("expected_sha256")
                     ? toml::find<std::string>(v, "expected_sha256") : "";
@@ -2333,17 +2551,21 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                      !valid_sha256(overlay.expected_sha256)))
                     throw std::runtime_error(
                         "overlay hashes must be lowercase SHA-256");
-                std::string file_error;
-                std::vector<uint8_t> payload;
-                if (!read_file(overlay.file, payload, &file_error))
-                    throw std::runtime_error(file_error);
-                if (payload.empty())
-                    throw std::runtime_error("overlay payload is empty");
-                const std::string actual = fingerprint_text(std::string(
-                    (const char*)payload.data(), payload.size()));
-                if (actual != overlay.sha256)
-                    throw std::runtime_error("overlay payload checksum failed");
-                overlay.size = payload.size();
+                if (overlay.resource_id.empty()) {
+                    std::string file_error;
+                    std::vector<uint8_t> payload;
+                    if (!read_file(overlay.file, payload, &file_error))
+                        throw std::runtime_error(file_error);
+                    if (payload.empty())
+                        throw std::runtime_error("overlay payload is empty");
+                    const std::string actual = fingerprint_text(std::string(
+                        (const char*)payload.data(), payload.size()));
+                    if (actual != overlay.sha256)
+                        throw std::runtime_error("overlay payload checksum failed");
+                    overlay.size = payload.size();
+                } else if (overlay.expected_sha256.empty()) {
+                    throw std::runtime_error("resource overlay requires expected_sha256");
+                }
                 if (overlay.location >
                     std::numeric_limits<uint64_t>::max() - overlay.size)
                     throw std::runtime_error("overlay range overflows");
@@ -2411,6 +2633,18 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     throw std::runtime_error("invalid plugin id");
                 plugin.order = toml::find_or<int64_t>(
                     v, "order", (int64_t)declaration_index);
+                {
+                    const std::string netplay =
+                        toml::find_or<std::string>(v, "netplay", "");
+                    if (!netplay.empty() && netplay != "local_view" &&
+                        netplay != "input" && netplay != "host_output")
+                        throw std::runtime_error(
+                            "plugin netplay must be \"local_view\", \"input\" "
+                            "or \"host_output\"");
+                    plugin.netplay_local_view = netplay == "local_view";
+                    plugin.netplay_input = netplay == "input";
+                    plugin.netplay_host_output = netplay == "host_output";
+                }
                 read_conditions(v, out.options, plugin.feature_id,
                                 plugin.when, "plugin");
                 out.plugins.push_back(std::move(plugin));
@@ -2547,6 +2781,8 @@ bool ModPackageManager::scan_root(const fs::path& packages_root,
                     ": package path does not match manifest id/version");
                 continue;
             }
+            if (std::find(disabled_packages_.begin(), disabled_packages_.end(), package.id) != disabled_packages_.end())
+                continue;
             if (!developer_channel_ && !strip_developer_features(package)) {
                 /* Every feature was developer-channel, so on this build the
                  * package has nothing to offer. Not an error: it is the
@@ -2587,6 +2823,7 @@ bool ModPackageManager::scan(std::string* error) {
 
 bool ModPackageManager::load_state(std::string* error) {
     selections_.clear();
+    sources_.clear();
     const fs::path path = root_ / "state.toml";
     if (!fs::exists(path)) return true;
     try {
@@ -2594,6 +2831,12 @@ bool ModPackageManager::load_state(std::string* error) {
         const int64_t version = toml::find<int64_t>(cfg, "format_version");
         if (version != 1 && version != 2)
             throw std::runtime_error("unsupported state format_version");
+        if (cfg.contains("sources")) {
+            for (const auto& [id, value] : toml::find(cfg, "sources").as_table()) {
+                if (!valid_id(id) || !value.is_string()) throw std::runtime_error("invalid shared source binding");
+                sources_[id] = toml::get<std::string>(value);
+            }
+        }
         if (cfg.contains("package")) {
             for (const toml::value& v : toml::find(cfg, "package").as_array()) {
                 const std::string id = toml::find<std::string>(v, "id");
@@ -2683,6 +2926,11 @@ bool ModPackageManager::save_state(std::string* error) const {
         return false;
     }
     out << "format_version = 2\n";
+    if (!sources_.empty()) {
+        out << "\n[sources]\n";
+        for (const auto& [id, path] : sources_)
+            out << quote_toml(id) << " = " << quote_toml(path.string()) << "\n";
+    }
     for (const auto& [id, selection] : selections_) {
         out << "\n[[package]]\n";
         out << "id = " << quote_toml(id) << "\n";
@@ -3045,9 +3293,8 @@ bool ModPackageManager::set_feature_resource_path(
                 : "selected resource path is not a file");
         return false;
     }
-    selections_[package_id]
-        .features[feature_id]
-        .resources[resource_id] = path.string();
+    if (!resource->shared_source.empty()) sources_[resource->shared_source] = path;
+    else selections_[package_id].features[feature_id].resources[resource_id] = path.u8string();
     return true;
 }
 
@@ -3099,17 +3346,67 @@ std::string ModPackageManager::feature_option_value(
         feature_id, option_id);
 }
 
+bool ModPackageManager::set_generated_feature_resource_default(
+    const std::string& package_id, const std::string& feature_id,
+    const std::string& resource_id, const fs::path& relative_path,
+    std::string* error) {
+    const auto* package = selected_package(package_id);
+    const auto* resource = package ? find_resource(*package, feature_id, resource_id) : nullptr;
+    if (!resource || !resource->shared_source.empty() || relative_path.empty() ||
+        relative_path.is_absolute() || relative_path.has_root_name() || relative_path.has_root_directory()) {
+        set_error(error, "invalid generated resource default");
+        return false;
+    }
+    for (const auto& component : relative_path) if (component == "." || component == ".." || component.empty()) {
+        set_error(error, "generated resource default must stay relative to mods root");
+        return false;
+    }
+    std::error_code ec;
+    const auto path = fs::absolute(root_ / relative_path, ec);
+    if (ec) { set_error(error, ec.message()); return false; }
+    generated_resource_defaults_[{package_id, feature_id, resource_id}] = path;
+    return true;
+}
+
+fs::path ModPackageManager::generated_resource_default(
+    const std::string& package_id, const std::string& feature_id,
+    const std::string& resource_id) const {
+    const auto found = generated_resource_defaults_.find({package_id, feature_id, resource_id});
+    return found == generated_resource_defaults_.end() ? fs::path() : found->second;
+}
+
 fs::path ModPackageManager::feature_resource_path(
     const std::string& package_id,
     const std::string& feature_id,
     const std::string& resource_id) const {
     const ModPackage* package = selected_package(package_id);
     if (!package) return {};
+    const auto* resource = find_resource(*package, feature_id, resource_id);
+    if (resource && !resource->shared_source.empty()) {
+        const auto source = sources_.find(resource->shared_source);
+        if (source != sources_.end()) return source->second;
+        // Adopt an earlier per-feature selection as the visible default. The
+        // next edit persists one shared binding and wins over every old value.
+        for (const auto& [id, versions] : packages_) {
+            (void)versions;
+            const auto* other = selected_package(id);
+            if (!other) continue;
+            const auto selected = selections_.find(id);
+            if (selected == selections_.end()) continue;
+            for (const auto& r : other->resources) if(r.shared_source == resource->shared_source) {
+                auto path = effective_resource_path(*other, selected->second, r.feature_id, r.id,
+                    generated_resource_default(other->id, r.feature_id, r.id));
+                if (!path.empty()) return path;
+            }
+        }
+        return {};
+    }
     const auto found = selections_.find(package_id);
     const ModSelection blank;
     return effective_resource_path(
         *package, found == selections_.end() ? blank : found->second,
-        feature_id, resource_id);
+        feature_id, resource_id,
+        generated_resource_default(package_id, feature_id, resource_id));
 }
 
 std::map<std::string, ModSelection> ModPackageManager::effective_selections(
@@ -3248,9 +3545,66 @@ std::string ModPackageManager::feature_option_value(
         feature_id, option_id);
 }
 
+bool ModPackageManager::prepare_resources(const std::string& game_id,
+    const fs::path& disc_path, const fs::path& cache_root, std::string* error, bool cached_only,
+    const ModPrepareProgress& progress) {
+    auto effective = effective_selections(nullptr, nullptr, nullptr);
+    auto pending = selections_;
+    try {
+        for (const auto& [id, versions] : packages_) {
+            (void)versions;
+            const auto* package = selected_package(id);
+            if (!package || package->prepare.empty()) continue;
+            bool target = std::any_of(package->targets.begin(), package->targets.end(),
+                [&](const ModTarget& t){return t.game_id == "*" || t.game_id == game_id;});
+            if (!target) continue;
+            for (const auto& feature : package->features) {
+                if (!is_feature_enabled(*package, effective[id], feature)) continue;
+                const auto provider = media_preparers().find(package->prepare);
+                if (provider == media_preparers().end())
+                    throw std::runtime_error(package->name + ": media preparer is not installed");
+                if (progress && !progress(-1.0f,"Preparing " + feature.name))
+                    throw std::runtime_error("Preparation canceled.");
+                ModPrepareContext context{*package, feature.id, disc_path, cache_root, root_.parent_path(), {}, progress};
+                for (const auto& r : package->resources) if (r.feature_id == feature.id && r.input_only) {
+                    auto path = feature_resource_path(id, feature.id, r.id);
+                    if (path.empty() && r.required)
+                        throw std::runtime_error(package->name + ": select " + r.label);
+                    context.inputs[r.id] = path;
+                }
+                std::map<std::string, fs::path> outputs;
+                std::string reason;
+                {
+                    HostLaunchTimingScope timing(HOST_LAUNCH_MEDIA_PROVIDER,
+                        package->id.c_str(), feature.id.c_str());
+                    const auto& callback = cached_only ? provider->second.probe : provider->second.prepare;
+                    if (!callback || !callback(context, outputs, reason))
+                        throw std::runtime_error(package->name + ": " + reason);
+                    timing.success();
+                }
+                for (const auto& [name, path] : outputs) {
+                    const auto* resource = find_resource(*package, feature.id, name);
+                    if (!resource || resource->input_only || resource->sha256.empty())
+                        throw std::runtime_error("preparer returned an undeclared or unverified output");
+                    pending[id].features[feature.id].resources[name] = path.u8string();
+                }
+                for (const auto& r : package->resources)
+                    if (r.feature_id == feature.id && !r.input_only && r.required && !outputs.count(r.id))
+                        throw std::runtime_error(package->name + ": preparer omitted " + r.label);
+            }
+        }
+    } catch (const std::exception& ex) { set_error(error, ex.what()); return false; }
+    if (progress && !progress(-1.0f,"Verifying prepared content")) {
+        set_error(error,"Preparation canceled."); return false;
+    }
+    selections_ = std::move(pending);
+    return true;
+}
+
 ModResolution ModPackageManager::resolve(const std::string& game_id,
                                          const std::string& exe_sha256,
-                                         const std::string& disc_sha256) const {
+                                         const std::string& disc_sha256,
+                                         bool defer_prepared_resources) const {
     ModResolution result;
     /* Everything below reads the EFFECTIVE selection: the player's state plus
      * the features active [[requirement]]s derive. selections itself is never
@@ -3372,6 +3726,20 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         const ModSelection blank;
         const ModSelection& selected =
             selected_it == selections.end() ? blank : selected_it->second;
+        std::map<std::pair<std::string,std::string>,
+                 std::shared_ptr<const std::vector<uint8_t>>> resource_snapshots;
+        auto load_resource = [&](const ModResource& resource,
+                                 std::shared_ptr<const std::vector<uint8_t>>& bytes,
+                                 std::string& reason) {
+            const auto key=std::make_pair(resource.feature_id,resource.id);
+            const auto found=resource_snapshots.find(key);
+            if(found!=resource_snapshots.end()) { bytes=found->second; return true; }
+            const auto path=effective_resource_path(*package,selected,resource.feature_id,resource.id);
+            if(!load_mod_media(path,resource.format,resource.size,resource.sha256,bytes,&reason))
+                return false;
+            resource_snapshots.emplace(key,bytes);
+            return true;
+        };
         if (package->resolver == "declarative") {
             for (const ModDerivedDisc& derived : package->derived_discs) {
                 const ModFeature& legacy = package->features.front();
@@ -3597,6 +3965,8 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         std::vector<const ModOverlay*> overlays;
         overlays.reserve(package->overlays.size());
         for (const ModOverlay& overlay : package->overlays) {
+            if (defer_prepared_resources && !package->prepare.empty() && !overlay.resource_id.empty())
+                continue;
             const ModFeature* feature =
                 find_feature(*package, overlay.feature_id);
             if (!feature ||
@@ -3615,7 +3985,22 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         for (const ModOverlay* overlay : overlays) {
             std::vector<uint8_t> payload;
             std::string payload_error;
-            if (!read_file(overlay->file, payload, &payload_error)) {
+            bool loaded = false;
+            if (overlay->resource_id.empty()) {
+                loaded = read_file(overlay->file, payload, &payload_error);
+            } else {
+                const auto* resource = find_resource(*package, overlay->feature_id, overlay->resource_id);
+                std::shared_ptr<const std::vector<uint8_t>> bytes;
+                if (resource && load_resource(*resource, bytes, payload_error) && bytes &&
+                    overlay->resource_offset <= bytes->size() &&
+                    overlay->size <= bytes->size() - overlay->resource_offset) {
+                    const auto begin = bytes->begin() + size_t(overlay->resource_offset);
+                    payload.assign(begin, begin + size_t(overlay->size));
+                    loaded = true;
+                }
+                if (!loaded && payload_error.empty()) payload_error = "overlay resource is unavailable or out of bounds";
+            }
+            if (!loaded) {
                 result.errors.push_back(
                     package->id + "/" + overlay->feature_id + ": " +
                     payload_error);
@@ -3668,16 +4053,24 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             resolved.id = plugin->id;
             resolved.package_id = package->id;
             resolved.feature_id = plugin->feature_id;
+            resolved.netplay_local_view = plugin->netplay_local_view;
+            resolved.netplay_input = plugin->netplay_input;
+            resolved.netplay_host_output = plugin->netplay_host_output;
             result.plugins.push_back(std::move(resolved));
         }
         for (const ModResource& resource : package->resources) {
+            // Launcher previews must not ask players to select files that the
+            // preparer creates on Play. Runtime commits always validate them.
+            if (resource.input_only ||
+                (defer_prepared_resources && !package->prepare.empty())) continue;
             const ModFeature* feature =
                 find_feature(*package, resource.feature_id);
             if (!feature ||
                 !is_feature_enabled(*package, selected, *feature))
                 continue;
             const fs::path path = effective_resource_path(
-                *package, selected, resource.feature_id, resource.id);
+                *package, selected, resource.feature_id, resource.id,
+                generated_resource_default(package->id, resource.feature_id, resource.id));
             if (path.empty()) {
                 if (resource.required) {
                     result.errors.push_back(
@@ -3692,6 +4085,16 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             resolved.feature_id = resource.feature_id;
             resolved.id = resource.id;
             resolved.path = path;
+            resolved.format = resource.format;
+            resolved.sha256 = resource.sha256;
+            if (!resource.sha256.empty()) {
+                std::string media_error;
+                if (!load_resource(resource, resolved.bytes, media_error)) {
+                    result.errors.push_back(package->id + "/" + resource.feature_id +
+                                            ": " + resource.id + ": " + media_error);
+                    continue;
+                }
+            }
             result.resources.push_back(std::move(resolved));
         }
     }
@@ -3904,4 +4307,16 @@ extern "C" int psx_mod_register_activation_plugin(
     const char* id, PSXModActivationCallback callback) {
     return id &&
         PSXRecompV4::mod_register_activation_plugin(id, callback) ? 1 : 0;
+}
+
+extern "C" int psx_mod_register_session_reset_plugin(
+    const char* id, PSXModActivationCallback callback) {
+    return id &&
+        PSXRecompV4::mod_register_session_reset_plugin(id, callback) ? 1 : 0;
+}
+
+extern "C" int psx_mod_register_savestate_plugin(
+    const char* id, PSXModActivationCallback callback) {
+    return id &&
+        PSXRecompV4::mod_register_savestate_plugin(id, callback) ? 1 : 0;
 }

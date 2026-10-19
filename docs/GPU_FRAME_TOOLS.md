@@ -29,6 +29,34 @@ than a pointer at a function.
 
 ---
 
+## Hidden OpenGL validation
+
+`--headless` uses the software rasterizer even when the game config requests
+OpenGL. For an OpenGL rendering investigation, use `--headless-opengl` with an
+isolated `--debug-port` and `--memcard-dir`. This explicit mode creates a hidden
+SDL OpenGL context and initializes only SDL video; it does not open an audio
+device, enumerate controllers, sample host input, or show the launcher.
+
+A failed context/pipeline initialization exits with an error instead of silently
+using software. Verify the `hidden OpenGL headless enabled` startup record and a
+successful `gl_fbo_peek` query. The existing `present_image_ring_stats` /
+`present_image_ring_get` captures read the native-wide GL surface during gameplay
+and CPU-synchronized GL VRAM for native 4:3 frames. They contain the displayed
+band before fitting to a host window; `present_shot` remains unavailable.
+
+For temporal presentation bugs, freeze capture with `capture_mark` (`op=mark`)
+and inspect `oldest_sequence` through `newest_sequence` from
+`present_image_ring_stats`. Fetch each image with `present_image_ring_get`
+(`sequence=N`, `path="image.png"`); the response includes its guest `frame`.
+Several extra or held presentations can share that frame number. The legacy
+`frame=N` lookup retrieves only one matching image, so it cannot establish that
+all extra presentations have a stable HUD. Release the mark when done.
+
+The hidden window does not select an adaptive display aspect. Set the desired
+aspect explicitly with `display_aspect` for each comparison. A capture that
+repeats establishes repeatability; correctness still needs appropriate camera
+coverage and comparison against the reported defect.
+
 ## The provenance rule
 
 Everything these tools report is **observed** from one execution of one frame,

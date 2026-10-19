@@ -29,8 +29,11 @@
  * Derivative direction is area2-normalized (winding-independent); diagonal
  * (3D-ish) mappings — both derivatives nonzero on an axis — get no
  * compensation and no back-off tightening on that axis. Like Beetle, a rare
- * 3D poly that happens to be axis-aligned accepts a one-texel shift in
- * exchange for correct 2D sprites.
+ * affine poly that happens to be axis-aligned accepts a one-texel shift in
+ * exchange for correct 2D sprites. Perspective-correct world primitives must
+ * retain their authored UVs: rounding their screen positions can make just
+ * one triangle of a quad appear axis-aligned, moving its shared edge by a
+ * texel. Their sampling bounds include both authored UV endpoints.
  *
  * History: GL, VK and SW each carried a private copy of this math; the
  * copies drifted (the mirrored back-off bug lived only in the GPU backends)
@@ -109,6 +112,30 @@ static inline void psx_uv_tri_mirror_offset(const int *xs, const int *ys,
 static inline void psx_uv_rect_mirror_offset(int *u0, int *v0, int *u1, int *v1) {
     if (*u1 < *u0) { (*u0)++; (*u1)++; }
     if (*v1 < *v0) { (*v0)++; (*v1)++; }
+}
+
+/* Perspective mapping has no affine, integer-DDA exclusive texel endpoint.
+ * Keep a stable atlas footprint independent of rounded screen derivatives. */
+static inline void psx_uv_tri_world_limits(const int *us, const int *vs, int lim[4]) {
+    int lo_u=us[0], hi_u=us[0], lo_v=vs[0], hi_v=vs[0];
+    for (int i=1;i<3;++i) {
+        if (us[i]<lo_u) lo_u=us[i]; if (us[i]>hi_u) hi_u=us[i];
+        if (vs[i]<lo_v) lo_v=vs[i]; if (vs[i]>hi_v) hi_v=vs[i];
+    }
+    psx_uv_axis_limits(lo_u,hi_u,0,&lim[0],&lim[2]);
+    psx_uv_axis_limits(lo_v,hi_v,0,&lim[1],&lim[3]);
+}
+
+/* GL/VK polygon sampling: preserve world UVs; apply the existing PS1
+ * center-sampling compensation only to affine primitives. */
+static inline void psx_uv_tri_center_sample(const int *xs, const int *ys,
+    int *us, int *vs, int perspective, int lim[4]) {
+    if (perspective) {
+        psx_uv_tri_world_limits(us,vs,lim);
+    } else {
+        psx_uv_tri_limits(xs,ys,us,vs,lim);
+        psx_uv_tri_mirror_offset(xs,ys,us,vs);
+    }
 }
 
 #endif /* PSXRECOMP_GPU_UV_H */

@@ -1,0 +1,51 @@
+diff --git a/mednafen/psx/spu.cpp b/mednafen/psx/spu.cpp
+index 513628ae..b89efa08 100644
+--- a/mednafen/psx/spu.cpp
++++ b/mednafen/psx/spu.cpp
+@@ -73,6 +73,12 @@
+ 
+ #include "../state_helpers.h"
+ 
++/* PSXRecomp oracle: SPU voice event sink, defined by the psx-beetle host
++ * (runtime/src/beetle_libretro.cpp). kind: 1=KEYON 2=KEYOFF 3=END_STOP
++ * 4=END_LOOP; addr = SPU RAM address in 16-bit units; env = ADSR level. */
++extern "C" void psxrecomp_beetle_spu_event(unsigned kind, unsigned voice,
++                                           unsigned addr, unsigned env);
++
+ uint32_t IntermediateBufferPos;
+ int16_t IntermediateBuffer[4096][2];
+ 
+@@ -328,6 +334,11 @@ void PS_SPU::RunDecoder(SPU_Voice *voice)
+ 
+          BlockEnd |= 1 << (voice - Voices);
+ 
++         /* PSXRecomp oracle hook: loop-end flag reached (repeat / stop). */
++         psxrecomp_beetle_spu_event((voice->DecodeFlags & 0x2) ? 4 : 3,
++                                    (unsigned)(voice - Voices), voice->CurAddr,
++                                    (unsigned)(uint16)voice->ADSR.EnvLevel);
++
+          if(!(voice->DecodeFlags & 0x2))	// Force enveloping to 0 if not "looping".  TODO: Should we reset the ADSR divider counter too?
+          {
+             if(!(Noise_Mode & (1 << (voice - Voices))))
+@@ -925,6 +936,10 @@ int32 PS_SPU::UpdateFromCDC(int32 clocks)
+                if(voice->DecodePlayDelay < 3)
+                {
+                   ReleaseEnvelope(voice);
++
++                  /* PSXRecomp oracle hook: KEYOFF took effect. */
++                  psxrecomp_beetle_spu_event(2, voice_num, voice->CurAddr,
++                                             (unsigned)(uint16)voice->ADSR.EnvLevel);
+                }
+             }
+          }
+@@ -950,6 +965,10 @@ int32 PS_SPU::UpdateFromCDC(int32 clocks)
+             voice->CurPhase = 0;
+             voice->CurAddr = voice->StartAddr & ~0x7;
+             voice->IgnoreSampLA = false;
++
++            /* PSXRecomp oracle hook: KEYON took effect. */
++            psxrecomp_beetle_spu_event(1, voice_num, voice->CurAddr,
++                                       (unsigned)(uint16)voice->ADSR.EnvLevel);
+          }
+ 
+          if(!(SPUControl & 0x8000))

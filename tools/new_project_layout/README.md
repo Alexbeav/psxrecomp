@@ -1,8 +1,9 @@
 # New Project Layout + Project Studio
 
-Scaffold **new** titles and **migrate** older ones onto the setup-host layout.
+Scaffold **new** titles and **migrate** older ones onto the New Project Layout.
 
-**Policy:** public releases are **setup-host only** (no prebuilt generated game C).
+**Policy:** public releases are **bundled** — `generated/` is committed and CI
+builds and ships the compiled game (`docs/ci/BUNDLED_RELEASES.md`).
 
 ## New project
 
@@ -85,11 +86,13 @@ For **bulk ops across many titles / platforms**, use the sibling tool
 | `ensure_recomp_ui_submodule` | Add `recomp-ui` |
 | `emit_codegen_setup` | Thin `codegen_setup.c/.h` |
 | `rewrite_cmake_setup_host` | `psxrecomp_add_game_runtime` + wizard |
-| `emit_packager` | `scripts/package_setup_release.sh` |
-| `emit_ci_workflow` | Setup-host `release.yml` |
+| `merge_gitignore` | Disc/BIOS/dist rules; **un-ignores** `generated/` |
+| `emit_packager` | `scripts/package_release.sh` (bundled) |
+| `emit_ci_workflow` | Bundled `release.yml` |
 | `probe_disc_refresh` | TOC / catalog / seeds (needs `--disc`) |
-| `annotate_legacy_packaging` | Mark old prebuilt packagers obsolete |
+| `annotate_legacy_packaging` | Mark hand-forked packagers obsolete |
 
-Wizard + `recomp-ui` are forced on for `apply` (setup-host requirement).
+Wizard + `recomp-ui` are forced on for `apply` (the shipped game's first-run
+disc picker).
 
 Helpers reused: `probe_disc.py`, `fill_tokens.py`, `sync_symbols.py`, `write_recomp_json.py` (`.recomp.json`, [recomp.fyi spec](https://recomp.fyi/spec)), `templates/*`.
