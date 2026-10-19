@@ -942,7 +942,7 @@ if(BUILD_TESTING)
     endforeach()
 
     foreach(_pgxp_isolated_test
-            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test)
+            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test pgxp_session_hooks_test)
         target_sources(${_pgxp_isolated_test} PRIVATE tests/pgxp_test_mod_memory.cpp)
     endforeach()
 
@@ -1090,6 +1090,9 @@ if(BUILD_TESTING)
     add_executable(ws_repeat_rect_test tests/test_ws_repeat_rect.c)
     target_include_directories(ws_repeat_rect_test PRIVATE include)
     add_test(NAME ws_repeat_rect_test COMMAND ws_repeat_rect_test)
+    add_executable(ws_feedback_rect_test tests/test_ws_feedback_rect.c)
+    target_include_directories(ws_feedback_rect_test PRIVATE include)
+    add_test(NAME ws_feedback_rect_test COMMAND ws_feedback_rect_test)
     add_executable(ws_screen_mask_test tests/test_ws_screen_mask.c)
     target_include_directories(ws_screen_mask_test PRIVATE include)
     if(UNIX)
