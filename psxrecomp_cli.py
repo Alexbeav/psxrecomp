@@ -873,6 +873,29 @@ def regen_bios_profile(
         raise RuntimeError(
             f"psxrecomp-bios failed for {profile_rel} (exit {proc.returncode})"
         )
+    write_bios_emitter_stamp(fw, profile_rel, progress=progress)
+
+
+def write_bios_emitter_stamp(
+    fw: Path, profile_rel: str, *, progress: ProgressReporter
+) -> None:
+    """Record generated/<stem>.emitter.sha like tools/regen_bios.sh, so the next
+    configure does not report the fresh BIOS as STALE."""
+    recompiler = load_sections(fw / profile_rel).get("recompiler", {})
+    stem = recompiler.get("out_stem")
+    cmake = shutil.which("cmake")
+    if not stem or not cmake:
+        progress.log(f"emitter stamp skipped for {profile_rel} (no out_stem or cmake)")
+        return
+    proc = subprocess.run(
+        [cmake, f"-DROOT={fw}", f"-DPROFILE={profile_rel}",
+         "-P", str(fw / "tools" / "bios_emitter_fingerprint.cmake")],
+        cwd=str(fw), capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"emitter fingerprint failed for {profile_rel}: {proc.stderr.strip()}")
+    out_dir = fw / str(recompiler.get("out_dir") or "generated")
+    (out_dir / f"{stem}.emitter.sha").write_text(proc.stdout, encoding="utf-8")
 
 
 def load_sections(config: Path) -> dict[str, dict[str, Any]]:
