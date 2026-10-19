@@ -19,7 +19,7 @@
 #include "debug_server.h"
 #include "host_launch_timing.h"
 #include "host_sampler.h"
-#include "host_span_ring.h"
+#include "savestate.h"
 #include "guest_cycle_profile.h"
 #include "host_osd.h"
 #include "psx_video_timing.h"
@@ -113,6 +113,7 @@
 #endif
 
 #include "psx_sdl.h"
+#include "debug_socket_io.h"
 
 /* ---- Externs from runtime ---- */
 extern uint32_t i_stat;
@@ -148,7 +149,15 @@ static SDL_mutex  *s_io_mutex    = NULL;
 static SDL_cond   *s_io_req_cv   = NULL;   /* emu waits on this for a request   */
 static SDL_cond   *s_io_resp_cv  = NULL;   /* I/O waits on this for a response  */
 static volatile int s_io_state   = IO_IDLE;
-static volatile int s_io_running  = 0;
+#if defined(PSX_SDL3)
+static SDL_AtomicInt s_io_running;
+static int io_is_running(void *ctx) { (void)ctx; return SDL_GetAtomicInt(&s_io_running); }
+static void io_set_running(int on) { SDL_SetAtomicInt(&s_io_running, on); }
+#else
+static SDL_atomic_t s_io_running;
+static int io_is_running(void *ctx) { (void)ctx; return SDL_AtomicGet(&s_io_running); }
+static void io_set_running(int on) { SDL_AtomicSet(&s_io_running, on); }
+#endif
 static char  s_io_req[RECV_BUF_SIZE];      /* request line (I/O -> emu)         */
 static char *s_resp_buf = NULL;            /* response bytes (emu -> I/O)       */
 static size_t s_resp_len = 0, s_resp_cap = 0;
@@ -307,6 +316,8 @@ static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
 /* Test-only controller identity override for set_input/press. -1 follows the
  * selected host device/config; 0/1/2 force digital/DualShock/JogCon. */
 static int s_pad_type_override = -1;
+/* Explicit serial presence while a set_input/press injection is active. */
+static int s_pad_connected_override[2] = { -1, -1 };
 
 /*
  * Exact guest-VBlank input route. A client queues run-length encoded digital
@@ -5432,7 +5443,7 @@ static void handle_geom_correction(int id, const char *json)
 /* host_profile — histogram of the always-on host CPU sampler (host_sampler.c)
  * over a window of the ring: {"cmd":"host_profile","since":SEQ} or
  * {"cmd":"host_profile","frames":N} (the last N guest frames), optional
- * "frame_lo"/"frame_hi" (an absolute guest-frame window), "pass":1 (only samples inside render passes) / "pass":0 (outside), "top":K.
+ * "pass":1 (only samples inside render passes) / "pass":0 (outside), "top":K.
  * Addresses are executable-relative; tools/host_profile.py names them. Take
  * "seq" from one reply as "since" of the next to profile what ran between. */
 static void handle_host_profile(int id, const char *json)
@@ -5444,9 +5455,6 @@ static void handle_host_profile(int id, const char *json)
     const uint64_t oldest = seq > HOST_SAMPLER_CAP ? seq - HOST_SAMPLER_CAP : 0;
     int since = json_get_int(json, "since", -1);
     const int frames = json_get_int(json, "frames", -1);
-    /* Optional absolute guest-frame window (inclusive): profile exactly one hitch. */
-    const int frame_lo_abs = json_get_int(json, "frame_lo", -1);
-    const int frame_hi_abs = json_get_int(json, "frame_hi", -1);
     const int pass = json_get_int(json, "pass", -1);
     int top = json_get_int(json, "top", 60);
     if (top < 1) top = 1;
@@ -5461,8 +5469,6 @@ static void handle_host_profile(int id, const char *json)
         HostSample smp;
         if (!host_sampler_get(i, &smp)) continue;
         if (frames > 0 && (int32_t)(smp.frame - frame_lo) < 0) continue;
-        if (frame_lo_abs >= 0 && smp.frame < (uint32_t)frame_lo_abs) continue;
-        if (frame_hi_abs >= 0 && smp.frame > (uint32_t)frame_hi_abs) continue;
         if (pass >= 0 && (int)smp.in_pass != pass) continue;
         total++;
         int b = 0;
@@ -5473,41 +5479,7 @@ static void handle_host_profile(int id, const char *json)
         }
         counts[b]++;
     }
-    /* Where did the samples that are NOT in this executable land? A hitch spent inside the
-     * GL driver, the OS loader or the audio stack shows up here by module name ("modules":
-     * [[name, samples], ...], the exe itself as "(exe)"), where the bare addresses above
-     * cannot be mapped to anything without that module's symbols. */
-    char modnames[24][96]; uint64_t modcount[24]; int nmod = 0;
-#ifdef _WIN32
-    {
-        const HMODULE exe_mod = GetModuleHandleA(NULL);
-        const uint64_t base = host_sampler_image_base();
-        for (int b = 0; b < nb; b++) {
-            HMODULE h = NULL;
-            const char *name = "(unknown)";
-            char path[260];
-            if (rvas[b] == 0) {
-                name = "(non-image pc)";
-            } else if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                          (LPCSTR)(uintptr_t)(base + rvas[b]), &h) && h) {
-                if (h == exe_mod) name = "(exe)";
-                else if (GetModuleFileNameA(h, path, sizeof path)) {
-                    name = strrchr(path, '\\');
-                    name = name ? name + 1 : path;
-                }
-            }
-            int m = 0;
-            while (m < nmod && strcmp(modnames[m], name) != 0) m++;
-            if (m == nmod) {
-                if (nmod == 24) { m = 23; }
-                else { nmod++; snprintf(modnames[m], sizeof modnames[m], "%s", name); modcount[m] = 0; }
-            }
-            modcount[m] += counts[b];
-        }
-    }
-#endif
-    size_t cap = 256 + (size_t)top * 48 + 24u * 128u;
+    size_t cap = 256 + (size_t)top * 48;
     char *buf = (char *)malloc(cap);
     if (!buf) { send_err(id, "oom"); return; }
     size_t n = (size_t)snprintf(buf, cap,
@@ -5525,78 +5497,7 @@ static void handle_host_profile(int id, const char *json)
                               (unsigned long long)rvas[best], counts[best]);
         counts[best] = 0;
     }
-    n += (size_t)snprintf(buf + n, cap - n, "],\"modules\":[");
-    for (int m = 0; m < nmod; m++)
-        n += (size_t)snprintf(buf + n, cap - n, "%s[\"%s\",%llu]", m ? "," : "", modnames[m],
-                              (unsigned long long)modcount[m]);
     snprintf(buf + n, cap - n, "]}");
-    send_fmt("%s", buf);
-    free(buf);
-}
-
-/* host_span_ring / frame_wall_ring - always-on wall-time rings (host_span_ring.h).
- *   {"cmd":"host_span_ring","from":SEQ,"n":N}  spans with seq >= from (default: oldest)
- *     -> {total, oldest, events:[[seq, kind, t0_us, dur_us, frame, emu, arg], ...]}
- *   {"cmd":"frame_wall_ring","from":SEQ,"n":N} per-guest-frame wall stamps
- *     -> {total, oldest, now_us, f:[frame, t_us, interp_insns_lo32, static_checks_lo32, page_faults, io_read_kb, ...]}
- * Both read a window that already happened; nothing is armed. */
-static void handle_host_span_ring(int id, const char *json)
-{
-    const uint64_t total = host_span_total();
-    const uint64_t oldest = total > HOST_SPAN_RING_CAP ? total - HOST_SPAN_RING_CAP : 0;
-    int from_i = json_get_int(json, "from", -1);
-    int n = json_get_int(json, "n", 4096);
-    if (n < 1) n = 1;
-    if (n > (int)HOST_SPAN_RING_CAP) n = (int)HOST_SPAN_RING_CAP;
-    uint64_t from = from_i >= 0 ? (uint64_t)from_i : oldest;
-    if (from < oldest) from = oldest;
-    size_t cap = 160 + (size_t)n * 96;
-    char *buf = (char *)malloc(cap);
-    if (!buf) { send_err(id, "oom"); return; }
-    size_t pos = (size_t)snprintf(buf, cap,
-        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"oldest\":%llu,\"now_us\":%llu,\"events\":[",
-        id, (unsigned long long)total, (unsigned long long)oldest,
-        (unsigned long long)host_clock_us());
-    int first = 1, emitted = 0;
-    for (uint64_t q = from; q < total && emitted < n && pos + 128 < cap; q++) {
-        HostSpan sp;
-        if (!host_span_get(q, &sp)) continue;
-        pos += (size_t)snprintf(buf + pos, cap - pos, "%s[%llu,\"%s\",%llu,%u,%u,%u,%u]",
-            first ? "" : ",", (unsigned long long)q, host_span_kind_name(sp.kind),
-            (unsigned long long)sp.t0_us, sp.dur_us, sp.frame, sp.emu, sp.arg);
-        first = 0; emitted++;
-    }
-    snprintf(buf + pos, cap - pos, "]}");
-    send_fmt("%s", buf);
-    free(buf);
-}
-
-static void handle_frame_wall_ring(int id, const char *json)
-{
-    const uint64_t total = host_frame_stamp_total();
-    const uint64_t oldest = total > HOST_FRAME_STAMP_CAP ? total - HOST_FRAME_STAMP_CAP : 0;
-    int from_i = json_get_int(json, "from", -1);
-    int n = json_get_int(json, "n", 20000);
-    if (n < 1) n = 1;
-    if (n > (int)HOST_FRAME_STAMP_CAP) n = (int)HOST_FRAME_STAMP_CAP;
-    uint64_t from = from_i >= 0 ? (uint64_t)from_i : oldest;
-    if (from < oldest) from = oldest;
-    size_t cap = 192 + (size_t)n * 64;
-    char *buf = (char *)malloc(cap);
-    if (!buf) { send_err(id, "oom"); return; }
-    size_t pos = (size_t)snprintf(buf, cap,
-        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"oldest\":%llu,\"from\":%llu,\"now_us\":%llu,\"stride\":6,\"f\":[",
-        id, (unsigned long long)total, (unsigned long long)oldest,
-        (unsigned long long)from, (unsigned long long)host_clock_us());
-    int first = 1, emitted = 0;
-    for (uint64_t q = from; q < total && emitted < n && pos + 96 < cap; q++) {
-        uint32_t fr, ii, ck, pf, io; uint64_t t;
-        if (!host_frame_stamp_get(q, &fr, &t, &ii, &ck, &pf, &io)) continue;
-        pos += (size_t)snprintf(buf + pos, cap - pos, "%s%u,%llu,%u,%u,%u,%u", first ? "" : ",", fr,
-                                (unsigned long long)t, ii, ck, pf, io);
-        first = 0; emitted++;
-    }
-    snprintf(buf + pos, cap - pos, "]}");
     send_fmt("%s", buf);
     free(buf);
 }
@@ -8198,6 +8099,10 @@ static void handle_set_input(int id, const char *json)
     char val_str[32];
     char layer[16];
     const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (json_get_str(json, "layer", layer, sizeof(layer)) &&
         strcmp(layer, "host") == 0) {
         s_host_buttons = json_get_str(json, "buttons", val_str, sizeof(val_str))
@@ -8219,12 +8124,14 @@ static void handle_set_input(int id, const char *json)
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
     }
     if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
         s_input_override_p2 = (int)(hex_to_u32(val_str) & 0xFFFFu);
         s_input_frames_p2 = 0;
         send_ok(id);
         return;
     }
     s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = (int)hex_to_u32(val_str);
     s_input_frames = 0;
     /* Optional stick override: any of lx/ly/rx/ry (0..255) arms it; omitted
@@ -8260,17 +8167,23 @@ static void handle_press(int id, const char *json)
     int buttons = json_get_int(json, "buttons", -1);
     int frames  = json_get_int(json, "frames", 2);
     const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
     if (pad_type < -1 || pad_type > 2) {
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
     }
     if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
         s_input_override_p2 = buttons & 0xFFFF;
         s_input_frames_p2   = frames;
         send_ok(id);
         return;
     }
     s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = buttons;
     s_input_frames   = frames;
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
@@ -8347,6 +8260,7 @@ static void handle_clear_input(int id, const char *json)
 {
     const int port = json_get_int(json, "port", 0);   /* 0 = both */
     if (port == 0 || port == 2) {
+        s_pad_connected_override[1] = -1;
         s_input_override_p2 = -1;
         s_input_frames_p2 = 0;
     }
@@ -8358,6 +8272,7 @@ static void handle_clear_input(int id, const char *json)
     s_input_frames   = 0;
     s_axis_override  = 0;
     s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     s_host_layer = 0;
     s_host_buttons = 0xFFFF;
@@ -8408,6 +8323,7 @@ static void handle_input_route_start(int id, const char *json)
     s_input_frames = 0;
     s_axis_override = 0;
     s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_input_route_index = 0;
     s_input_route_remaining = s_input_route[0].frames;
     const int at = json_get_int(json, "at_frame", 0);
@@ -8708,6 +8624,26 @@ static void handle_synth_recurse(int id, const char *json)
 
 /* post_aa: post-process anti-aliasing, live. {"cmd":"post_aa"} reads it,
  * {"cmd":"post_aa","mode":0|1|2} sets it (off, fxaa, fxaa_hq). */
+/* bloom: {"cmd":"bloom"} reads; optional "strength" (0..2), "threshold",
+ * and "time" (1: time
+ * each pass; the mean resets on read) set. */
+static void handle_bloom(int id, const char *json)
+{
+    const char *p = strstr(json, "\"strength\"");
+    float strength = -1.0f, threshold = -1.0f;
+    if (p && (p = strchr(p, ':'))) strength = (float)strtod(p + 1, NULL);
+    p = strstr(json, "\"threshold\"");
+    if (p && (p = strchr(p, ':'))) threshold = (float)strtod(p + 1, NULL);
+    GlBloomInfo bi;
+    gl_renderer_bloom_debug(strength, threshold, json_get_int(json, "time", -1), &bi);
+    send_fmt("{\"id\":%d,\"ok\":true,\"strength\":%.3f,\"threshold\":%.3f,"
+             "\"passes\":%llu,\"timed\":%llu,\"us_mean\":%.1f,\"gen_timed\":%llu,"
+             "\"gen_us_mean\":%.1f,\"reused\":%llu}",
+             id, bi.strength, bi.threshold, (unsigned long long)bi.passes,
+             (unsigned long long)bi.us_n, bi.us_mean, (unsigned long long)bi.gen_us_n,
+             bi.gen_us_mean, (unsigned long long)bi.reused);
+}
+
 static void handle_post_aa(int id, const char *json)
 {
     int mode = json_get_int(json, "mode", -1);
@@ -8757,6 +8693,15 @@ static void handle_texture_filter(int id, const char *json)
     int mode = json_get_int(json, "mode", -1);
     if (mode >= 0) gr_set_texture_filter(mode);
     send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d}", id, gr_texture_filter());
+}
+
+/* dithering: {"cmd":"dithering"} reads, {"cmd":"dithering","mode":0|1|2}
+ * sets [video] dithering live (0 off, 1 on = native grid, 2 fine). */
+static void handle_dithering(int id, const char *json)
+{
+    int mode = json_get_int(json, "mode", -1);
+    if (mode >= 0) gl_renderer_set_dithering(mode);
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d}", id, gl_renderer_dithering());
 }
 
 static void handle_frame_perf(int id, const char *json)
@@ -9013,7 +8958,8 @@ static void handle_openxr_stats(int id, const char *json) {
              "\"gl_version\":%llu,\"min_gl_version\":%llu,\"max_gl_version\":%llu,\"swapchain_format\":%lld,"
              "\"submitted_layer\":%u,\"quad_submitted\":%llu,"
              "\"submitted_source\":%u,\"native_submitted\":%llu,\"submitted_native_frame\":%llu,"
-             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu}", id,s.compiled,s.enabled,
+             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu,"
+             "\"submitted_surfaces\":%u,\"surface_uploads\":%llu,\"surface_failures\":%llu}", id,s.compiled,s.enabled,
              s.initialized,s.running,s.state,s.tracking,s.frame_open,s.result,
              s.stage?s.stage:"off",s.runtime,s.last_failure?s.last_failure:"",s.last_failure_result,
              (unsigned long long)s.view_flags,(unsigned long long)s.waits,
@@ -9023,7 +8969,8 @@ static void handle_openxr_stats(int id, const char *json) {
              (unsigned long long)s.max_gl_version,(long long)s.swapchain_format,s.submitted_layer,
              (unsigned long long)s.quad_submitted,s.submitted_source,
              (unsigned long long)s.native_submitted,(unsigned long long)s.submitted_native_frame,
-             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses);
+             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses,
+             s.submitted_surfaces,(unsigned long long)s.surface_uploads,(unsigned long long)s.surface_failures);
 }
 static void handle_openxr_views(int id,const char *json) {
     PSXOpenXRStats s; (void)json;psx_openxr_stats(&s);
@@ -9327,6 +9274,51 @@ static void handle_debug_key(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":%s,\"state\":\"%s\"}", id, ok ? "true" : "false", msg);
 }
 
+/* host_pause on=<1|0>: push/pop a host pause (host_overlay.h P1). */
+#include "host_overlay.h"
+static void handle_host_pause(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    int ok = 1;
+    if (on == 1) ok = psx_host_pause_push("debug");
+    else if (on == 0) psx_host_pause_pop();
+    send_fmt("{\"id\":%d,\"ok\":%s,\"depth\":%d}", id, ok ? "true" : "false",
+             psx_host_pause_depth());
+}
+
+/* menu_host: in-game menu host state (psx_menu_host.h): provider, attached,
+ * open, pause, ui capture, and the video/netplay snapshot. */
+extern int psx_debug_menu_host_json(char *out, size_t cap);
+static void handle_menu_host(int id, const char *json)
+{
+    char body[768];
+    (void)json;
+    psx_debug_menu_host_json(body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+/* host_key name=<SDL scancode name> down=<1|0> (both when omitted). */
+extern int psx_debug_push_host_key(const char *name, int down);
+static void handle_host_key(int id, const char *json)
+{
+    char name[64] = "";
+    json_get_str(json, "name", name, sizeof name);
+    int down = json_get_int(json, "down", -1);
+    int ok = down < 0 ? (psx_debug_push_host_key(name, 1) && psx_debug_push_host_key(name, 0))
+                      : psx_debug_push_host_key(name, down);
+    send_fmt("{\"id\":%d,\"ok\":%s}", id, ok ? "true" : "false");
+}
+
+/* host_mouse x=<pt> y=<pt> [wheel=<steps>]: click (or scroll) at a window point. */
+extern int psx_debug_push_host_mouse(float x, float y, int wheel);
+static void handle_host_mouse(int id, const char *json)
+{
+    int ok = psx_debug_push_host_mouse((float)json_get_int(json, "x", 0),
+                                       (float)json_get_int(json, "y", 0),
+                                       json_get_int(json, "wheel", 0));
+    send_fmt("{\"id\":%d,\"ok\":%s}", id, ok ? "true" : "false");
+}
+
 static void handle_ws_nw(int id, const char *json)
 {
     int on = json_get_int(json, "on", -1);
@@ -9583,6 +9575,12 @@ static void handle_savestate(int id, const char *json)
     extern int psx_netplay_request_load(int slot);
     int slot = json_get_int(json, "slot", -1);
     if (slot < 0) { send_err(id, "missing slot"); return; }
+    if (slot >= SAVESTATE_SLOTS) {
+        /* Name the real reason: the generic refusal below blamed LLE runs. */
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"slot %d out of range (0..%d)\"}",
+                 id, slot, SAVESTATE_SLOTS - 1);
+        return;
+    }
     char op[16];
     if (!json_get_str(json, "op", op, sizeof(op))) { send_err(id, "missing op"); return; }
     int staged;
@@ -10908,6 +10906,8 @@ static void handle_wide_full(int id, const char *json)
     extern void gl_renderer_sync_cpu(void);
     gl_renderer_sync_cpu();   /* no-op on SW; ensures pending GL frame is flushed */
     int base_x = json_get_int(json, "base_x", 0);
+    /* "alpha":1 writes bit 15 (GL: the surface alpha) as white/black. */
+    int show_alpha = json_get_int(json, "alpha", 0);
     char path[512];
     if (!json_get_str(json, "path", path, sizeof(path)))
         strncpy(path, "psx_wide_full.png", sizeof(path) - 1);
@@ -10926,6 +10926,10 @@ static void handle_wide_full(int id, const char *json)
         for (int x = 0; x < W; x++) {
             uint32_t px = buf[(size_t)y * W + x];
             uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+            if (show_alpha) {
+                p[0] = p[1] = p[2] = (uint8_t)(px >> 24);
+                continue;
+            }
             p[0] = (uint8_t)((px >> 16) & 0xFF);
             p[1] = (uint8_t)((px >> 8) & 0xFF);
             p[2] = (uint8_t)(px & 0xFF);
@@ -14313,19 +14317,6 @@ static void handle_overlay_loader_status(int id, const char *json)
             (unsigned long long)nd, (unsigned long long)ni,
             (unsigned long long)sn, (unsigned long long)ss,
             (unsigned long long)sc, (unsigned long long)sx);
-        {
-            /* Call-unit IRQ starvation signature: call_unit_depth stuck > 0 with
-             * ci_skip_unit climbing while an unmasked IRQ stays pending. */
-            uint64_t cu=0, cs=0, cn=0, cr=0, cd=0, ce=0;
-            overlay_loader_get_ci_skip_diag(&cu, &cs, &cn, &cr, &cd, &ce);
-            n += snprintf(buf + n, sizeof(buf) - n,
-                ",\"ci_skip_unit\":%llu,\"ci_skip_supp\":%llu,\"ci_skip_none\":%llu,"
-                "\"ci_skip_sr\":%llu,\"ci_skip_deliv\":%llu,\"ci_enter\":%llu,"
-                "\"call_unit_depth\":%d",
-                (unsigned long long)cu, (unsigned long long)cs, (unsigned long long)cn,
-                (unsigned long long)cr, (unsigned long long)cd, (unsigned long long)ce,
-                overlay_loader_call_unit_depth());
-        }
         extern volatile long g_overlay_image_warm_loaded;
         extern volatile long g_overlay_image_warm_pending;
         n += snprintf(buf + n, sizeof(buf) - n,
@@ -15974,8 +15965,6 @@ static const CmdEntry s_commands[] = {
     { "pgxp_store_ring",   handle_pgxp_store_ring },
     { "pgxp_shadow",       handle_pgxp_shadow },
     { "host_profile",      handle_host_profile },
-    { "host_span_ring",    handle_host_span_ring },
-    { "frame_wall_ring",   handle_frame_wall_ring },
     { "pgxp_miss_ring",    handle_pgxp_miss_ring },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
@@ -15997,6 +15986,10 @@ static const CmdEntry s_commands[] = {
     { "window_size",       handle_window_size },
     { "ws_nw",             handle_ws_nw },
     { "debug_key",         handle_debug_key },
+    { "host_pause",        handle_host_pause },
+    { "host_key",          handle_host_key },
+    { "menu_host",         handle_menu_host },
+    { "host_mouse",        handle_host_mouse },
     { "scanline",          handle_scanline },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
     { "ws_ui_groups",      handle_ws_ui_groups },
@@ -16023,6 +16016,8 @@ static const CmdEntry s_commands[] = {
     { "accurate_blending", handle_accurate_blending },
 
     { "texture_filter",    handle_texture_filter },
+    { "bloom",             handle_bloom },
+    { "dithering",         handle_dithering },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
     { "render_pass_stats", handle_render_pass_stats },
@@ -16567,13 +16562,19 @@ void debug_server_init(int port)
      * 16 leaves room for a few probes to queue while we investigate. This
      * is observability infrastructure, not a freeze fix. */
     listen(s_listen, 16);
+    if (!psx_debug_socket_nonblocking(s_listen, 1)) {
+        s_listen_err = sock_error();
+        sock_close(s_listen);
+        s_listen = SOCK_INVALID;
+        return;
+    }
     fprintf(stdout, "psxrecomp: debug server LISTENING on 127.0.0.1:%d\n",
             s_port);
 
     /* Always-on wall-time phase sampler (phase_profile). Own thread: the
      * server pumps on the main thread, so sampling must not live there. */
     phase_sampler_start();
-    /* Blocking accept — the dedicated I/O thread waits on it (no busy-poll). */
+    /* The I/O worker waits for readiness with bounded cancellation. */
 
     /* Start the TCP I/O thread + its handoff primitives. */
     s_io_mutex   = SDL_CreateMutex();
@@ -16582,9 +16583,9 @@ void debug_server_init(int port)
     s_resp_cap   = 65536;
     s_resp_buf   = (char *)malloc(s_resp_cap);
     if (s_io_mutex && s_io_req_cv && s_io_resp_cv && s_resp_buf) {
-        s_io_running = 1;
+        io_set_running(1);
         s_io_thread = SDL_CreateThread(io_thread_main, "psx-dbg-io", NULL);
-        if (!s_io_thread) s_io_running = 0;
+        if (!s_io_thread) io_set_running(0);
     }
 
     if (!s_frame_history) {
@@ -16924,17 +16925,7 @@ void debug_server_init(int port)
  * line length (NUL-terminated, newline stripped), or -1 on close/error. */
 static int recv_line(sock_t c, char *buf, int cap)
 {
-    int len = 0;
-    while (len < cap - 1) {
-        int n = recv(c, buf + len, cap - 1 - len, 0);
-        if (n <= 0) return -1;
-        len += n;
-        buf[len] = '\0';
-        char *nl = strchr(buf, '\n');
-        if (nl) { *nl = '\0'; return (int)(nl - buf); }
-    }
-    buf[cap - 1] = '\0';
-    return cap - 1;   /* over-long line: take what we have */
+    return psx_debug_socket_recv_line(c, buf, cap, io_is_running, NULL);
 }
 
 /* The TCP I/O thread: owns accept/recv/send. Hands each request to the emu
@@ -16944,11 +16935,9 @@ static int recv_line(sock_t c, char *buf, int cap)
 static int io_thread_main(void *arg)
 {
     (void)arg;
-    while (s_io_running) {
-        struct sockaddr_in caddr;
-        int clen = sizeof(caddr);
-        sock_t c = accept(s_listen, (struct sockaddr *)&caddr, &clen);
-        if (c == SOCK_INVALID) { if (!s_io_running) break; SDL_Delay(5); continue; }
+    while (io_is_running(NULL)) {
+        sock_t c = psx_debug_socket_accept(s_listen, io_is_running, NULL);
+        if (c == SOCK_INVALID) { if (!io_is_running(NULL)) break; SDL_Delay(5); continue; }
 
         char req[RECV_BUF_SIZE];
         int rl = recv_line(c, req, sizeof(req));
@@ -16970,7 +16959,7 @@ static int io_thread_main(void *arg)
         s_io_state = IO_REQ;
         SDL_CondSignal(s_io_req_cv);
         int waited = 0;
-        while (s_io_state != IO_RESP && s_io_running) {
+        while (s_io_state != IO_RESP && io_is_running(NULL)) {
             if (SDL_CondWaitTimeout(s_io_resp_cv, s_io_mutex, 1000) == SDL_MUTEX_TIMEDOUT) {
                 waited += 1000;
                 if (waited >= 30000) break;   /* emu wedged: give up on this one */
@@ -17151,17 +17140,17 @@ void debug_server_check_watchpoints(void)
 
 void debug_server_shutdown(void)
 {
-    /* Stop the I/O thread: clear the flag, close the listen socket to break the
-     * blocking accept(), then join. */
-    s_io_running = 0;
-    if (s_listen != SOCK_INVALID) {
-        sock_close(s_listen);
-        s_listen = SOCK_INVALID;
-    }
+    /* Join before closing: the worker keeps sole ownership of its sockets
+     * while its cancellable waits are active. */
+    io_set_running(0);
     if (s_io_thread) {
         if (s_io_mutex) { SDL_LockMutex(s_io_mutex); SDL_CondSignal(s_io_resp_cv); SDL_UnlockMutex(s_io_mutex); }
         SDL_WaitThread(s_io_thread, NULL);
         s_io_thread = NULL;
+    }
+    if (s_listen != SOCK_INVALID) {
+        sock_close(s_listen);
+        s_listen = SOCK_INVALID;
     }
     if (s_client != SOCK_INVALID) {
         sock_close(s_client);
@@ -17233,6 +17222,11 @@ int debug_server_get_host_pad(uint16_t *buttons, uint8_t st[4], uint8_t *lt,
 int debug_server_get_pad_type_override(void)
 {
     return s_pad_type_override;
+}
+
+int debug_server_get_pad_connected_override(int slot)
+{
+    return slot >= 0 && slot < 2 ? s_pad_connected_override[slot] : -1;
 }
 
 int debug_server_turbo_enabled(void)

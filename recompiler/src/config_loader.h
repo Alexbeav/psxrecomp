@@ -132,27 +132,6 @@ struct DrawDistanceClampSite {
     int32_t  max = 0;
 };
 
-// [[mod_immediate.sites]]: a guarded I-type instruction whose 16-bit immediate a
-// trusted mod may swap at run time. The complete word at `address` must equal
-// `expected` (an unrelated overlay word at the same address is left alone).
-// Selector 0 always runs `expected` unchanged; selector N (1-based) runs the
-// same instruction with `values[N-1]` in the immediate field. The selector
-// belongs to `group` (0..63) and is set by the mod
-// (psx_mod_set_immediate_selector). Because the instruction bytes in RAM never
-// change, static / cached native code keeps matching its original-bytes guard;
-// generated code, the interpreter and every overlay path pick the immediate
-// from the same selector. Only ADDI..LUI (0x08-0x0F) and the byte/half/word
-// loads and stores (0x20-0x2B) qualify.
-struct ModImmediateSite {
-    uint32_t address = 0;
-    uint32_t expected = 0;
-    uint32_t group = 0;
-    std::vector<uint16_t> values; // imm16 per selector 1..N
-};
-
-// Empty on success; otherwise why `site` cannot be a mod-immediate site.
-std::string mod_immediate_site_error(const ModImmediateSite& site);
-
 // True when `instr` is an ALU instruction (I-type or SPECIAL R-type, not a
 // load, store, branch or jump) that reads GPR `reg`. These are the only
 // instructions a draw-distance clamp may precede.
@@ -375,6 +354,15 @@ struct RuntimeConfig {
     // device events still advance exactly. Opt-in per game; the idle_skip
     // debug command and PSX_IDLE_SKIP environment variable support live A/B.
     bool                  idle_skip = false;
+    // idle_skip_store_counters: with idle_skip, also skip loops that count a
+    // stack timeout down once per iteration and span several block edges --
+    // PsyQ libetc's v_wait, the VSync(0) spin. Bit-exact (psx_cycles.c);
+    // PSX_IDLE_SKIP_EXT=0/1 overrides it for one run.
+    bool                  idle_skip_store_counters = false;
+    // idle_skip_store_counter_sites: the audited loop sites (block-edge PCs
+    // the detector anchors on) where the store-counter extension may skip.
+    // Unlisted sites are never skipped; an empty list disables the extension.
+    std::vector<uint32_t> idle_skip_store_counter_sites;
 
     // overlay_autocompile_cmd: variant-capture automation (step 2.8). A
     // shell command (run via cmd.exe /C, cwd = project root) that compiles
@@ -476,6 +464,12 @@ struct RuntimeConfig {
     // "fxaa_hq". Separate from the legacy antialiasing bool above, which the
     // launcher and settings.toml already persist as the linear present filter.
     int                   video_antialiasing_mode = 0;
+    // bloom: opt-in glow strength, 0.0 (off, the default) .. 2.0. A plain
+    // [video] key, so [quality.*] presets can set it.
+    float                 video_bloom = 0.0f;
+    // post_shader: a post-effect chain (.pfx, docs/POST_EFFECTS.md), "" = none.
+    // Relative paths resolve against the game root.
+    std::filesystem::path video_post_shader;
     // supersample: factor on the internal-resolution target (Match display or
     // a line preset), 1.0..4.0, kept in thousandths (internal_resolution.h).
     int                   video_supersample_milli = 1000;
@@ -601,6 +595,12 @@ struct RuntimeConfig {
     // semi-transparency truncates exactly like the PS1's 5-bit blend.
     // Default true: PS1 colour/blend correctness. OpenGL only.
     bool                  video_accurate_blending = true;
+    // dithering: PS1 dithering of Gouraud-shaded and texture-modulated
+    // polygons while the guest sets GP0(E1h) bit 9 (hardware behaviour).
+    // 1 "on" (default; "scaled" is an alias) = pattern on the native VRAM
+    // grid, identical guest VRAM at every scale; 2 "fine" = elective pattern
+    // per internal-resolution pixel; 0 "off" = true colour. OpenGL only.
+    int                   video_dithering = 1;
     bool                  video_pgxp_color_correction = false;
     int                   video_pgxp_seam = 0;
     double                video_pgxp_depth_threshold = 4096.0;
@@ -653,6 +653,9 @@ struct RuntimeConfig {
     // constants from game.toml only. See config_loader.cpp.
     int                   guest_cycle_scale = 1;
     bool                  guest_cycle_scale_gated = false;
+    // [timing] guest_cycle_scale_batch: batch the scaled CPU charge like the
+    // scale-1 path (psx_cyc.h). Same totals and observation points; opt-in.
+    bool                  guest_cycle_scale_batch = false;
     // guest_cycle_scale_gate: declarative RAM gate, judged at every VBlank;
     // the scale applies only while every predicate holds.
     struct GuestCycleScaleGatePred {
@@ -827,6 +830,13 @@ struct RuntimeConfig {
     std::string           direct_shortcut;
     std::string           direct_shortcut_button;
 
+    // experimental_jogcon_force_feedback: EXPERIMENTAL. Drive a host wheel's
+    // SDL haptics (constant force / centring spring) from a presented
+    // JogCon's motor commands. Opt-in; gamepads are never driven; direction
+    // unverified on hardware (_invert flips it).
+    bool                  experimental_jogcon_force_feedback = false;
+    bool                  experimental_jogcon_force_feedback_invert = false;
+
     // multitap_analog: DualShock-on-tap hack (default true). When true,
     // multitap bulk seats may report 0x73 + stick bytes; when false (faithful),
     // tap seats stay plain digital. Overridable by settings.toml / match_caps.
@@ -951,6 +961,31 @@ struct WidescreenMaskedRejectSite {
     uint32_t address = 0;
     uint32_t expected = 0;
     uint32_t reject_mask = 0;
+};
+
+// [quality.<name>] -- a named graphics preset (docs/QUALITY_PRESETS.md).
+// The table holds [video] keys; the preset's runtime config is the whole
+// game.toml parsed with those keys laid over [video], so every [video] key
+// (and its validation) works in a preset without being listed here.
+// The [video] keys a [quality.*] preset may set (docs/QUALITY_PRESETS.md).
+// Each is fully enforced: a preset in force masks the player's saved value,
+// a one-run override and an unrelated edit keep the disk value, a launcher
+// row or live change to it is a governed edit, and picking a preset applies
+// it. Player-editable (settings.toml form, launcher row): texture_filtering,
+// fmv_filter, antialiasing, dynamic_resolution, dynamic_resolution_min,
+// frame_generation, render_thread, present_thread, geometry_correction,
+// perspective_texturing, frame_interpolation, frame_interpolation_fps.
+// Preset-only (no settings.toml form, no row): supersample, texture_lod,
+// anisotropic_filtering, fmv_chroma_smoothing, bloom, dithering,
+// pgxp_depth_buffer, pgxp_color_correction, pgxp_seam. Any other key in a
+// preset is a load error.
+bool quality_key_supported(const std::string& key);
+bool quality_key_player_editable(const std::string& key);
+
+struct QualityPreset {
+    std::string              name;     // "low" | "medium" | "high" | "ultra"
+    RuntimeConfig            runtime;  // [video] with [quality.<name>] on top
+    std::vector<std::string> keys;     // the [video] keys this preset sets
 };
 
 struct GameConfig {
@@ -1464,8 +1499,9 @@ struct GameConfig {
     // [[draw_distance.clamp]] -- opt-in "keep far geometry" clamps. Empty by
     // default; inert until a mod switches them on; regen required.
     std::vector<DrawDistanceClampSite> draw_distance_clamp_sites;
-    // [[mod_immediate.sites]]: run-time-selectable immediates (ModImmediateSite).
-    std::vector<ModImmediateSite> mod_immediate_sites;
+    // [quality.low/medium/high/ultra] -- graphics presets, lowest first. Empty:
+    // the title has no presets and [video] alone applies (unchanged).
+    std::vector<QualityPreset> quality_presets;
 };
 
 // Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.
@@ -1560,6 +1596,14 @@ struct UserSettings {
     bool has_vsync             = false; int  vsync             = 1;
     bool has_frame_interpolation = false; bool frame_interpolation = false;
     bool has_frame_interpolation_fps = false; int frame_interpolation_fps = 0;
+    // [video] quality_* (docs/QUALITY_PRESETS.md): the graphics preset in
+    // force ("low".."ultra", or "custom" once the player changed a setting it
+    // governs), the preset a "custom" started from, the hardware fingerprint
+    // the last detection ran on, and what that detection picked.
+    bool has_quality_preset = false;   std::string quality_preset;
+    bool has_quality_base = false;     std::string quality_base;
+    bool has_quality_hardware = false; std::string quality_hardware;
+    bool has_quality_detected = false; std::string quality_detected;
     // [launcher] — when true, boot straight into the game and skip the GUI
     // launcher window (mirrors snesrecomp's SkipLauncher). Overridable per-run:
     // `--launcher` forces the GUI back on; `PSX_NO_LAUNCHER=1` forces it off.
@@ -1643,6 +1687,10 @@ struct UserSettings {
     // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
     // Default on when unset; game.toml / global prefs may override.
     bool has_multitap_analog = false; bool multitap_analog = true;
+    // EXPERIMENTAL JogCon wheel force feedback, the player's choice
+    // (settings.toml [controller] jogcon_force_feedback). Unset = the title's
+    // game.toml experimental_jogcon_force_feedback default (off).
+    bool has_jogcon_force_feedback = false; bool jogcon_force_feedback = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.

@@ -24,7 +24,8 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
                         bool save_selection = true);
 /* Prepare a preboot launcher selection; the audited runtime retains a ticket. */
 bool mod_runtime_prepare_for_launcher(const std::filesystem::path& disc_path,
-                                      std::string* error = nullptr);
+                                      std::string* error = nullptr,
+                                      const ModPrepareProgress& progress = {});
 
 /* Audited preboot only: load and verify a plan using existing receipts.
  * A miss never invokes a media converter or computes a disc digest. */
@@ -74,6 +75,9 @@ bool mod_runtime_netplay_input_active();
 /* "package/feature" keys of `plan` that qualify as own-view features. */
 std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& plan);
 const std::string& mod_runtime_fingerprint();
+/* Empty scope preserves existing slots. Isolated packages require a committed,
+ * verified content plan; resource preparation/preview alone establishes none. */
+bool mod_runtime_savestate_scope(std::string& scope, std::string* error = nullptr);
 /* Host diagnostics may copy the persisted offline selection from this root. */
 const std::filesystem::path& mod_runtime_root();
 const std::filesystem::path& mod_runtime_effective_disc_path();
@@ -108,13 +112,6 @@ void mod_runtime_on_savestate_loaded(void);
  * launcher commit and before renderer/window initialization. */
 void mod_runtime_activate_plugins(void);
 void mod_runtime_on_vblank(void);
-/* Host-side disc reads for plugins (psx_mod_read_disc_file and friends) follow
- * the image the guest drive has mounted. `path` returns the mounted image's
- * path, `index` its 1-based roster position. NULL restores the boot disc. */
-void mod_runtime_set_mounted_disc_resolver(const char* (*path)(void), int (*index)(void));
-/* Long host-side disc reads (resident pack preparation) call `hook` about every
- * 2 MiB so the emulation thread's starvation watchdog sees progress. NULL clears. */
-void mod_runtime_set_progress_hook(void (*hook)(void));
 /* Host-only callback continuation. Exception/render landings restore the live
  * outer callback; scheduler escapes restore an empty context after abandoning
  * all callbacks. Never serialize this into guest saves. */

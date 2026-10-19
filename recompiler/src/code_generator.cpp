@@ -924,42 +924,6 @@ std::string CodeGenerator::mod_instruction_call(uint32_t addr, uint32_t instr) c
         });
     return selected ? fmt::format("psx_mod_instruction(cpu, 0x{:08X}u, 0x{:08X}u);\n", addr, instr) : "";
 }
-const PSXRecompV4::ModImmediateSite* CodeGenerator::find_mod_immediate_site(
-        uint32_t addr, uint32_t instr) const {
-    const uint32_t phys = addr & 0x1FFFFFFFu;
-    bool address_listed = false;
-    for (const auto& site : config_.mod_immediate_sites) {
-        if ((site.address & 0x1FFFFFFFu) != phys) continue;
-        address_listed = true;
-        if (site.expected == instr) return &site;
-    }
-    if (address_listed && !config_.overlay_mode) {
-        fmt::print(stderr,
-                   "ERROR: [[mod_immediate.sites]] expected word does not match "
-                   "0x{:08X} at 0x{:08X}\n", instr, addr);
-        std::exit(1);
-    }
-    return nullptr;
-}
-
-std::string CodeGenerator::mod_immediate_translation(
-        uint32_t addr, uint32_t instr, const PSXRecompV4::ModImmediateSite& site) {
-    const std::string& ind = config_.indent;
-    std::string out = ind + fmt::format(
-        "switch (psx_mod_immediate_select({}u)) {{  /* mod immediate 0x{:08X} */\n",
-        site.group, addr);
-    for (size_t i = 0; i < site.values.size(); ++i) {
-        const uint32_t word = (instr & 0xFFFF0000u) | site.values[i];
-        out += ind + fmt::format("case {}u: {{ /* 0x{:08X} */\n", i + 1u, word);
-        out += translate_instruction_core(addr, word) + "\n";
-        out += ind + "    break;\n" + ind + "}\n";
-    }
-    out += ind + "default: {\n";
-    out += translate_instruction_core(addr, instr) + "\n";
-    out += ind + "    break;\n" + ind + "}\n" + ind + "}";
-    return out;
-}
-
 // [[draw_distance.clamp]]: a main-EXE ordering-table range guard. While a
 // mod has the clamps on, the site's register is clamped to `max` before the
 // instruction runs, so the guard keeps a far primitive in the last OT slot
@@ -1001,12 +965,9 @@ std::string CodeGenerator::draw_distance_clamp_prefix(uint32_t addr,
 std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) {
     std::string clamp = draw_distance_clamp_prefix(addr, instr);
     const std::string hook = mod_instruction_call(addr, instr);
-    const PSXRecompV4::ModImmediateSite* imm_site = find_mod_immediate_site(addr, instr);
-    const std::string body = imm_site ? mod_immediate_translation(addr, instr, *imm_site)
-                                      : translate_instruction_core(addr, instr);
-    if (clamp.empty()) return hook + body;
+    if (clamp.empty()) return hook + translate_instruction_core(addr, instr);
     // The core translation carries its own indent; give the clamp the same.
-    return hook + config_.indent + clamp + "\n" + body;
+    return hook + config_.indent + clamp + "\n" + translate_instruction_core(addr, instr);
 }
 
 std::string CodeGenerator::translate_instruction_core(uint32_t addr, uint32_t instr) {
@@ -1484,6 +1445,13 @@ std::string CodeGenerator::translate_instruction_core(uint32_t addr, uint32_t in
             return fmt::format("{} = psx_ws_cull_sltiu({}, {});"
                                " /* ws explicit screen-x cull */{}",
                                reg_name(rt), reg_name(rs), imm, comment);
+        } else if (opcode == 0x00 && (instr & 0x3Fu) == 0x2Bu && get_rd(instr) != 0) {
+            // sltu rd,SX,W: the width held in a register (often a loaded
+            // clip bound); SX is a 16-bit screen X. Accept the left band too.
+            return fmt::format("{} = psx_ws_cull_sltu_band({}, {});"
+                               " /* ws explicit screen-x band */{}",
+                               reg_name(get_rd(instr)), reg_name(get_rs(instr)),
+                               reg_name(get_rt(instr)), comment);
         } else if (opcode == 0x0F && get_rt(instr) != 0) {
             // lui rt,W: a screen edge kept in the high half of a register
             // (compared with `SX << 16`). Move it out by the live margin.
@@ -1494,7 +1462,7 @@ std::string CodeGenerator::translate_instruction_core(uint32_t addr, uint32_t in
                                reg_name(rt), imm, comment);
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] screen_x site 0x{:08X} "
-                       "is not sltiu, lui or bltz (0x{:08X})\n", addr, instr);
+                       "is not sltiu, sltu, lui or bltz (0x{:08X})\n", addr, instr);
             std::exit(1);
         }
         // Overlay variant: the configured main-EXE PC holds different code.
@@ -2277,10 +2245,6 @@ std::string CodeGenerator::translate_basic_block(
             if (defer_load) {
                 const std::string lhs = fmt::format("cpu->gpr[{}] =", load_dest);
                 const size_t pos = emitted.find(lhs);
-                // A [[mod_immediate.sites]] load carries one translation per
-                // selector; every copy must write the deferred temporary.
-                const bool per_selector =
-                    emitted.find("psx_mod_immediate_select(") != std::string::npos;
                 if (pos != std::string::npos) {
                     const std::string temp = fmt::format("psx_ldd_{:08X}", addr);
                     // Declare the temp in the pair block, not inline at the
@@ -2297,16 +2261,6 @@ std::string CodeGenerator::translate_basic_block(
                     if (hook != std::string::npos)
                         emitted.replace(hook, pgxp_tail.size(),
                                         fmt::format(", _pgxa, {});", temp));
-                    if (per_selector) {
-                        // The remaining selector copies, same two rewrites.
-                        for (size_t at = emitted.find(lhs); at != std::string::npos;
-                             at = emitted.find(lhs, at + temp.size()))
-                            emitted.replace(at, lhs.size(), temp + " =");
-                        for (size_t at = emitted.find(pgxp_tail); at != std::string::npos;
-                             at = emitted.find(pgxp_tail, at + 1))
-                            emitted.replace(at, pgxp_tail.size(),
-                                            fmt::format(", _pgxa, {});", temp));
-                    }
                     ss << config_.indent << "{ /* MIPS-I load-delay pair */\n";
                     ss << config_.indent
                        << fmt::format("    uint32_t {} = 0;\n", temp);
@@ -3656,8 +3610,6 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int  psx_game_text_native_ok(uint32_t addr);  /* stale-static guard (dispatch shard) */\n";
     ss << "extern int  psx_datashard_enter(CPUState* cpu, uint32_t key);  /* data-shard replay/capture (data_shards.c) */\n";
     ss << "extern void psx_mod_instruction(CPUState*, uint32_t, uint32_t);\n";
-    if (!config_.mod_immediate_sites.empty())
-        ss << "extern uint32_t psx_mod_immediate_select(uint32_t group);  /* [[mod_immediate.sites]] selector (mod_immediate.c) */\n";
     ss << "extern int psx_mod_function_entry(CPUState* cpu, uint32_t address);  /* trusted opt-in game-mod hook */\n";
     ss << "extern int psx_ws_masked_reject(uint32_t flags, uint32_t mask); /* guarded packed-coordinate reject */\n";
     ss << "extern int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla);\n";
@@ -3681,6 +3633,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     if (!config_.ws_cull_screen_x_sites.empty()) {
         ss << "extern uint32_t psx_ws_cull_lui_hi(uint32_t imm);          /* ws screen-x edge in the high half (gpu.c) */\n";
         ss << "extern int  psx_ws_cull_bltz_hi(uint32_t v);               /* ws cull left edge, X in the high half (gpu.c) */\n";
+        ss << "extern int  psx_ws_cull_sltu_band(uint32_t sx, uint32_t bound); /* ws screen-x band, W in a register (gpu.c) */\n";
     }
     ss << "extern int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm); /* ws masked-u16 X window */\n";
     ss << "extern int32_t psx_ws_depth_bound(int32_t imm);            /* ws aspect-scaled far bound */\n";

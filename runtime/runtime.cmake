@@ -20,6 +20,7 @@ include("${PSXRECOMP_ROOT}/cmake/psx_sha256_file.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_build_revision.cmake")
 
 include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_windows_manifest.cmake")
 include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
 include("${PSXRECOMP_ROOT}/runtime/openxr_dependency.cmake")
 include("${PSXRECOMP_ROOT}/runtime/overlay_static_sources.cmake")
@@ -365,6 +366,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_jogcon_ffb_sdl.cpp
     ${PSXRECOMP_ROOT}/runtime/src/local_mouse_policy.cpp
     ${PSXRECOMP_ROOT}/runtime/src/local_mouse_sdl.cpp
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
@@ -390,6 +392,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_openxr.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_controller_source.c
     ${PSXRECOMP_ROOT}/runtime/src/pad_external_input.c
+    ${PSXRECOMP_ROOT}/runtime/src/host_overlay.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_menu_host.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_pad_transform.c
     ${PSXRECOMP_ROOT}/runtime/src/vr_pose_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
@@ -408,16 +412,18 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/render_pass_frame.c
     ${PSXRECOMP_ROOT}/runtime/src/dynamic_resolution.c
     ${PSXRECOMP_ROOT}/runtime/src/host_time.c
+    ${PSXRECOMP_ROOT}/runtime/src/quality_tier.c
+    ${PSXRECOMP_ROOT}/runtime/src/quality_probe.c
+    ${PSXRECOMP_ROOT}/runtime/src/quality_presets.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/game_mode.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
     ${PSXRECOMP_ROOT}/runtime/src/memcard.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_server.c
     ${PSXRECOMP_ROOT}/runtime/src/host_sampler.c
-    ${PSXRECOMP_ROOT}/runtime/src/host_span_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_trace_ranges.c
     ${PSXRECOMP_ROOT}/runtime/src/dirty_ram_interp.c
     ${PSXRECOMP_ROOT}/runtime/src/draw_distance.c
-    ${PSXRECOMP_ROOT}/runtime/src/mod_immediate.c
     ${PSXRECOMP_ROOT}/runtime/src/game_dispatch_compat.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_segment_miss.c
     ${PSXRECOMP_ROOT}/runtime/src/fntrace.c
@@ -434,6 +440,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
+    ${PSXRECOMP_ROOT}/runtime/src/video_texture_filter.c
+    ${PSXRECOMP_ROOT}/runtime/src/video_telemetry.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_savestate_menu.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_rewind.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
@@ -1616,6 +1624,7 @@ function(psxrecomp_add_runtime_target target)
         ${PSXRT_EXTRAS_SOURCES}
     )
     target_link_libraries(${target} PRIVATE chdr-static psx_texture_image_decode)
+    psxrecomp_windows_manifest(${target})
     psxrecomp_sha256_file(${target})
     set(_execution_contract
         "${PSXRECOMP_ROOT}/runtime/src/gte.cpp"
@@ -2049,10 +2058,12 @@ function(psxrecomp_add_runtime_target target)
 
     # OpenBIOS is part of the native runtime product, not a developer-machine
     # prerequisite. Stage both the exact ROM consumed by the compiled backend
-    # and its required MIT notice beside every native executable. Release
-    # packagers copy this directory as a unit.
+    # and its required MIT notice beside executables linking that backend.
+    # Desired stems may include unavailable backends; retail-only SDKs have
+    # no OpenBIOS backend or redistributable image. Packagers copy this
+    # directory as a unit when OpenBIOS is actually linked.
     if(NOT PSXRT_ORACLE)
-        list(FIND PSXRECOMP_BIOS_STEMS "OpenBIOS" _psxrt_openbios_index)
+        list(FIND _psxrt_bios_linked "OpenBIOS" _psxrt_openbios_index)
         if(NOT _psxrt_openbios_index EQUAL -1)
             if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
                 message(FATAL_ERROR
@@ -2287,7 +2298,7 @@ function(psxrecomp_add_runtime_target target)
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
         # iphlpapi: GetAdaptersAddresses in the launcher's netplay
         # local-address discovery (MSVC does not link it implicitly).
-        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32)
+        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32 shell32)
         # Newer mingw-w64 maps clock_gettime → clock_gettime64 in libwinpthread.
         # Link it even when netplay code prefers Win32 clocks, so any residual
         # POSIX time refs (third-party / debug tools) resolve under -static.
@@ -2327,6 +2338,20 @@ function(psxrecomp_add_runtime_target target)
         # the lobby client all use pthread on Unix.
         find_package(Threads REQUIRED)
         target_link_libraries(${target} PRIVATE Threads::Threads)
+        # musl declares getcontext/makecontext/swapcontext (psx_fiber.c) but
+        # does not implement them; libucontext does.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            include(CheckSymbolExists)
+            check_symbol_exists(getcontext "ucontext.h" PSX_HAVE_GETCONTEXT)
+            if(NOT PSX_HAVE_GETCONTEXT)
+                find_library(PSX_UCONTEXT_LIBRARY ucontext)
+                if(NOT PSX_UCONTEXT_LIBRARY)
+                    message(FATAL_ERROR
+                        "getcontext is missing (musl?): install libucontext")
+                endif()
+                target_link_libraries(${target} PRIVATE "${PSX_UCONTEXT_LIBRARY}")
+            endif()
+        endif()
     endif()
 
     # ---- Vulkan backend (gpu_vk_renderer.c) --------------------------------
@@ -2439,7 +2464,7 @@ function(psxrecomp_add_runtime_target target)
             endif()
         endif()
         if(NOT PSX_PYTHON)
-            find_program(PSX_PYTHON NAMES python python3)
+            find_program(PSX_PYTHON NAMES python3 python)
         endif()
         if(NOT PSX_PYTHON)
             message(FATAL_ERROR

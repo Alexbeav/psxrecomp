@@ -8,9 +8,7 @@
 extern "C" {
 #endif
 
-/* 1 Mi samples: ~17 minutes at 1 kHz, enough to keep a whole load-transition route (16 MB,
- * debug-tools builds only) so a hitch found afterwards still has its host call sites. */
-#define HOST_SAMPLER_CAP 1048576u
+#define HOST_SAMPLER_CAP 65536u   /* ~65 s at 1 kHz */
 
 typedef struct HostSample {
     uint64_t rva;      /* instruction pointer minus the executable's base */

@@ -75,15 +75,22 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
  * overhead. `out` must hold at least `count` uint32_t ARGB entries. */
 void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
                              uint32_t count);
+/* Stage a depth24 frame into a w x di->screen_height ARGB canvas and
+ * black-fill trailing columns no upload covered (see gpu.c). Returns the
+ * source rows staged. */
+uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo* di, uint32_t* buf,
+                                   uint32_t w, uint32_t margin);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
  * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
  * else the covered RGB width. Present black-fills [limit, crtc_w) without
  * shrinking the CRTC-derived draw width (avoids a flickering black pillar). */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
-/* MotK intro cuts retarget GP1(07h). While hold > 0, present should skip
- * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
- * per vblank; returns non-zero while the hold is still active after tick. */
+/* MotK intro cuts retarget GP1(07h): the guest-state hold counts down at
+ * guest VBlank (gpu_vblank_tick). Returns non-zero while the latest guest
+ * VBlank was held (read-only; guest state in the GPU snap): presents should
+ * skip Swap (keep the prior frame) so stale trailing
+ * VRAM never flashes. */
 int      gpu_depth24_present_hold_tick(void);
 /* After savestate restore: clear ephemeral hold so the restored depth24
  * frame can present immediately (span/prev_h come from the GPU snap). */
@@ -419,6 +426,8 @@ int32_t psx_ws_screen_x_bound(int32_t vanilla);
  * `sltiu rt, sx, 0x140/0x141` through this one helper so every overlay execution
  * path widens identically. Returns the sltiu verdict (1 = keep). 0 at 4:3. */
 int  psx_ws_cull_sltiu(uint32_t sx, uint32_t imm);
+/* screen_x_sites on `sltu rd, SX, W` (W in a register): -4m <= SX < W. */
+int  psx_ws_cull_sltu_band(uint32_t sx, uint32_t bound);
 /* Signed-funnel variants (min/max + center±halfwidth idioms — see
  * ws_cull_detect.h): right-edge widen for `slti v, minSX, W` and left-edge
  * widen for the paired `bltz maxSX` reject. Identity at 4:3. */
@@ -488,10 +497,11 @@ void gpu_ws_set_adaptive_backdrop_preload(int enabled);
  * `prim` is the address of the PsyQ P_TAG word; the drawn command starts at
  * prim+4. anchor: -1 = left, 0 = center, +1 = right. */
 void gpu_ws_tag_hud_prim(uint32_t prim, int anchor);
-/* Stretch a trusted authored background polygon about the display center in
+/* Stretch a trusted authored background primitive about the display center in
  * the native-wide output only (GL/SW). prim+4 is the command address, including
- * for a command embedded inside a longer DMA packet. Only opaque polygons are
- * accepted; address, full packet contents, and frame freshness are guarded.
+ * for a command embedded inside a longer DMA packet. Only opaque polygons and
+ * variable textured rectangles (64h/65h) are accepted; address, full packet
+ * contents, and frame freshness are guarded.
  * Tag the complete background composite before submitting its ordering table.
  * The caller proves background identity/coverage; no guest data is modified. */
 void gpu_ws_tag_background_prim(uint32_t prim);
@@ -525,6 +535,11 @@ void gpu_ws_tag_black_reveal_rect(uint32_t prim);
  * reveal margins only. The caller verifies the composite's source period.
  * Original UVs, texel density, and canonical VRAM writes are unchanged. */
 void gpu_ws_tag_repeat_rect(uint32_t prim, int32_t period);
+/* Title-identified 15-bit sprite (0x64-0x67) that copies a framebuffer 1:1,
+ * e.g. a motion trail. Where it touches the draw area's edge, native-wide
+ * continues it into the bands from the source buffer's wide surface.
+ * Packet-guarded for the current frame; canonical VRAM is untouched. */
+void gpu_ws_tag_feedback_rect(uint32_t prim);
 /* Title-identified flat screen mask: extend vertical sides or horizontal
  * letterbox panels to adaptive edges, preserving the interior opening.
  * Packet guarded, cleared on reset/load, inert outside native-wide gameplay. */

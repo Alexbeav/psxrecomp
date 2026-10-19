@@ -6,6 +6,18 @@ if(NOT PSX_EXECUTION_PROFILE MATCHES "^(ENHANCED|REFERENCE)$")
     message(FATAL_ERROR "PSX_EXECUTION_PROFILE must be ENHANCED or REFERENCE")
 endif()
 
+# Identity hashes are over the TEXT of sources and contracts, with CRLF read
+# as LF. A Windows checkout with core.autocrlf=true has CRLF in every text
+# file (including generated/), so hashing raw bytes gave a Mac and a PC build
+# of the same commits different PSX_EXECUTION_IDs, and the netplay content
+# gate refused the session ("content mismatch").
+function(_psx_execution_text_sha256 path out)
+    file(READ "${path}" _text)
+    string(REPLACE "\r\n" "\n" _text "${_text}")
+    string(SHA256 _hash "${_text}")
+    set(${out} "${_hash}" PARENT_SCOPE)
+endfunction()
+
 function(_psx_execution_stamp target)
     get_target_property(_profile ${target} PSX_EXECUTION_PROFILE)
     get_target_property(_families ${target} PSX_IMPLEMENTATION_FAMILIES)
@@ -18,7 +30,7 @@ function(_psx_execution_stamp target)
     set(_shared_identity "")
     if(_shared_files)
         foreach(_source IN LISTS _shared_files)
-            file(SHA256 "${_source}" _hash)
+            _psx_execution_text_sha256("${_source}" _hash)
             string(APPEND _shared_identity "${_hash}\n")
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_source}")
         endforeach()
@@ -33,7 +45,7 @@ function(_psx_execution_stamp target)
         foreach(_source IN LISTS _sources)
             # Generated private bodies must exist before configure. Their bytes,
             # not workstation paths, identify the implementation.
-            file(SHA256 "${_source}" _hash)
+            _psx_execution_text_sha256("${_source}" _hash)
             string(APPEND _source_identity "${_hash}\n")
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_source}")
         endforeach()

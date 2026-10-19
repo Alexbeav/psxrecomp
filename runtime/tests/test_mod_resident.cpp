@@ -33,6 +33,8 @@ extern "C" uint16_t psx_read_half(uint32_t a) {
 extern "C" void psx_write_half(uint32_t a, uint16_t v) {
     psx_write_byte(a, (uint8_t)v); psx_write_byte(a + 1, (uint8_t)(v >> 8));
 }
+/* Side-effect-free peek (memory.c); host-output observation reads. */
+extern "C" int psx_peek_word(uint32_t, uint32_t* out) { *out = 0; return 0; }
 extern "C" uint32_t psx_read_word(uint32_t a) {
     return (uint32_t)psx_read_half(a) | (uint32_t)psx_read_half(a + 2) << 16;
 }
@@ -57,7 +59,6 @@ extern "C" int psx_ws_x_margin(void) { return 0; }
 extern "C" void gpu_get_display_info(GpuDisplayInfo* out) { *out = GpuDisplayInfo{}; }
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
 extern "C" int fntrace_is_game_started(void) { return 1; }
-extern "C" int psx_netplay_active(void) { return 0; }
 extern "C" void gpu_ws_tag_hud_primitive(uint32_t, int) {}
 extern "C" void gpu_ws_tag_world_primitive(uint32_t, int) {}
 extern "C" void gpu_ws_set_adaptive_backdrop_preload(int) {}
@@ -68,6 +69,8 @@ extern "C" { uint64_t s_frame_count = 0; }
 static uint64_t cycles;
 extern "C" uint64_t psx_get_cycle_count(void) { return cycles; }
 extern "C" void gpu_ws_tag_radial_screen_mask_quad(uint32_t, float) {}
+extern "C" void gpu_ws_tag_feedback_rect(uint32_t) {}
+extern "C" int psx_netplay_active(void) { return 0; }
 /* mod_runtime.cpp's lobby netplay commit reads the negotiated match caps.
  * No lobby match is negotiated in this test. */
 static PsxLobbyMatchCaps no_match_caps;
@@ -168,31 +171,6 @@ int main() {
     check(psx_mod_disc_file_extent("DATA/B.BIN", &lba, &size) && lba == 24 && size == 5000,
           "extent query reports the effective record");
     check(!psx_mod_disc_file_extent("DATA", &lba, &size) && !lba && !size, "extent rejects directories");
-
-    /* A multi-disc title swaps images mid-session: host reads follow the
-     * resolver the runtime registers, and the boot disc is read again once it
-     * is cleared. The second image holds B.BIN with a different extent. */
-    {
-        std::vector<uint8_t> iso2 = iso;
-        const size_t b2 = a_rec + (size_t)iso2[a_rec];
-        for (unsigned i = 0; i < 4; ++i) {
-            iso2[b2 + 2 + i] = (uint8_t)(25u >> (i * 8));
-            iso2[b2 + 10 + i] = (uint8_t)(1234u >> (i * 8));
-        }
-        const fs::path iso2_path = root / "disc2.iso";
-        write_bytes(iso2_path, iso2);
-        static std::string swapped = iso2_path.string();
-        static int selected = 2;
-        mod_runtime_set_mounted_disc_resolver(
-            [](void) -> const char* { return swapped.c_str(); }, [](void) -> int { return selected; });
-        check(psx_mod_mounted_disc() == 2, "mounted disc index reported");
-        check(psx_mod_disc_file_extent("DATA/B.BIN", &lba, &size) && lba == 25 && size == 1234,
-              "extent follows the mounted disc");
-        mod_runtime_set_mounted_disc_resolver(nullptr, nullptr);
-        check(psx_mod_mounted_disc() == 0, "no resolver: single-image session");
-        check(psx_mod_disc_file_extent("DATA/B.BIN", &lba, &size) && lba == 24 && size == 5000,
-              "extent reads the boot disc again");
-    }
 
     PSXResidentFile files[2] = {{"DATA/A.BIN", 3000, a_sha.c_str()},
                                 {"data/b.bin", 5000, b_sha.c_str()}};
@@ -321,32 +299,6 @@ int main() {
 #else
     setenv("PSX_RESIDENT_CACHE", (root / "cache").string().c_str(), 1);
 #endif
-
-    /* A memory-only spec never touches the cache folder: no pack is read from
-     * or written to it, even though a verified pack of this format sits there. */
-    {
-        const fs::path memdir = root / "cache" / "ResidentTest";
-        size_t packs_before = 0;
-        for (const auto& e : fs::directory_iterator(memdir))
-            packs_before += e.path().extension() == ".pack";
-        PSXResidentSpec mem = spec;
-        mem.format = "rt-mem-v1";
-        mem.memory_only = 1;
-        mem.derive_user = (void*)&a_padded;
-        const int derived_before = derive_calls;
-        pack = psx_resident_prepare(&mem);
-        check(pack && psx_resident_file(pack, 1, nullptr, nullptr), "memory-only spec prepares");
-        check(status().find("prepared (memory only)") != std::string::npos, "memory-only state reported");
-        size_t packs_after = 0;
-        bool wrote = false;
-        for (const auto& e : fs::directory_iterator(memdir)) {
-            packs_after += e.path().extension() == ".pack";
-            wrote |= e.path().filename().string().rfind("rt-mem-v1-", 0) == 0;
-        }
-        check(!wrote && packs_after == packs_before, "memory-only spec writes no cache file");
-        pack = psx_resident_prepare(&mem);
-        check(pack && derive_calls == derived_before + 4, "memory-only spec rebuilds on every prepare");
-    }
 
     /* Service ring: frame window, newest-first selection, oldest-first
      * output, eviction past capacity. */

@@ -25,6 +25,11 @@ typedef int (*PSXModFunctionFilterCallback)(struct CPUState* cpu,
  */
 int psx_mod_register_activation_plugin(const char* id,
                                        PSXModActivationCallback callback);
+/* Host-only cleanup before each plan activates, including plans that omit this
+ * plugin, and when netplay clears the offline plan. Runs with emulation stopped
+ * and without a current feature/resource context. Never mutate guest state. */
+int psx_mod_register_session_reset_plugin(const char* id,
+                                          PSXModActivationCallback callback);
 int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
 /* Runs after successful guest-state restore, before the restored PC resumes.
@@ -110,10 +115,6 @@ int psx_mod_game_started(void);
  * otherwise capacity must hold the entire file. Active sector mods apply. */
 int psx_mod_read_disc_file(const char* path, void* buffer, uint32_t capacity,
                            uint32_t* size);
-/* 1-based roster index of the disc image the guest drive has mounted, or 0
- * for a single-image session. It changes when the player swaps discs; the
- * psx_mod_read_disc_file / psx_mod_disc_file_extent calls read that image. */
-int psx_mod_mounted_disc(void);
 /* Effective-disc LBA and byte size of a file (directory records patched by
  * active mods apply, so a relocated file reports its new extent). */
 int psx_mod_disc_file_extent(const char* path, uint32_t* lba, uint32_t* size);
@@ -293,6 +294,10 @@ void psx_mod_tag_radial_screen_mask_quad(uint32_t primitive, float scale);
 /* Exclude a known world packet from screen-space backdrop stretching, even
  * if it sorts before the first shaded polygon. Zero clears a recycled tag. */
 void psx_mod_tag_world_primitive(uint32_t primitive, int is_world);
+/* A 15-bit sprite (P_TAG address) that copies a framebuffer 1:1, such as a
+ * motion trail: native-wide continues it into the bands. Tag it each frame
+ * after the title built it; inert at native 4:3. */
+void psx_mod_tag_feedback_rect(uint32_t primitive);
 /* Enable aspect-derived column selection for a title that opted into the
  * auto_backdrop detector. No effect on titles that did not opt in. */
 void psx_mod_set_adaptive_backdrop_preload(int enabled);
@@ -376,6 +381,38 @@ int psx_mod_option_value(const char* package_id, const char* feature_id,
  * The same committed-plan and buffer rules as psx_mod_option_value apply. */
 int psx_mod_current_option_value(const char* option_id,
                                  char* out, uint32_t out_size);
+/*
+ * Live option changes (in-game overlay P5). A trusted plugin that can re-read
+ * an option on a running game registers an option-changed callback under its
+ * plugin id; it runs in that plugin's context (psx_mod_current_option_value
+ * already answers the new value) and returns 1 if the change took effect now.
+ *
+ * psx_mod_set_option_live records a new value for a committed feature's
+ * option for the rest of the session and notifies its plugin. Returns 1 when
+ * a plugin applied it live; 0 when the feature has no live-capable plugin (or
+ * is not in the plan) -- then nothing changes until the next start; -1 when
+ * refused: during netplay the plan is
+ * negotiated between peers and must not change. Persisting the choice stays
+ * the mod provider's job (mods/state.toml).
+ */
+typedef int (*PSXModOptionChangedCallback)(const char* option_id, const char* value);
+int psx_mod_register_option_changed_plugin(const char* id,
+                                           PSXModOptionChangedCallback callback);
+int psx_mod_set_option_live(const char* package_id, const char* feature_id,
+                            const char* option_id, const char* value);
+/* 1 when the committed feature's plugin registered an option-changed callback
+ * (so a live set can take effect now). Read-only; any thread. */
+int psx_mod_option_live_capable(const char* package_id, const char* feature_id);
+/* Write the player's current selection (feature switches and option values,
+ * as edited through the launcher mod provider) to mods/state.toml now,
+ * without re-resolving the running plan. Main thread. 1 on success. */
+int psx_mod_save_selection(void);
+/* Switch a feature on/off or set one of its options in the selection (not
+ * the committed plan; psx_mod_save_selection persists it). Main thread.
+ * Returns 1 on success. Used by the in-game menu host. */
+int psx_mod_feature_enable(const char* package_id, const char* feature_id, int enabled);
+int psx_mod_feature_set_option(const char* package_id, const char* feature_id,
+                               const char* option_id, const char* value);
 /*
  * Read the committed owner-selected path for a resource declared by the
  * package feature whose trusted plugin is currently running. Returns 0 when
@@ -572,6 +609,14 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
  * partially updated plugin state) across guest code, or tolerate the abort. */
 int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
                         PSXModRenderPassFn fn, void* user);
+/* Isolated draw/readback using the stereo-capable rollback transaction.
+ * Never publishes an eye pair or changes presentation. Returns native-sized
+ * top-to-bottom RGBA8 pixels (alpha remains the PSX mask bit, not coverage).
+ * Call outside another pass. rgba_bytes must cover rect->w*rect->h*4. */
+int psx_mod_render_capture_rgba(struct CPUState *cpu,const PSXModRenderPass *rect,
+                               PSXModRenderPassFn fn,void *user,
+                               uint8_t *rgba,uint32_t rgba_bytes);
+#define PSX_MOD_RENDER_CAPTURE_RGBA 1
 /*
  * Why passes cannot run right now, the host-time budget aside (a plan that
  * returns 0 while this says READY was shed for time). A plugin that relies on
@@ -681,6 +726,21 @@ int psx_mod_openxr_end(int pair_rendered);
  * Dimensions and distance are meters; zero distance restores projection.
  * Requests reset at begin/end and never affect faithful guest rendering. */
 int psx_mod_openxr_quad(double distance_m, double width_m, double height_m);
+/* Additive, frame-local LOCAL-space surface. Called between XR begin/end and
+ * outside guest replay. Pixels are tightly packed bottom-to-top sRGB RGBA8,
+ * straight alpha, copied synchronously; caller retains ownership. IDs 0..1.
+ * Pose is raw XR LOCAL meters/quaternion x,y,z,w, not recentered game units.
+ * Missing requests disappear next frame. Returns 0 without replacing scene UI. */
+typedef struct PSXModOpenXRSurface {
+    uint32_t struct_size, id, width_px, height_px, flags;
+    float position_m[3], orientation_xyzw[4], size_m[2];
+    const uint8_t *rgba;
+} PSXModOpenXRSurface;
+#define PSX_MOD_OPENXR_SURFACES 1
+/* Ignore surface orientation: aim at predicted eye midpoint, upright in LOCAL
+ * space. Both eyes use the same plane. Position remains caller-controlled. */
+#define PSX_MOD_OPENXR_SURFACE_FACE_HEAD 1u
+int psx_mod_openxr_surface(const PSXModOpenXRSurface *surface);
 /* Opt-in native presentation surface for boot, videos and menus. Copies the
  * freshly drawn desktop content before host overlays, without guest replay.
  * Zero distance disables it. Applications disable it before scene begin and
@@ -854,20 +914,6 @@ int psx_mod_set_disc_speed(uint32_t divisor,
 int psx_mod_set_draw_distance_clamp(int enabled);
 int psx_mod_draw_distance_clamp_enabled(void);
 
-/*
- * Select the immediate variant of one [[mod_immediate.sites]] group
- * (mod_immediate.h). Selector 0 runs the stock instructions; N runs
- * values[N-1] of every site in `group`. The instruction bytes in RAM never
- * change, so static and cached native code stay valid. Returns 1 when the
- * title configured sites, 0 otherwise (nothing the guest sees changes), and
- * rejects a group >= 64 or a selector > 15. Reset to 0 at every session start:
- * call it from activation, before the guest runs. The caller owns the memory
- * layout the selector implies (a savestate or card written under another
- * selector is not interchangeable).
- */
-int psx_mod_set_immediate_selector(uint32_t group, uint32_t selector);
-uint32_t psx_mod_immediate_selector(uint32_t group);
-
 /* Controller presentation values exposed to trusted game-owned plugins. */
 enum {
     PSX_MOD_CONTROLLER_ANALOG = 1,
@@ -967,6 +1013,10 @@ typedef struct PSXModControllerState {
 } PSXModControllerState;
 typedef int (*PSXModControllerSource)(PSXModControllerState *state);
 int psx_mod_set_controller_source(uint32_t player, PSXModControllerSource source);
+/* Presence of an attached offline source (default connected). A diagnostic
+ * source may explicitly emulate an unplugged pad without falling back to a
+ * physical controller assigned to that port. Cleared on detach/session reset. */
+int psx_mod_set_controller_source_connected(uint32_t player, int connected);
 
 /* Title pad transform (stage 2b above). Offline local play only: never under
  * netplay or rollback resim (the session is vanilla), selfcheck replay or a
@@ -982,7 +1032,8 @@ int psx_mod_set_controller_source(uint32_t player, PSXModControllerSource source
  * host_flags bit 0 = a
  * gamepad is assigned, bit 1 / bit 2 = it has a left / right trigger axis;
  * host_lt / host_rt are those triggers, 0 released .. 255 fully pressed
- * (0 when absent or while the savestate input guard is armed).
+ * (0 when absent or while the savestate input guard is armed). Bit 3 marks
+ * axes/type supplied by an offline input source (PSX_MOD_PAD_HOST_SOURCE).
  *
  * The output arrives pre-filled with the stock pad (what the player gets
  * without a transform, so a digital pad keeps its fold and centred sticks;
@@ -1009,7 +1060,10 @@ enum {
 enum {
     PSX_MOD_PAD_HOST_GAMEPAD = 1u << 0,
     PSX_MOD_PAD_HOST_LT = 1u << 1,
-    PSX_MOD_PAD_HOST_RT = 1u << 2
+    PSX_MOD_PAD_HOST_RT = 1u << 2,
+    /* Axes/type came from an offline input source, rather than the host.
+     * Transforms can preserve already transformed diagnostic recordings. */
+    PSX_MOD_PAD_HOST_SOURCE = 1u << 3
 };
 typedef struct PSXModPadFrame {
     uint32_t struct_size, player, buttons, lx, ly, rx, ry, type;
@@ -1103,6 +1157,14 @@ typedef struct PSXModMousePolicy {
     void (*sample)(uint64_t now_ns, PSXModMouseOutput* output);
 } PSXModMousePolicy;
 int psx_mod_set_local_mouse_policy(const PSXModMousePolicy* policy);
+/* Optional action-game capture: click once to capture, Escape to release.
+ * Later clicks reach the normal bindings. Existing hold-to-look is default. */
+int psx_mod_set_local_mouse_persistent_capture(int enabled);
+/* Optional persistent-capture companion: keep existing capture through title
+ * eligibility changes (menus/cutscenes/loading), Start and host stalls, while
+ * clearing mouse motion and suspending output. Focus loss, host UI, disconnect,
+ * native right-stick takeover and Escape still release. Never auto-acquires. */
+int psx_mod_set_local_mouse_capture_across_transitions(int enabled);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.

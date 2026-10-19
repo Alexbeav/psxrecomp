@@ -447,49 +447,6 @@ max      = 0x1BF
 - Regenerate after changing the list. With no sites the generated code is
   unchanged.
 
-## Mod immediates (`[mod_immediate]`)
-
-A trusted mod sometimes needs the same compiled instruction to behave
-differently from one session to the next without changing the guest bytes
-(a capacity compared against `slti v0, a0, 32`, a table address formed by
-`addiu a1, a1, 0x6988`, a struct offset in `lbu v0, 0x2E9(v1)`). Patching RAM
-fails for statically compiled code: every function carries a CRC of its
-original bytes and a patched function drops to the interpreter. Listing the
-instruction as a mod immediate site keeps the bytes and the CRC, and moves the
-choice into the generated code:
-
-```toml
-[mod_immediate]
-sites = [
-  { address = "0x80023500", expected = "0x28820020", group = 1, values = [0x40, 0x80] },  # slti v0, a0, 0x20
-  { address = "0x80023B14", expected = "0x24A5AEB1", group = 1, values = [0xAEB1, 0x9000] },
-]
-```
-
-- `expected` is the complete word at `address` and must be an I-type ALU
-  instruction (`ADDI`..`LUI`, opcodes 0x08-0x0F) or a byte/half/word load or
-  store (`LB`..`SW`, 0x20-0x2B). Branches, jumps and R-type instructions are
-  refused. `group` is 0..63; `values` lists up to 15 replacement 16-bit
-  immediates (decimal, hex, or negative), selector 1 first.
-- Selector 0 is the original instruction. A trusted plugin selects variant N of
-  every site in a group with `psx_mod_set_immediate_selector(group, N)` from its
-  activation callback; the selector is 0 again at every session start, so an
-  inactive mod, a disabled feature and netplay all run the stock code.
-- Generated code emits `switch (psx_mod_immediate_select(group))` with one case
-  per value, each translated exactly like the instruction it stands for
-  (cycle accounting, PGXP hooks, load-delay handling), plus the original as the
-  default. The dirty-RAM interpreter substitutes the same word
-  (`psx_mod_immediate_patch`), so native and interpreted execution agree. The
-  forwarder is part of the overlay ABI (v31).
-- A site is keyed by physical address and word. Overlays share load addresses,
-  so one address may carry several sites with different words; a variant whose
-  word differs is left alone in overlay mode and is an error in a main EXE.
-- The sites enter the overlay-cache identity (the hash changes only when the list
-  is non-empty). Regenerate after changing the list; with no sites the generated
-  code is unchanged.
-- The mod owns the consequences: a relocated table needs its own free memory and
-  a save written under one selector is not interchangeable with another's.
-
 ## Runtime block
 
 Consumed by the cmake macro `psxrecomp_v4_add_runtime_target` (eventually)
@@ -535,6 +492,93 @@ overlay_region_floor = "0x10000"   # optional: lowest RAM address treated as ove
                                     # 0x80010000, Driver 2 mission pages) so it is overlay-cache
                                     # eligible. Clamped >= 0x10000; PSX_OVERLAY_REGION_FLOOR overrides.
 ```
+
+`idle_skip` only elides loops with no stores and one interrupt-check edge.
+`idle_skip_store_counters = true` (with `idle_skip`; `PSX_IDLE_SKIP_EXT=0/1`
+overrides it for one run) also elides loops that count a stack timeout down
+by one each pass and span up to eight block edges: PsyQ libetc's `v_wait`,
+the `VSync(0)`/`VSync(n)` spin most PsyQ titles run every frame. The skip
+lowers the counter by the number of passes it skips (several edges per pass are
+accepted only together with such a counter store; the device distance is
+measured from the current cycle, not from the devices' last service) (never to 1 or below, so
+the real timeout test still runs) and lands on the loop's first edge strictly
+before the next device event, so an interrupt is taken at the same edge as
+without it. Guest cycles, device-register writes and scratchpad writes are
+unchanged; the only difference is that the skipped passes' stores to the
+counter word are not individually made (`frame_fingerprint` `wc`/`ws` count
+fewer writes, its judge columns match). In R4 races it removes about a quarter
+of the emulation thread's time. Off under netplay, like `idle_skip`.
+
+#### Developer contract for `idle_skip_store_counters`
+
+**Eligibility is an audited allowlist, not an automatic guarantee.** The
+detector can check a loop's shape over the passes it observes. It cannot prove
+that the loop has no later exit that depends on the counter (for example, an
+exit at `counter == 500`): a skip would jump past it. So the extension only
+skips at sites the title's developer has audited and declared:
+
+```toml
+[runtime]
+idle_skip = true
+idle_skip_store_counters = true
+# Block-edge PCs of each audited loop (the detector anchors on either).
+idle_skip_store_counter_sites = ["0x8008B4D0", "0x8008B518"]
+```
+
+Unlisted sites are never skipped. An empty or missing list turns the
+extension off, and the runtime log says so. Before adding a site, read the
+loop's code and record its exit structure next to the list: every exit that
+depends on the counter must be the final timeout test (the counter reaching
+the value the skip stops short of), and no other code may read the counter.
+
+R4 (SLUS-00797) is the reference audit. PsyQ libetc `v_wait` sits at
+`0x8008B4A8`:
+
+1. It stores `timeout << 15` to `0x10(sp)` and returns at once if the VSync
+   count at `0x800A6548` has already reached the target.
+2. **`0x8008B4D0`:** it loads the counter, subtracts 1, stores it and reloads
+   it. If it equals -1 it takes the timeout path (`0x8008B4F0`: prints
+   "VSync: timeout", calls `ChangeClearPAD(0)` and `ChangeClearRCnt(3, 0)`,
+   then jumps to the exit).
+3. **`0x8008B518`:** it reloads the VSync count and branches back to
+   `0x8008B4D0` while the count is still below the target.
+4. **`0x8008B530`:** the exit.
+
+The only exit that depends on the counter is the `== -1` timeout test. The skip
+never takes the counter to 1 or below, so that test always runs for real. The
+counter is a private stack slot of this frame.
+
+A skip leaves out stores to the counter word that the guest would have made.
+That is invisible only if nothing observes the word between those stores. The
+assumptions, and how each one is enforced:
+
+| Assumption | Enforced by |
+|---|---|
+| The loop makes exactly one guest store per pass: a 4-byte-aligned word in RAM or the scratchpad, at the same address every pass, one lower each pass. | `idle_stores_ok` plus the address/value check at the anchor. Any other store count, any device or BIOS-area address, or a changed pattern resets the detector. |
+| The loop touches no MMIO, so it cannot start DMA, acknowledge an IRQ or poll a device mid-span. | `g_mmio_access_count` must be unchanged across the pass. |
+| Everything else in the pass is a pure function of the registers. Only the counter register and the counter word progress; every other GPR is invariant at the anchor. | The register snapshot is compared at the anchor; one progress register is allowed, and only if it moves in step with the word. |
+| No other observer (IRQ handler, DMA, timer, SPU, CD, GPU, host-side mod or debugger code) runs between two device events. | The skip lands on the anchor strictly before the next scheduled device event, measured from the current cycle. Every IRQ, DMA completion and VBlank callback therefore sees the counter value that unskipped execution would have stored at that same edge. Host mod hooks run only at VBlank or at function entry, and neither happens inside the span. |
+| The loop has no exit that depends on the counter, except the final timeout test. | **Not checkable by the detector.** It is the caller's audit: only the sites listed in `idle_skip_store_counter_sites` are eligible. |
+| The loop's own exit test still runs. | The counter is never lowered to 1 or below, so the `--timeout == -1` path executes for real. |
+| The game does not read the counter word through another pointer, inside or outside the loop. | Partly checked: a read that changes a register or the edge count resets the detector. Otherwise this is part of the site audit. |
+
+What differs from unskipped execution: the guest store count (`frame_fingerprint`
+`wc`/`ws`) and the host time. Guest cycles, device-register writes, scratchpad
+and RAM contents at every device event are the same. That is why the judge
+columns `cyc`, `mmio`, `mc`, `sp`, `sc` and `qc` must match. A title that
+breaks one of the assumptions in a way the detector cannot see (for example, a
+second CPU-side writer driven by a device it does not schedule) must leave
+the key off.
+
+Evidence (R4, OpenBIOS, M4 release build with debug tools, `frame_fingerprint`, key off vs on):
+
+- boot into attract: 9000 frames
+- race from a savestate: 3600 frames
+- all judge columns identical, 0 dispatch misses
+- `wc`/`ws` lower with the key on
+
+The other psxrecomp titles have no disc in this test setup, so they keep the
+key off until they are run the same way.
 
 ### `turbo_loads` / `offer_turbo_loads` — deprecated and ignored
 
@@ -598,6 +642,13 @@ a build compiled with Vulkan support. `offer_vulkan` controls launcher
 visibility only; it defaults to false so game projects must explicitly expose
 Vulkan after validating their visuals and stability.
 
+### Graphics presets (`[quality.low|medium|high|ultra]`)
+
+Optional named presets of supported `[video]` keys (the set is listed in
+QUALITY_PRESETS.md; any other key is a load error), laid over `[video]`, with hardware
+detection on first launch, a launcher Graphics preset row, Re-detect and a
+Custom state. See [QUALITY_PRESETS.md](QUALITY_PRESETS.md).
+
 ### Internal resolution (`internal_resolution`, `supersampling`)
 
 The player picks a preset in Settings → Display → **Internal resolution**:
@@ -646,6 +697,35 @@ the pixels to show it. Native keeps the window exactly as before.
 `supersampling = N` renders at N times the native resolution per axis and
 downsamples to the window. It accepts 1 to 32 in both `game.toml` and the
 player's `settings.toml`; 1 (the default) is native and unchanged.
+
+### Bloom (`bloom`)
+
+Opt-in glow around lights, OpenGL only. Off (0) changes nothing.
+
+```toml
+[video]
+bloom = 1.0                     # 0.0 (off, default) .. 2.0 strength
+```
+
+Only what 3D primitives (proven from GTE data, so it needs PGXP geometry) and
+additive semi-transparent primitives (blend modes 1 and 3) drew can glow: each
+draw marks its pixels in a spare stencil bit, and a sprite, fill or HUD element
+drawn over them clears the mark. The marks gate both ends of the pass: only
+marked pixels feed the bright pass, and only marked pixels take the glow back,
+so a HUD, sprite or fill pixel is never changed, even right next to a lamp
+(the halo spreads over 3D surroundings only). The pass runs on the composed
+game image like `antialiasing_mode` (before it, sharing its copy texture and
+full-screen pass): a quarter-resolution bright pass, three Gaussian iterations
+and a screen blend.
+It follows 4:3, native-wide, supersample, dynamic resolution, the render
+thread and Smooth motion (generated frames carry the marks of the frame they
+are drawn from). Without PGXP geometry only additive primitives glow.
+Bloom is the built-in `bloom` chain of the post-effect pipeline
+(`docs/POST_EFFECTS.md`), which also loads your own chains through
+`post_shader = "<file>.pfx"` (relative to the game root; `PSX_POST_SHADER`).
+`PSX_BLOOM=<0..2>` overrides it for one run and the `bloom` TCP command reads
+or changes it live. It is one of the supported quality keys, so a
+`[quality.*]` preset can turn it off on low-end machines.
 
 ### Anti-aliasing (`antialiasing_mode`, `supersample`)
 
@@ -768,6 +848,36 @@ first layer's full 8-bit result where the console would have truncated it to
 5 bits first (at most one 5-bit step). OpenGL only.
 `PSX_ACCURATE_BLENDING=0|1` overrides it for one run and the
 `accurate_blending` TCP command switches it live.
+### Dithering (`dithering`)
+
+```toml
+[video]
+dithering = "on"      # on (default) | fine | off
+```
+
+The PS1 GPU dithers while the game sets GP0(E1h) bit 9: it adds a 4x4
+offset pattern to every pixel of a Gouraud-shaded polygon or line and of a
+texture-modulated polygon, then truncates to 5 bits per channel. Flat
+untextured primitives, raw-texture polygons and all rectangles (sprites) are
+never dithered. Eligibility is decided per primitive from its command and
+carried to the shader, never guessed from colours.
+
+`on` (the default; `scaled` is accepted as an alias) is that hardware
+behaviour with the pattern on the native VRAM grid, so it looks like the
+console at any internal scale and the VRAM a game reads back is identical at
+every scale. `fine` is elective: the pattern per internal-resolution pixel, a
+grain that all but vanishes at high scales (guest VRAM then depends on the
+scale). `off` is the old true-colour output (8 bits per channel, no pattern).
+
+Semi-transparent primitives are an approximation: the pattern is applied to
+the source colour before blending, while the console dithers the blended
+result at its final 8-to-5-bit write. Fixed-function GL blending cannot run
+a shader after the blend (GL 3.3 has no framebuffer fetch, and macOS offers
+none), so a dithered semi-transparent pixel can differ from the console by
+one 5-bit step; opaque pixels match exactly. The dither output follows the
+surface colour basis, so it composes with `accurate_blending`. OpenGL only;
+the software and Vulkan renderers do not dither. `PSX_DITHERING=0|1|2`
+overrides it for one run and the `dithering` TCP command switches it live.
 
 ### Texture filtering (`texture_filtering`)
 
@@ -910,6 +1020,24 @@ pad with the louder of that and the guest's SIO motors; a value lapses 8
 VBlanks after the last call and all are cleared at every mod/session reset.
 `PSX_RUMBLE_TRACE=1` logs every change, headless included.
 
+**EXPERIMENTAL:** JogCon wheel force feedback is a player setting,
+`settings.toml [controller] jogcon_force_feedback` (off by default; the
+launcher / in-game menu toggle writes it via
+`RecompLauncherCSettings.jogcon_force_feedback` (recomp-launcher; read behind
+`RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK`, so other providers still build), applied live through
+`psx_jogcon_ffb_set_player_enabled`). A title may set its default with
+`game.toml [controller] experimental_jogcon_force_feedback` (off when
+absent); the player's setting always wins. When on, it drives a host
+force-feedback wheel's SDL haptics from a presented JogCon's motor commands: a constant force for turn commands 1 and 2, and a centring
+spring for hold. It is off by default. Gamepads and devices without constant
+or spring haptics are never driven. Every force has a 120 ms lifetime and is
+renewed each VBlank, so a pause, stall or crash leaves the wheel slack. The
+Rewind and save-state pause menus, disconnects and session end also stop it
+explicitly. The turn direction has not been checked on JogCon hardware or a
+physical wheel; `experimental_jogcon_force_feedback_invert = true` flips it.
+SDL has no virtual haptic device, so CI covers the driver with a recording
+backend and the SDL backend only against an SDL3 virtual wheel (no haptics).
+
 Bezel artwork is intentionally not a `[video]` key. It is exposed as the
 disabled-by-default `psx.presentation.bezel` mod package, which draws a
 user-selected image resource behind the game image in OpenGL letterbox or
@@ -956,6 +1084,22 @@ the `cpu_charge` callback into the same function), the dirty-RAM
 interpreter and the BIOS all charge CPU work through it; mul/div and GTE
 latencies are scaled where their deadline is set. At 1 the CPU charge is
 exactly the device advance and nothing else changes.
+
+`guest_cycle_scale_batch = true` (opt-in; `PSX_GCS_BATCH=0/1` for one run)
+scales each CPU charge where it is made and then batches it like the scale-1
+path, instead of publishing every one-cycle step to the devices. The
+fractional carry and the flush points (stores, MMIO, interrupt checks, device
+deadlines) are the same, so guest-visible timing is unchanged. In R4 races,
+`frame_fingerprint` A/Bs over 9000 frames (boot to attract, 1P race, 2P VS
+race) agree on `cyc`, `mmio` and `mc` on every frame. They also end with
+identical ordered write hashes. The only differences are one-frame VBlank
+straddles of `wc`/`sc`, as documented for batched code.
+
+The scale and selected batching profile are fixed at session startup and
+included in the existing netplay compatibility fingerprint. Peers with
+different batching choices cannot start together. Both paths use portable C;
+this does not authorize compatibility between otherwise different builds or
+replace the existing game/core/config identity checks.
 
 Gates (all present gates must be open; with none the scale always applies):
 

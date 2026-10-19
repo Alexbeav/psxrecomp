@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace PSXRecompV4 {
@@ -196,6 +197,9 @@ struct ModOverlay {
     ModPatchTarget target = ModPatchTarget::DiscRaw;
     uint64_t location = 0;
     std::filesystem::path file;
+    // Format 10: verified same-feature derived resource instead of a package file.
+    std::string resource_id;
+    uint64_t resource_offset = 0;
     std::string sha256;
     std::string expected_sha256;
     uint64_t size = 0;
@@ -223,6 +227,11 @@ struct ModPlugin {
      * before it is staged (psx_mod_set_pad_transform). Online it stays on per
      * player: the post-transform pad is what every peer simulates. */
     bool netplay_input = false;
+    /* netplay = "host_output": the plugin only reads guest state and drives
+     * host output (rumble, haptics). Online it stays on per player and its
+     * hooks run in the shared simulation, but every guest write it attempts
+     * is refused there, so it can never diverge the peers. */
+    bool netplay_host_output = false;
 };
 
 struct ModResource {
@@ -310,6 +319,9 @@ struct ModPackage {
     std::vector<ModDerivedDisc> derived_discs;
 };
 
+// False requests cancellation. Providers report between bounded work units
+// and before publishing outputs; no UI code runs on the preparation worker.
+using ModPrepareProgress = std::function<bool(float, const std::string&)>;
 struct ModPrepareContext {
     const ModPackage& package;
     std::string feature_id;
@@ -317,6 +329,7 @@ struct ModPrepareContext {
     std::filesystem::path cache_root;
     std::filesystem::path application_dir;
     std::map<std::string, std::filesystem::path> inputs;
+    ModPrepareProgress progress;
 };
 using ModMediaPreparer = std::function<bool(const ModPrepareContext&,
     std::map<std::string, std::filesystem::path>&, std::string&)>;
@@ -388,6 +401,7 @@ struct ModResolution {
         std::string feature_id;
         bool netplay_local_view = false;
         bool netplay_input = false;
+        bool netplay_host_output = false;
     };
     std::vector<Plugin> plugins;
     struct Resource {
@@ -451,6 +465,10 @@ public:
         developer_channel_ = visible;
     }
     bool developer_channel_visible() const { return developer_channel_; }
+    /* Trusted title policy: hide and deactivate these ids even when an old
+     * bundle or an installed copy survives an update. Saved choices stay
+     * dormant and files remain untouched. Set before scan(). */
+    void set_disabled_packages(std::vector<std::string> ids) { disabled_packages_ = std::move(ids); }
 
     /* Build-owned catalog: wiped and re-staged by every build. */
     std::filesystem::path bundled_root() const { return root_ / "bundled"; }
@@ -463,7 +481,8 @@ public:
     bool prepare_resources(const std::string& game_id,
                            const std::filesystem::path& disc_path,
                            const std::filesystem::path& cache_root,
-                           std::string* error = nullptr, bool cached_only = false);
+                           std::string* error = nullptr, bool cached_only = false,
+                           const ModPrepareProgress& progress = {});
 
     bool install_archive(const std::filesystem::path& archive,
                          std::string* installed_id = nullptr,
@@ -512,6 +531,14 @@ public:
     std::string feature_option_value(const std::string& package_id,
                                      const std::string& feature_id,
                                      const std::string& option_id) const;
+    /* Runtime-derived defaults are not player selections and are never saved.
+     * relative_path is rooted at this manager's mods root, captured as an
+     * absolute path at registration so subsequent cwd changes cannot rebase it.
+     * Existing explicit selections (including legacy absolute paths) win. */
+    bool set_generated_feature_resource_default(const std::string& package_id,
+        const std::string& feature_id, const std::string& resource_id,
+        const std::filesystem::path& relative_path, std::string* error = nullptr);
+
     std::filesystem::path feature_resource_path(
         const std::string& package_id,
         const std::string& feature_id,
@@ -570,10 +597,15 @@ private:
         std::vector<ModResolution::Diagnostic>* diagnostics,
         std::vector<std::string>* errors) const;
 
+    std::filesystem::path generated_resource_default(const std::string& package_id,
+        const std::string& feature_id, const std::string& resource_id) const;
+    std::map<std::tuple<std::string, std::string, std::string>, std::filesystem::path>
+        generated_resource_defaults_;
     std::filesystem::path root_;
     bool developer_channel_ = kDeveloperChannelDefault;
     std::vector<std::string> scan_errors_;
     std::map<std::string, std::map<std::string, ModPackage>> packages_;
+    std::vector<std::string> disabled_packages_;
     std::map<std::string, ModSelection> selections_;
     std::map<std::string, std::filesystem::path> sources_;
 };
@@ -581,6 +613,8 @@ private:
 bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver resolver);
 void mod_clear_builtin_resolvers_for_tests();
 bool mod_register_activation_plugin(const std::string& id, void (*callback)(void));
+bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void));
+void mod_reset_plugin_sessions();
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
 bool mod_register_savestate_plugin(const std::string& id, void (*callback)(void));
 void mod_invoke_savestate_plugin(const std::string& id);
