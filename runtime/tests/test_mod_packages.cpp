@@ -14,6 +14,7 @@ namespace fs = std::filesystem;
 using namespace PSXRecompV4;
 
 static int failures;
+static int session_resets;
 
 static void check(bool value, const char* message) {
     if (!value) {
@@ -321,6 +322,16 @@ int main() {
     check(mod_register_vblank_plugin(
               "test.vblank", +[]() {}),
           "test plugin must register");
+    check(mod_register_session_reset_plugin(
+              "test.vblank", +[]() { ++session_resets; }),
+          "session cleanup must register independently of active features");
+    check(!mod_register_session_reset_plugin("test.vblank", +[]() {}),
+          "duplicate session cleanup must be rejected");
+    // No manifest or active plan exists yet: deselected plugins still clean
+    // up the host state left by the previous session.
+    mod_reset_plugin_sessions();
+    mod_reset_plugin_sessions();
+    check(session_resets == 2, "each session boundary must invoke registered cleanup");
     write_text(root / "packages/plugin.mod/1.0.0/manifest.toml",
                "format_version = 5\n"
                "id = \"plugin.mod\"\n"
@@ -1798,6 +1809,21 @@ int main() {
               "both absent packages must be reported as dormant selections");
         check(std::find(dormant.begin(), dormant.end(), "kept.mod") == dormant.end(),
               "a present package is never dormant");
+        // Strong title policy also suppresses stale bundles and installed
+        // copies. Preserve the user's choice and files for a later re-enable.
+        write_text(stale_root / "installed/kept.mod/1.0.0/manifest.toml", kept);
+        stale.set_disabled_packages({"kept.mod"});
+        check(stale.scan(&error), error.c_str());
+        const auto disabled = stale.resolve("SLUS-TEST");
+        check(disabled.ok && disabled.ordered.empty() && disabled.writes.empty(),
+              "a title-disabled package must not resolve from either catalog");
+        check(stale.packages().count("kept.mod") == 0 && stale.dormant_selections().size() == 3,
+              "title-disabled packages must be hidden and their saved choices dormant");
+        check(fs::exists(stale_root / "bundled/kept.mod/1.0.0/manifest.toml") &&
+              fs::exists(stale_root / "installed/kept.mod/1.0.0/manifest.toml"),
+              "disabling never deletes catalog files");
+        stale.set_disabled_packages({});
+        check(stale.scan(&error), error.c_str());
 
         /* Saving (every launch commit does) must keep the dormant choices. */
         check(stale.save_state(&error), error.c_str());
@@ -2320,6 +2346,8 @@ int main() {
         }
         ModPackageManager manager(folder);
         check(manager.scan(&error) && manager.scan_errors().empty(), "source/preparation catalog parses");
+        check(!manager.set_generated_feature_resource_default("cars", "content", "source", "generated/source", &error),
+              "generated defaults cannot appoint shared user sources");
         check(manager.set_feature_resource_path("cars", "content", "source", source, &error), error.c_str());
         check(manager.feature_resource_path("music", "content", "source") == source, "source picker prefills sibling package");
         check(manager.set_feature_resource_path("music", "content", "source", replacement, &error), error.c_str());

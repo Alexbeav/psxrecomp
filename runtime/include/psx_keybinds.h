@@ -73,6 +73,10 @@ void psx_keybinds_init(const char *exe_path);
 
 /* Read-only view of the current bindings. */
 const PsxKeyBinds *psx_keybinds_get(void);
+/* Trusted title mod's temporary sampling profile. Does not edit or save the
+ * user's primary/alternate bindings. Cleared at each session boundary. */
+int psx_keybinds_set_session_player(int player, const PsxPlayerBinds *profile);
+void psx_keybinds_clear_session_players(void);
 
 /* Runtime-owned host controls consumed by optional local input capture.
  * Suppression is per source/player, before PSX folding, and lasts through

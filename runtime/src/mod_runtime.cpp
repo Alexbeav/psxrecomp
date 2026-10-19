@@ -1531,6 +1531,17 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     s.disc_enabled = false;
     s.disc_guard_failed = false;
     s.manager.set_root(root);
+    // Optional comma-separated trusted title policy, stronger than omitting
+    // bundled manifests: stale/installed copies cannot reactivate these ids.
+#ifdef PSX_MOD_DISABLED_PACKAGES
+    std::vector<std::string> disabled_packages;
+    std::istringstream disabled_stream(PSX_MOD_DISABLED_PACKAGES);
+    for (std::string id; std::getline(disabled_stream, id, ','); )
+        if (!id.empty()) disabled_packages.push_back(id);
+    s.manager.set_disabled_packages(std::move(disabled_packages));
+#else
+    s.manager.set_disabled_packages({});
+#endif
     s.game_id = game_id;
     s.entry_phys = game_entry_pc & 0x1FFFFFFFu;
 #if defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
@@ -1579,15 +1590,19 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
                 });
             if (resource == package->resources.end()) continue;
             std::error_code ec;
-            const auto pack = std::filesystem::absolute(
-                root / "texture-packs" / texture_game_id, ec);
+            std::string directory_error;
+            if (!s.manager.set_generated_feature_resource_default(package->id,
+                    plugin.feature_id, "pack", std::filesystem::path("texture-packs") / texture_game_id,
+                    &directory_error)) {
+                std::fprintf(stderr, "psxrecomp: texture pack folder: %s\n", directory_error.c_str());
+                continue;
+            }
+            const auto pack = s.manager.feature_resource_path(package->id, plugin.feature_id, "pack");
             if (!ec) std::filesystem::create_directories(pack / "replacements", ec);
             if (!ec) std::filesystem::create_directories(pack / "dumps", ec);
-            std::string directory_error;
-            if (ec || !s.manager.set_feature_resource_path(package->id,
-                    plugin.feature_id, "pack", pack, &directory_error)) {
+            if (ec) {
                 std::fprintf(stderr, "psxrecomp: texture pack folder: %s\n",
-                    ec ? ec.message().c_str() : directory_error.c_str());
+                    ec.message().c_str());
             }
         }
     }
@@ -1606,6 +1621,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
 }
 
 bool mod_runtime_clear_for_netplay(std::string* error) {
+    mod_reset_plugin_sessions();
     psx_mod_netplay_set_active(0);
     (void)psx_mod_netplay_set_options_identity("");
     state().ticket_ready = false;
@@ -2897,6 +2913,7 @@ bool mod_runtime_read_disc_file_sectors(const std::string& path, uint32_t max_by
 extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     HostLaunchTimingScope timing(HOST_LAUNCH_PLUGIN_ACTIVATION);
+    mod_reset_plugin_sessions();
     RuntimeMods& s = state();
     s.ticket_ready = false;
     psx_projection_reset_session();
@@ -3273,6 +3290,9 @@ extern "C" void psx_mod_tag_radial_screen_mask_quad(uint32_t primitive, float sc
 
 extern "C" void psx_mod_tag_world_primitive(uint32_t primitive, int is_world) {
     gpu_ws_tag_world_primitive(primitive, is_world);
+}
+extern "C" void psx_mod_tag_feedback_rect(uint32_t primitive) {
+    gpu_ws_tag_feedback_rect(primitive);
 }
 
 extern "C" void psx_mod_set_adaptive_backdrop_preload(int enabled) {

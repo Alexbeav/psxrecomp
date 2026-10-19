@@ -228,6 +228,8 @@ if(BUILD_TESTING)
             add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
                 --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME menu_quality_callbacks_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_quality_callbacks.py)
             add_test(NAME host_pause_first_present_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pause_first_present.py
                 --cxx ${CMAKE_CXX_COMPILER})
@@ -729,6 +731,27 @@ if(BUILD_TESTING)
 
     # Standalone serial-pad protocol tests use explicit SIO/device stubs; they
     # cover both DualShock rumble and JogCon wire/state behavior.
+    add_executable(sio_digital_command_test
+        tests/test_sio_digital_command.c
+        src/sio.c)
+    target_include_directories(sio_digital_command_test PRIVATE include)
+    add_test(NAME sio_digital_command_test COMMAND sio_digital_command_test)
+    add_executable(sio_digital_command_multitap_test
+        tests/test_sio_digital_command.c
+        src/sio.c)
+    target_include_directories(sio_digital_command_multitap_test PRIVATE include)
+    target_compile_definitions(sio_digital_command_multitap_test PRIVATE
+        PSX_MAX_PLAYERS=5)
+    add_test(NAME sio_digital_command_multitap_test
+             COMMAND sio_digital_command_multitap_test)
+    add_executable(sio_digital_command_dual_multitap_test
+        tests/test_sio_digital_command.c
+        src/sio.c)
+    target_include_directories(sio_digital_command_dual_multitap_test PRIVATE include)
+    target_compile_definitions(sio_digital_command_dual_multitap_test PRIVATE
+        PSX_MAX_PLAYERS=8)
+    add_test(NAME sio_digital_command_dual_multitap_test
+             COMMAND sio_digital_command_dual_multitap_test)
     add_executable(sio_dualshock_rumble_test
         tests/test_sio_dualshock_rumble.c
         src/sio.c)
@@ -765,6 +788,20 @@ if(BUILD_TESTING)
     add_executable(host_rumble_test tests/test_host_rumble.c)
     target_include_directories(host_rumble_test PRIVATE include)
     add_test(NAME host_rumble_test COMMAND host_rumble_test)
+    # JogCon motor byte -> host wheel haptics ([controller] jogcon_force_feedback).
+    add_executable(jogcon_ffb_test tests/test_jogcon_ffb.c)
+    target_include_directories(jogcon_ffb_test PRIVATE include)
+    add_test(NAME jogcon_ffb_test COMMAND jogcon_ffb_test)
+    # The SDL haptic backend against an SDL3 virtual wheel (no virtual haptic
+    # device exists in SDL; see the test). Skips (77) on SDL2.
+    add_executable(jogcon_ffb_sdl_test tests/test_jogcon_ffb_sdl.cpp
+                   src/psx_jogcon_ffb_sdl.cpp)
+    target_include_directories(jogcon_ffb_sdl_test PRIVATE include)
+    target_link_libraries(jogcon_ffb_sdl_test PRIVATE ${PSX_SDL_LIBRARIES})
+    target_compile_definitions(jogcon_ffb_sdl_test PRIVATE
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    add_test(NAME jogcon_ffb_sdl_test COMMAND jogcon_ffb_sdl_test)
+    set_tests_properties(jogcon_ffb_sdl_test PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(controller_type_test tests/test_controller_type.cpp)
     target_include_directories(controller_type_test PRIVATE include)
@@ -905,7 +942,7 @@ if(BUILD_TESTING)
     endforeach()
 
     foreach(_pgxp_isolated_test
-            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test)
+            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test pgxp_session_hooks_test)
         target_sources(${_pgxp_isolated_test} PRIVATE tests/pgxp_test_mod_memory.cpp)
     endforeach()
 
@@ -1053,6 +1090,9 @@ if(BUILD_TESTING)
     add_executable(ws_repeat_rect_test tests/test_ws_repeat_rect.c)
     target_include_directories(ws_repeat_rect_test PRIVATE include)
     add_test(NAME ws_repeat_rect_test COMMAND ws_repeat_rect_test)
+    add_executable(ws_feedback_rect_test tests/test_ws_feedback_rect.c)
+    target_include_directories(ws_feedback_rect_test PRIVATE include)
+    add_test(NAME ws_feedback_rect_test COMMAND ws_feedback_rect_test)
     add_executable(ws_screen_mask_test tests/test_ws_screen_mask.c)
     target_include_directories(ws_screen_mask_test PRIVATE include)
     if(UNIX)
@@ -1092,6 +1132,18 @@ if(BUILD_TESTING)
     # the real scheduler (traps.c) and IRQ delivery (interrupts.c). Compiled
     # game, BIOS ROM, CPS continuation and interpreted resumes; no pending
     # IRQ; I_MASK/SR gating; same-edge dedup; null-PC recovery.
+    add_executable(same_thread_rfe_k0_test
+        tests/test_same_thread_rfe_k0.c
+        tests/restore_edge_irq_stubs.c
+        src/traps.c
+        src/interrupts.c)
+    target_include_directories(same_thread_rfe_k0_test PRIVATE include src)
+    foreach(_rfe_mode RANGE 0 3)
+        add_test(NAME same_thread_rfe_k0_mode${_rfe_mode}
+            COMMAND same_thread_rfe_k0_test ${_rfe_mode})
+        set_tests_properties(same_thread_rfe_k0_mode${_rfe_mode} PROPERTIES
+            ENVIRONMENT "PSX_SAME_THREAD_RESTORE=${_rfe_mode}" TIMEOUT 30)
+    endforeach()
     add_executable(restore_edge_irq_replay_test
         tests/test_restore_edge_irq_replay.c
         tests/restore_edge_irq_stubs.c
@@ -1139,6 +1191,20 @@ if(BUILD_TESTING)
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(overlay_capture_retry_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_retry_test COMMAND overlay_capture_retry_test)
+
+    # PC evidence stays inside the dirty-page run: nothing recorded in the
+    # trailing delay-slot guard word (bead beads-eio.3.190).
+    add_executable(overlay_capture_guard_word_test
+        tests/test_overlay_capture_guard_word.cpp
+        src/overlay_capture.c)
+    target_include_directories(overlay_capture_guard_word_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(overlay_capture_guard_word_test PRIVATE
+        SDL_MAIN_HANDLED $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_guard_word_test PRIVATE
+        ${PSX_SDL_LIBRARIES})
+    add_test(NAME overlay_capture_guard_word_test
+             COMMAND overlay_capture_guard_word_test)
 
     add_executable(overlay_path_canon_test
         tests/test_overlay_path_canon.c
@@ -1579,6 +1645,10 @@ if(BUILD_TESTING)
         target_link_libraries(dynamic_resolution_test PRIVATE m)
     endif()
     add_test(NAME dynamic_resolution_test COMMAND dynamic_resolution_test)
+    # Game Mode (Steam Deck / gamescope) detection and precedence.
+    add_executable(game_mode_test tests/test_game_mode.c src/game_mode.c)
+    target_include_directories(game_mode_test PRIVATE include)
+    add_test(NAME game_mode_test COMMAND game_mode_test)
     # The render-thread controller (dynrt_*) against a synthetic pipeline.
     add_executable(dynamic_resolution_rt_test
         tests/test_dynamic_resolution_rt.c
@@ -1821,6 +1891,13 @@ if(BUILD_TESTING)
     target_include_directories(psx_cycle_event_boundaries_test PRIVATE include)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
+
+    # idle_skip store-counter loops: PsyQ v_wait skips, near misses do not.
+    add_executable(idle_skip_store_counter_test
+        tests/test_idle_skip_store_counter.c
+        src/psx_cycles.c)
+    target_include_directories(idle_skip_store_counter_test PRIVATE include)
+    add_test(NAME idle_skip_store_counter_test COMMAND idle_skip_store_counter_test)
 
     add_executable(psx_vblank_clock_test
         tests/test_psx_vblank_clock.c

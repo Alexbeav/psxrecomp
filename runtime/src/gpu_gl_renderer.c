@@ -79,6 +79,7 @@
 #include "gl_scale_limits.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
+#include "video_telemetry.h"
 #include "gpu_hd_textures.h"
 #include "mod_texture_banks.h"
 #include "gl_batch_policy.h"
@@ -465,7 +466,7 @@ enum {
     RTH_WIDE_DISABLE, RTH_WIDE_CLEAR, RTH_WIDE_CLEAR_MARGINS, RTH_PROJ_TRI,
     RTH_WIDE_RECOVERY, RTH_INTERP_SUSPENDED, RTH_PRESENT_VRAM,
     RTH_PRESENT_WIDE, RTH_STATE, RTH_PEEK, RTH_RING_CAPTURE, RTH_DYN_STEP,
-    RTH_FRAME, RTH_FG_SRC, RTH_DEPTH, RTH_HD_NOTE, RTH_DITHER
+    RTH_FRAME, RTH_FG_SRC, RTH_DEPTH, RTH_HD_NOTE, RTH_DITHER, RTH_WIDE_FEEDBACK
 };
 /* GP0(A0) whose payload gpu.c is still streaming into its array (the
  * facade's vram_upload_open, emulation thread), tracked whatever the HD
@@ -610,6 +611,9 @@ static GLuint        s_osd_tex = 0;
 static int           s_osd_tw = 0, s_osd_th = 0;
 static GLuint        s_present_prog = 0, s_present_vao = 0;
 static GLuint        s_xr_color_prog = 0, s_xr_native_tex = 0;
+static GLuint s_xr_surface_program,s_xr_surface_vao,s_xr_surface_vbo,s_xr_surface_tex[2];
+static GLuint s_capture_read_tex,s_capture_read_fbo;
+static int s_capture_read_w,s_capture_read_h;
 static void          gl_swap_with_osd(void);
 static int           s_post_aa = 0;   /* GL_POST_AA_*; post-process AA (post_aa_apply) */
 static int s_native_surface_enabled, s_native_surface_pending;
@@ -1398,6 +1402,10 @@ static int  postfx_active(void);
 static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int lh);
 static void pres_record(int path, int dx, int dy, int w, int h,
                         int lx, int ly, int lw, int lh) {
+    int drawable_w = 0, drawable_h = 0;
+    SDL_GL_GetDrawableSize(s_win, &drawable_w, &drawable_h);
+    psx_video_telemetry_compose(PSX_VIDEO_OPENGL, s_out_scale, w, h,
+                               drawable_w, drawable_h, lw, lh);
     /* The composed game image, before hold-last capture and the OSD: the
      * post-effect chains (bloom, [video] post_shader, AA; gl_postfx.inc). */
     if ((path == GL_PRES_VRAM || path == GL_PRES_WIDE || path == GL_PRES_INTERP) && postfx_active())
@@ -6438,7 +6446,9 @@ int gl_renderer_init_context(SDL_Window *win) {
     }
     glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
     const char *ver = (const char *)glGetString(GL_VERSION);
-    fprintf(stdout, "psxrecomp: OpenGL context created (%s)\n", ver ? ver : "?");
+    const char *gpu = (const char *)glGetString(0x1F01 /* GL_RENDERER */);
+    fprintf(stdout, "psxrecomp: OpenGL context created (%s; %s)\n", ver ? ver : "?",
+            gpu ? gpu : "?");
 
     /* All-or-nothing: any missing entry point / failed shader / bad FBO means
      * the whole GL renderer is unavailable and the runtime stays on the pure
@@ -7154,6 +7164,111 @@ static void glb_wide_clear_margins(int base_x, int y, int h, uint16_t color, int
     s_cw_wide_ms += cw_ms() - t0;
 }
 
+/* Framebuffer feedback into the bands (gr_wide_feedback_rect): a 15-bit
+ * sprite copying another framebuffer, sampled from that buffer's wide surface
+ * because its band columns exist nowhere in VRAM. Band texels count as bit 15
+ * set, as in sw_wide_feedback_rect: the band's own bit 15 is not
+ * authoritative, and the centre sits at bit 15 once the trail blends. */
+static const char *FB_VS =
+    "#version 330\n"
+    "uniform vec4 u_rect;   /* wide-local native px: x0, y0, x1, y1 */\n"
+    "uniform vec2 u_size;   /* wide surface in native px */\n"
+    "void main(){\n"
+    "  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
+    "  vec2 p = mix(u_rect.xy, u_rect.zw, c);\n"
+    "  gl_Position = vec4(p / u_size * 2.0 - 1.0, 0.0, 1.0); }\n";
+static const char *FB_FS =
+    "#version 330\n"
+    "out vec4 frag;\n"
+    "uniform sampler2D u_src;\n"
+    "uniform float u_dst_scale; /* target px per native px */\n"
+    "uniform vec2 u_src_delta;  /* source minus target, native px */\n"
+    "uniform vec3 u_mod;        /* 8-bit modulation colour */\n"
+    "uniform int u_raw;\n"
+    "uniform int u_accurate;    /* the surfaces' colour basis, as TEX_FS */\n"
+    "void main(){\n"
+    "  vec2 n = gl_FragCoord.xy / u_dst_scale + u_src_delta;\n"
+    "  float ss = float(textureSize(u_src, 0).y) / 512.0;\n"
+    "  vec4 c = texelFetch(u_src, ivec2(n * ss), 0);\n"
+    "  if (c.a < 0.5 && c.rgb == vec3(0.0)) discard;   /* texel 0x0000 */\n"
+    "  /* The centre samples packed 5-bit VRAM (PACK_FS); truncating the same\n"
+    "   * way keeps the bands from drifting brighter across feedback frames. */\n"
+    "  vec3 k = floor(floor(c.rgb * 255.0 + 0.5) / 8.0);\n"
+    "  vec3 rgb = u_accurate != 0 ? k * (8.0 / 255.0) : k / 31.0;\n"
+    "  if (u_raw == 0) rgb = clamp(rgb * u_mod / 255.0 * 2.0, 0.0, 1.0);\n"
+    "  frag = vec4(rgb, 1.0);\n"
+    "}\n";
+static GLuint s_fb_prog = 0;
+static GLint  s_fb_uRect, s_fb_uSize, s_fb_uSrc, s_fb_uDstScale, s_fb_uSrcDelta,
+              s_fb_uMod, s_fb_uRaw, s_fb_uAccurate;
+
+static int fb_prog_ready(void) {
+    if (s_fb_prog) return 1;
+    s_fb_prog = build_program(FB_VS, FB_FS);
+    if (!s_fb_prog) return 0;
+    s_fb_uRect      = p_glGetUniformLocation(s_fb_prog, "u_rect");
+    s_fb_uSize      = p_glGetUniformLocation(s_fb_prog, "u_size");
+    s_fb_uSrc       = p_glGetUniformLocation(s_fb_prog, "u_src");
+    s_fb_uDstScale  = p_glGetUniformLocation(s_fb_prog, "u_dst_scale");
+    s_fb_uSrcDelta  = p_glGetUniformLocation(s_fb_prog, "u_src_delta");
+    s_fb_uMod       = p_glGetUniformLocation(s_fb_prog, "u_mod");
+    s_fb_uRaw       = p_glGetUniformLocation(s_fb_prog, "u_raw");
+    s_fb_uAccurate  = p_glGetUniformLocation(s_fb_prog, "u_accurate");
+    return 1;
+}
+
+/* Program, source texture and uniforms for one band copy (wide-local px). */
+static void fb_bind(GLuint src_tex, int dl, int dy, int w, int h, int sl, int sy,
+                    int r, int g, int b, int raw) {
+    p_glUseProgram(s_fb_prog);
+    p_glBindVertexArray(s_empty_vao);
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, src_tex);
+    p_glUniform1i(s_fb_uSrc, 0);
+    p_glUniform4f(s_fb_uRect, (float)dl, (float)dy, (float)(dl + w), (float)(dy + h));
+    p_glUniform2f(s_fb_uSize, (float)g_wide_w, (float)VRAM_H);
+    p_glUniform1f(s_fb_uDstScale, (float)s_out_scale);
+    p_glUniform2f(s_fb_uSrcDelta, (float)(sl - dl), (float)(sy - dy));
+    p_glUniform3f(s_fb_uMod, (float)r, (float)g, (float)b);
+    p_glUniform1i(s_fb_uRaw, raw);
+    p_glUniform1i(s_fb_uAccurate, s_accurate_blend);
+}
+
+/* An existing wide surface for base_x; never allocates (nothing to copy yet). */
+static int wide_index_existing(int base_x) {
+    for (int i = 0; i < WIDE_MAX_SURF; i++)
+        if (s_wide_fbo[i] && s_wide_base[i] == base_x) return i;
+    return -1;
+}
+
+static void glb_wide_feedback_rect(int src_base, int src_x, int src_y, int dst_x, int dst_y,
+                                   int w, int h, int r, int g, int b, int raw, int semi) {
+    if (!s_raster_ok || !g_wide_cur || w <= 0 || h <= 0 || g_wide_w <= 0) return;
+    flush_flat_batch();
+    flush_tex_batch();
+    hiw_flush_queue();   /* queued mirrors land in both surfaces first */
+    const int si = wide_index_existing(src_base);
+    if (si < 0 || s_wide_fbo[si] == g_wide_cur || !fb_prog_ready()) return;
+    const int dl = dst_x + wide_dx();
+    const int sl = src_x - src_base + g_wide_off + view_shift;
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, g_wide_cur);
+    glViewport(0, 0, g_wide_w * s_out_scale, VRAM_H * s_out_scale);
+    wide_band_scissor_x(view_pad_left, g_wide_w - view_pad_left - view_pad_right);
+    glDisable(GL_STENCIL_TEST);
+    fb_bind(s_wide_tex[si], dl, dst_y, w, h, sl, src_y, r, g, b, raw);
+    if (semi >= 0) apply_psx_blend(semi);
+    else glDisable(GL_BLEND);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindTexture(GL_TEXTURE_2D, 0);   /* the source surface is a render target too */
+    glDisable(GL_BLEND);
+    p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
+    glDisable(GL_SCISSOR_TEST);
+    p_glBindVertexArray(0);
+    p_glUseProgram(0);
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
+    wst_add(wide_index(g_wide_cur), dl, dst_y, dl + w, dst_y + h);
+}
+
 /* Present source: read the wide FBO for the displayed buffer (base_x) into the
  * CPU present buffer as ARGB8888, byte-identical to sw_render_wide_display's
  * output so the shared CPU present path consumes it the same way. Output is
@@ -7247,7 +7362,8 @@ static int glb_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh,
     /* Same orientation reasoning as glb_render_wide_display: glReadPixels row 0 =
      * PS1 top scanline, so copy straight (top-down). */
     int count = 0;
-    for (int i = 0; i < W * H; i++) { out[i] = tmp[i] | 0xFF000000u; count++; }
+    /* Alpha is the surface's bit 15 (mask/STP); wide_full can show it. */
+    for (int i = 0; i < W * H; i++) { out[i] = tmp[i]; count++; }
     free(tmp);
     if (ow) *ow = W;
     if (oh) *oh = H;
@@ -8330,7 +8446,16 @@ static void pass_resources_release(void) {
         if(s_xr_color_prog && p_glDeleteProgram) p_glDeleteProgram(s_xr_color_prog);
         if(s_xr_native_tex) glDeleteTextures(1,&s_xr_native_tex);
     }
+    if(s_ctx) {
+        if(s_xr_surface_program && p_glDeleteProgram)p_glDeleteProgram(s_xr_surface_program);
+        if(s_xr_surface_vao && p_glDeleteVertexArrays)p_glDeleteVertexArrays(1,&s_xr_surface_vao);
+        if(s_xr_surface_vbo && p_glDeleteBuffers)p_glDeleteBuffers(1,&s_xr_surface_vbo);
+        glDeleteTextures(2,s_xr_surface_tex);
+    }
+    s_xr_surface_program=s_xr_surface_vao=s_xr_surface_vbo=0;
+    s_xr_surface_tex[0]=s_xr_surface_tex[1]=0;
     s_xr_color_prog=s_xr_native_tex=0;
+    pass_free_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h);
     stereo_resources_release();
     for(int gi=0;gi<PASS_GENERATIONS;++gi)pass_gen_release(gi);
     pass_gens_invalidate();
@@ -8673,6 +8798,34 @@ void gl_renderer_stereo_stage_reset(void) {
     GL_RT_SYNC("stereo_stage_reset");
     s_stereo_pair[1 - s_stereo_current].mask = 0;
 }
+int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
+    GL_RT_SYNC("capture_readback");
+    if(eye>=2 || !rgba || !w || !h || w>1024 || h>512)return 0;
+    StereoPair *pair=&s_stereo_pair[1-s_stereo_current];
+    if(!(pair->mask&(1u<<eye)))return 0;
+    GLint read,draw,texture,pack,pbo,row,skipr,skipp;
+    GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(0x8DB9);
+    glGetIntegerv(0x8CAA,&read);glGetIntegerv(0x8CA6,&draw);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);
+    glGetIntegerv(GL_PACK_ALIGNMENT,&pack);glGetIntegerv(0x88ED,&pbo);glGetIntegerv(GL_PACK_ROW_LENGTH,&row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS,&skipr);glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipp);
+    int ok=pass_make_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h,
+                              w,h,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
+    if(ok) {
+        glDisable(GL_SCISSOR_TEST);glDisable(0x8DB9);
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
+        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,s_capture_read_fbo);
+        p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,0,w,h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,s_capture_read_fbo);
+        p_glBindBuffer(0x88EB,0);glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
+        glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+        glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+    }
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,read);p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,draw);
+    glBindTexture(GL_TEXTURE_2D,texture);glPixelStorei(GL_PACK_ALIGNMENT,pack);
+    glPixelStorei(GL_PACK_ROW_LENGTH,row);glPixelStorei(GL_PACK_SKIP_ROWS,skipr);glPixelStorei(GL_PACK_SKIP_PIXELS,skipp);
+    p_glBindBuffer(0x88EB,pbo);if(scissor)glEnable(GL_SCISSOR_TEST);if(srgb)glEnable(0x8DB9);
+    return ok;
+}
 static void stereo_invalidate(void) {
     s_stereo_valid = 0;
     s_stereo_pair[0].mask = s_stereo_pair[1].mask = 0;
@@ -8802,6 +8955,11 @@ int psx_mod_openxr_quad(double distance,double width,double height) {
     if(s_pass_active)return 0;
     return psx_openxr_quad(distance,width,height);
 }
+int psx_mod_openxr_surface(const PSXModOpenXRSurface *surface) {
+    GL_RT_SYNC("openxr_surface");
+    if(s_pass_active)return 0;
+    return psx_openxr_surface(surface); /* CPU copy only; upload after eye replay. */
+}
 int psx_mod_openxr_native_surface(double distance,double width,double units) {
     GL_RT_SYNC("openxr_native_surface");
     PSXOpenXRStats stats;psx_openxr_stats(&stats);
@@ -8868,7 +9026,68 @@ static int openxr_color_draw(GLuint source, int w, int h, int flip, float gamma,
     glBindTexture(GL_TEXTURE_2D,(GLuint)binding);p_glActiveTexture((GLenum)active);
     return 1;
 }
+#include "xr_surface_math.h"
+static int openxr_surface_draw(uint32_t eye) {
+    PSXModOpenXRSurface surface[2];int present[2];
+    for(int i=0;i<2;i++)present[i]=psx_openxr_surface_get(i,&surface[i]);
+    if(!present[0] && !present[1])return 1;
+    PSXOpenXRStats xr;psx_openxr_stats(&xr);
+    GLint program,vao,vbo,active,texture,fbo,viewport[4],unpack,pbo,row,skipr,skipp;
+    GLint bs,bd,bas,bad,be,bae;GLboolean mask[4];
+    const GLenum caps[]={GL_BLEND,GL_DEPTH_TEST,GL_STENCIL_TEST,GL_CULL_FACE,GL_SCISSOR_TEST,0x8DB9};
+    GLboolean enabled[6];
+    glGetIntegerv(0x8B8D,&program);glGetIntegerv(0x85B5,&vao);glGetIntegerv(0x8894,&vbo);
+    glGetIntegerv(0x84E0,&active);p_glActiveTexture(PSXGL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);glGetIntegerv(0x8CA6,&fbo);
+    glGetIntegerv(GL_VIEWPORT,viewport);glGetBooleanv(GL_COLOR_WRITEMASK,mask);
+    glGetIntegerv(0x80C9,&bs);glGetIntegerv(0x80C8,&bd);glGetIntegerv(0x80CB,&bas);glGetIntegerv(0x80CA,&bad);
+    glGetIntegerv(0x8009,&be);glGetIntegerv(0x883D,&bae);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT,&unpack);glGetIntegerv(0x88EF,&pbo);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH,&row);glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skipr);glGetIntegerv(GL_UNPACK_SKIP_PIXELS,&skipp);
+    for(int i=0;i<6;i++){enabled[i]=glIsEnabled(caps[i]);glDisable(caps[i]);}
+    int ok=1;
+    if(!s_xr_surface_program)s_xr_surface_program=build_program(
+        "#version 330\nlayout(location=0) in vec4 p; layout(location=1) in vec2 uv; out vec2 v_uv; void main(){gl_Position=vec4(p.x,-p.y,p.z,p.w);v_uv=uv;}\n",
+        "#version 330\nin vec2 v_uv; uniform sampler2D u_tex; out vec4 frag; void main(){frag=texture(u_tex,v_uv);}\n");
+    if(!s_xr_surface_program){ok=0;goto restore;}
+    if(!s_xr_surface_vao)p_glGenVertexArrays(1,&s_xr_surface_vao);
+    if(!s_xr_surface_vbo)p_glGenBuffers(1,&s_xr_surface_vbo);
+    if(!s_xr_surface_tex[0])glGenTextures(2,s_xr_surface_tex);
+    StereoPair *pair=&s_stereo_pair[s_stereo_current];
+    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,pair->fbo[eye]);
+    glViewport(0,0,pair->tw[eye],pair->th[eye]);glColorMask(1,1,1,1);
+    glEnable(GL_BLEND);p_glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+    p_glBlendEquationSeparate(0x8006,0x8006);
+    p_glUseProgram(s_xr_surface_program);p_glUniform1i(p_glGetUniformLocation(s_xr_surface_program,"u_tex"),0);
+    p_glBindVertexArray(s_xr_surface_vao);p_glBindBuffer(PSXGL_ARRAY_BUFFER,s_xr_surface_vbo);
+    p_glEnableVertexAttribArray(0);p_glEnableVertexAttribArray(1);
+    p_glVertexAttribPointer(0,4,GL_FLOAT,GL_FALSE,6*sizeof(float),(void*)0);
+    p_glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(void*)(4*sizeof(float)));
+    p_glBindBuffer(0x88EC,0);glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS,0);glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
+    for(int i=0;i<2;i++)if(present[i]) {
+        float head[3];for(int j=0;j<3;j++)head[j]=(xr.pose[0][j]+xr.pose[1][j])*.5f;
+        float vertices[36];if(!xr_surface_vertices_head(&surface[i],xr.pose[eye],xr.fov[eye],head,vertices))continue;
+        glBindTexture(GL_TEXTURE_2D,s_xr_surface_tex[i]);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,surface[i].width_px,surface[i].height_px,0,GL_RGBA,GL_UNSIGNED_BYTE,surface[i].rgba);
+        p_glBufferData(PSXGL_ARRAY_BUFFER,sizeof vertices,vertices,PSXGL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES,0,6);
+    }
+restore:
+    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,fbo);glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
+    glColorMask(mask[0],mask[1],mask[2],mask[3]);
+    p_glBlendFuncSeparate(bs,bd,bas,bad);p_glBlendEquationSeparate(be,bae);
+    for(int i=0;i<6;i++)if(enabled[i])glEnable(caps[i]);else glDisable(caps[i]);
+    p_glBindVertexArray(vao);p_glBindBuffer(PSXGL_ARRAY_BUFFER,vbo);p_glUseProgram(program);
+    glBindTexture(GL_TEXTURE_2D,texture);p_glActiveTexture(active);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,unpack);glPixelStorei(GL_UNPACK_ROW_LENGTH,row);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS,skipr);glPixelStorei(GL_UNPACK_SKIP_PIXELS,skipp);p_glBindBuffer(0x88EC,pbo);
+    return ok;
+}
 static int openxr_copy_eye(uint32_t eye, uint32_t texture, int w, int h) {
+    if(!openxr_surface_draw(eye))return 0;
     StereoPair *p = &s_stereo_pair[s_stereo_current];
     GLint read_fbo, draw_fbo; GLuint target = 0;
     GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
@@ -9498,7 +9717,14 @@ static int pt_cb_ctx(void *user, int current) {
 
 /* The one owned swap call: the composing thread's (direct) or the present
  * thread's. */
-static void gl_window_swap(void) { SDL_GL_SwapWindow(s_win); }
+static void gl_window_swap(void) {
+#if defined(PSX_SDL3)
+    psx_video_telemetry_present(SDL_GL_SwapWindow(s_win) ? 1 : 0);
+#else
+    SDL_GL_SwapWindow(s_win);
+    psx_video_telemetry_present(-1); // SDL2 exposes no swap result.
+#endif
+}
 
 static void *pt_cb_present(void *user, int slot, void *ready) {
     (void)user;
@@ -10896,6 +11122,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .render_wide_display = glb_render_wide_display,
     .wide_dump_full = glb_wide_dump_full,
     .set_depth_triangle = glb_set_depth_triangle,
+    .wide_feedback_rect = glb_wide_feedback_rect,
 };
 
 /* ==== Render thread: recording, replay, hand-off ===========================
@@ -13683,6 +13910,16 @@ static void rtb_wide_clear_margins(int base_x, int y, int h, uint16_t color, int
     }
     glb_wide_clear_margins(base_x, y, h, color, sides);
 }
+
+static void rtb_wide_feedback_rect(int src_base, int src_x, int src_y, int dst_x, int dst_y,
+                                   int w, int h, int r, int g, int b, int raw, int semi) {
+    if (rth_record_mode()) {
+        RTH_REC(RTH_WIDE_FEEDBACK, 0, src_base, src_x, src_y, dst_x, dst_y, w, h,
+                r, g, b, raw, semi);
+        return;
+    }
+    glb_wide_feedback_rect(src_base, src_x, src_y, dst_x, dst_y, w, h, r, g, b, raw, semi);
+}
 static int rtb_render_wide_display(uint32_t *out, int pitch, int base_x, int disp_y, int disp_h) {
     GL_RT_SYNC("render_wide_display");
     return glb_render_wide_display(out, pitch, base_x, disp_y, disp_h);
@@ -13724,6 +13961,7 @@ static const GpuRenderBackend GL_RT_BACKEND = {
     .set_depth_triangle = rtb_set_depth_triangle,
     .hd_texture_note = rtb_hd_texture_note,
     .vram_upload_open = rtb_vram_upload_open,
+    .wide_feedback_rect = rtb_wide_feedback_rect,
 };
 
 /* ---- replay (render thread) ---------------------------------------------- */
@@ -13798,6 +14036,10 @@ static void gl_rth_exec(void *user, const RtCmd *c, const void *payload) {
     case RTH_WIDE_DISABLE: glb_wide_disable_target(); break;
     case RTH_WIDE_CLEAR: glb_wide_clear(v[0], v[1], v[2], (uint16_t)v[3]); break;
     case RTH_WIDE_CLEAR_MARGINS: glb_wide_clear_margins(v[0], v[1], v[2], (uint16_t)v[3], v[4]); break;
+    case RTH_WIDE_FEEDBACK:
+        glb_wide_feedback_rect(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                               v[10], v[11]);
+        break;
     case RTH_PROJ_TRI: {
         PSXProjectedVertex vx[3];
         memcpy(vx, payload, sizeof vx);

@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace PSXRecompV4 {
@@ -464,6 +465,10 @@ public:
         developer_channel_ = visible;
     }
     bool developer_channel_visible() const { return developer_channel_; }
+    /* Trusted title policy: hide and deactivate these ids even when an old
+     * bundle or an installed copy survives an update. Saved choices stay
+     * dormant and files remain untouched. Set before scan(). */
+    void set_disabled_packages(std::vector<std::string> ids) { disabled_packages_ = std::move(ids); }
 
     /* Build-owned catalog: wiped and re-staged by every build. */
     std::filesystem::path bundled_root() const { return root_ / "bundled"; }
@@ -526,6 +531,14 @@ public:
     std::string feature_option_value(const std::string& package_id,
                                      const std::string& feature_id,
                                      const std::string& option_id) const;
+    /* Runtime-derived defaults are not player selections and are never saved.
+     * relative_path is rooted at this manager's mods root, captured as an
+     * absolute path at registration so subsequent cwd changes cannot rebase it.
+     * Existing explicit selections (including legacy absolute paths) win. */
+    bool set_generated_feature_resource_default(const std::string& package_id,
+        const std::string& feature_id, const std::string& resource_id,
+        const std::filesystem::path& relative_path, std::string* error = nullptr);
+
     std::filesystem::path feature_resource_path(
         const std::string& package_id,
         const std::string& feature_id,
@@ -584,10 +597,15 @@ private:
         std::vector<ModResolution::Diagnostic>* diagnostics,
         std::vector<std::string>* errors) const;
 
+    std::filesystem::path generated_resource_default(const std::string& package_id,
+        const std::string& feature_id, const std::string& resource_id) const;
+    std::map<std::tuple<std::string, std::string, std::string>, std::filesystem::path>
+        generated_resource_defaults_;
     std::filesystem::path root_;
     bool developer_channel_ = kDeveloperChannelDefault;
     std::vector<std::string> scan_errors_;
     std::map<std::string, std::map<std::string, ModPackage>> packages_;
+    std::vector<std::string> disabled_packages_;
     std::map<std::string, ModSelection> selections_;
     std::map<std::string, std::filesystem::path> sources_;
 };
@@ -595,6 +613,8 @@ private:
 bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver resolver);
 void mod_clear_builtin_resolvers_for_tests();
 bool mod_register_activation_plugin(const std::string& id, void (*callback)(void));
+bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void));
+void mod_reset_plugin_sessions();
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
 bool mod_register_savestate_plugin(const std::string& id, void (*callback)(void));
 void mod_invoke_savestate_plugin(const std::string& id);

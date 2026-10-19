@@ -25,6 +25,11 @@ typedef int (*PSXModFunctionFilterCallback)(struct CPUState* cpu,
  */
 int psx_mod_register_activation_plugin(const char* id,
                                        PSXModActivationCallback callback);
+/* Host-only cleanup before each plan activates, including plans that omit this
+ * plugin, and when netplay clears the offline plan. Runs with emulation stopped
+ * and without a current feature/resource context. Never mutate guest state. */
+int psx_mod_register_session_reset_plugin(const char* id,
+                                          PSXModActivationCallback callback);
 int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
 /* Runs after successful guest-state restore, before the restored PC resumes.
@@ -289,6 +294,10 @@ void psx_mod_tag_radial_screen_mask_quad(uint32_t primitive, float scale);
 /* Exclude a known world packet from screen-space backdrop stretching, even
  * if it sorts before the first shaded polygon. Zero clears a recycled tag. */
 void psx_mod_tag_world_primitive(uint32_t primitive, int is_world);
+/* A 15-bit sprite (P_TAG address) that copies a framebuffer 1:1, such as a
+ * motion trail: native-wide continues it into the bands. Tag it each frame
+ * after the title built it; inert at native 4:3. */
+void psx_mod_tag_feedback_rect(uint32_t primitive);
 /* Enable aspect-derived column selection for a title that opted into the
  * auto_backdrop detector. No effect on titles that did not opt in. */
 void psx_mod_set_adaptive_backdrop_preload(int enabled);
@@ -600,6 +609,14 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
  * partially updated plugin state) across guest code, or tolerate the abort. */
 int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
                         PSXModRenderPassFn fn, void* user);
+/* Isolated draw/readback using the stereo-capable rollback transaction.
+ * Never publishes an eye pair or changes presentation. Returns native-sized
+ * top-to-bottom RGBA8 pixels (alpha remains the PSX mask bit, not coverage).
+ * Call outside another pass. rgba_bytes must cover rect->w*rect->h*4. */
+int psx_mod_render_capture_rgba(struct CPUState *cpu,const PSXModRenderPass *rect,
+                               PSXModRenderPassFn fn,void *user,
+                               uint8_t *rgba,uint32_t rgba_bytes);
+#define PSX_MOD_RENDER_CAPTURE_RGBA 1
 /*
  * Why passes cannot run right now, the host-time budget aside (a plan that
  * returns 0 while this says READY was shed for time). A plugin that relies on
@@ -709,6 +726,21 @@ int psx_mod_openxr_end(int pair_rendered);
  * Dimensions and distance are meters; zero distance restores projection.
  * Requests reset at begin/end and never affect faithful guest rendering. */
 int psx_mod_openxr_quad(double distance_m, double width_m, double height_m);
+/* Additive, frame-local LOCAL-space surface. Called between XR begin/end and
+ * outside guest replay. Pixels are tightly packed bottom-to-top sRGB RGBA8,
+ * straight alpha, copied synchronously; caller retains ownership. IDs 0..1.
+ * Pose is raw XR LOCAL meters/quaternion x,y,z,w, not recentered game units.
+ * Missing requests disappear next frame. Returns 0 without replacing scene UI. */
+typedef struct PSXModOpenXRSurface {
+    uint32_t struct_size, id, width_px, height_px, flags;
+    float position_m[3], orientation_xyzw[4], size_m[2];
+    const uint8_t *rgba;
+} PSXModOpenXRSurface;
+#define PSX_MOD_OPENXR_SURFACES 1
+/* Ignore surface orientation: aim at predicted eye midpoint, upright in LOCAL
+ * space. Both eyes use the same plane. Position remains caller-controlled. */
+#define PSX_MOD_OPENXR_SURFACE_FACE_HEAD 1u
+int psx_mod_openxr_surface(const PSXModOpenXRSurface *surface);
 /* Opt-in native presentation surface for boot, videos and menus. Copies the
  * freshly drawn desktop content before host overlays, without guest replay.
  * Zero distance disables it. Applications disable it before scene begin and
@@ -981,6 +1013,10 @@ typedef struct PSXModControllerState {
 } PSXModControllerState;
 typedef int (*PSXModControllerSource)(PSXModControllerState *state);
 int psx_mod_set_controller_source(uint32_t player, PSXModControllerSource source);
+/* Presence of an attached offline source (default connected). A diagnostic
+ * source may explicitly emulate an unplugged pad without falling back to a
+ * physical controller assigned to that port. Cleared on detach/session reset. */
+int psx_mod_set_controller_source_connected(uint32_t player, int connected);
 
 /* Title pad transform (stage 2b above). Offline local play only: never under
  * netplay or rollback resim (the session is vanilla), selfcheck replay or a
@@ -996,7 +1032,8 @@ int psx_mod_set_controller_source(uint32_t player, PSXModControllerSource source
  * host_flags bit 0 = a
  * gamepad is assigned, bit 1 / bit 2 = it has a left / right trigger axis;
  * host_lt / host_rt are those triggers, 0 released .. 255 fully pressed
- * (0 when absent or while the savestate input guard is armed).
+ * (0 when absent or while the savestate input guard is armed). Bit 3 marks
+ * axes/type supplied by an offline input source (PSX_MOD_PAD_HOST_SOURCE).
  *
  * The output arrives pre-filled with the stock pad (what the player gets
  * without a transform, so a digital pad keeps its fold and centred sticks;
@@ -1023,7 +1060,10 @@ enum {
 enum {
     PSX_MOD_PAD_HOST_GAMEPAD = 1u << 0,
     PSX_MOD_PAD_HOST_LT = 1u << 1,
-    PSX_MOD_PAD_HOST_RT = 1u << 2
+    PSX_MOD_PAD_HOST_RT = 1u << 2,
+    /* Axes/type came from an offline input source, rather than the host.
+     * Transforms can preserve already transformed diagnostic recordings. */
+    PSX_MOD_PAD_HOST_SOURCE = 1u << 3
 };
 typedef struct PSXModPadFrame {
     uint32_t struct_size, player, buttons, lx, ly, rx, ry, type;
@@ -1117,6 +1157,14 @@ typedef struct PSXModMousePolicy {
     void (*sample)(uint64_t now_ns, PSXModMouseOutput* output);
 } PSXModMousePolicy;
 int psx_mod_set_local_mouse_policy(const PSXModMousePolicy* policy);
+/* Optional action-game capture: click once to capture, Escape to release.
+ * Later clicks reach the normal bindings. Existing hold-to-look is default. */
+int psx_mod_set_local_mouse_persistent_capture(int enabled);
+/* Optional persistent-capture companion: keep existing capture through title
+ * eligibility changes (menus/cutscenes/loading), Start and host stalls, while
+ * clearing mouse motion and suspending output. Focus loss, host UI, disconnect,
+ * native right-stick takeover and Escape still release. Never auto-acquires. */
+int psx_mod_set_local_mouse_capture_across_transitions(int enabled);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.

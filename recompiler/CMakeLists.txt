@@ -399,6 +399,14 @@ if(BUILD_TESTING)
     target_include_directories(guest_tty_test PRIVATE ../runtime/include)
     add_test(NAME guest_tty_test COMMAND guest_tty_test)
 
+    # MDEC status bit 29 stays set until a decode's output is down to the last
+    # 32-word OutFIFO load (Beetle InCommand); libpress DecDCTin spins on it.
+    add_executable(mdec_busy_drain_test
+        ../runtime/tests/test_mdec_busy_drain.c
+        ../runtime/src/mdec.c)
+    target_include_directories(mdec_busy_drain_test PRIVATE ../runtime/include)
+    add_test(NAME mdec_busy_drain_test COMMAND mdec_busy_drain_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
@@ -781,6 +789,38 @@ if(BUILD_TESTING)
     )
     target_link_libraries(rewind_settings_test PRIVATE fmt)
     add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+    add_executable(jogcon_ffb_settings_test
+        tests/jogcon_ffb_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(jogcon_ffb_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(jogcon_ffb_settings_test PRIVATE fmt)
+    add_test(NAME jogcon_ffb_settings_test COMMAND jogcon_ffb_settings_test)
+
+    # Graphics presets: [quality.*] parsing, detection rules, the
+    # detect/keep/Custom decision and settings round trip.
+    add_executable(quality_presets_test
+        tests/quality_presets_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+        ../runtime/src/quality_presets.cpp
+        ../runtime/src/quality_tier.c
+    )
+    target_include_directories(quality_presets_test PRIVATE
+        include
+        src
+        ../runtime/include
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(quality_presets_test PRIVATE fmt)
+    add_test(NAME quality_presets_test COMMAND quality_presets_test)
 
     # Launcher-saved paths stay relative inside a portable game folder.
     add_executable(portable_settings_paths_test
@@ -880,6 +920,28 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_enrich_overlay_captures.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A walk root is a hard cap: a root inside another function splits it
+        # and still passes every audit. The classifier's no-split guard, the
+        # image-local enrichment proof, the recompiler's own guard on explicit
+        # roots, and the root policy's place in the cache namespace
+        # (beads-eio.3.177).
+        add_test(
+            NAME overlay_no_split_guard
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_no_split_guard.py
+                    --cmake ${CMAKE_COMMAND}
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # Cross-image call evidence (main EXE, other captured images) roots
+        # an overlay function only where the overlay's own bytes prove the
+        # boundary (beads-eio.3.191, category a).
+        add_test(
+            NAME overlay_cross_image_calls
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_cross_image_calls.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # The runtime exe name must come from CMake, not be re-derived.
         add_test(
@@ -920,6 +982,16 @@ if(BUILD_TESTING)
             NAME overlay_guard_word_analysis_bound
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_guard_word_analysis_bound.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Request half of the same contract: no seed, alias or fragment demand
+        # may name the guard word (classifier, fragment jobs, hosted selection,
+        # fragment batches), and the recompiler warns when it drops a seed
+        # past Analysis End. Bead beads-eio.3.190 (AC3 fragment no-func-ids).
+        add_test(
+            NAME overlay_guard_word_requests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_guard_word_requests.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # Producer half of the same contract: the capture writer declares its
@@ -1099,6 +1171,8 @@ if(BUILD_TESTING)
         # template, scaffold, check_generated.sh, Project Studio audit/ops).
         foreach(_t IN ITEMS
                 aligned_lzss_banks
+                bpe_container
+                audit_playtest_diagnostics_package
                 bundled_release_layout
                 collect_game_misses
                 cursor_writers

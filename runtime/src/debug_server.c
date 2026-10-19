@@ -316,6 +316,8 @@ static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
 /* Test-only controller identity override for set_input/press. -1 follows the
  * selected host device/config; 0/1/2 force digital/DualShock/JogCon. */
 static int s_pad_type_override = -1;
+/* Explicit serial presence while a set_input/press injection is active. */
+static int s_pad_connected_override[2] = { -1, -1 };
 
 /*
  * Exact guest-VBlank input route. A client queues run-length encoded digital
@@ -8097,6 +8099,10 @@ static void handle_set_input(int id, const char *json)
     char val_str[32];
     char layer[16];
     const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (json_get_str(json, "layer", layer, sizeof(layer)) &&
         strcmp(layer, "host") == 0) {
         s_host_buttons = json_get_str(json, "buttons", val_str, sizeof(val_str))
@@ -8118,12 +8124,14 @@ static void handle_set_input(int id, const char *json)
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
     }
     if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
         s_input_override_p2 = (int)(hex_to_u32(val_str) & 0xFFFFu);
         s_input_frames_p2 = 0;
         send_ok(id);
         return;
     }
     s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = (int)hex_to_u32(val_str);
     s_input_frames = 0;
     /* Optional stick override: any of lx/ly/rx/ry (0..255) arms it; omitted
@@ -8159,17 +8167,23 @@ static void handle_press(int id, const char *json)
     int buttons = json_get_int(json, "buttons", -1);
     int frames  = json_get_int(json, "frames", 2);
     const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
     if (pad_type < -1 || pad_type > 2) {
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
     }
     if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
         s_input_override_p2 = buttons & 0xFFFF;
         s_input_frames_p2   = frames;
         send_ok(id);
         return;
     }
     s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = buttons;
     s_input_frames   = frames;
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
@@ -8246,6 +8260,7 @@ static void handle_clear_input(int id, const char *json)
 {
     const int port = json_get_int(json, "port", 0);   /* 0 = both */
     if (port == 0 || port == 2) {
+        s_pad_connected_override[1] = -1;
         s_input_override_p2 = -1;
         s_input_frames_p2 = 0;
     }
@@ -8257,6 +8272,7 @@ static void handle_clear_input(int id, const char *json)
     s_input_frames   = 0;
     s_axis_override  = 0;
     s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     s_host_layer = 0;
     s_host_buttons = 0xFFFF;
@@ -8307,6 +8323,7 @@ static void handle_input_route_start(int id, const char *json)
     s_input_frames = 0;
     s_axis_override = 0;
     s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_input_route_index = 0;
     s_input_route_remaining = s_input_route[0].frames;
     const int at = json_get_int(json, "at_frame", 0);
@@ -8941,7 +8958,8 @@ static void handle_openxr_stats(int id, const char *json) {
              "\"gl_version\":%llu,\"min_gl_version\":%llu,\"max_gl_version\":%llu,\"swapchain_format\":%lld,"
              "\"submitted_layer\":%u,\"quad_submitted\":%llu,"
              "\"submitted_source\":%u,\"native_submitted\":%llu,\"submitted_native_frame\":%llu,"
-             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu}", id,s.compiled,s.enabled,
+             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu,"
+             "\"submitted_surfaces\":%u,\"surface_uploads\":%llu,\"surface_failures\":%llu}", id,s.compiled,s.enabled,
              s.initialized,s.running,s.state,s.tracking,s.frame_open,s.result,
              s.stage?s.stage:"off",s.runtime,s.last_failure?s.last_failure:"",s.last_failure_result,
              (unsigned long long)s.view_flags,(unsigned long long)s.waits,
@@ -8951,7 +8969,8 @@ static void handle_openxr_stats(int id, const char *json) {
              (unsigned long long)s.max_gl_version,(long long)s.swapchain_format,s.submitted_layer,
              (unsigned long long)s.quad_submitted,s.submitted_source,
              (unsigned long long)s.native_submitted,(unsigned long long)s.submitted_native_frame,
-             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses);
+             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses,
+             s.submitted_surfaces,(unsigned long long)s.surface_uploads,(unsigned long long)s.surface_failures);
 }
 static void handle_openxr_views(int id,const char *json) {
     PSXOpenXRStats s; (void)json;psx_openxr_stats(&s);
@@ -9265,6 +9284,17 @@ static void handle_host_pause(int id, const char *json)
     else if (on == 0) psx_host_pause_pop();
     send_fmt("{\"id\":%d,\"ok\":%s,\"depth\":%d}", id, ok ? "true" : "false",
              psx_host_pause_depth());
+}
+
+/* menu_host: in-game menu host state (psx_menu_host.h): provider, attached,
+ * open, pause, ui capture, and the video/netplay snapshot. */
+extern int psx_debug_menu_host_json(char *out, size_t cap);
+static void handle_menu_host(int id, const char *json)
+{
+    char body[768];
+    (void)json;
+    psx_debug_menu_host_json(body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
 }
 
 /* host_key name=<SDL scancode name> down=<1|0> (both when omitted). */
@@ -10876,6 +10906,8 @@ static void handle_wide_full(int id, const char *json)
     extern void gl_renderer_sync_cpu(void);
     gl_renderer_sync_cpu();   /* no-op on SW; ensures pending GL frame is flushed */
     int base_x = json_get_int(json, "base_x", 0);
+    /* "alpha":1 writes bit 15 (GL: the surface alpha) as white/black. */
+    int show_alpha = json_get_int(json, "alpha", 0);
     char path[512];
     if (!json_get_str(json, "path", path, sizeof(path)))
         strncpy(path, "psx_wide_full.png", sizeof(path) - 1);
@@ -10894,6 +10926,10 @@ static void handle_wide_full(int id, const char *json)
         for (int x = 0; x < W; x++) {
             uint32_t px = buf[(size_t)y * W + x];
             uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+            if (show_alpha) {
+                p[0] = p[1] = p[2] = (uint8_t)(px >> 24);
+                continue;
+            }
             p[0] = (uint8_t)((px >> 16) & 0xFF);
             p[1] = (uint8_t)((px >> 8) & 0xFF);
             p[2] = (uint8_t)(px & 0xFF);
@@ -15952,6 +15988,7 @@ static const CmdEntry s_commands[] = {
     { "debug_key",         handle_debug_key },
     { "host_pause",        handle_host_pause },
     { "host_key",          handle_host_key },
+    { "menu_host",         handle_menu_host },
     { "host_mouse",        handle_host_mouse },
     { "scanline",          handle_scanline },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
@@ -17185,6 +17222,11 @@ int debug_server_get_host_pad(uint16_t *buttons, uint8_t st[4], uint8_t *lt,
 int debug_server_get_pad_type_override(void)
 {
     return s_pad_type_override;
+}
+
+int debug_server_get_pad_connected_override(int slot)
+{
+    return slot >= 0 && slot < 2 ? s_pad_connected_override[slot] : -1;
 }
 
 int debug_server_turbo_enabled(void)
