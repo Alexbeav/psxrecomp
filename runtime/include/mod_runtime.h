@@ -24,7 +24,8 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
                         bool save_selection = true);
 /* Prepare a preboot launcher selection; the audited runtime retains a ticket. */
 bool mod_runtime_prepare_for_launcher(const std::filesystem::path& disc_path,
-                                      std::string* error = nullptr);
+                                      std::string* error = nullptr,
+                                      const ModPrepareProgress& progress = {});
 
 /* Audited preboot only: load and verify a plan using existing receipts.
  * A miss never invokes a media converter or computes a disc digest. */
@@ -74,6 +75,9 @@ bool mod_runtime_netplay_input_active();
 /* "package/feature" keys of `plan` that qualify as own-view features. */
 std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& plan);
 const std::string& mod_runtime_fingerprint();
+/* Empty scope preserves existing slots. Isolated packages require a committed,
+ * verified content plan; resource preparation/preview alone establishes none. */
+bool mod_runtime_savestate_scope(std::string& scope, std::string* error = nullptr);
 /* Host diagnostics may copy the persisted offline selection from this root. */
 const std::filesystem::path& mod_runtime_root();
 const std::filesystem::path& mod_runtime_effective_disc_path();

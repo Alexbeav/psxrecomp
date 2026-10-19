@@ -210,6 +210,9 @@ int debug_server_get_axis_override(unsigned char st[4]);
  * -1 follows normal device selection; otherwise 0=digital, 1=DualShock,
  * 2=JogCon. */
 int debug_server_get_pad_type_override(void);
+/* set_input/press connected: -1 leaves device selection unchanged; 0/1
+ * unplug/plug the serial endpoint for that injected sample. */
+int debug_server_get_pad_connected_override(int slot);
 
 /* Host-pad layer (set_input {"layer":"host", buttons, lx..ry, lt, rt}): a
  * virtual P1 gamepad feeding the normal offline input path and host shortcut

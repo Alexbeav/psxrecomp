@@ -23,6 +23,32 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    # Windows UTF-8 text boundary (issue #371): the helpers legacy Windows
+    # relies on, and — with the shipped manifest — a UTF-8 process code page.
+    if(WIN32)
+        add_executable(win_utf8_helpers_test tests/test_win_utf8.cpp)
+        target_include_directories(win_utf8_helpers_test PRIVATE include)
+        add_test(NAME win_utf8_helpers_test COMMAND win_utf8_helpers_test)
+        add_executable(win_utf8_manifest_test tests/test_win_utf8.cpp)
+        target_include_directories(win_utf8_manifest_test PRIVATE include)
+        psxrecomp_windows_manifest(win_utf8_manifest_test)
+        add_test(NAME win_utf8_manifest_test
+                 COMMAND win_utf8_manifest_test --expect-utf8-acp)
+    endif()
+
+    add_executable(debug_socket_shutdown_test tests/test_debug_socket_shutdown.cpp)
+    target_include_directories(debug_socket_shutdown_test PRIVATE src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(debug_socket_shutdown_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(debug_socket_shutdown_test PRIVATE ws2_32)
+    endif()
+    add_test(NAME debug_socket_shutdown_test COMMAND debug_socket_shutdown_test)
+    set_tests_properties(debug_socket_shutdown_test PROPERTIES TIMEOUT 15)
+
+    add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
+    target_include_directories(video_texture_filter_test PRIVATE include)
+    add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
     add_executable(mod_netplay_test tests/test_mod_netplay.c
         src/mod_netplay.c src/netplay_state_digest.c src/crc32.c src/psx_sha256.c)
     target_include_directories(mod_netplay_test PRIVATE include)
@@ -211,6 +237,16 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
+                --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME menu_quality_callbacks_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_quality_callbacks.py)
+            add_test(NAME host_pause_first_present_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pause_first_present.py
+                --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME guest_implementation_binding_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_guest_implementation.py"
             --cmake "${CMAKE_COMMAND}" --compiler "${CMAKE_C_COMPILER}"
@@ -363,6 +399,19 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-xbr-results")
         set_tests_properties(gl_xbr_filter_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        # [video] dithering: off ignores the guest's dither bit (byte-identical
+        # true colour); on/scaled add the PS1 pattern to shaded/modulated draws
+        # only, through the facade, the render thread, PGXP depth and wide.
+        add_test(NAME gl_dithering_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_dithering.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-dithering-results")
+        set_tests_properties(gl_dithering_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         unset(_gl_scale_sdl_inc)
     else()
         message(STATUS "gl_scale_invariance_test: not registered (needs macOS, Linux or MinGW, Python 3 and SDL3)")
@@ -387,6 +436,16 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-post-aa-results")
         set_tests_properties(gl_post_aa_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_bloom_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_bloom.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-bloom-results")
+        set_tests_properties(gl_bloom_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         add_test(NAME gl_hd_texture_pack_test
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
@@ -409,6 +468,18 @@ if(BUILD_TESTING)
                 --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-fmv-chroma-results")
         set_tests_properties(gl_fmv_chroma_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        # Debug present ring: GL names do not outlive a renderer restart.
+        add_test(NAME gl_present_ring_restart_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --debug-tools
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_present_ring_restart.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-present-ring-restart-results")
+        set_tests_properties(gl_present_ring_restart_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
     endif()
     add_executable(launcher_device_roundtrip_test
@@ -675,6 +746,27 @@ if(BUILD_TESTING)
 
     # Standalone serial-pad protocol tests use explicit SIO/device stubs; they
     # cover both DualShock rumble and JogCon wire/state behavior.
+    add_executable(sio_digital_command_test
+        tests/test_sio_digital_command.c
+        src/sio.c)
+    target_include_directories(sio_digital_command_test PRIVATE include)
+    add_test(NAME sio_digital_command_test COMMAND sio_digital_command_test)
+    add_executable(sio_digital_command_multitap_test
+        tests/test_sio_digital_command.c
+        src/sio.c)
+    target_include_directories(sio_digital_command_multitap_test PRIVATE include)
+    target_compile_definitions(sio_digital_command_multitap_test PRIVATE
+        PSX_MAX_PLAYERS=5)
+    add_test(NAME sio_digital_command_multitap_test
+             COMMAND sio_digital_command_multitap_test)
+    add_executable(sio_digital_command_dual_multitap_test
+        tests/test_sio_digital_command.c
+        src/sio.c)
+    target_include_directories(sio_digital_command_dual_multitap_test PRIVATE include)
+    target_compile_definitions(sio_digital_command_dual_multitap_test PRIVATE
+        PSX_MAX_PLAYERS=8)
+    add_test(NAME sio_digital_command_dual_multitap_test
+             COMMAND sio_digital_command_dual_multitap_test)
     add_executable(sio_dualshock_rumble_test
         tests/test_sio_dualshock_rumble.c
         src/sio.c)
@@ -711,6 +803,20 @@ if(BUILD_TESTING)
     add_executable(host_rumble_test tests/test_host_rumble.c)
     target_include_directories(host_rumble_test PRIVATE include)
     add_test(NAME host_rumble_test COMMAND host_rumble_test)
+    # JogCon motor byte -> host wheel haptics ([controller] jogcon_force_feedback).
+    add_executable(jogcon_ffb_test tests/test_jogcon_ffb.c)
+    target_include_directories(jogcon_ffb_test PRIVATE include)
+    add_test(NAME jogcon_ffb_test COMMAND jogcon_ffb_test)
+    # The SDL haptic backend against an SDL3 virtual wheel (no virtual haptic
+    # device exists in SDL; see the test). Skips (77) on SDL2.
+    add_executable(jogcon_ffb_sdl_test tests/test_jogcon_ffb_sdl.cpp
+                   src/psx_jogcon_ffb_sdl.cpp)
+    target_include_directories(jogcon_ffb_sdl_test PRIVATE include)
+    target_link_libraries(jogcon_ffb_sdl_test PRIVATE ${PSX_SDL_LIBRARIES})
+    target_compile_definitions(jogcon_ffb_sdl_test PRIVATE
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    add_test(NAME jogcon_ffb_sdl_test COMMAND jogcon_ffb_sdl_test)
+    set_tests_properties(jogcon_ffb_sdl_test PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(controller_type_test tests/test_controller_type.cpp)
     target_include_directories(controller_type_test PRIVATE include)
@@ -757,6 +863,17 @@ if(BUILD_TESTING)
         tests/test_pad_external_input.c src/pad_external_input.c)
     target_include_directories(pad_external_input_test PRIVATE include src)
     add_test(NAME pad_external_input_test COMMAND pad_external_input_test)
+    add_executable(host_overlay_test tests/test_host_overlay.c src/host_overlay.c src/video_texture_filter.c)
+    target_include_directories(host_overlay_test PRIVATE include src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(host_overlay_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(host_overlay_test PRIVATE shell32)
+    endif()
+    add_test(NAME host_overlay_test COMMAND host_overlay_test)
+    add_executable(psx_menu_host_test tests/test_psx_menu_host.c src/psx_menu_host.c)
+    target_include_directories(psx_menu_host_test PRIVATE include src)
+    add_test(NAME psx_menu_host_test COMMAND psx_menu_host_test)
 
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
@@ -840,7 +957,7 @@ if(BUILD_TESTING)
     endforeach()
 
     foreach(_pgxp_isolated_test
-            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test)
+            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test pgxp_session_hooks_test)
         target_sources(${_pgxp_isolated_test} PRIVATE tests/pgxp_test_mod_memory.cpp)
     endforeach()
 
@@ -936,6 +1053,26 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME ws_local_view_margin_test COMMAND ws_local_view_margin_test)
 
+    # Depth24 GP1(07h) present hold (#636): hold count, upload span and the
+    # staged frame agree across windowed/headless/deferred presents, rollback
+    # replay and disk loads; stale trailing FMV pixels never reach a frame.
+    add_executable(depth24_present_hold_exec_test
+        tests/test_depth24_present_hold_exec.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(depth24_present_hold_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(depth24_present_hold_exec_test PRIVATE -flto)
+        target_link_options(depth24_present_hold_exec_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(depth24_present_hold_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(depth24_present_hold_exec_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME depth24_present_hold_exec_test COMMAND depth24_present_hold_exec_test)
+
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
         src/psx_video_timing.c
@@ -968,6 +1105,9 @@ if(BUILD_TESTING)
     add_executable(ws_repeat_rect_test tests/test_ws_repeat_rect.c)
     target_include_directories(ws_repeat_rect_test PRIVATE include)
     add_test(NAME ws_repeat_rect_test COMMAND ws_repeat_rect_test)
+    add_executable(ws_feedback_rect_test tests/test_ws_feedback_rect.c)
+    target_include_directories(ws_feedback_rect_test PRIVATE include)
+    add_test(NAME ws_feedback_rect_test COMMAND ws_feedback_rect_test)
     add_executable(ws_screen_mask_test tests/test_ws_screen_mask.c)
     target_include_directories(ws_screen_mask_test PRIVATE include)
     if(UNIX)
@@ -1002,6 +1142,31 @@ if(BUILD_TESTING)
         set_tests_properties(exit_critical_section_test PROPERTIES
             SKIP_REGULAR_EXPRESSION "^SKIP:")
     endif()
+
+    # #636 / PR #660: restore-vs-live IRQ delivery at the restore edge, over
+    # the real scheduler (traps.c) and IRQ delivery (interrupts.c). Compiled
+    # game, BIOS ROM, CPS continuation and interpreted resumes; no pending
+    # IRQ; I_MASK/SR gating; same-edge dedup; null-PC recovery.
+    add_executable(same_thread_rfe_k0_test
+        tests/test_same_thread_rfe_k0.c
+        tests/restore_edge_irq_stubs.c
+        src/traps.c
+        src/interrupts.c)
+    target_include_directories(same_thread_rfe_k0_test PRIVATE include src)
+    foreach(_rfe_mode RANGE 0 3)
+        add_test(NAME same_thread_rfe_k0_mode${_rfe_mode}
+            COMMAND same_thread_rfe_k0_test ${_rfe_mode})
+        set_tests_properties(same_thread_rfe_k0_mode${_rfe_mode} PROPERTIES
+            ENVIRONMENT "PSX_SAME_THREAD_RESTORE=${_rfe_mode}" TIMEOUT 30)
+    endforeach()
+    add_executable(restore_edge_irq_replay_test
+        tests/test_restore_edge_irq_replay.c
+        tests/restore_edge_irq_stubs.c
+        src/traps.c
+        src/interrupts.c)
+    target_include_directories(restore_edge_irq_replay_test PRIVATE include src)
+    add_test(NAME restore_edge_irq_replay_test COMMAND restore_edge_irq_replay_test)
+    set_tests_properties(restore_edge_irq_replay_test PROPERTIES TIMEOUT 60)
 
     add_executable(dma_gpu_linked_list_timing_test
         tests/test_dma_gpu_linked_list_timing.c
@@ -1041,6 +1206,20 @@ if(BUILD_TESTING)
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(overlay_capture_retry_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_retry_test COMMAND overlay_capture_retry_test)
+
+    # PC evidence stays inside the dirty-page run: nothing recorded in the
+    # trailing delay-slot guard word (bead beads-eio.3.190).
+    add_executable(overlay_capture_guard_word_test
+        tests/test_overlay_capture_guard_word.cpp
+        src/overlay_capture.c)
+    target_include_directories(overlay_capture_guard_word_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(overlay_capture_guard_word_test PRIVATE
+        SDL_MAIN_HANDLED $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_guard_word_test PRIVATE
+        ${PSX_SDL_LIBRARIES})
+    add_test(NAME overlay_capture_guard_word_test
+             COMMAND overlay_capture_guard_word_test)
 
     add_executable(overlay_path_canon_test
         tests/test_overlay_path_canon.c
@@ -1122,6 +1301,16 @@ if(BUILD_TESTING)
     target_include_directories(iso_reader_pregap_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
     target_link_libraries(iso_reader_pregap_test PRIVATE chdr-static)
     add_test(NAME iso_reader_pregap_test COMMAND iso_reader_pregap_test)
+
+    # Raw vs cooked geometry comes from the cue TRACK mode / sector-0 sync,
+    # never from file length.
+    add_executable(iso_reader_geometry_test
+        tests/test_iso_reader_geometry.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(iso_reader_geometry_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
+    target_link_libraries(iso_reader_geometry_test PRIVATE chdr-static)
+    add_test(NAME iso_reader_geometry_test COMMAND iso_reader_geometry_test)
 
     add_executable(iso_reader_sbi_test
         tests/test_iso_reader_sbi.cpp
@@ -1240,7 +1429,8 @@ if(BUILD_TESTING)
         src/cue_sheet.cpp
         src/iso_reader.cpp
         src/crc32.c
-        src/psx_sha256.c)
+        src/psx_sha256.c
+        src/sio.c)
     target_include_directories(netplay_view_mods_test PRIVATE
         include
         ../recompiler/include
@@ -1347,6 +1537,10 @@ if(BUILD_TESTING)
     add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
+
+    add_executable(cdrom_sector_fifo_test tests/test_cdrom_sector_fifo.c)
+    target_include_directories(cdrom_sector_fifo_test PRIVATE include src)
+    add_test(NAME cdrom_sector_fifo_test COMMAND cdrom_sector_fifo_test)
 
     add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
     target_include_directories(cdrom_lid_state_test PRIVATE src)
@@ -1466,6 +1660,10 @@ if(BUILD_TESTING)
         target_link_libraries(dynamic_resolution_test PRIVATE m)
     endif()
     add_test(NAME dynamic_resolution_test COMMAND dynamic_resolution_test)
+    # Game Mode (Steam Deck / gamescope) detection and precedence.
+    add_executable(game_mode_test tests/test_game_mode.c src/game_mode.c)
+    target_include_directories(game_mode_test PRIVATE include)
+    add_test(NAME game_mode_test COMMAND game_mode_test)
     # The render-thread controller (dynrt_*) against a synthetic pipeline.
     add_executable(dynamic_resolution_rt_test
         tests/test_dynamic_resolution_rt.c
@@ -1482,6 +1680,12 @@ if(BUILD_TESTING)
         target_link_libraries(frame_gen_test PRIVATE m)
     endif()
     add_test(NAME frame_gen_test COMMAND frame_gen_test)
+
+    # Post-effect chain presets (postfx_chain.c alone; no GL).
+    add_executable(postfx_chain_test tests/test_postfx_chain.c src/postfx_chain.c)
+    target_include_directories(postfx_chain_test PRIVATE include)
+    add_test(NAME postfx_chain_test COMMAND postfx_chain_test
+             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
     # Render-pass time freeze against mock devices (psx_cycles.c only).
     add_executable(render_pass_freeze_test
@@ -1680,6 +1884,11 @@ if(BUILD_TESTING)
     # not starve: LoD "Checking MEMORY CARD" hang). Header-only, no runtime link.
     add_executable(overlay_unit_defer_test tests/test_overlay_unit_defer.c)
     target_include_directories(overlay_unit_defer_test PRIVATE src)
+    if(MSVC)
+        target_compile_options(overlay_unit_defer_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(overlay_unit_defer_test PRIVATE -UNDEBUG)
+    endif()
     add_test(NAME overlay_unit_defer_test COMMAND overlay_unit_defer_test)
 
     add_executable(overlay_store_cycle_barrier_test
@@ -1709,6 +1918,13 @@ if(BUILD_TESTING)
     target_include_directories(psx_cycle_event_boundaries_test PRIVATE include)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
+
+    # idle_skip store-counter loops: PsyQ v_wait skips, near misses do not.
+    add_executable(idle_skip_store_counter_test
+        tests/test_idle_skip_store_counter.c
+        src/psx_cycles.c)
+    target_include_directories(idle_skip_store_counter_test PRIVATE include)
+    add_test(NAME idle_skip_store_counter_test COMMAND idle_skip_store_counter_test)
 
     add_executable(psx_vblank_clock_test
         tests/test_psx_vblank_clock.c
@@ -1764,14 +1980,29 @@ if(BUILD_TESTING)
                              --cc ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
+        add_test(NAME depth24_present_hold_vblank_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_present_hold_vblank.py)
         add_test(NAME netplay_load_apply_flow_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_load_apply_flow.py)
+        add_test(NAME restore_edge_irq_check_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_restore_edge_irq_check.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME netplay_rb_session_reset_test
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_rb_session_reset.py
                              --compiler ${CMAKE_C_COMPILER})
+            if(PSXRECOMP_TEST_HAS_RBENGINE)
+                # Multi-seat Verify with a lost POST (#636): production Verify
+                # code, controlled clock and lossy transport.
+                add_test(NAME netplay_rb_verify_lost_post_test
+                         COMMAND ${Python3_EXECUTABLE}
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_rb_verify_lost_post.py
+                                 --compiler ${CMAKE_C_COMPILER}
+                                 --recomp-net ${_RNET_ROOT})
+            endif()
             add_test(NAME overlay_retry_c11_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_retry_c11.py --compiler ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
@@ -1876,6 +2107,13 @@ if(BUILD_TESTING)
         if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
             set_tests_properties(package_appimage_test PROPERTIES DISABLED TRUE)
         endif()
+        # The Linux release's bundled tcc + musl headers build and load a real
+        # shard with nothing from the host (x86_64 Linux; skips elsewhere).
+        add_test(NAME linux_tcc_bundle_smoke_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_linux_tcc_bundle_smoke.py)
+        set_tests_properties(linux_tcc_bundle_smoke_test PROPERTIES
+            SKIP_RETURN_CODE 77 TIMEOUT 900)
         # Overlay shards and BIOS modules are compiled for the RUNTIME's
         # architecture: an x86_64 macOS runtime under Rosetta used to get arm64
         # shards (arm64-only Xcode clang, no -arch) in its macos-x64 cache and

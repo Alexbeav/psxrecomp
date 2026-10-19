@@ -114,6 +114,8 @@ extern "C" void psx_write_half(uint32_t a, uint16_t v) {
     ram[o] = (uint8_t)v;
     ram[o + 1] = (uint8_t)(v >> 8);
 }
+/* Side-effect-free peek (memory.c); host-output observation reads. */
+extern "C" int psx_peek_word(uint32_t, uint32_t* out) { *out = 0; return 0; }
 extern "C" uint32_t psx_read_word(uint32_t a) {
     const uint32_t o = a & 0x1fffffu;
     return (uint32_t)ram[o] | ((uint32_t)ram[o + 1] << 8) |
@@ -141,6 +143,7 @@ extern "C" int gpu_ws_configured_x_reveal(void) { return 0; }
 extern "C" void gpu_ws_tag_hud_prim(uint32_t, int) {}
 extern "C" void gpu_ws_tag_screen_mask_quad(uint32_t) {}
 extern "C" void gpu_ws_tag_radial_screen_mask_quad(uint32_t, float) {}
+extern "C" void gpu_ws_tag_feedback_rect(uint32_t) {}
 /* mod_runtime.cpp's lobby netplay commit reads the negotiated match caps.
  * This test drives netplay through mod_runtime_clear_for_netplay, so no
  * lobby match is ever negotiated. */

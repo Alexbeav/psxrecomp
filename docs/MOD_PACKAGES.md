@@ -12,6 +12,21 @@ The player selects a verified stock BIN/CUE. Resolution produces guarded native
 operations and sparse disc overlays without rewriting or replacing that stock
 image.
 
+## Save-state isolation
+
+An active package with `save_compatibility = "isolated"` gives normal save slots
+and their thumbnail/HD-residency sidecars a namespace derived from the complete
+committed, verified content-plan fingerprint. Disabling it returns to the
+historical slot paths; a different plan uses different slots. Memory-card files
+are unaffected. Preparation and preview do not establish a save-state scope.
+
+The runtime refuses to start an isolated session without a qualified content
+identity. Invalid scopes and truncated paths fail closed, and changing scope
+cancels pending slot operations. There is no automatic import from ordinary
+slots. This is filename isolation, not a new state-header compatibility guard;
+explicit developer blob/path loading and manually copied files are outside it.
+Packages using the default compatibility policy retain their existing paths.
+
 ## Where packages live
 
 Two catalog roots sit beside the executable, split by who owns the files:
@@ -674,6 +689,23 @@ direct indexed lookup rather than scanning every installed mod.
 
 Feature disc overlays require an exact `disc_sha256` on every target entry.
 `expected_sha256` can additionally guard the replaced stock range.
+
+Format 10 also supports an overlay sourced from a verified same-feature
+`[[resource]]` with `format = "file"`. Declare exactly one of `file` or
+`resource`. Resource overlays require `size`, a nonnegative `resource_offset`
+(default zero), the slice's `sha256`, and the stock range's `expected_sha256`.
+The source must have a fixed nonzero size and SHA-256 and cannot be input-only.
+The complete resource is verified once into immutable bytes during resolution;
+all its slices and the runtime resource share that snapshot. Slices may span
+sectors. A diagnostic launcher preview defers preparer-owned resource overlays,
+while execution rejects missing, corrupt, out-of-range or mismatched content.
+No generated media needs to be written into a bundled package directory.
+
+Trusted preparers may use `ModPrepareContext::progress(fraction, message)` when
+it is provided. A false result requests cancellation: stop between bounded work
+units and before publishing outputs. Keep previously verified cache entries and
+publish new entries atomically. The manager checks cancellation before applying
+derived resource bindings. Older preparers may leave this callback unused.
 
 ## State and migration
 
