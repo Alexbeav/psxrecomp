@@ -15,6 +15,7 @@ end = text.index('int loaded_range_ci', start)
 fragment = text[start:end]
 with tempfile.TemporaryDirectory() as tmp:
     source = Path(tmp)/'label.c'
-    source.write_text('static int idx_head(int p) { return p; }\nint main(void) { int phys=0; if (phys) goto retry_candidates;\n'+fragment+'return head; }\n')
+    # The retry label heads the per-segment lookup (idx_head_seg, §5.7).
+    source.write_text('static int idx_head_seg(int p, unsigned s) { return p + (int)s; }\nint main(void) { int phys=0; unsigned seg=0; if (phys) goto retry_candidates;\n'+fragment+'return head; }\n')
     subprocess.run([shutil.which(args.compiler) or args.compiler,'-std=c11','-pedantic-errors','-fsyntax-only',str(source)],check=True)
 print('production retry label: strict C11 passes')

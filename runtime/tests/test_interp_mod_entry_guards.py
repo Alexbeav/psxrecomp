@@ -6,6 +6,11 @@ from pathlib import Path
 def main():
     source = (Path(__file__).resolve().parents[1] /
               'src/dirty_ram_interp.c').read_text(encoding='utf-8')
+    fetched = source[source.index('static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,\n                            uint32_t *next_pc_out) {'):]
+    fetched = fetched[:fetched.index('const uint32_t ld_op')]
+    assert fetched.count('psx_mod_instruction(cpu, pc, insn)') == 1
+    assert fetched.index('if (s_ld_pend_armed') < fetched.index('psx_mod_instruction(cpu, pc, insn)')
+    assert 'if (g_psx_mod_instruction_hooks) psx_mod_instruction(cpu, pc, insn);' in fetched
     start = source.index('static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {')
     source = source[start:]
     static_dispatch = source[source.index('/* B-2: statically-compiled'):]
@@ -13,7 +18,14 @@ def main():
     assert static_dispatch.index('g_exec_phase = 3;') < static_dispatch.index(
         'psx_overlay_dispatch(cpu, addr);') < static_dispatch.index(
         'g_exec_phase = previous_phase;') < static_dispatch.index('if (handled) return 1;')
-    assert source.count('psx_mod_function_entry(cpu, addr);') == 1
+    assert source.count('psx_mod_function_entry(cpu, addr)') == 1
+    # Every interpreted entry reaches these calls: without an active hook they
+    # must cost one load, never a call into the plugin table.
+    # A forced span replay (psx_mod_run_guest_span) runs inside a hook
+    # already: it must not re-enter the entry hooks, so the check leads.
+    assert ('if (!forced && g_psx_mod_function_entry_hooks && '
+            'psx_mod_function_entry(cpu, addr))\n            return 1;') in source
+    assert 'if (g_psx_mod_function_entry_hooks &&\n' in source
     local_start = source.index('if (allow_local_dirty_flow && target != 0 &&')
     local_end = source.index('current_page = target_phys >> 12;', local_start)
     local = source[local_start:local_end]
@@ -23,9 +35,13 @@ def main():
     assert 'g_dirty_interp_chain_target = target;' in probe
     assert 'OV_FPLOG_RET1();' in probe
     assert 'psx_overlay_dispatch(cpu' not in probe
-    assert local.count('psx_mod_function_entry(cpu, target);') == 1
+    assert local.count('psx_mod_function_entry(cpu, target)') == 1
     assert local.index('overlay_loader_dispatch(cpu, target)') < local.index(
-        'psx_mod_function_entry(cpu, target);') < local.index('pc = target;')
+        'psx_mod_function_entry(cpu, target)') < local.index('pc = target;')
+    completion = local[local.index('if (g_psx_mod_function_entry_hooks &&'):]
+    completion = completion[:completion.index('pc = target;')]
+    assert 'g_dirty_interp_chain_target = cpu->pc;' in completion
+    assert 'OV_FPLOG_RET1();' in completion
     print('interpreter mod entry guards: PASS')
 
 

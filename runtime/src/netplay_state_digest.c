@@ -1,4 +1,5 @@
 #include "netplay_state_digest.h"
+#include "mod_netplay.h"
 #include "cdrom.h"
 #include "crc32.h"
 #include "dirty_ram_interp.h"
@@ -12,6 +13,7 @@
 #include <string.h>
 
 extern uint8_t* memory_get_ram_ptr(void);
+extern uint32_t memory_get_ram_bytes(void);
 extern uint32_t i_stat;
 extern uint32_t i_mask;
 extern void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3],
@@ -55,8 +57,6 @@ static uint32_t digest_module(uint32_t (*bytes_fn)(void), void (*write_fn)(uint8
     return crc32_compute(buf, n);
 }
 
-#define NP_RAM_SIZE (2u * 1024u * 1024u)
-
 uint32_t netplay_cdrom_digest(void)
 {
     static uint8_t *buf;
@@ -94,6 +94,12 @@ uint32_t netplay_av_digest(void)
             gcap = gn;
         }
         gpu_snapshot_write(gbuf);
+        /* The last 12 bytes are depth-24 present helpers (upload span,
+         * present hold, previous display height): host presentation state
+         * that a suppressed-present replay leaves different from Live. Not
+         * guest-visible; keep them out of the av comparison. */
+        if (gn >= 12u)
+            memset(gbuf + gn - 12u, 0, 12u);
         crc = crc32_update(crc, gbuf, gn);
     }
     if (vram)
@@ -159,7 +165,7 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
 
     ram = memory_get_ram_ptr();
     if (ram)
-        crc_ram = crc32_update(crc_ram, ram, NP_RAM_SIZE);
+        crc_ram = crc32_update(crc_ram, ram, memory_get_ram_bytes());
 
     wc = dirty_ram_get_bitmap_word_count();
     for (i = 0; i < wc; i++) {
@@ -177,6 +183,13 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     fold = crc32_update(fold, (const uint8_t*)&tim_h, sizeof(tim_h));
     fold = crc32_update(fold, (const uint8_t*)&ram_h, sizeof(ram_h));
     fold = crc32_update(fold, (const uint8_t*)&drt_h, sizeof(drt_h));
+    /* Keep vanilla digests byte-for-byte unchanged. Zero is a valid plugin
+     * digest, so presence is separate from its value. */
+    if (psx_mod_netplay_has_state_digest()) {
+        uint32_t mod = psx_mod_netplay_state_digest();
+        fold = crc32_update(fold, (const uint8_t*)&mod, sizeof(mod));
+        if (out) out->mod = mod;
+    }
 
     if (out) {
         out->cpu = cpu_h;

@@ -9,7 +9,9 @@
 extern "C" {
 #endif
 
-#define WS_HUD_ANCHOR_TABLE_SIZE 256u
+/* Large screen-space composites can exceed 256 packets (MMX6 Ilumina).
+ * Keep both pending display buffers' pieces anchored together. */
+#define WS_HUD_ANCHOR_TABLE_SIZE 4096u
 #define WS_HUD_ANCHOR_PROBES 8u
 #define WS_HUD_ANCHOR_FRESH_FRAMES 2u
 
@@ -76,14 +78,23 @@ static inline void ws_hud_anchor_insert(WsHudAnchorTag *tags, uint32_t count,
     tags[victim].guard = *guard;
 }
 
-static inline int ws_hud_anchor_lookup(const WsHudAnchorTag *tags,
-                                       uint32_t count,
-                                       uint32_t command_addr,
-                                       const uint32_t *words,
-                                       uint32_t word_count,
-                                       uint32_t frame,
-                                       int *out_anchor) {
-    if (!tags || !count || !words) return 0;
+/* Lookup outcome, so callers can keep always-on counters that say WHY a tagged
+ * primitive was or was not honoured (absent, expired, or packet rewritten). */
+enum {
+    WS_HUD_ANCHOR_HIT = 1,
+    WS_HUD_ANCHOR_ABSENT = 0,
+    WS_HUD_ANCHOR_STALE = -1,
+    WS_HUD_ANCHOR_GUARD_MISMATCH = -2
+};
+
+static inline int ws_hud_anchor_lookup_result(const WsHudAnchorTag *tags,
+                                              uint32_t count,
+                                              uint32_t command_addr,
+                                              const uint32_t *words,
+                                              uint32_t word_count,
+                                              uint32_t frame,
+                                              int *out_anchor) {
+    if (!tags || !count || !words) return WS_HUD_ANCHOR_ABSENT;
     uint32_t idx = ws_hud_anchor_slot(command_addr) & (count - 1u);
     for (uint32_t i = 0; i < WS_HUD_ANCHOR_PROBES && i < count; i++) {
         const WsHudAnchorTag *tag = &tags[(idx + i) & (count - 1u)];
@@ -91,13 +102,25 @@ static inline int ws_hud_anchor_lookup(const WsHudAnchorTag *tags,
             continue;
         if (tag->frame > frame ||
             frame - tag->frame > WS_HUD_ANCHOR_FRESH_FRAMES)
-            return 0;
+            return WS_HUD_ANCHOR_STALE;
         if (!ws_prepass_packet_matches(&tag->guard, words, word_count))
-            return 0;
+            return WS_HUD_ANCHOR_GUARD_MISMATCH;
         if (out_anchor) *out_anchor = tag->anchor;
-        return 1;
+        return WS_HUD_ANCHOR_HIT;
     }
-    return 0;
+    return WS_HUD_ANCHOR_ABSENT;
+}
+
+static inline int ws_hud_anchor_lookup(const WsHudAnchorTag *tags,
+                                       uint32_t count,
+                                       uint32_t command_addr,
+                                       const uint32_t *words,
+                                       uint32_t word_count,
+                                       uint32_t frame,
+                                       int *out_anchor) {
+    return ws_hud_anchor_lookup_result(tags, count, command_addr, words,
+                                       word_count, frame, out_anchor) ==
+           WS_HUD_ANCHOR_HIT;
 }
 
 #ifdef __cplusplus

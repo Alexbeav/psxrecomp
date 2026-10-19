@@ -21,6 +21,9 @@
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
+#  if defined(__APPLE__)
+#    include <mach-o/dyld.h>
+#  endif
 extern char** environ;
 #endif
 
@@ -489,9 +492,9 @@ static int find_python(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if defined(_WIN32)
     if (find_toolchain_python(out, cap))
         return 1;
-#if defined(_WIN32)
     /* Prefer python.org / py-launcher installs over the Microsoft Store
      * stub: Store Python redirects LocalAppData writes into LocalCache. */
     char resolved[1100];
@@ -796,6 +799,10 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
+#if !defined(_WIN32)
+    /* A cached portable pack must not shadow Linux/macOS native tools. */
+    return;
+#endif
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
@@ -904,6 +911,9 @@ static int find_cmake(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if !defined(_WIN32)
+    return find_on_path("cmake", out, cap);
+#endif
     char tc[1100], cand[1200];
     if (resolve_toolchain_bin(tc, sizeof(tc))) {
 #if defined(_WIN32)
@@ -946,9 +956,32 @@ static int walk_up_for_project_root(const char* start, char* out, size_t cap) {
     return 0;
 }
 
+#if !defined(_WIN32)
+/* Canonical path of the running executable on POSIX hosts. /proc/self/exe is
+ * Linux-only; macOS has no procfs, so there the path comes from dyld. */
+static int host_posix_exe_path(char* out, size_t cap) {
+    char* rp = NULL;
+#  if defined(__APPLE__)
+    char raw[1100];
+    uint32_t n = (uint32_t)sizeof(raw);
+    if (_NSGetExecutablePath(raw, &n) != 0)
+        return 0;
+    rp = realpath(raw, NULL);
+#  else
+    rp = realpath("/proc/self/exe", NULL);
+#  endif
+    if (!rp)
+        return 0;
+    snprintf(out, cap, "%s", rp);
+    free(rp);
+    return out[0] != '\0';
+}
+#endif
+
 /* Directory containing this process's executable (not cwd). Dolphin / .desktop
- * launches leave cwd as $HOME — VIDEO/PGO/setup must still find the zip tree.
- * Linux: $APPIMAGE parent, else /proc/self/exe. Windows: GetModuleFileName. */
+ * and Finder launches leave cwd as $HOME — VIDEO/PGO/setup must still find the
+ * zip tree. Linux: $APPIMAGE parent, else /proc/self/exe. macOS: dyld's
+ * executable path. Windows: GetModuleFileName. */
 static int resolve_host_exe_dir(char* out, size_t cap) {
     char exe[1100];
     if (!out || cap < 2)
@@ -967,12 +1000,8 @@ static int resolve_host_exe_dir(char* out, size_t cap) {
         const char* appimg = getenv("APPIMAGE");
         if (appimg && appimg[0] && path_is_file(appimg)) {
             snprintf(exe, sizeof(exe), "%s", appimg);
-        } else {
-            char* rp = realpath("/proc/self/exe", NULL);
-            if (!rp)
-                return 0;
-            snprintf(exe, sizeof(exe), "%s", rp);
-            free(rp);
+        } else if (!host_posix_exe_path(exe, sizeof(exe))) {
+            return 0;
         }
     }
 #endif
@@ -3042,6 +3071,44 @@ static int cmake_path_runs(const char* cmake_path) {
     return run_cmd_exit_zero(cmd);
 }
 
+#if !defined(_WIN32)
+/* Native release kits probe host tools; setup never installs system packages. */
+static int posix_command_runs(const char* command) {
+    char cmd[1600];
+    if (!command || !command[0])
+        return 0;
+    snprintf(cmd, sizeof(cmd), "\"%s\" --version >/dev/null 2>&1", command);
+    return run_cmd_exit_zero(cmd);
+}
+
+static int host_system_toolchain_ready(void) {
+    char python[1200], tool[1200];
+#if defined(__APPLE__)
+    /* Avoid xcrun prompting to install tools during a readiness check. */
+    if (!run_cmd_exit_zero("xcode-select -p >/dev/null 2>&1"))
+        return 0;
+#endif
+    if (!find_on_path("cmake", g_cmake, sizeof(g_cmake)) ||
+        !posix_command_runs(g_cmake))
+        return 0;
+    if (!(find_on_path("python3", python, sizeof(python)) ||
+          find_on_path("python", python, sizeof(python))) ||
+        !posix_command_runs(python))
+        return 0;
+    if (!find_on_path("ninja", tool, sizeof(tool)) || !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("cc", tool, sizeof(tool)) ||
+          find_on_path("gcc", tool, sizeof(tool)) ||
+          find_on_path("clang", tool, sizeof(tool))) || !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("c++", tool, sizeof(tool)) ||
+          find_on_path("g++", tool, sizeof(tool)) ||
+          find_on_path("clang++", tool, sizeof(tool))) || !posix_command_runs(tool))
+        return 0;
+    return 1;
+}
+#endif
+
 /* True when pack bin/ can compile+link a tiny C program (catches broken
  * ld.lld / missing libicuuc.so.* etc. that cmake --version still passes). */
 static int toolchain_bin_compiler_works(const char* bin) {
@@ -3059,8 +3126,17 @@ static int toolchain_bin_compiler_works(const char* bin) {
             return 0;
     }
 #else
-    if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang))
+    if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang)) {
+#  if defined(__APPLE__)
+        /* The macOS pack (cmake-clang-v1-macos-universal) ships CMake, Ninja,
+         * ccache and Python only; compiling uses the system toolchain from
+         * Apple's Command Line Tools, checked by macos_system_compiler_works.
+         * A pack without clang is the normal macOS layout, not a broken one. */
+        return 1;
+#  else
         return 0;
+#  endif
+    }
     if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld))
         return 0;
 #endif
@@ -3112,6 +3188,50 @@ static int toolchain_bin_compiler_works(const char* bin) {
     unlink(exe);
 #endif
     return ok;
+}
+
+#if defined(__APPLE__)
+/* True when Apple's Command Line Tools are installed and /usr/bin/clang can
+ * compile and link a tiny program. xcode-select runs first so a machine
+ * without the CLT gets a repair note instead of the xcrun install prompt on
+ * every wizard refresh. */
+static int macos_system_compiler_works(void) {
+    char src[256], exe[256], cmd[1024];
+    FILE* f;
+    int ok;
+    if (!run_cmd_exit_zero("xcode-select -p >/dev/null 2>&1"))
+        return 0;
+    snprintf(src, sizeof(src), "/tmp/psxrecomp-cc-probe-%d.c", (int)getpid());
+    snprintf(exe, sizeof(exe), "/tmp/psxrecomp-cc-probe-%d", (int)getpid());
+    f = fopen(src, "wb");
+    if (!f)
+        return 0;
+    fputs("int main(void){return 0;}\n", f);
+    fclose(f);
+    snprintf(cmd, sizeof(cmd), "/usr/bin/clang \"%s\" -o \"%s\" >/dev/null 2>&1",
+             src, exe);
+    ok = run_cmd_exit_zero(cmd);
+    unlink(src);
+    unlink(exe);
+    return ok;
+}
+#endif
+
+/* Pack health says nothing about the macOS system compiler (see above), so
+ * readiness checks it separately and explains how to fix it. The pack itself
+ * is left alone: a missing compiler must never delete a good download. */
+static int host_system_compiler_ready(void) {
+#if defined(__APPLE__)
+    if (macos_system_compiler_works())
+        return 1;
+    snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
+             "Apple's Command Line Tools are required to build the game. "
+             "Open Terminal, run: xcode-select --install  then reopen this "
+             "app.");
+    return 0;
+#else
+    return 1;
+#endif
 }
 
 static int toolchain_bin_is_healthy(const char* bin) {
@@ -3292,13 +3412,16 @@ static int host_toolchain_is_ready(void) {
     if (!g_project_root[0])
         return 0;
     g_tc_repair_note[0] = '\0';
+#if !defined(_WIN32)
+    return host_system_toolchain_ready();
+#endif
     migrate_legacy_psxrecomp_toolchain();
     /* Wizard open: drop broken latest/ before treating the pack as ready. */
     heal_broken_toolchain_pointers();
     for (attempt = 0; attempt < 3; ++attempt) {
         activate_toolchain_path();
         if (host_portable_cmake_ready())
-            return 1;
+            return host_system_compiler_ready();
         if (!g_toolchain_bin[0])
             break;
         discard_unhealthy_active_toolchain();
@@ -3463,6 +3586,9 @@ static int host_toolchain_update_available(char* local_ver, size_t local_cap,
         local_ver[0] = '\0';
     if (remote_ver && remote_cap)
         remote_ver[0] = '\0';
+#if !defined(_WIN32)
+    return 0;
+#endif
     if (skip && skip[0] && skip[0] != '0')
         return 0;
     if (!g_project_root[0])
@@ -3493,6 +3619,16 @@ static int host_ensure_toolchain_with_progress(
         snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
+#if !defined(_WIN32)
+    if (on_progress)
+        on_progress(progress_ctx, 0.02f, "Checking native build tools…");
+    if (host_system_toolchain_ready())
+        return 1;
+    snprintf(err_msg, err_cap,
+             "Native build tools are missing. Install CMake, Ninja, Python 3, "
+             "and C/C++ compilers with your package manager, then check tools again.");
+    return 0;
+#endif
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
     if (!force && host_portable_cmake_ready())
@@ -4070,26 +4206,30 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
             "set /p PUBLISHED=<\"%%BUILD_DIR%%\\psxrecomp_exe_name-%%TARGET%%.txt\"\r\n"
             "if defined PUBLISHED if exist \"%%BUILD_DIR%%\\%%PUBLISHED%%.exe\" "
             "set \"EXE_FINAL=%%BUILD_DIR%%\\%%PUBLISHED%%.exe\"\r\n"
-            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" (\r\n"
-            "  echo.\r\n"
-            "  echo Build finished but the generated game code is missing:\r\n"
-            "  echo   %%GEN_MARKER%%\r\n"
-            "  echo Launching now would reopen setup in a loop. Please report\r\n"
-            "  echo this to the port maintainer: the boot-EXE name in\r\n"
-            "  echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
-            "if not exist \"%%EXE_FINAL%%\" (\r\n"
-            "  echo.\r\n"
-            "  echo Build finished but the game executable is missing:\r\n"
-            "  echo   %%EXE_FINAL%%\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
+            /* Path-bearing messages sit outside ( ) blocks: cmd expands
+             * %VAR% when it parses a block, so a ")" in an install folder
+             * such as "... (1)" would close the block early. */
+            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" goto no_gen\r\n"
+            "if not exist \"%%EXE_FINAL%%\" goto no_exe\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
             "start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
-            "endlocal\r\n");
+            "endlocal\r\n"
+            "exit /b 0\r\n"
+            ":no_gen\r\n"
+            "echo.\r\n"
+            "echo Build finished but the generated game code is missing:\r\n"
+            "echo   %%GEN_MARKER%%\r\n"
+            "echo Launching now would reopen setup in a loop. Please report\r\n"
+            "echo this to the port maintainer: the boot-EXE name in\r\n"
+            "echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
+            "pause\r\n"
+            "exit /b 1\r\n"
+            ":no_exe\r\n"
+            "echo.\r\n"
+            "echo Build finished but the game executable is missing:\r\n"
+            "echo   %%EXE_FINAL%%\r\n"
+            "pause\r\n"
+            "exit /b 1\r\n");
     fclose(f);
     return 1;
 }
@@ -4248,12 +4388,7 @@ static int host_self_exe_path(char* out, size_t cap) {
             snprintf(out, cap, "%s", appimg);
             return 1;
         }
-        char* rp = realpath("/proc/self/exe", NULL);
-        if (!rp)
-            return 0;
-        snprintf(out, cap, "%s", rp);
-        free(rp);
-        return out[0] != '\0';
+        return host_posix_exe_path(out, cap);
     }
 #endif
 }
@@ -4387,6 +4522,18 @@ static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
             }
         }
         printf(",\n  \"overlay_cache_configured\": %s", overlay_cache ? "true" : "false");
+    }
+    /* Build-tools readiness as wizard page 0 judges it, minus its cache
+     * healing: nothing is deleted or renamed here. toolchain_note carries the
+     * repair hint the wizard would show (e.g. missing Command Line Tools). */
+    {
+        int tc_ready;
+        g_tc_repair_note[0] = '\0';
+        activate_toolchain_path();
+        tc_ready = host_portable_cmake_ready() && host_system_compiler_ready();
+        printf(",\n  \"toolchain_ready\": %s", tc_ready ? "true" : "false");
+        printf(",\n  \"toolchain_note\": ");
+        host_json_str(g_tc_repair_note);
     }
     printf("\n}\n");
     fflush(stdout);
@@ -4542,7 +4689,11 @@ void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
         if (g_relaunch_is_helper) {
             fprintf(stderr,
                     "psxrecomp-codegen: starting deferred rebuild helper\n");
-            snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", exe);
+            /* cmd /C strips the first and last quote of the command line
+             * when it holds special characters such as the parentheses in
+             * "r4-1.0-windows-x64 (1)"; the doubled outer pair keeps the
+             * path's own quotes intact. */
+            snprintf(cmd, sizeof(cmd), "cmd.exe /C \"\"%s\"\"", exe);
             flags = CREATE_NEW_CONSOLE;
         } else {
             fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
@@ -4612,10 +4763,12 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
 
     /* Master switch for recomp-ui: first-run wizard + Generate & rebuild. */
     gi->setup_wizard_supported = 1;
-    /* Setup SDKs often link OpenBIOS only (retail C comes from Generate).
-     * psx_bios_has_selectable() is then 0 and would hide the BIOS row — keep
-     * the optional SCPH1001 picker so prepare can ingest a dump first. */
-    gi->has_bios = 1;
+    /* has_bios is NOT forced here. A setup SDK links OpenBIOS only and needs
+     * the retail picker so prepare can ingest a dump, but a shipped bundled
+     * build has no CLI, sources or toolchain to compile one in, and forcing
+     * the row there offered "Generate & rebuild" that could never run.
+     * main.cpp decides after this returns, from whether prepare_with_progress
+     * was actually wired below (or nothing is linked yet). */
 
     if (!discover_project_root(g_project_root, sizeof(g_project_root))) {
         /* Still force the wizard when generated/ is missing — discover may

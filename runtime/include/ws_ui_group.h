@@ -37,12 +37,17 @@ typedef struct {
     uint32_t root;
 } WsUiGroupItem;
 
-/* Assign one thirds anchor to each complete spatial run. Items with the same
+/* Assign one anchor to each complete spatial run. Items with the same
  * texture/row key join when their horizontal intervals touch or are separated
  * by at most WS_UI_GROUP_JOIN_GAP pixels. This is intentionally a whole-frame
- * operation: animated text is coherent on its first frame, not one frame late. */
+ * operation: animated text is coherent on its first frame, not one frame late.
+ *
+ * The anchor is the run's thirds anchor (left edge, centre, right edge), or
+ * with in_place the run's own centre, so it keeps the position the stretched
+ * 4:3 layout gives it. in_place is for HUD widgets whose GTE-projected parts
+ * (never corrected) must stay registered with their flat quads. */
 void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
-                        int32_t display_width, int dense_menu);
+                        int32_t display_width, int dense_menu, int in_place);
 
 int32_t ws_ui_anchor_for_bounds(int32_t x, int32_t width,
                                 int32_t display_width);

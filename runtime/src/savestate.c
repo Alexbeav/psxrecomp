@@ -7,14 +7,19 @@
  * restores the full machine then unwinds to the scheduler and re-dispatches. */
 
 #include "savestate.h"
+#include "mod_netplay.h"
 #include "boot_state.h"
 #include "cdrom.h"
 #include "gpu.h"
+#include "gpu_hd_textures.h"
 #include "interrupts.h"
 #include "psx_cycles.h"
 #include "psx_netplay.h"
 #include "psx_netplay_rb.h"
 #include "psx_scheduler.h"
+#if defined(PSX_HAS_RECOMP_NET)
+#include "netplay_state_digest.h"
+#endif
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -51,6 +56,7 @@ static uint32_t s_openbios_wordsum;   /* bundled OpenBIOS wordsum for migrate */
 static uint32_t s_bios_checksum;
 static uint32_t s_entry_pc;
 static int      s_configured   = 0;
+static int      s_title_blocked;
 static int      s_save_pending = -1;   /* slot, or -1 */
 static int      s_load_pending = -1;
 static int      s_load_completed = 0;
@@ -66,6 +72,43 @@ static int      s_save_defer_slot = -1;
 static double   s_save_defer_t0 = 0.0;
 static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
 static size_t   s_load_blob_len = 0;
+#if defined(PSX_HAS_RECOMP_NET)
+static uint32_t s_load_trace_generation;
+
+static int savestate_load_trace_enabled(void)
+{
+    static int enabled = -1;
+    const char *value;
+    if (enabled >= 0) return enabled;
+    value = getenv("PSX_NETPLAY_LOAD_TRACE");
+    enabled = (value && value[0] == '1' && value[1] == '\0') ? 1 : 0;
+    return enabled;
+}
+
+static void savestate_load_trace(const char *stage, uint32_t generation,
+                                 int slot, const char *source,
+                                 const CPUState *cpu)
+{
+    NetplayCoreParts core;
+    if (!savestate_load_trace_enabled()) return;
+    memset(&core, 0, sizeof(core));
+    netplay_core_digest_parts(cpu, &core);
+    fprintf(stderr,
+            "savestate: load_trace gen=%u stage=%s source=%s slot=%d sim=%u "
+            "pc=%08x core=%08x cpu=%08x clk=%08x timers=%08x ram=%08x "
+            "dirty=%08x av=%08x cd=%08x spu=%08x mdec=%08x aux=%08x\n",
+            (unsigned)generation, stage ? stage : "?",
+            source ? source : "?", slot,
+            (unsigned)psx_netplay_sim_tick(), (unsigned)(cpu ? cpu->pc : 0u),
+            (unsigned)core.core, (unsigned)core.cpu,
+            (unsigned)core.clock_irq, (unsigned)core.timers,
+            (unsigned)core.ram, (unsigned)core.dirty,
+            (unsigned)netplay_av_digest(), (unsigned)netplay_cdrom_digest(),
+            (unsigned)netplay_spu_digest(), (unsigned)netplay_mdec_digest(),
+            (unsigned)netplay_aux_digest());
+    fflush(stderr);
+}
+#endif
 
 typedef struct SavestateThumbHeader {
     char magic[4];
@@ -150,6 +193,28 @@ static void clear_load_blob(void) {
     free(s_load_blob);
     s_load_blob = NULL;
     s_load_blob_len = 0;
+}
+
+int savestate_title_blocked(void) { return s_title_blocked; }
+void savestate_set_title_blocked(int blocked) {
+    s_title_blocked = blocked != 0;
+    if (!s_title_blocked) return;
+    if (s_save_pending >= 0 || s_save_defer_slot >= 0) s_save_failed = 1;
+    if (s_load_pending >= 0) s_load_failed = 1;
+    s_save_pending = s_load_pending = s_save_defer_slot = -1;
+    s_last_save_pc = 0;
+    s_status_pending = 0;
+    clear_load_blob();
+}
+
+static int title_save_request_blocked(int is_load, int slot) {
+    const char* reason;
+    if (!s_title_blocked && psx_mod_netplay_savestates_supported()) return 0;
+    reason = s_title_blocked ? "Save states are unavailable in this game mode" :
+                              "Save states are unavailable in this netplay mode";
+    fprintf(stderr, "savestate: %s\n", reason);
+    psx_frontend_on_savestate_refused(is_load, slot, reason);
+    return 1;
 }
 
 /* Peek .pst header bios_checksum (BOOT_STATE wire: magic, version, checksum). */
@@ -448,6 +513,47 @@ static int savestate_thumb_path(int slot, char* out, size_t cap) {
     return 1;
 }
 
+/* HD texture-pack residency sidecar (gpu_hd_textures.h): host metadata next
+ * to the slot, never part of the .pst, so states stay renderer-independent. */
+static int savestate_hd_path(int slot, char* out, size_t cap) {
+    if (!s_configured || !out || cap == 0) return 0;
+    if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
+    snprintf(out, cap, "%s%sstate_%08X%s_slot%02d.hdres",
+             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc,
+             s_disc_token, slot);
+    return 1;
+}
+static void savestate_write_hd_residency(int slot) {
+    char path[600];
+    uint8_t* data = NULL;
+    size_t size = 0;
+    if (!savestate_hd_path(slot, path, sizeof(path))) return;
+    if (!gpu_hd_textures_residency_save(&data, &size)) { remove(path); return; }
+    FILE* f = fopen(path, "wb");
+    if (f) {
+        const int ok = fwrite(data, 1, size, f) == size;
+        if (fclose(f) != 0 || !ok) remove(path);
+    }
+    free(data);
+}
+static void savestate_read_hd_residency(int slot) {
+    char path[600];
+    if (!savestate_hd_path(slot, path, sizeof(path))) return;
+    FILE* f = fopen(path, "rb");
+    if (!f) return;
+    uint8_t* data = NULL;
+    long size = (fseek(f, 0, SEEK_END) == 0) ? ftell(f) : -1;
+    if (size > 0 && size <= (64L << 20) && fseek(f, 0, SEEK_SET) == 0 &&
+        (data = (uint8_t*)malloc((size_t)size)) != NULL &&
+        fread(data, 1, (size_t)size, f) == (size_t)size) {
+        if (!gpu_hd_textures_residency_load(data, (size_t)size))
+            fprintf(stderr, "savestate: slot %d HD texture residency not restored "
+                            "(different pack or VRAM); replacements resume on new uploads\n", slot);
+    }
+    free(data);
+    fclose(f);
+}
+
 int savestate_slot_exists(int slot) {
     char path[600];
     FILE* f;
@@ -582,7 +688,8 @@ int savestate_read_slot(int slot, uint8_t** data_out, size_t* size_out) {
     if (!f) return 0;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
     sz = ftell(f);
-    if (sz <= 0 || (size_t)sz > 8u * 1024u * 1024u) { fclose(f); return 0; }
+    /* Raw 8 MB-RAM states run ~11.5 MiB (RAM + VRAM + SPU + dirty maps). */
+    if (sz <= 0 || (size_t)sz > 16u * 1024u * 1024u) { fclose(f); return 0; }
     if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
     buf = (uint8_t*)malloc((size_t)sz);
     if (!buf) { fclose(f); return 0; }
@@ -648,7 +755,12 @@ static int netplay_user_blocked(void) {
 }
 
 static int request_save_inner(int slot) {
-    if (!s_configured) { fprintf(stderr, "savestate: not configured\n"); return 0; }
+    if (title_save_request_blocked(0, slot)) return 0;
+    if (!s_configured) {
+        fprintf(stderr, "savestate: not configured\n");
+        psx_frontend_on_savestate_refused(0, slot, "Save states are not available yet");
+        return 0;
+    }
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
     s_save_failed = 0;
     s_last_save_pc = 0; /* block netplay transfer until this write stamps a PC */
@@ -661,13 +773,20 @@ static int request_save_inner(int slot) {
 }
 
 static int request_load_inner(int slot) {
-    if (!s_configured) { fprintf(stderr, "savestate: not configured\n"); return 0; }
+    if (title_save_request_blocked(1, slot)) return 0;
+    if (!s_configured) {
+        fprintf(stderr, "savestate: not configured\n");
+        psx_frontend_on_savestate_refused(1, slot, "Save states are not available yet");
+        return 0;
+    }
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
     if (!psx_hle_scheduler_enabled()) {
         /* LLE (host-fiber) mode: the restore longjmp target lives on the
          * scheduler fiber; cross-fiber unwind is unsafe. HLE is the default. */
         fprintf(stderr, "savestate: load requires the HLE scheduler (default); "
                         "PSX_HLE_SCHEDULER=0 run cannot load states.\n");
+        psx_frontend_on_savestate_refused(1, slot,
+            "Cannot load: this run uses the legacy thread scheduler");
         return 0;
     }
     s_load_failed = 0;
@@ -702,6 +821,7 @@ int savestate_request_load_protocol(int slot) {
 
 int savestate_request_load_blob_protocol(const void* data, size_t size) {
     uint8_t* copy;
+    if (title_save_request_blocked(1, -1)) return 0;
     if (!s_configured) {
         fprintf(stderr, "savestate: load_blob — not configured\n");
         return 0;
@@ -765,6 +885,8 @@ uint32_t savestate_last_save_pc(void) {
 
 void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
     if (s_save_pending < 0 && s_load_pending < 0) return;   /* hot path: nothing staged */
+    extern int psx_mod_function_entry_active(void);
+    if (psx_mod_function_entry_active()) return;
 
     if (s_save_pending >= 0) {
         int slot = s_save_pending;
@@ -834,6 +956,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     s_last_save_pc = pc;
                     s_save_failed = 0;
                     (void)savestate_capture_thumb(slot);
+                    savestate_write_hd_residency(slot);
                 } else {
                     s_last_save_pc = 0;
                     s_save_failed = 1;
@@ -858,12 +981,30 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
     if (s_load_pending >= 0) {
         int slot = s_load_pending;
         int loaded = 0;
+#if defined(PSX_HAS_RECOMP_NET)
+        uint32_t load_trace_generation = ++s_load_trace_generation;
+        const char *load_trace_source =
+            (s_load_blob && s_load_blob_len > 0) ? "blob" : "file";
+#endif
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
         double t_after_boot = t_load0;
         double t_after_frontend = t_load0;
+        /* The resume-PC gate below can only judge a state AFTER it is applied
+         * (dispatchability depends on the restored RAM). Hold the pre-load
+         * machine so that refusal puts it back: a failed load never leaves a
+         * half-applied or foreign machine running on this host stack.
+         * (boot_state_load_* itself refuses before mutating anything.) */
+        uint8_t* rollback = NULL;
+        size_t rollback_len = 0;
+        const int have_rollback = boot_state_save_buffer_raw(
+            cpu, s_bios_checksum, s_entry_pc, &rollback, &rollback_len);
         path[0] = '\0';
+#if defined(PSX_HAS_RECOMP_NET)
+        savestate_load_trace("before_apply", load_trace_generation, slot,
+                             load_trace_source, cpu);
+#endif
         if (s_load_blob && s_load_blob_len > 0) {
             const size_t blob_len = s_load_blob_len;
             loaded = boot_state_load_buffer(s_load_blob, blob_len,
@@ -897,8 +1038,19 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     slot, (unsigned)cpu->pc, path[0] ? "" : " [blob]");
             loaded = 0;
             s_load_failed = 1;
+            /* Restoring this build's own just-written state cannot fail short
+             * of allocation failure; s_load_failed already reports the load. */
+            if (have_rollback)
+                (void)boot_state_load_buffer(rollback, rollback_len,
+                                             s_bios_checksum, s_entry_pc, cpu);
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
+#if defined(PSX_HAS_RECOMP_NET)
+        if (loaded)
+            savestate_load_trace("after_restore", load_trace_generation, slot,
+                                 load_trace_source, cpu);
+#endif
+        free(rollback);
         if (!loaded) {
             s_status_pending = 0;
             s_status_last_ok = 0;
@@ -923,6 +1075,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             /* Restage FBO/present latch so the restored frame is visible
              * immediately (avoids disabled-display blank latch + stale smooth). */
             psx_frontend_on_savestate_loaded();
+            if (path[0]) savestate_read_hd_residency(slot);
             t_after_frontend = savestate_mono_ms();
             fprintf(stderr,
                     "savestate: LOADED slot %d -> resuming pc=0x%08X "
@@ -933,6 +1086,10 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     t_after_frontend - t_load0,
                     path[0] ? "" : " [blob]");
             psx_frontend_on_savestate_notify(1, slot, 1);
+#if defined(PSX_HAS_RECOMP_NET)
+            savestate_load_trace("before_resume", load_trace_generation, slot,
+                                 load_trace_source, cpu);
+#endif
             /* Unwind to the scheduler and re-dispatch the restored PC. Never
              * returns; abandons the suspended CPS frames on the current stack. */
             psx_scheduler_resume_at(cpu->pc);

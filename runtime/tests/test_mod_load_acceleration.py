@@ -54,12 +54,14 @@ assert 'f << "turbo_loads       = "' not in CONFIG_CPP
 assert "if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;" in MAIN
 assert "if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;" in MAIN
 
+# These run inside main.cpp's start_mod_session(), which every session start
+# (first boot and lobby rematch) calls, hence the lambda-body indentation.
 reset = """g_mod_load_wall_multiplier = -1;
-    g_mod_load_release_frames = -1;"""
+        g_mod_load_release_frames = -1;"""
 disc_reset = """g_mod_disc_speed_divisor = -1;
-    g_mod_disc_instant_rate = -1;"""
+        g_mod_disc_instant_rate = -1;"""
 disable_mod_owned_baseline = """if (!turbo_loads_offered)
-        g_turbo_loads_enabled = 0;"""
+            g_turbo_loads_enabled = 0;"""
 activate = "mod_runtime_activate_plugins();"
 apply = "if (g_mod_load_wall_multiplier >= 0) {"
 assert reset in MAIN

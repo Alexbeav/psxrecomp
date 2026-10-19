@@ -8,6 +8,14 @@ extern "C" {
 #endif
 
 struct CPUState;
+/* A host adapter that preserves registers outside guest RAM is not a
+ * serializable continuation. Defer snapshots until it returns; scheduler
+ * escapes discard the scope with the abandoned host stack. */
+void psx_snapshot_host_call_begin(void);
+void psx_snapshot_host_call_end(void);
+void psx_snapshot_host_call_reset(void);
+unsigned psx_snapshot_host_call_depth(void);
+void psx_snapshot_host_call_restore(unsigned depth);
 
 /* IRQ bit positions in I_STAT/I_MASK */
 #define IRQ_VBLANK  0
@@ -76,7 +84,8 @@ void psx_check_interrupts_dispatch_entry(struct CPUState* cpu, uint32_t resume_p
  * Called from psx_advance_cycles() so the VBlank rate is gated on
  * guest cycles (correct PSX timing) rather than block-dispatch
  * count (which was 5-6x too fast and squeezed game-time to ~60% of
- * real). One real-PSX VBlank = 564480 cycles (33.8688 MHz / 60). */
+ * real). The period follows the GPU's live video standard: NTSC 564480
+ * cycles (33.8688 MHz / 60), PAL 677376 (/ 50); see psx_video_timing.h. */
 void interrupts_advance_cycles(uint32_t cycles);
 void interrupts_service_scheduled_events(void);
 uint32_t interrupts_cycles_to_vblank(void);
@@ -86,7 +95,7 @@ uint32_t interrupts_cycles_to_vblank(void);
  * diagnostic opt-out. */
 uint32_t psx_spu_sample_event_cycles_to_next(void);
 void psx_spu_sample_event_service(void);
-/* VBlank phase within the current frame (0 .. VBLANK_CYCLES-1). Persisted in
+/* VBlank phase within the current frame (0 .. period-1). Persisted in
  * BS_SEC_IRQ (and selfcheck's out-of-band latch) so resim keeps the snap's
  * phase. Legacy 8-byte IRQ sections still rebase to 0 on load. */
 uint32_t interrupts_get_cycles_since_vblank(void);

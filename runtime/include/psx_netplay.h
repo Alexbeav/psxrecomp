@@ -30,8 +30,13 @@ extern "C" {
  * Pad blob (8 bytes):
  *   [0..1] buttons LE u16 (PSX active-low)
  *   [2] lx  [3] ly  [4] rx  [5] ry
- *   [6] analog (0/1)
+ *   [6] controller type (0 digital, 1 DualShock, 2 JogCon, 3 NeGcon)
  *   [7] connected (always 1)
+ *
+ * Packed per type. DualShock: lx/ly/rx/ry are the sticks. JogCon: lx is the
+ * wheel position (0x80 centre). NeGcon: lx = twist (0x80 centre), rx = analog
+ * I, ry = analog II, ly = analog L (0 released .. 0xFF pressed). The rollback
+ * row carries only lx/ly (stick view), i.e. NeGcon twist and L.
  */
 
 #define PSX_NETPLAY_PAD_BYTES 8
@@ -39,10 +44,20 @@ extern "C" {
 typedef struct PsxNetPad {
     uint16_t buttons;
     uint8_t  lx, ly, rx, ry;
-    uint8_t  analog;
+    uint8_t  analog; /* SIO_PAD_*; legacy field name retained on the wire */
     uint8_t  connected;
 } PsxNetPad;
 
+/* Highest controller type a PsxNetPad may carry (SIO_PAD_NEGCON). Larger
+ * values decode as digital. */
+#define PSX_NETPAD_TYPE_MAX 3u
+
+/* The one way a resolved pad reaches SIO, shared by offline sampling, netplay
+ * (delay and rollback apply) and selfcheck replay: buttons, the type's axes
+ * (NeGcon unpacked to twist + I/II/L), and a deferred type request. A
+ * multitap seat without the analog-on-tap hack is made config-inert, as SIO
+ * then forces it digital. Callers own connection and other policy. */
+void psx_pad_apply_to_sio(int port, const PsxNetPad *pad);
 typedef struct PsxNetplayConfig {
     int         enabled;
     int         local_slot;    /* 0 .. slot_count-1 */
@@ -79,6 +94,20 @@ typedef struct PsxNetplayConfig {
     /* Rollback invent runway (phase_lock / P). Clamped 2..16. Unused in delay-sync. */
     int         input_prediction;
     int         force_input_relay; /* 1 = lobby UDP SFU star (from launch) */
+    /* 1 = the launch said transport "host": an online room whose host
+     * carries the match on bind_hostport; guests dial peer_hostport. Takes
+     * the LAN / hub transport path, not the server-relay one. */
+    int         transport_host;
+    /* 1 = the launch said transport "host" AND relay_via "ice" (host relay
+     * over ICE). transport_host is ALSO 1 then; this is tested first. No UDP
+     * port is bound and nothing is dialled (bind_hostport is a placeholder,
+     * peer_hostport empty): the match runs over the ICE agents the waiting
+     * room connected -- host: a hub over one agent per guest; guest: a 1:1
+     * agent to the host. Neither the single-agent ICE path nor the SFU is
+     * ever chosen for it. The agents come from psx_netplay_ice_stash_from_lobby
+     * (taken when the launch was consumed) or, failing that, straight from the
+     * lobby client. */
+    int         transport_ice_hub;
     int         force_turn;        /* 1 = ICE relay-only (Force TURN for UDP) */
     /* 0 = auto (MotK room → ICE, else LAN), 1 = force ICE, 2 = force LAN.
      * Env PSX_NET_TRANSPORT=lan|ice overrides. */
@@ -94,6 +123,9 @@ typedef struct PsxNetplayConfig {
      * Must be identical on every peer (the lobby decides it at start).
      * Env PSX_NET_GUEST_MEMCARD=1 overrides. */
     int         guest_memcard;
+    /* Nonempty for direct/LAN sessions: full portable mod-plan SHA-256.
+     * Gameplay waits for every occupied peer to agree. */
+    char        content_fingerprint[65];
     uint32_t    session_id;
     char        bind_hostport[64];
     char        peer_hostport[64];
@@ -102,7 +134,13 @@ typedef struct PsxNetplayConfig {
 void psx_netplay_config_defaults(PsxNetplayConfig *cfg);
 void psx_netplay_apply_env(PsxNetplayConfig *cfg);
 
+/* Internal RB_SYNC demultiplexing; returns 1 for a content identity packet. */
+int psx_netplay_content_note(uint32_t epoch, uint32_t word0, uint32_t word1,
+                             uint32_t seen, uint8_t slot, uint8_t op, uint8_t flags);
 int  psx_netplay_active(void);
+/* Every other occupied seat of the session (bit i = seat i): the peers that
+ * must all answer a rollback episode. 0 offline. */
+uint32_t psx_netplay_peer_seats(void);
 int  psx_netplay_is_running(void);
 /* "ice" | "lan" | "none" */
 const char *psx_netplay_transport_name(void);
@@ -111,6 +149,8 @@ int  psx_netplay_ice_failed(void);
 /* Optional JSONL samples when PSX_NET_DIAG=1 (saves/netplay/net_diag.jsonl). */
 void psx_netplay_diag_tick(void);
 int  psx_netplay_local_slot(void);
+/* Guest controller port of this peer; differs from session slot after seat swaps. */
+int  psx_netplay_local_port(void);
 /* 1 while this build is watching rather than playing. */
 int  psx_netplay_is_spectator(void);
 /* 1 when the local peer is the host running the match from the gallery. */
@@ -118,16 +158,62 @@ int  psx_netplay_host_spectates(void);
 /* Resolved host player index used for local capture. */
 int  psx_netplay_input_player(void);
 uint32_t psx_netplay_sim_tick(void);
+/* Session seats, including any host gallery seat; zero when offline. */
+int psx_netplay_seat_count(void);
+/* Read the pad actually published for one session seat in the current
+ * simulation tick. This follows the delay-sync publisher and rollback's
+ * sealed-frame override of predicted history, so a trusted game plugin can
+ * use the same seat inputs that SIO sees when a title consumes more player
+ * commands than its SIO protocol exposes. Call on the emulation thread while
+ * guest code runs; returns 0 when netplay is off, the seat is absent, or no
+ * pad has been published for this tick. */
+int psx_netplay_sim_pad(int seat, PsxNetPad *out);
+
+/* Presentation-only local view. A title whose netplay mode draws every seat's
+ * view into one frame on every peer (so guest state stays identical) asks the
+ * present path to show only this peer's view: a rectangle of the display area
+ * in guest pixels, relative to the GP1(05h) display start. The present path
+ * scales it to the window at 4:3. Host state only: never serialized, never
+ * visible to the guest. A request lapses a few simulation ticks after the
+ * last renewal, so the title renews it every frame its multi-view screen is
+ * up. Ignored while netplay is off. */
+void psx_netplay_present_local_view(uint32_t x, uint32_t y,
+                                    uint32_t w, uint32_t h);
+/* Drop any current request at once (the full frame is presented again).
+ * A committed psx_mod_render_local_view() image calls it: the peer's own
+ * image of the display supersedes a crop of the canonical frame. */
+void psx_netplay_local_view_clear(void);
+/* 1 while this peer is behind the other peers' inputs: presentation-only work
+ * (psx_mod_render_local_view) is shed first so the simulation can catch up.
+ * See psx_netplay_local_view_shed_step. PSX_NET_LOCAL_VIEW_SHED=0 keeps the
+ * own view regardless. 0 offline. */
+int psx_netplay_local_view_shed(void);
+/* 1 and the rectangle while a current request fits a display of
+ * display_w x display_h. */
+int psx_netplay_local_view(uint32_t display_w, uint32_t display_h,
+                           uint32_t *x, uint32_t *y,
+                           uint32_t *w, uint32_t *h);
 
 /*
  * Snapshot for diagnostic dumps (starvation_dump.jsonl meta, etc.).
- * arch_out: "off" | "p2p" | "host_relay" | "server_relay" (never NULL when
+ * arch_out: "off" | "p2p" | "host_relay" | "ice_host_relay" | "server_relay" (never NULL when
  * arch_cap > 0). Returns 1 when netplay is/was configured this run.
  */
 int  psx_netplay_diag_snapshot(char *arch_out, size_t arch_cap,
                                int *max_players_out, int *player_count_out);
 
 int  psx_netplay_start(const PsxNetplayConfig *cfg);
+
+/* Host relay over ICE: take the launch's connected agents from the lobby
+ * client and hold them until psx_netplay_start adopts them. Call where the
+ * launch is consumed, BEFORE the lobby launch is cleared (the lobby destroys an
+ * untaken bundle after 60 s). No-op unless the lobby's launch is an ICE hub
+ * launch with a bundle pending. Returns 1 when agents are now held. */
+int  psx_netplay_ice_stash_from_lobby(void);
+/* Release held agents (a launch that never started). Safe at any time. */
+void psx_netplay_ice_stash_discard(void);
+/* 1 when held agents await psx_netplay_start. */
+int  psx_netplay_ice_stash_held(void);
 void psx_netplay_shutdown(void);
 /* Soft-return rematch / new lobby opponent: make host sim state match a cold
  * process peer. Call from session_reboot (rematch) and after BYE teardown.
@@ -268,7 +354,14 @@ void psx_netplay_wait_recv(int timeout_ms);
 void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
                                  uint32_t *sim_tick_out, int *lead_out);
 
-/* Normalize sticks (deadzone → center) for stabler cross-device blobs. */
+/* One-line transport snapshot for a session stuck before RUNNING: ICE state,
+ * selected path, datagrams received, recv-queue drops and time since the last
+ * peer datagram. Writes "inactive" when no session exists. */
+void psx_netplay_link_diag(char *out, size_t cap);
+
+/* Normalize for stabler cross-device blobs: unknown types become digital;
+ * centred axes (sticks, wheel, twist) snap to 0x80 inside a deadzone; NeGcon
+ * pressure bytes (ly/rx/ry) are kept exactly; digital centres everything. */
 void psx_netplay_normalize_pad(PsxNetPad *pad);
 
 void psx_netplay_release_pads(void);

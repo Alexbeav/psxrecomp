@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include "cpu_state.h"
 
+/* Title adapters can require support before selecting HLE execution boundaries.
+ * PSX_SAVESTATE_IMPL_TAG is a compile definition on boot_state.c, default zero. */
+#define PSX_BOOT_STATE_IMPL_TAG_VERSION 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,9 +46,11 @@ extern "C" {
  * v5 = v4 + CD-ROM Sub-Q replacement state;
  * v6 = v5 + per-word GPU DMA2 linked-list progress;
  * v7 = v6 + pending XA DATA_END IRQ state. */
-#define BOOT_STATE_VERSION 8u
-/* v8 adds allocated enhancement memory. Vanilla writers remain v7; older
+#define BOOT_STATE_VERSION 9u
+/* v8 added allocated enhancement memory (vanilla v8-era writers kept v7); older
  * runtimes must not accept enhanced snapshots while ignoring their arenas. */
+/* v9 persists the BIOS-to-game handoff latch. Engine overlays may have
+ * replaced the original entry code by the time a gameplay state is loaded. */
 /* v7 intentionally breaks older savestates after the CD-ROM wire grew. Reject
  * them at the header before any section changes the live machine. */
 #define BOOT_STATE_VERSION_MIN_READ 7u
@@ -64,10 +70,10 @@ typedef struct {
     uint32_t entry_pc;       /* game PS-EXE entry PC                              */
     uint32_t codegen_hash;   /* PSX_OVERLAY_CODEGEN_HASH (auto-gen by cmake)      */
     int32_t  abi_tag;        /* PSX_OVERLAY_ABI_TAG (abi version | flavor<<16)    */
-    uint32_t codegen_ver;    /* PSX_OVERLAY_CODEGEN_VER                           */
+    uint32_t codegen_ver;    /* codegen version XOR build PSX_SAVESTATE_IMPL_TAG  */
     /* ---- layout ---- */
     uint32_t section_count;  /* number of sections that follow                    */
-    uint32_t reserved;       /* v8: enhancement-memory layout cookie; vanilla 0   */
+    uint32_t reserved;       /* enhancement-memory, RAM and execution cookie     */
 } BootStateHeader;
 
 #define BOOT_STATE_HEADER_WIRE_BYTES 36u
@@ -84,6 +90,7 @@ typedef struct {
  * never allowed) -> normal boot + recapture.
  */
 enum {
+    BS_SEC_GAME_START = 0x12, /* u32 LE boolean: BIOS-to-game handoff completed */
     BS_SEC_MODMEM = 0x11,  /* allocated opt-in CPU/GPU enhancement arenas */
     BS_SEC_CPU    = 0x01,  /* CPUState: gpr/pc/hi/lo/cop0/gte_data/gte_ctrl       */
     BS_SEC_RAM    = 0x02,  /* 2 MB main RAM                                       */
@@ -100,6 +107,16 @@ enum {
     BS_SEC_SIO    = 0x0D,  /* SIO regs + pad-config FSM + memcard FSM             */
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
     BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
+    BS_SEC_SPUCD  = 0x15,  /* SPU CD-input frames queued (u32 n + n*(l,r) s16) */
+    BS_SEC_CPUTIM = 0x14,  /* [timing] in-flight CPU stall state, relative to
+                              the clock: GTE / mul-div cycles left, the load-
+                              delay give-back (read_absorb[33], which, fudge,
+                              ld_which_t, ld_absorb). Absent => anchored at the
+                              restored clock (pre-0x14 behaviour). */
+    BS_SEC_GCS    = 0x13,  /* [timing] guest_cycle_scale: carried fraction + gate
+                              state (3 u32). Written only when the title's
+                              scale is not 1, so faithful states are unchanged;
+                              absent => fraction 0, gates as they are. */
     BS_SEC_ICACHE = 0x10,  /* R3000A I-cache tag/valid words (1024 u32) — fetch
                               cost model. Host-persistent otherwise: a warm load
                               without it replays with the pre-load timeline's

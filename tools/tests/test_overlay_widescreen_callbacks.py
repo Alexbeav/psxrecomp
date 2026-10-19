@@ -20,28 +20,68 @@ class OverlayWidescreenCallbacks(unittest.TestCase):
 static CPUState *seen_cpu;
 static uint32_t seen_address, cycles;
 static int32_t bound(int32_t x) { return x * 2; }
+static int margin120(void) { return 120; }
+static int packed_reject(uint32_t flags, uint32_t mask) { return (flags & mask) != 0; }
+static int nclip_branch(uint32_t pc, uint32_t word, int32_t mac0, int vanilla) {
+    assert(pc == 0x80021EAC && word == 0x1900FFCF && mac0 == 0 && vanilla == 1);
+    return 0;
+}
 static void advance(uint32_t n) { cycles += n; }
-static void entry(CPUState *cpu, uint32_t address) {
+static int entry(CPUState *cpu, uint32_t address) {
     assert(cycles == 17); seen_cpu = cpu; seen_address = address;
+    cpu->pc = cpu->gpr[31]; return 1;
 }
 int main(void) {
     CPUState cpu = {0};
     OverlayCallbacks callbacks = {0};
     callbacks.ws_screen_x_bound = bound;
     callbacks.mod_function_entry = entry;
-    callbacks.advance_cycles = advance;
+    callbacks.cpu_charge = advance;
     overlay_init(&callbacks);
     assert(overlay_abi() == PSX_OVERLAY_ABI_TAG);
     assert(psx_ws_screen_x_bound(-256) == -512);
     assert(psx_ws_screen_x_bound(256) == 512);
     psx_advance_cycles(17);
-    psx_mod_function_entry(&cpu, 0x80045770);
+    cpu.gpr[31] = 0x80010000;
+    assert(psx_mod_function_entry(&cpu, 0x80045770) == 1);
+    assert(cpu.pc == 0x80010000);
     assert(seen_cpu == &cpu && seen_address == 0x80045770);
     callbacks.ws_screen_x_bound = 0; callbacks.mod_function_entry = 0;
     overlay_init(&callbacks);
     assert(psx_ws_screen_x_bound(-256) == -256);
-    psx_mod_function_entry(&cpu, 0);
+    assert(psx_mod_function_entry(&cpu, 0) == 0);
     assert(seen_address == 0x80045770);
+    /* bgez_sites / clip_edge_x_load_sites in overlay code: identity with no
+     * margin callback (4:3 host), widened by the live margin with one. */
+    assert(psx_ws_cull_bgez(0u) == 1 && psx_ws_cull_bgez((uint32_t)-1) == 0);
+    assert(psx_ws_clip_edge_x(0u, 0x140u) == 0u);
+    assert(psx_ws_clip_edge_x(0x140u, 0x140u) == 0x140u);
+    /* screen_x_sites on lui / bltz: a screen X in the high half. */
+    assert(psx_ws_cull_lui_hi(0x0200u) == (0x0200u << 16));
+    assert(psx_ws_cull_bltz_hi((uint32_t)-1 << 16) == 1 && psx_ws_cull_bltz_hi(0u) == 0);
+    callbacks.ws_x_margin = margin120;
+    overlay_init(&callbacks);
+    assert(psx_ws_cull_bgez((uint32_t)-120) == 1);
+    assert(psx_ws_cull_bgez((uint32_t)-121) == 0);
+    assert(psx_ws_clip_edge_x(0u, 0x140u) == (uint32_t)-120);
+    assert(psx_ws_clip_edge_x(0x140u, 0x140u) == 0x140u + 120u);
+    assert(psx_ws_clip_edge_x(98u, 0x140u) == 98u);     /* interior viewport edge */
+    assert(psx_ws_clip_edge_x(222u, 0x140u) == 222u);
+    assert(psx_ws_cull_lui_hi(0x0200u) == ((0x0200u + 120u) << 16));
+    assert(psx_ws_cull_bltz_hi((uint32_t)-120 << 16) == 0);
+    assert(psx_ws_cull_bltz_hi((uint32_t)-121 << 16) == 1);
+    /* Newly cached modules forward the guarded packed predicate. Missing
+     * callbacks retain the original reject, rather than widening unsafely. */
+    assert(psx_ws_masked_reject(0xFE00u, 0xFFFF0000u) == 1);
+    callbacks.ws_masked_reject = packed_reject;
+    overlay_init(&callbacks);
+    assert(psx_ws_masked_reject(0xFE00u, 0xFFFF0000u) == 0);
+    assert(psx_ws_masked_reject(0xFF00FE00u, 0xFFFF0000u) == 1);
+    assert(psx_ws_masked_reject(0u, 0xFFFF0000u) == 0);
+    assert(psx_ws_nclip_branch(0x80021EAC, 0x1900FFCF, 0, 1) == 1);
+    callbacks.ws_nclip_branch = nclip_branch;
+    overlay_init(&callbacks);
+    assert(psx_ws_nclip_branch(0x80021EAC, 0x1900FFCF, 0, 1) == 0);
     return 0;
 }
 '''
