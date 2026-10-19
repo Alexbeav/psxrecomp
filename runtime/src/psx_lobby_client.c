@@ -1,10 +1,14 @@
 #include "psx_lobby_client.h"
+#include "mod_netplay.h"
+#include "psx_lobby_launch_transport.h"
+#include "netplay_bios_settle.h"
 
 #include <ctype.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <time.h>
 
@@ -32,6 +36,8 @@ void psx_lobby_pump(void) {}
 void psx_lobby_request_list(void) {}
 int  psx_lobby_list_count(void) { return 0; }
 int  psx_lobby_list_get(int index, PsxLobbyRow *out) { (void)index; (void)out; return 0; }
+int  psx_lobby_online_count(void) { return 0; }
+int  psx_lobby_online_get(int index, PsxLobbyOnlinePlayer *out) { (void)index; (void)out; return 0; }
 void psx_lobby_set_game_identity(const char *a, const char *b) { (void)a; (void)b; }
 const char *psx_lobby_game_version(void) { return PSX_GAME_VERSION; }
 void psx_lobby_set_disc_fp(const char *disc_fp) { (void)disc_fp; }
@@ -43,6 +49,19 @@ int  psx_lobby_create(const char *a, const char *b, const char *c, const char *d
 int  psx_lobby_join(const char *a, const char *b, const char *c)
 { (void)a; (void)b; (void)c; return -1; }
 int  psx_lobby_leave(void) { return -1; }
+void psx_lobby_set_relay_host_pref(int on) { (void)on; }
+int  psx_lobby_relay_host_pref(void) { return 0; }
+int  psx_lobby_host_relay_status(struct RNetHostRelayStatus *out) { (void)out; return 0; }
+void psx_lobby_host_relay_release_port(void) {}
+void psx_lobby_set_relay_via_ice_pref(int on) { (void)on; }
+int  psx_lobby_relay_via_ice_pref(void) { return 0; }
+int  psx_lobby_ice_available(void) { return 0; }
+int  psx_lobby_host_ice_status(struct RNetHostIceStatus *out) { (void)out; return 0; }
+int  psx_lobby_ice_take_hub(PsxLobbyIceSeat *out, int max) { (void)out; (void)max; return -1; }
+struct RNetIceAgent *psx_lobby_ice_take_guest_agent(void) { return NULL; }
+const char *psx_lobby_ice_launch_error(void) { return ""; }
+void psx_lobby_ice_discard(void) {}
+void psx_lobby_ice_destroy_agent(struct RNetIceAgent *agent) { (void)agent; }
 int  psx_lobby_kick(int slot) { (void)slot; return -1; }
 void psx_lobby_set_allow_spectators(int allow) { (void)allow; }
 int  psx_lobby_allow_spectators_pref(void) { return 0; }
@@ -70,7 +89,25 @@ const PsxLobbyMatchCaps *psx_lobby_match_caps(void)
     static PsxLobbyMatchCaps z;
     return &z;
 }
+void psx_lobby_set_mod_offer(const PsxLobbyModOffer *offer) { (void)offer; }
+const PsxLobbyModOffer *psx_lobby_mod_offer(void)
+{
+    static PsxLobbyModOffer z;
+    return &z;
+}
+int  psx_lobby_need_mods_count(void) { return 0; }
+int  psx_lobby_need_mods_get(int index, PsxLobbyModPkg *out) { (void)index; (void)out; return 0; }
+int  psx_lobby_need_mods_can_transfer(void) { return 0; }
+int  psx_lobby_mod_xfer_start(void) { return -1; }
+void psx_lobby_mod_xfer_cancel(void) {}
+int  psx_lobby_mod_xfer_progress(void) { return -1; }
+int  psx_lobby_mod_xfer_failed(char *err, size_t err_cap) { if (err && err_cap) err[0] = '\0'; return 0; }
 int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *c) { (void)c; return -1; }
+int psx_lobby_encode_match_caps(char *o, size_t n, const PsxLobbyMatchCaps *c)
+{ (void)o; (void)n; (void)c; return 0; }
+int psx_lobby_decode_match_caps(const char *j, PsxLobbyMatchCaps *c)
+{ (void)j; (void)c; return 0; }
+void psx_lobby_set_local_match_caps(const PsxLobbyMatchCaps *c) { (void)c; }
 int  psx_lobby_member_count(void) { return 0; }
 int  psx_lobby_member_get(int index, PsxLobbyMember *out) { (void)index; (void)out; return 0; }
 int  psx_lobby_member_latency_ms(int slot) { (void)slot; return -1; }
@@ -151,14 +188,29 @@ void psx_lobby_seat_swap_clear(void) {}
 int  psx_lobby_chat_count(void) { return 0; }
 int  psx_lobby_chat_get(int index, PsxLobbyChatMsg *out) { (void)index; (void)out; return 0; }
 void psx_lobby_chat_clear(void) {}
-int  psx_lobby_settle_session_bios(char *out, size_t out_cap)
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap)
 {
     if (!out || out_cap < 9) return -1;
     strncpy(out, "openbios", out_cap - 1);
     out[out_cap - 1] = '\0';
+    if (out_crc) *out_crc = 0;
+    if (why && why_cap) why[0] = '\0';
     return 0;
 }
+void psx_lobby_set_last_error(const char *text) { (void)text; }
 int  psx_lobby_request_start(const PsxLobbyMatchCaps *c) { (void)c; return -1; }
+int  psx_lobby_ready_message(int ready, char *msg, size_t cap)
+{ (void)ready; (void)msg; (void)cap; return -1; }
+int  psx_lobby_start_message(const PsxLobbyMatchCaps *c, char *msg, size_t cap)
+{ (void)c; (void)msg; (void)cap; return -1; }
+int  psx_lobby_replay_room(const char *r, char *why, size_t cap)
+{ (void)r; if (why && cap) snprintf(why, cap, "this build has no lobby client"); return -1; }
+int  psx_lobby_ingest_record(const char *r, char *why, size_t cap)
+{ (void)r; if (why && cap) snprintf(why, cap, "this build has no lobby client"); return -1; }
+int  psx_lobby_handoff_active(void) { return 0; }
+int  psx_lobby_json_str(const char *j, const char *k, char *out, size_t cap)
+{ (void)j; (void)k; if (out && cap) out[0] = '\0'; return 0; }
 int  psx_lobby_launch_pending(void) { return 0; }
 void psx_lobby_clear_launch_pending(void) {}
 
@@ -167,6 +219,8 @@ void psx_lobby_clear_launch_pending(void) {}
 #include "rnet_ws.h"
 #include "rnet_sha1.h"
 #include "recomp_net/address.h"
+#include "recomp_net/host_relay.h"
+#include "recomp_net/host_ice.h"
 #include "recomp_net/ice.h"
 #include "recomp_net/ice_rtt.h"
 #include "recomp_net/lan_beacon.h"
@@ -248,6 +302,10 @@ typedef struct {
     int all_ready;
     int launch_pending;
     PsxLobbyMatchCaps match_caps;
+    PsxLobbyModOffer mod_offer;
+    PsxLobbyModPkg need_mods[PSX_LOBBY_MAX_MODS];
+    int need_mod_count;
+    int need_mods_can_transfer;
     PsxLobbyBiosOffer bios_offer;
     PsxLobbyMemcardOffer memcard_offer;
     /* Seat swap: one pending ask aimed at us, one outgoing result. */
@@ -266,7 +324,7 @@ typedef struct {
     int schat_head;
     int schat_count;
     uint32_t schat_seq;
-    char pending_tx[8][2048];
+    char pending_tx[8][8192];
     int pending_n;
     /* Inbound ICE signals (WS op:signal). */
     struct {
@@ -1011,6 +1069,7 @@ void psx_lobby_set_max_slots(int max_slots)
 
 static const char *effective_game_version(const char *override_ver)
 {
+    if (psx_mod_netplay_profile()) return psx_mod_netplay_version(NULL);
     if (override_ver && override_ver[0]) {
         return override_ver;
     }
@@ -1025,6 +1084,9 @@ static const char *effective_game_version(const char *override_ver)
  * unofficial / mismatched hosts; join still requires an exact version match. */
 static int list_filter_version_strict(void)
 {
+#ifdef PSX_LOBBY_DEV_LIST
+    return 0;
+#endif
     const char *gv = effective_game_version(NULL);
     return gv && gv[0] && strcmp(gv, "dev") != 0;
 }
@@ -1080,6 +1142,329 @@ static void match_caps_clear(PsxLobbyMatchCaps *c)
     c->input_delay = 6;
     c->input_prediction = 10;
     c->guest_memcard = 1;
+}
+
+/* ---- host relay (recomp_net/host_relay.h) -------------------------------
+ * The same wiring as recomp-net's own lobby client (rnet_lobby_client.c):
+ * this file is psxrecomp's copy of that client, so the orchestration object
+ * is recomp-net's and only the glue lives here. */
+static RNetHostRelay *g_host_relay;
+static int g_relay_host_pref = 1;
+static int room_relays_via_ice(void);
+
+void psx_lobby_set_relay_host_pref(int on) { g_relay_host_pref = on ? 1 : 0; }
+int  psx_lobby_relay_host_pref(void) { return g_relay_host_pref; }
+
+static int host_relay_send(const char *json, void *ctx)
+{
+    (void)ctx;
+    if (!psx_lobby_connected() || !g_lc.in_lobby) return -1;
+    queue_send(json);
+    flush_pending();
+    return 0;
+}
+
+static int lobby_bind_port(void)
+{
+    const char *colon = strrchr(g_lc.my_bind, ':');
+    const int port = colon ? atoi(colon + 1) : 0;
+    return port > 0 && port < 65536 ? port : 0;
+}
+
+/* Every pump: active only while seated in an online room whose published
+ * caps ask for the host relay (the host's caps are echoed back to it, so one
+ * rule serves both roles) and before the launch, which releases the port for
+ * the game. A spectator is not on the relay's path and reports nothing. */
+static void host_relay_step(void)
+{
+    RNetHostRelayView v;
+    if (!g_host_relay) {
+        g_host_relay = rnet_host_relay_create();
+        if (!g_host_relay) return;
+    }
+    memset(&v, 0, sizeof(v));
+    v.is_host = g_lc.is_host ? 1 : 0;
+    v.active = psx_lobby_connected() && g_lc.in_lobby && !g_lc.launch_pending &&
+               !g_lc.join.local_is_spectator &&
+               g_lc.match_caps.valid && g_lc.match_caps.relay_host &&
+               !room_relays_via_ice();   /* ICE mode: no port, no set_host_endpoint */
+    v.bind_port = (unsigned short)lobby_bind_port();
+    if (v.is_host && !v.bind_port) v.active = 0;
+    v.host_endpoint = g_lc.join.host_endpoint;
+    v.send_json = host_relay_send;
+    rnet_host_relay_update(g_host_relay, &v);
+}
+
+int psx_lobby_host_relay_status(struct RNetHostRelayStatus *out)
+{
+    RNetHostRelayStatus st;
+    if (!out) return 0;
+    rnet_host_relay_status(g_host_relay, &st);
+    *out = st;
+    return st.role != 0;
+}
+
+void psx_lobby_host_relay_release_port(void)
+{
+    rnet_host_relay_release_port(g_host_relay);
+}
+
+static void host_relay_leave(void)
+{
+    rnet_host_relay_leave(g_host_relay);
+}
+
+/* ---- host relay over ICE (recomp_net/host_ice.h) -------------------------
+ * psxrecomp's copy of recomp-net's rnet_lobby_client.c wiring (decision: the
+ * fork is not a thin copy -- own member table, spectator gallery, BIOS /
+ * memcard offers, signal queue -- so the glue is ported here and the proof
+ * logic is recomp-net's RNetHostIce, exactly as RNetHostRelay is above).
+ *
+ * The pref is the HOST's, default ON. In ICE mode the waiting-room proof is
+ * one agent pair per guest instead of a probe of an advertised UDP port, so
+ * host_relay_step stands down (no UPnP / STUN port, no set_host_endpoint). */
+static RNetHostIce *g_host_ice;
+static int g_relay_via_ice_pref = 1;
+
+void psx_lobby_set_relay_via_ice_pref(int on) { g_relay_via_ice_pref = on ? 1 : 0; }
+int  psx_lobby_relay_via_ice_pref(void) { return g_relay_via_ice_pref; }
+int  psx_lobby_ice_available(void) { return rnet_host_ice_available(); }
+
+/* The room's published caps ask for ICE as the host relay's path. */
+static int room_relays_via_ice(void)
+{
+    return g_lc.match_caps.valid && g_lc.match_caps.relay_host &&
+           g_lc.match_caps.relay_via_ice;
+}
+
+/* Agents handed over at launch until the engine takes them (or the room /
+ * launch is abandoned). Kept apart from g_lc so a refused launch can still say
+ * why after the lobby state is reset. */
+typedef struct {
+    int      valid;                 /* a bundle awaits take */
+    int      is_host;
+    int      n;
+    PsxLobbyIceSeat seat[RNET_HOST_ICE_MAX_PEERS];   /* host */
+    RNetIceAgent *guest;            /* guest: connected to the host */
+    uint64_t born_ms;
+    char     error[200];
+} PsxIceLaunch;
+static PsxIceLaunch g_il;
+
+static uint64_t ice_now_ms(void)
+{
+    return (uint64_t)psx_host_mono_ms();
+}
+
+static void ice_launch_discard(void)
+{
+    int i;
+    for (i = 0; i < g_il.n; ++i)
+        if (g_il.seat[i].agent) rnet_host_ice_destroy_agent(g_il.seat[i].agent);
+    if (g_il.guest) rnet_host_ice_destroy_agent(g_il.guest);
+    memset(&g_il, 0, offsetof(PsxIceLaunch, error));
+}
+
+static void host_ice_leave(void)
+{
+    ice_launch_discard();
+    g_il.error[0] = '\0';
+    rnet_host_ice_destroy(&g_host_ice);
+}
+
+/* Lobby `signal` addressed to one player (the legacy sender broadcasts). */
+static int send_signal_to(const char *to_player_id, int type, int flag, const char *text)
+{
+    char esc[4096];
+    char to_esc[JSON_ESC_CAP(PSX_LOBBY_ID_LEN)];
+    char lid_esc[JSON_ESC_CAP(PSX_LOBBY_ID_LEN)];
+    char msg[4608];
+    const char *lid;
+    if (!psx_lobby_connected() || !g_lc.in_lobby) return -1;
+    lid = g_lc.join.lobby_id[0] ? g_lc.join.lobby_id : "";
+    json_escape(text ? text : "", esc, sizeof(esc));
+    json_escape(to_player_id ? to_player_id : "", to_esc, sizeof(to_esc));
+    json_escape(lid, lid_esc, sizeof(lid_esc));
+    snprintf(msg, sizeof(msg),
+             "{\"op\":\"signal\",\"lobby_id\":\"%s\",\"to_player_id\":\"%s\","
+             "\"type\":%d,\"flag\":%d,\"text\":\"%s\"}",
+             lid_esc, to_esc, type, flag, esc);
+    if (g_lc.handshake_done && g_lc.fd >= 0)
+        return rnet_ws_write_text(g_lc.fd, msg, 1) < 0 ? -1 : 0;
+    queue_send(msg);
+    return 0;
+}
+
+static int host_ice_send_signal(const char *to, int type, int flag, const char *text,
+                                void *ctx)
+{
+    (void)ctx;
+    return send_signal_to(to, type, flag, text);
+}
+
+/* Every pump, beside host_relay_step: the room decides which agents exist. */
+static void host_ice_step(void)
+{
+    RNetHostIceView v;
+    RNetHostIcePeer peers[RNET_HOST_ICE_MAX_PEERS];
+    int n = 0, i;
+    if (!g_host_ice) {
+        g_host_ice = rnet_host_ice_create();
+        if (!g_host_ice) return;
+    }
+    /* A bundle nobody took (the engine declined the launch) must not hold
+     * sockets for the rest of the session. */
+    if (g_il.valid && ice_now_ms() - g_il.born_ms > 60000u)
+        ice_launch_discard();
+    memset(&v, 0, sizeof(v));
+    v.is_host = g_lc.is_host ? 1 : 0;
+    v.local_slot = local_member_slot();
+    v.active = psx_lobby_connected() && g_lc.in_lobby && !g_lc.launch_pending &&
+               !g_lc.ice_rtt_suspended && !g_lc.join.local_is_spectator && room_relays_via_ice() &&
+               v.local_slot >= 0;
+    if (v.active) {
+        if (v.is_host) {
+            for (i = 0; i < g_lc.member_count && n < RNET_HOST_ICE_MAX_PEERS; ++i) {
+                const PsxLobbyMember *m = &g_lc.members[i];
+                if (m->is_spectator || !m->player_id[0] ||
+                    strcmp(m->player_id, g_lc.player_id) == 0)
+                    continue;
+                peers[n].player_id = m->player_id;
+                peers[n].slot = m->slot;
+                n++;
+            }
+        } else {
+            const int hs = member_slot_for_player(g_lc.host_player_id);
+            if (g_lc.host_player_id[0] && hs >= 0) {
+                peers[0].player_id = g_lc.host_player_id;
+                peers[0].slot = hs;
+                n = 1;
+            } else {
+                v.active = 0;
+            }
+        }
+    }
+    v.peers = peers;
+    v.peer_count = n;
+    /* STUN only: hub agents never use TURN, so the Coturn mint is not used. */
+    if (g_lc.turn.valid && g_lc.turn.stun_host[0]) {
+        v.stun_host = g_lc.turn.stun_host;
+        v.stun_port = (unsigned short)(g_lc.turn.stun_port > 0 ? g_lc.turn.stun_port : 3478);
+    }
+    v.send_signal = host_ice_send_signal;
+    v.send_json = host_relay_send;
+    rnet_host_ice_update(g_host_ice, &v);
+}
+
+int psx_lobby_host_ice_status(struct RNetHostIceStatus *out)
+{
+    if (!out) return 0;
+    rnet_host_ice_status(g_host_ice, out);
+    return out->role != 0;
+}
+
+/* Build the handover from the agents the waiting room already connected. A
+ * seat that is not COMPLETED is a refused launch with a reason, never a
+ * smaller room. Spectators are not on the ICE path: any gallery seat refuses
+ * the launch (host), and a spectating guest has no agent (it refuses itself). */
+static void ice_launch_capture(void)
+{
+    int i;
+    ice_launch_discard();
+    g_il.error[0] = '\0';
+    g_il.is_host = g_lc.is_host ? 1 : 0;
+    g_il.born_ms = ice_now_ms();
+    if (!g_host_ice) {
+        snprintf(g_il.error, sizeof(g_il.error),
+                 "no ICE agents exist (this build cannot run ICE, or the room was "
+                 "not seated)");
+        return;
+    }
+    if (g_il.is_host) {
+        for (i = 0; i < g_lc.member_count; ++i) {
+            const PsxLobbyMember *m = &g_lc.members[i];
+            RNetIceAgent *a;
+            if (!m->player_id[0] || strcmp(m->player_id, g_lc.player_id) == 0)
+                continue;
+            if (m->is_spectator) {
+                snprintf(g_il.error, sizeof(g_il.error),
+                         "\"%s\" is a spectator; spectators are not on the ICE "
+                         "host-relay path",
+                         m->display_name[0] ? m->display_name : m->player_id);
+                break;
+            }
+            if (g_il.n >= RNET_HOST_ICE_MAX_PEERS) {
+                snprintf(g_il.error, sizeof(g_il.error), "too many guests for the ICE hub");
+                break;
+            }
+            a = rnet_host_ice_take_completed(g_host_ice, m->player_id);
+            if (!a) {
+                snprintf(g_il.error, sizeof(g_il.error),
+                         "\"%s\" (seat %d) is not connected over ICE",
+                         m->display_name[0] ? m->display_name : m->player_id, m->slot);
+                break;
+            }
+            g_il.seat[g_il.n].lobby_slot = m->slot;
+            snprintf(g_il.seat[g_il.n].player_id, sizeof(g_il.seat[g_il.n].player_id),
+                     "%s", m->player_id);
+            g_il.seat[g_il.n].agent = a;
+            g_il.n++;
+        }
+        if (!g_il.error[0] && g_il.n == 0)
+            snprintf(g_il.error, sizeof(g_il.error), "no guest is seated");
+    } else {
+        g_il.guest = rnet_host_ice_take_completed(g_host_ice, g_lc.host_player_id);
+        if (!g_il.guest)
+            snprintf(g_il.error, sizeof(g_il.error),
+                     "this client is not connected to the host over ICE");
+    }
+    if (g_il.error[0]) {
+        char why[sizeof(g_il.error)];
+        snprintf(why, sizeof(why), "%s", g_il.error);
+        ice_launch_discard();
+        snprintf(g_il.error, sizeof(g_il.error), "%s", why);
+        return;
+    }
+    g_il.valid = 1;
+}
+
+int psx_lobby_ice_take_hub(PsxLobbyIceSeat *out, int max)
+{
+    int n;
+    if (!out || max < 1) return -1;
+    if (!g_il.valid || !g_il.is_host) {
+        if (!g_il.error[0])
+            snprintf(g_il.error, sizeof(g_il.error), "no ICE hub handover is pending");
+        return -1;
+    }
+    if (max < g_il.n) {
+        snprintf(g_il.error, sizeof(g_il.error), "output array too small for %d seats", g_il.n);
+        return -1;
+    }
+    n = g_il.n;
+    memcpy(out, g_il.seat, sizeof(out[0]) * (size_t)n);
+    memset(&g_il, 0, offsetof(PsxIceLaunch, error));   /* ownership is the caller's */
+    return n;
+}
+
+RNetIceAgent *psx_lobby_ice_take_guest_agent(void)
+{
+    RNetIceAgent *a;
+    if (!g_il.valid || g_il.is_host || !g_il.guest) {
+        if (!g_il.error[0])
+            snprintf(g_il.error, sizeof(g_il.error), "no ICE guest handover is pending");
+        return NULL;
+    }
+    a = g_il.guest;
+    memset(&g_il, 0, offsetof(PsxIceLaunch, error));
+    return a;
+}
+
+const char *psx_lobby_ice_launch_error(void) { return g_il.error; }
+void psx_lobby_ice_discard(void) { ice_launch_discard(); }
+void psx_lobby_ice_destroy_agent(RNetIceAgent *agent)
+{
+    if (agent) rnet_host_ice_destroy_agent(agent);
 }
 
 static int json_extract_object(const char *json, const char *key, char *out, size_t out_cap);
@@ -1420,6 +1805,153 @@ static int json_get_bool(const char *json, const char *key, int def)
     return def;
 }
 
+
+static int json_token_ok(const char *s)
+{
+    size_t i;
+    if (!s || !s[0]) return 0;
+    for (i = 0; s[i]; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+            c == '.' || c == ':' || c == '/') continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int json_hex_ok(const char *s)
+{
+    size_t i;
+    if (!s || !s[0]) return 0;
+    for (i = 0; s[i]; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+            (c >= 'A' && c <= 'F')) continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int json_feats_ok(const char *s)
+{
+    size_t i;
+    if (!s) return 1;
+    for (i = 0; s[i]; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+            c == '.' || c == ':' || c == '/' || c == ',' || c == '=' ||
+            c == '+' || c == '~') continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int json_extract_array(const char *json, const char *key, char *out, size_t out_cap)
+{
+    char pat[80];
+    const char *q;
+    int depth;
+    size_t n;
+    if (!json || !key || !out || out_cap < 3) return 0;
+    out[0] = '\0';
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    q = strstr(json, pat);
+    if (!q) return 0;
+    q = strchr(q + strlen(pat), ':');
+    if (!q) return 0;
+    ++q;
+    while (*q && isspace((unsigned char)*q)) ++q;
+    if (*q != '[') return 0;
+    depth = 0;
+    n = 0;
+    do {
+        if (*q == '[') ++depth;
+        else if (*q == ']') --depth;
+        if (n + 1 >= out_cap) return 0;
+        out[n++] = *q++;
+    } while (*q && depth > 0);
+    out[n] = '\0';
+    return depth == 0 && n > 1;
+}
+
+static int parse_one_mod_pkg(const char *obj, PsxLobbyModPkg *out)
+{
+    if (!obj || !out || obj[0] != '{') return 0;
+    memset(out, 0, sizeof(*out));
+    json_get_str(obj, "id", out->id, sizeof(out->id));
+    json_get_str(obj, "ver", out->ver, sizeof(out->ver));
+    json_get_str(obj, "name", out->name, sizeof(out->name));
+    json_get_str(obj, "feats", out->feats, sizeof(out->feats));
+    out->builtin = json_get_bool(obj, "builtin", 0);
+    out->size = (uint32_t)json_get_int(obj, "size", 0);
+    if (!json_token_ok(out->id)) out->id[0] = '\0';
+    if (out->ver[0] && !json_token_ok(out->ver)) out->ver[0] = '\0';
+    if (out->feats[0] && !json_feats_ok(out->feats)) out->feats[0] = '\0';
+    return out->id[0] ? 1 : 0;
+}
+
+static int parse_mod_pkg_array(const char *json, const char *key,
+                               PsxLobbyModPkg *out, int cap)
+{
+    char arr[4096];
+    const char *q;
+    int n = 0;
+    if (!out || cap <= 0) return 0;
+    memset(out, 0, sizeof(PsxLobbyModPkg) * (size_t)cap);
+    if (!json_extract_array(json, key, arr, sizeof(arr))) return 0;
+    q = arr;
+    while (*q && n < cap) {
+        const char *obj, *end;
+        int depth = 0;
+        char chunk[768];
+        size_t len;
+        while (*q && *q != '{' && *q != ']') ++q;
+        if (*q != '{') break;
+        obj = end = q;
+        do {
+            if (*end == '{') ++depth;
+            else if (*end == '}') --depth;
+            ++end;
+        } while (*end && depth > 0);
+        len = (size_t)(end - obj);
+        if (len >= sizeof(chunk)) len = sizeof(chunk) - 1;
+        memcpy(chunk, obj, len);
+        chunk[len] = '\0';
+        if (parse_one_mod_pkg(chunk, &out[n])) ++n;
+        q = end;
+    }
+    return n;
+}
+
+static int append_mod_pkg_array(char *dst, size_t dst_cap,
+                                const PsxLobbyModPkg *pkgs, int count)
+{
+    size_t o = 0;
+    int i;
+    if (!dst || dst_cap < 3) return 0;
+    dst[o++] = '[';
+    for (i = 0; pkgs && i < count && i < PSX_LOBBY_MAX_MODS; ++i) {
+        const PsxLobbyModPkg *pkg = &pkgs[i];
+        int n;
+        if (!pkg->id[0] || !json_token_ok(pkg->id)) continue;
+        if (pkg->ver[0] && !json_token_ok(pkg->ver)) continue;
+        if (pkg->feats[0] && !json_feats_ok(pkg->feats)) continue;
+        n = snprintf(dst + o, dst_cap - o,
+                     "%s{\"id\":\"%s\",\"ver\":\"%s\",\"name\":\"%s\","
+                     "\"feats\":\"%s\",\"builtin\":%s,\"size\":%u}",
+                     o > 1 ? "," : "", pkg->id, pkg->ver, pkg->name,
+                     pkg->feats, pkg->builtin ? "true" : "false", (unsigned)pkg->size);
+        if (n < 0 || (size_t)n >= dst_cap - o) return 0;
+        o += (size_t)n;
+    }
+    if (o + 2 > dst_cap) return 0;
+    dst[o++] = ']';
+    dst[o] = '\0';
+    return 1;
+}
+
 static int json_extract_object(const char *json, const char *key, char *out, size_t out_cap)
 {
     char pat[80];
@@ -1465,6 +1997,18 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     if (out->input_prediction < 2) out->input_prediction = 2;
     if (out->input_prediction > 16) out->input_prediction = 16;
     out->force_input_relay = json_get_bool(obj, "force_input_relay", 0);
+    {
+        char relay[12];
+        relay[0] = '\0';
+        json_get_str(obj, "relay", relay, sizeof(relay));
+        out->relay_host = strcmp(relay, "host") == 0 ? 1 : 0;
+    }
+    {
+        char via[12];
+        via[0] = '\0';
+        json_get_str(obj, "relay_via", via, sizeof(via));
+        out->relay_via_ice = strcmp(via, "ice") == 0 ? 1 : 0;
+    }
     out->force_turn = json_get_bool(obj, "force_turn", 0);
     /* Absent field → delay-sync (older hosts). New hosts always publish explicit. */
     out->rollback = json_get_bool(obj, "rollback", 0);
@@ -1474,17 +2018,30 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     out->guest_memcard_active = json_get_bool(obj, "guest_memcard_active", 0);
     json_get_str(obj, "language", out->language, sizeof(out->language));
     json_get_str(obj, "session_bios", out->session_bios, sizeof(out->session_bios));
+    json_get_str(obj, "mod_plan_fp", out->mod_plan_fp, sizeof(out->mod_plan_fp));
+    if (out->mod_plan_fp[0] && !json_hex_ok(out->mod_plan_fp))
+        out->mod_plan_fp[0] = '\0';
+    out->mod_count = parse_mod_pkg_array(obj, "mods", out->mods, PSX_LOBBY_MAX_MODS);
     /* Normalize settled BIOS id. */
     if (out->session_bios[0] &&
         strcmp(out->session_bios, "openbios") != 0 &&
         strcmp(out->session_bios, "scph1001") != 0)
         out->session_bios[0] = '\0';
+    /* Retail image every peer boots. Absent from an older host:
+     * 0, and peers accept any retail dump as they used to. */
+    {
+        char crc[16];
+        crc[0] = '\0';
+        json_get_str(obj, "session_bios_crc", crc, sizeof(crc));
+        out->session_bios_crc = strcmp(out->session_bios, "scph1001") == 0
+                                    ? netplay_bios_parse_crc(crc) : 0;
+    }
     out->valid = 1;
 }
 
 static void ingest_match_caps_from_json(const char *json)
 {
-    char obj[1024];
+    char obj[4096];
     if (json_extract_object(json, "match_caps", obj, sizeof(obj)))
         parse_match_caps_object(obj, &g_lc.match_caps);
 }
@@ -1492,7 +2049,10 @@ static void ingest_match_caps_from_json(const char *json)
 static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatchCaps *caps)
 {
     char lang[PSX_LOBBY_LANG_LEN];
+    char mods_json[4096];
+    char plan_json[4096 + 96];
     size_t i, o = 0;
+    int n;
     if (!dst || dst_cap < 8 || !caps || !caps->valid) return 0;
     /* Sanitize language for JSON string (alnum / _ / - only). */
     for (i = 0; caps->language[i] && o + 1 < sizeof(lang); ++i) {
@@ -1503,33 +2063,81 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
     }
     lang[o] = '\0';
     if (!lang[0]) strncpy(lang, "en", sizeof(lang) - 1);
+    if (!append_mod_pkg_array(mods_json, sizeof(mods_json), caps->mods, caps->mod_count))
+        return 0;
     {
         const char *sb = caps->session_bios;
+        char crc[16];
+        netplay_bios_format_crc(strcmp(sb, "scph1001") == 0 ? caps->session_bios_crc : 0, crc, sizeof(crc));
+        const char *fp = caps->mod_plan_fp;
         if (!sb[0] || (strcmp(sb, "openbios") != 0 && strcmp(sb, "scph1001") != 0))
             sb = "";
-        return snprintf(dst, dst_cap,
-                        ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
-                        "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
-                        "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,"
-                        "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
-                        "\"multitap_analog\":%s,\"guest_memcard\":%s,"
-                        "\"guest_memcard_active\":%s,"
-                        "\"language\":\"%s\",\"session_bios\":\"%s\"}",
-                        caps->aspect_num, caps->aspect_den,
-                        caps->turbo_loads ? "true" : "false",
-                        caps->bios_hle ? "true" : "false",
-                        caps->fast_boot ? "true" : "false",
-                        caps->auto_skip_fmv ? "true" : "false",
-                        caps->input_delay,
-                        caps->input_prediction,
-                        caps->force_input_relay ? "true" : "false",
-                        caps->force_turn ? "true" : "false",
-                        caps->rollback ? "true" : "false",
-                        caps->multitap_analog ? "true" : "false",
-                        caps->guest_memcard ? "true" : "false",
-                        caps->guest_memcard_active ? "true" : "false",
-                        lang, sb);
+        if (fp[0] && !json_hex_ok(fp)) fp = "";
+        /* Only a published mod plan (content negotiation) adds plan fields;
+         * a vanilla host's caps stay byte-identical to the pre-plan wire. */
+        plan_json[0] = '\0';
+        if (fp[0] || caps->mod_count > 0)
+            snprintf(plan_json, sizeof(plan_json),
+                     ",\"mod_plan_fp\":\"%s\",\"mods\":%s", fp, mods_json);
+        n = snprintf(dst, dst_cap,
+                     ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
+                     "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
+                     "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,%s"
+                     "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
+                     "\"multitap_analog\":%s,\"guest_memcard\":%s,"
+                     "\"guest_memcard_active\":%s,"
+                     "\"language\":\"%s\",\"session_bios\":\"%s\","
+                     "\"session_bios_crc\":\"%s\"%s}",
+                     caps->aspect_num, caps->aspect_den,
+                     caps->turbo_loads ? "true" : "false",
+                     caps->bios_hle ? "true" : "false",
+                     caps->fast_boot ? "true" : "false",
+                     caps->auto_skip_fmv ? "true" : "false",
+                     caps->input_delay,
+                     caps->input_prediction,
+                     /* only when asked: absent reads as "the SFU, as always" */
+                     caps->relay_host
+                         ? ((g_relay_via_ice_pref && rnet_host_ice_available())
+                                ? "\"relay\":\"host\",\"relay_via\":\"ice\","
+                                : "\"relay\":\"host\",")
+                         : "",
+                     caps->force_input_relay ? "true" : "false",
+                     caps->force_turn ? "true" : "false",
+                     caps->rollback ? "true" : "false",
+                     caps->multitap_analog ? "true" : "false",
+                     caps->guest_memcard ? "true" : "false",
+                     caps->guest_memcard_active ? "true" : "false",
+                     lang, sb, crc, plan_json);
+        return n;
     }
+}
+int psx_lobby_encode_match_caps(char *out, size_t cap, const PsxLobbyMatchCaps *caps)
+{
+    int n;
+    if (!out || cap < 16) return 0;
+    strcpy(out, "{\"v\":1");
+    n = append_match_caps_json(out + 6, cap - 7, caps);
+    if (n <= 0 || (size_t)n >= cap - 7) { out[0] = '\0'; return 0; }
+    out[6 + n] = '}'; out[7 + n] = '\0';
+    return 1;
+}
+
+int psx_lobby_decode_match_caps(const char *json, PsxLobbyMatchCaps *out)
+{
+    char obj[4096];
+    PsxLobbyMatchCaps caps = {0};
+    if (!out || !json || !json_extract_object(json, "match_caps", obj, sizeof(obj)))
+        return 0;
+    parse_match_caps_object(obj, &caps);
+    if (!caps.valid || (caps.mod_count > 0 && strlen(caps.mod_plan_fp) != 64)) return 0;
+    *out = caps;
+    return 1;
+}
+
+void psx_lobby_set_local_match_caps(const PsxLobbyMatchCaps *caps)
+{
+    if (caps) g_lc.match_caps = *caps;
+    else match_caps_clear(&g_lc.match_caps);
 }
 
 static void queue_send(const char *json)
@@ -1585,27 +2193,27 @@ static void copy_first_usable_endpoint(char *dst, size_t dst_len, const char *a,
 
 static int using_server_input_relay(const PsxLobbyJoinInfo *j)
 {
-    if (g_lc.match_caps.valid && g_lc.match_caps.force_input_relay)
-        return 1;
-    /* Server rewrote both endpoints to the same relay advertise address. */
-    if (j && j->host_endpoint[0] && j->guest_endpoint[0] &&
-        !endpoint_port_is_zero(j->host_endpoint) &&
-        !endpoint_port_is_zero(j->guest_endpoint) &&
-        strcmp(j->host_endpoint, j->guest_endpoint) == 0 &&
-        (!g_lc.my_bind[0] || strcmp(j->host_endpoint, g_lc.my_bind) != 0))
-        return 1;
-    return 0;
+    if (!j)
+        return g_lc.match_caps.valid && g_lc.match_caps.force_input_relay;
+    return psx_lobby_launch_transport(j->transport_ice ? "ice" : j->transport_host ? "host" : "",
+                                      "", g_lc.match_caps.valid && g_lc.match_caps.force_input_relay,
+                                      j->host_endpoint, j->guest_endpoint,
+                                      g_lc.my_bind) == PSX_LAUNCH_RELAY;
 }
 
 static void fill_peer_bind_from_join(void)
 {
     PsxLobbyJoinInfo *j = &g_lc.join;
-    const int force_relay = using_server_input_relay(j);
+    const int force_relay = !j->transport_host && using_server_input_relay(j);
     const int seats = j->player_count >= 2 ? j->player_count : j->max_slots;
     const int host_hub = (g_lc.is_host && seats >= 3 && !force_relay) ? 1 : 0;
     memset(j->bind_hostport, 0, sizeof(j->bind_hostport));
     memset(j->peer_hostport, 0, sizeof(j->peer_hostport));
-    if (force_relay) {
+    if (j->transport_ice_hub) {
+        /* Nothing to bind or dial: the agents are already connected. Kept
+         * non-empty so a consumer's "usable bind" check passes. */
+        strncpy(j->bind_hostport, "0.0.0.0:0", sizeof(j->bind_hostport) - 1);
+    } else if (force_relay) {
         /* Everyone dials the lobby-server UDP relay — ephemeral local bind
          * (same as LAN guests) so same-PC multi-instance doesn't collide. */
         strncpy(j->bind_hostport, "0.0.0.0:0", sizeof(j->bind_hostport) - 1);
@@ -1613,9 +2221,12 @@ static void fill_peer_bind_from_join(void)
                                    j->host_endpoint, j->guest_endpoint, NULL);
     } else if (g_lc.is_host) {
         strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
-        if (!host_hub) {
+        if (!host_hub && !j->transport_host) {
             /* 2P P2P: dial guest when they advertised a fixed port. Online
-             * guests often join with :0 — leave peer empty (accept-first). */
+             * guests often join with :0 — leave peer empty (accept-first).
+             * Host relay: the guest's advertised address is its LAN bind,
+             * which this host cannot dial across the guest's NAT; the guest
+             * dials us (it proved it can), so accept-first always. */
             if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
                 strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
         }
@@ -1695,13 +2306,22 @@ static int parse_seat_array(const char *json, const char *key, int is_spectator,
                 g_lc.members[n].slot = json_get_int(chunk, "slot", n);
                 json_get_str(chunk, "player_id", g_lc.members[n].player_id,
                              sizeof(g_lc.members[n].player_id));
+                g_lc.members[n].path[0] = '\0';
+                json_get_str(chunk, "path", g_lc.members[n].path,
+                             sizeof(g_lc.members[n].path));
+                g_lc.members[n].path_fresh = json_get_bool(chunk, "path_fresh", 0) ? 1 : 0;
                 json_get_str(chunk, "display_name", g_lc.members[n].display_name,
                              sizeof(g_lc.members[n].display_name));
                 g_lc.members[n].ready = json_get_bool(chunk, "ready", 0);
                 g_lc.members[n].is_spectator = is_spectator;
+                g_lc.members[n].bios_retail_crc = 0;
                 if (json_extract_object(chunk, "bios_offer", offer, sizeof(offer))) {
                     char prefer[24];
+                    char crc[16];
                     prefer[0] = '\0';
+                    crc[0] = '\0';
+                    json_get_str(offer, "retail_crc", crc, sizeof(crc));
+                    g_lc.members[n].bios_retail_crc = netplay_bios_parse_crc(crc);
                     g_lc.members[n].bios_offer_valid = 1;
                     g_lc.members[n].bios_can_openbios =
                         json_get_bool(offer, "can_openbios", 1);
@@ -2835,6 +3455,8 @@ static void handle_server_json(const char *json)
     }
     if (strcmp(op, "created") == 0) {
         psx_lobby_chat_clear();
+        ice_launch_discard();
+        g_lc.join.transport_ice_hub = 0;
         g_lc.in_lobby = 1;
         g_lc.is_host = 1;
         g_lc.join.ok = 1;
@@ -2886,6 +3508,8 @@ static void handle_server_json(const char *json)
             (g_am.state == PSX_LOBBY_AUTOMATCH_ACCEPTED ||
              g_am.state == PSX_LOBBY_AUTOMATCH_FOUND);
         automatch_reset_queue_state();
+        ice_launch_discard();
+        g_lc.join.transport_ice_hub = 0;
         g_lc.in_lobby = 1;
         g_lc.is_host = 0;
         g_lc.join.ok = 1;
@@ -2926,18 +3550,44 @@ static void handle_server_json(const char *json)
     }
     if (strcmp(op, "launch") == 0) {
         char relay_endpoint[PSX_LOBBY_ENDPOINT_LEN];
+        char transport_kind[16];
         json_get_str(json, "host_endpoint", g_lc.join.host_endpoint, sizeof(g_lc.join.host_endpoint));
         json_get_str(json, "guest_endpoint", g_lc.join.guest_endpoint, sizeof(g_lc.join.guest_endpoint));
         relay_endpoint[0] = '\0';
         json_get_str(json, "relay_endpoint", relay_endpoint, sizeof(relay_endpoint));
+        /* "host": the host carries the match (WS_LOBBY.md "Host relay"): no
+         * relay_endpoint, host_endpoint is the host's advertised port. The
+         * waiting-room socket on that port goes now so the game can bind it;
+         * the router mapping stays for the game. */
+        transport_kind[0] = '\0';
+        json_get_str(json, "transport", transport_kind, sizeof(transport_kind));
+        g_lc.join.transport_host = strcmp(transport_kind, "host") == 0 ? 1 : 0;
+        g_lc.join.transport_ice = strcmp(transport_kind, "ice") == 0 ? 1 : 0;
+        rnet_host_relay_release_port(g_host_relay);
+        ice_launch_discard();   /* a previous launch's agents are never reused */
+        g_il.error[0] = '\0';
         g_lc.join.player_count = json_get_int(json, "player_count", g_lc.join.player_count);
         g_lc.join.max_slots = json_get_int(json, "max_slots", g_lc.join.max_slots);
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", (int)g_lc.join.session_id);
         ingest_match_caps_from_json(json);
+        /* relay_via is decided by THIS launch alone (top level, or its
+         * match_caps), never by caps carried over from an earlier message. */
+        {
+            char via[12];
+            via[0] = '\0';
+            json_get_str(json, "relay_via", via, sizeof(via));
+            g_lc.match_caps.relay_via_ice = strcmp(via, "ice") == 0 ? 1 : 0;
+            if (g_lc.match_caps.relay_via_ice) g_lc.match_caps.valid = 1;
+        }
+        g_lc.join.transport_ice_hub =
+            (g_lc.join.transport_host && g_lc.match_caps.relay_via_ice) ? 1 : 0;
         /* Prefer explicit relay_endpoint when the server opened input relay.
          * Apply after caps ingest: omitted force_input_relay must not leave
          * hosts on the hub path while guests dial the relay. */
-        if (relay_endpoint[0] && !endpoint_port_is_zero(relay_endpoint)) {
+        if (g_lc.join.transport_ice) {
+            /* ICE: nothing is dialled; a stale relay ask must not survive. */
+            if (g_lc.match_caps.valid) g_lc.match_caps.force_input_relay = 0;
+        } else if (relay_endpoint[0] && !endpoint_port_is_zero(relay_endpoint)) {
             char relay_raw[PSX_LOBBY_ENDPOINT_LEN];
             strncpy(relay_raw, relay_endpoint, sizeof(relay_raw) - 1);
             relay_raw[sizeof(relay_raw) - 1] = '\0';
@@ -2962,11 +3612,38 @@ static void handle_server_json(const char *json)
         }
         fill_peer_bind_from_join();
         parse_slots_array(json);
+        if (g_lc.join.transport_ice_hub) {
+            /* Host relay over ICE: no endpoints. Capture the connected agents
+             * NOW, before the next pump's view (launch_pending) tears them
+             * down; the engine takes them. A seat that is not connected is a
+             * refused launch with a reason, never a smaller room. */
+            ice_launch_capture();
+            if (g_il.error[0]) {
+                strncpy(g_lc.join.last_error, "ice_not_connected",
+                        sizeof(g_lc.join.last_error) - 1);
+                g_lc.join.last_error[sizeof(g_lc.join.last_error) - 1] = '\0';
+                g_lc.launch_pending = 0;
+                fprintf(stderr, "psx_lobby: launch refused - %s\n", g_il.error);
+                fflush(stderr);
+                return;
+            }
+            g_lc.join.last_error[0] = '\0';
+            g_lc.launch_pending = 1;
+            g_lc.ice_rtt_suspended = 1;
+            lobby_ice_rtt_close();
+            lobby_rtt_close();
+            psx_lobby_clear_signals();
+            g_lc.ice_signal_accept = 1;
+            rnet_lan_beacon_close(&g_lan_beacon_pub);
+            lobby_host_advertise_reset();
+            return;
+        }
         /* §108: online start always SFU — every peer dials relay_endpoint.
          * Legacy ice_p2p from an old server is refused (need SFU). */
         {
             char transport[24];
-            const int force_relay = using_server_input_relay(&g_lc.join);
+            const int force_relay =
+                !g_lc.join.transport_host && using_server_input_relay(&g_lc.join);
             const int seats = g_lc.join.player_count >= 2 ? g_lc.join.player_count
                                                          : g_lc.join.max_slots;
             const int host_hub =
@@ -2978,7 +3655,11 @@ static void handle_server_json(const char *json)
             json_get_str(json, "transport", transport, sizeof(transport));
             if (strcmp(transport, "ice_p2p") == 0)
                 ice_p2p = 1;
-            if (force_relay) {
+            if (g_lc.join.transport_ice) {
+                fprintf(stderr, "psx_lobby: launch transport=ice (peer-to-peer, "
+                                "signalled over the lobby)\n");
+                fflush(stderr);
+            } else if (force_relay) {
                 if (peer_bad) {
                     strncpy(g_lc.join.last_error, "missing_endpoints",
                             sizeof(g_lc.join.last_error) - 1);
@@ -3083,6 +3764,26 @@ static void handle_server_json(const char *json)
          * rnet_rtt_probe (peer path). REPORT still accepted from peers. */
         if (type == PSX_LOBBY_SIG_RTT_PING || type == PSX_LOBBY_SIG_RTT_PONG)
             return;
+        if (rnet_host_ice_sig_is_ours(type)) {
+            /* Host-relay-over-ICE waiting-room agents. Dispatched by the
+             * sender's player id, which the SERVER stamps (a client cannot
+             * choose it); only a seated player is a peer, and the seat is
+             * looked up here, never read from the payload. Never queued for
+             * the legacy session-ICE drain. */
+            const int from_slot = member_slot_for_player(from);
+            int from_spec = 0, mi;
+            for (mi = 0; mi < g_lc.member_count; ++mi)
+                if (strcmp(g_lc.members[mi].player_id, from) == 0)
+                    from_spec = g_lc.members[mi].is_spectator ? 1 : 0;
+            if (!g_host_ice || !from[0] || from_slot < 0 || from_spec) {
+                fprintf(stderr, "psx_lobby: host-ice signal from \"%s\" refused "
+                                "(not a seated player)\n", from);
+                return;
+            }
+            (void)rnet_host_ice_push_signal(g_host_ice, from, from_slot, type, flag,
+                                            text_buf);
+            return;
+        }
         if (type == PSX_LOBBY_SIG_RTT_REPORT) {
             int slot = rtt_index_for_slot(member_slot_for_player(from));
             int ms = (int)strtol(text_buf, NULL, 10);
@@ -3110,6 +3811,15 @@ static void handle_server_json(const char *json)
         if (automatch_claim_error(code, json)) {
             return;
         }
+        if (strcmp(code, "need_mods") == 0) {
+            g_lc.need_mod_count = parse_mod_pkg_array(json, "need_mods",
+                                                       g_lc.need_mods,
+                                                       PSX_LOBBY_MAX_MODS);
+            g_lc.need_mods_can_transfer = json_get_bool(json, "can_transfer", 0);
+        } else {
+            g_lc.need_mod_count = 0;
+            g_lc.need_mods_can_transfer = 0;
+        }
         /* Create/join failures are fatal to the seat. In-lobby ops (kick/move
          * on an older server, not_host, …) must not clear join.ok or the room
          * looks abandoned after a rejected host action. */
@@ -3121,7 +3831,8 @@ static void handle_server_json(const char *json)
             strcmp(code, "lobby_limit") == 0 ||
             strcmp(code, "version_mismatch") == 0 ||
             strcmp(code, "game_mismatch") == 0 ||
-            strcmp(code, "disc_mismatch") == 0) {
+            strcmp(code, "disc_mismatch") == 0 ||
+            strcmp(code, "need_mods") == 0) {
             g_lc.join.ok = 0;
         }
         return;
@@ -3129,6 +3840,7 @@ static void handle_server_json(const char *json)
     if (strcmp(op, "lobby_closed") == 0 || strcmp(op, "left") == 0 ||
         strcmp(op, "kicked") == 0) {
         psx_lobby_chat_clear();
+        ice_launch_discard();
         /* Leaving a room must never leave a queue ticket looking live, and
          * no seat means no automatch room either. */
         automatch_reset_queue_state();
@@ -3548,6 +4260,8 @@ int psx_lobby_connect(const char *ws_url)
 
 void psx_lobby_disconnect(void)
 {
+    host_relay_leave();
+    host_ice_leave();   /* agents + any launch bundle */
     /* Never block the UI on DNS/connect — cancel and let pump reap. */
     lobby_cancel_connect_async();
     automatch_on_connection_reset();
@@ -3764,8 +4478,11 @@ static void lobby_ice_rtt_tick(void)
     RNetIceState st;
     char path[16];
 
+    /* Host relay over ICE: the host-ice agents ARE the waiting-room ICE
+     * session and own the path_report; a second per-pair probe would race it
+     * (and its "relay"/"fail" reports would undo the proof). */
     if (!g_lc.in_lobby || g_lc.launch_pending || g_lc.ice_rtt_suspended ||
-        g_lc.member_count < 2) {
+        g_lc.member_count < 2 || room_relays_via_ice()) {
         lobby_ice_rtt_close();
         return;
     }
@@ -3900,6 +4617,10 @@ void psx_lobby_pump(void)
 {
     char buf[4096];
     automatch_probe_poll();
+    /* Host relay: hold / probe / report to match the room. Before the
+     * connected() check so a dropped WS releases the port the same pump. */
+    host_relay_step();
+    host_ice_step();
 #if defined(_WIN32)
     int n;
 #else
@@ -4068,8 +4789,8 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
                      const char *password, const char *host_bind,
                      const PsxLobbyMatchCaps *match_caps)
 {
-    char msg[2304];
-    char caps_json[512];
+    char msg[8192];
+    char caps_json[4096];
     char name_esc[JSON_ESC_CAP(128)];
     char gn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
     char gv_esc[JSON_ESC_CAP(PSX_LOBBY_VERSION_LEN)];
@@ -4092,6 +4813,8 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
     strncpy(g_lc.my_bind, host_bind && host_bind[0] ? host_bind : "0.0.0.0:7777",
             sizeof(g_lc.my_bind) - 1);
     g_lc.join.last_error[0] = '\0';
+    g_lc.need_mod_count = 0;
+    g_lc.need_mods_can_transfer = 0;
     caps_json[0] = '\0';
     if (match_caps && match_caps->valid) {
         g_lc.match_caps = *match_caps;
@@ -4122,7 +4845,7 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
 
 int psx_lobby_join(const char *lobby_id, const char *password, const char *guest_bind)
 {
-    char msg[1536];
+    char msg[8192];
     char lid_esc[JSON_ESC_CAP(PSX_LOBBY_ID_LEN)];
     char pw_esc[JSON_ESC_CAP(128)];
     char bind_esc[JSON_ESC_CAP(PSX_LOBBY_ENDPOINT_LEN)];
@@ -4130,6 +4853,7 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
     char gn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
     char gv_esc[JSON_ESC_CAP(PSX_LOBBY_VERSION_LEN)];
     char fp_esc[JSON_ESC_CAP(72)];
+    char offer_json[4096];
     const char *gn;
     const char *gv;
     int n;
@@ -4141,6 +4865,16 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
     strncpy(g_lc.my_bind, guest_bind && guest_bind[0] ? guest_bind : "0.0.0.0:7778",
             sizeof(g_lc.my_bind) - 1);
     g_lc.join.last_error[0] = '\0';
+    g_lc.need_mod_count = 0;
+    g_lc.need_mods_can_transfer = 0;
+    offer_json[0] = '\0';
+    if (g_lc.mod_offer.valid && g_lc.mod_offer.count > 0) {
+        char pkgs[4096];
+        if (append_mod_pkg_array(pkgs, sizeof(pkgs), g_lc.mod_offer.pkgs,
+                                 g_lc.mod_offer.count))
+            snprintf(offer_json, sizeof(offer_json),
+                     ",\"mod_offer\":{\"pkgs\":%s}", pkgs);
+    }
     json_escape(lobby_id, lid_esc, sizeof(lid_esc));
     json_escape(password ? password : "", pw_esc, sizeof(pw_esc));
     json_escape(g_lc.my_bind, bind_esc, sizeof(bind_esc));
@@ -4152,8 +4886,8 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
     n = snprintf(msg, sizeof(msg),
              "{\"op\":\"join\",\"lobby_id\":\"%s\",\"password\":\"%s\",\"guest_bind\":\"%s\","
              "\"display_name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\","
-             "\"disc_fp\":\"%s\"}",
-             lid_esc, pw_esc, bind_esc, dn_esc, gn_esc, gv_esc, fp_esc);
+             "\"disc_fp\":\"%s\"%s}",
+             lid_esc, pw_esc, bind_esc, dn_esc, gn_esc, gv_esc, fp_esc, offer_json);
     /* A truncated frame is a frame the server drops whole, so the join would
      * silently never happen. create checked this; join did not. */
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
@@ -4164,6 +4898,9 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
 
 int psx_lobby_leave(void)
 {
+    host_relay_leave(); /* unmap the router, close the port, forget reports */
+    ice_launch_discard();
+    g_il.error[0] = '\0';
     queue_send("{\"op\":\"leave\"}");
     flush_pending();
     g_lc.ice_rtt_suspended = 0;
@@ -4308,10 +5045,58 @@ const PsxLobbyMatchCaps *psx_lobby_match_caps(void)
     return &g_lc.match_caps;
 }
 
+
+void psx_lobby_set_mod_offer(const PsxLobbyModOffer *offer)
+{
+    if (!offer) {
+        memset(&g_lc.mod_offer, 0, sizeof(g_lc.mod_offer));
+        return;
+    }
+    g_lc.mod_offer = *offer;
+    if (g_lc.mod_offer.count < 0) g_lc.mod_offer.count = 0;
+    if (g_lc.mod_offer.count > PSX_LOBBY_MAX_MODS)
+        g_lc.mod_offer.count = PSX_LOBBY_MAX_MODS;
+}
+
+const PsxLobbyModOffer *psx_lobby_mod_offer(void)
+{
+    return &g_lc.mod_offer;
+}
+
+int psx_lobby_need_mods_count(void)
+{
+    return g_lc.need_mod_count;
+}
+
+int psx_lobby_need_mods_get(int index, PsxLobbyModPkg *out)
+{
+    if (!out || index < 0 || index >= g_lc.need_mod_count) return 0;
+    *out = g_lc.need_mods[index];
+    return 1;
+}
+
+int psx_lobby_need_mods_can_transfer(void)
+{
+    /* This focused online-mod port advertises and applies bundled packages, but
+     * does not implement lobby byte transfer. Keep the UI from offering a dead
+     * Download action even if the server reports that a transfer channel exists. */
+    (void)g_lc.need_mods_can_transfer;
+    return 0;
+}
+
+int psx_lobby_mod_xfer_start(void) { return -1; }
+void psx_lobby_mod_xfer_cancel(void) {}
+int psx_lobby_mod_xfer_progress(void) { return -1; }
+int psx_lobby_mod_xfer_failed(char *err, size_t err_cap)
+{
+    if (err && err_cap) err[0] = '\0';
+    return 0;
+}
+
 int psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps)
 {
-    char msg[896];
-    char caps_json[640];
+    char msg[6144];
+    char caps_json[4096];
     int n;
     if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host || !caps || !caps->valid)
         return -1;
@@ -4566,68 +5351,73 @@ int psx_lobby_chat_get(int index, PsxLobbyChatMsg *out)
     return 1;
 }
 
-int psx_lobby_settle_session_bios(char *out, size_t out_cap)
+int psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap)
 {
+    NetplayBiosSeat seats[PSX_LOBBY_MAX_MEMBERS + 1];
+    NetplayBiosSettle settle;
+    const char *me = psx_lobby_player_id();
+    int n = 0;
     int i;
-    int any_prefer_open = 0;
-    int any_cannot_scph = 0;
-    int host_prefer_scph = 0;
-    int saw_peer = 0;
     if (!out || out_cap < 9) return -1;
     out[0] = '\0';
+    if (out_crc) *out_crc = 0;
+    if (why && why_cap) why[0] = '\0';
 
-    for (i = 0; i < g_lc.member_count; ++i) {
+    memset(seats, 0, sizeof(seats));
+    for (i = 0; i < g_lc.member_count && n < PSX_LOBBY_MAX_MEMBERS; ++i) {
         const PsxLobbyMember *m = &g_lc.members[i];
         if (!m->player_id[0] && !m->display_name[0]) continue;
-        saw_peer = 1;
-        if (!m->bios_offer_valid) {
-            /* Legacy client / not ready yet — cannot assume SCPH. */
-            any_cannot_scph = 1;
+        /* This client's own row: the local offer below is newer than the
+         * server's echo of it (the player may have just changed BIOS). */
+        if (g_lc.bios_offer.valid && me && me[0] && strcmp(m->player_id, me) == 0)
             continue;
-        }
-        if (m->bios_prefer_openbios) any_prefer_open = 1;
-        if (!m->bios_can_scph1001) any_cannot_scph = 1;
-        if (!m->bios_can_openbios && !m->bios_can_scph1001)
-            any_cannot_scph = 1;
-        if (psx_lobby_member_is_host(m) && !m->bios_prefer_openbios &&
-            m->bios_can_scph1001)
-            host_prefer_scph = 1;
+        seats[n].offered = m->bios_offer_valid;
+        seats[n].can_openbios = m->bios_can_openbios;
+        seats[n].can_retail = m->bios_can_scph1001;
+        seats[n].prefer_openbios = m->bios_prefer_openbios;
+        seats[n].retail_crc = m->bios_retail_crc;
+        seats[n].is_host = psx_lobby_member_is_host(m);
+        ++n;
     }
-
-    /* Include local offer even before lobby_update echoes it. */
+    /* Include the local offer even before lobby_update echoes it. */
     if (g_lc.bios_offer.valid) {
-        saw_peer = 1;
-        if (g_lc.bios_offer.prefer_openbios) any_prefer_open = 1;
-        if (!g_lc.bios_offer.can_scph1001) any_cannot_scph = 1;
-        if (g_lc.is_host && !g_lc.bios_offer.prefer_openbios &&
-            g_lc.bios_offer.can_scph1001)
-            host_prefer_scph = 1;
-    } else if (!saw_peer) {
-        any_cannot_scph = 1;
+        seats[n].offered = 1;
+        seats[n].can_openbios = g_lc.bios_offer.can_openbios;
+        seats[n].can_retail = g_lc.bios_offer.can_scph1001;
+        seats[n].prefer_openbios = g_lc.bios_offer.prefer_openbios;
+        seats[n].retail_crc = g_lc.bios_offer.retail_crc;
+        seats[n].is_host = g_lc.is_host;
+        ++n;
     }
 
-    /* Capability first: without universal SCPH support, OpenBIOS is required.
-     * Otherwise the host's retail pick wins over guest OpenBIOS preferences. */
-    if (any_cannot_scph || !saw_peer)
-        strncpy(out, "openbios", out_cap - 1);
-    else if (host_prefer_scph)
-        strncpy(out, "scph1001", out_cap - 1);
-    else if (any_prefer_open)
-        strncpy(out, "openbios", out_cap - 1);
-    else
-        strncpy(out, "scph1001", out_cap - 1);
+    settle = netplay_bios_settle(seats, n);
+    if (settle.kind == NETPLAY_BIOS_NONE) {
+        if (why && why_cap)
+            netplay_bios_describe_refusal(&settle, seats, n, why, why_cap);
+        return 1;
+    }
+    strncpy(out, netplay_bios_token(settle.kind), out_cap - 1);
     out[out_cap - 1] = '\0';
+    if (out_crc) *out_crc = settle.retail_crc;
     return 0;
 }
 
-int psx_lobby_set_ready(int ready)
+void psx_lobby_set_last_error(const char *text)
 {
-    char msg[512];
+    if (!text) text = "";
+    strncpy(g_lc.join.last_error, text, sizeof(g_lc.join.last_error) - 1);
+    g_lc.join.last_error[sizeof(g_lc.join.last_error) - 1] = '\0';
+}
+
+/* The set_ready message exactly as this seat sends it: the BIOS and memory
+ * card offers ride along. Also what --netplay-query hands the Retro hub, so a
+ * seat the hub holds offers what this build would (NETPLAY_HANDOFF.md). */
+int psx_lobby_ready_message(int ready, char *msg, size_t cap)
+{
     char memcard[96];
     int n;
-    if (!psx_lobby_connected() || !g_lc.in_lobby) {
-        return -1;
-    }
+    if (!msg || cap == 0) return -1;
     memcard[0] = '\0';
     if (g_lc.memcard_offer.valid) {
         snprintf(memcard, sizeof(memcard),
@@ -4636,48 +5426,217 @@ int psx_lobby_set_ready(int ready)
                  g_lc.memcard_offer.share ? "true" : "false");
     }
     if (g_lc.bios_offer.valid) {
-        n = snprintf(msg, sizeof(msg),
+        /* retail_crc names the image this peer would boot. Older
+         * peers ignore the field; the server relays bios_offer as is. */
+        char crc[16];
+        netplay_bios_format_crc(g_lc.bios_offer.can_scph1001 ? g_lc.bios_offer.retail_crc : 0,
+                                crc, sizeof(crc));
+        n = snprintf(msg, cap,
                      "{\"op\":\"set_ready\",\"ready\":%s,"
                      "\"bios_offer\":{\"v\":1,\"prefer\":\"%s\","
-                     "\"can_openbios\":%s,\"can_scph1001\":%s}%s}",
+                     "\"can_openbios\":%s,\"can_scph1001\":%s,"
+                     "\"retail_crc\":\"%s\"}%s}",
                      ready ? "true" : "false",
                      g_lc.bios_offer.prefer_openbios ? "openbios" : "scph1001",
                      g_lc.bios_offer.can_openbios ? "true" : "false",
                      g_lc.bios_offer.can_scph1001 ? "true" : "false",
-                     memcard);
+                     crc, memcard);
     } else {
-        n = snprintf(msg, sizeof(msg), "{\"op\":\"set_ready\",\"ready\":%s%s}",
+        n = snprintf(msg, cap, "{\"op\":\"set_ready\",\"ready\":%s%s}",
                      ready ? "true" : "false", memcard);
     }
-    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
+int psx_lobby_set_ready(int ready)
+{
+    char msg[512];
+    if (!psx_lobby_connected() || !g_lc.in_lobby) {
+        return -1;
+    }
+    if (psx_lobby_ready_message(ready, msg, sizeof(msg)) != 0) return -1;
     queue_send(msg);
     flush_pending();
     return 0;
 }
 
+/* The start message for these caps, exactly as the host sends it (settled
+ * already: request_start settles the BIOS first). Also what --netplay-query
+ * hands a Retro hub that hosts the room. */
+int psx_lobby_start_message(const PsxLobbyMatchCaps *caps, char *msg, size_t cap)
+{
+    char caps_json[640];
+    int n;
+    if (!msg || cap == 0) return -1;
+    caps_json[0] = '\0';
+    if (caps && caps->valid)
+        append_match_caps_json(caps_json, sizeof(caps_json), caps);
+    n = snprintf(msg, cap, "{\"op\":\"start\"%s}", caps_json);
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
 int psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps)
 {
-    char msg[896];
-    char caps_json[640];
+    char msg[6144];
     PsxLobbyMatchCaps caps_local;
-    int n;
+    const PsxLobbyMatchCaps *send = NULL;
     if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host) {
         return -1;
     }
-    caps_json[0] = '\0';
     if (match_caps && match_caps->valid) {
         caps_local = *match_caps;
-        if (!caps_local.session_bios[0])
-            (void)psx_lobby_settle_session_bios(caps_local.session_bios,
-                                                sizeof(caps_local.session_bios));
+        if (!caps_local.session_bios[0]) {
+            char why[192];
+            if (psx_lobby_settle_session_bios(caps_local.session_bios,
+                                              sizeof(caps_local.session_bios),
+                                              &caps_local.session_bios_crc,
+                                              why, sizeof(why)) == 1) {
+                psx_lobby_set_last_error(why);
+                return -1;
+            }
+        }
+        /* The encoder selects the host relay's path from the local preference.
+         * Keep the waiting-room view on that same path while START is in flight:
+         * callers construct fresh caps and need not copy relay_via_ice. Clearing
+         * it here destroys the completed agents before LAUNCH can take them. */
+        caps_local.relay_via_ice = caps_local.relay_host &&
+            g_relay_via_ice_pref && rnet_host_ice_available();
         g_lc.match_caps = caps_local;
-        append_match_caps_json(caps_json, sizeof(caps_json), &caps_local);
+        send = &caps_local;
     }
-    n = snprintf(msg, sizeof(msg), "{\"op\":\"start\"%s}", caps_json);
-    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
+    if (psx_lobby_start_message(send, msg, sizeof(msg)) != 0) return -1;
     queue_send(msg);
     flush_pending();
     return 0;
+}
+
+/* ---- a match the Retro hub negotiated (retcomm-launcher NETPLAY_HANDOFF.md)
+ *
+ * The hub holds the seat with its own lobby client and writes the server
+ * messages that seated this player into a launch record. They are replayed
+ * here through handle_server_json, the same code that reads them off this
+ * client's own socket, so every settled value -- slots, endpoints, the relay,
+ * match caps, the session BIOS -- comes out exactly as the in-game lobby
+ * would have it. Nothing is sent: there is no socket. */
+static int g_handoff_active = 0;
+
+static char *handoff_object(const char *record, const char *key)
+{
+    /* Not json_extract_object: that one counts braces inside strings too,
+     * and a room or player name with a brace in it would cut the message
+     * short. A quoted key cannot occur inside a JSON string (its quotes would
+     * be escaped), so the search for it is exact. */
+    char pat[64];
+    const char *p;
+    char *buf;
+    size_t n = 0;
+    int depth = 0, in_str = 0, esc = 0;
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    p = strstr(record, pat);
+    if (!p) return NULL;
+    p = strchr(p + strlen(pat), ':');
+    if (!p) return NULL;
+    ++p;
+    while (*p && isspace((unsigned char)*p)) ++p;
+    if (*p != '{') return NULL;
+    buf = (char *)malloc(strlen(p) + 1);
+    if (!buf) return NULL;
+    do {
+        const char c = *p++;
+        buf[n++] = c;
+        if (in_str) {
+            if (esc) esc = 0;
+            else if (c == '\\') esc = 1;
+            else if (c == '"') in_str = 0;
+        } else if (c == '"') {
+            in_str = 1;
+        } else if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+        }
+    } while (*p && depth > 0);
+    buf[n] = '\0';
+    if (depth != 0) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+/* Who this seat is and which server it sat on: what the welcome and the
+ * socket would have told the client. */
+static int handoff_identity(const char *record, char *why, size_t why_cap)
+{
+    char url[256];
+    char path[128];
+    int port = 0;
+    json_get_str(record, "handoff_player_id", g_lc.player_id, sizeof(g_lc.player_id));
+    if (!g_lc.player_id[0]) {
+        if (why && why_cap) snprintf(why, why_cap, "the launch record names no player");
+        return -1;
+    }
+    url[0] = '\0';
+    json_get_str(record, "handoff_lobby_url", url, sizeof(url));
+    if (url[0] && parse_ws_url(url, g_lc.host, sizeof(g_lc.host), &port, path, sizeof(path)) == 0)
+        g_lc.port = port;
+    json_get_str(record, "handoff_server_ip", g_lc.connected_peer_ip,
+                 sizeof(g_lc.connected_peer_ip));
+    return 0;
+}
+
+int psx_lobby_replay_room(const char *record, char *why, size_t why_cap)
+{
+    char *seat, *room;
+    if (why && why_cap) why[0] = '\0';
+    if (!record || handoff_identity(record, why, why_cap) != 0) return -1;
+    seat = handoff_object(record, "handoff_seat");
+    room = handoff_object(record, "handoff_room");
+    if (!seat) {
+        free(room);
+        if (why && why_cap) snprintf(why, why_cap, "the launch record has no seat");
+        return -1;
+    }
+    handle_server_json(seat);
+    if (room) handle_server_json(room);
+    free(seat);
+    free(room);
+    return 0;
+}
+
+int psx_lobby_ingest_record(const char *record, char *why, size_t why_cap)
+{
+    char *launch;
+    if (psx_lobby_replay_room(record, why, why_cap) != 0) return -1;
+    launch = handoff_object(record, "handoff_launch");
+    if (!launch) {
+        if (why && why_cap) snprintf(why, why_cap, "the launch record has no launch");
+        return -1;
+    }
+    handle_server_json(launch);
+    free(launch);
+    if (!g_lc.launch_pending) {
+        if (why && why_cap)
+            snprintf(why, why_cap, "the match could not be joined: %s",
+                     g_lc.join.last_error[0] ? g_lc.join.last_error
+                                             : "the launch was refused");
+        return -1;
+    }
+    g_handoff_active = 1;
+    return 0;
+}
+
+int psx_lobby_handoff_active(void)
+{
+    return g_handoff_active;
+}
+
+int psx_lobby_json_str(const char *json, const char *key, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!json || !key) return 0;
+    return json_get_str(json, key, out, cap) != NULL;
 }
 
 int psx_lobby_launch_pending(void)

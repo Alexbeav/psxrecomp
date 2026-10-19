@@ -3,7 +3,9 @@
 
 Commands:
   verify-disc        Hash-check a dump against game.toml [prepare_disc]
-  generate           Ensure emitters + prepare disc + run psxrecomp-game → generated/
+  generate           Ensure emitters + prepare disc + run psxrecomp-game → generated/,
+                     then build the static overlay shard an aot/overlays.json
+                     profile declares (static_output)
   rebuild            cmake --build; if [pgo] enabled, instrument → train → use
   pgo-train          Standalone PGO train (same as rebuild's PGO phase)
   ensure-toolchain   Resolve / download cmake-clang-v1 into the shared cache
@@ -16,12 +18,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -42,6 +46,12 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_VERIFY = 3
 
+# A title's AOT overlay profile, relative to the project root. One that
+# declares "static_output" gets its static overlay shard built by `generate`.
+AOT_PROFILE_RELPATH = Path("aot") / "overlays.json"
+# tools/aot_overlay_pipeline.py exit status: the profile describes another disc.
+AOT_PIPELINE_NOT_APPLICABLE = 3
+
 
 def resolve_embedded_toolchain_bin(project_root: Path) -> Optional[Path]:
     """Return a usable toolchain bin/ (project, env, or shared cache)."""
@@ -52,6 +62,8 @@ def activate_embedded_toolchain(
     project_root: Path, progress: Optional[ProgressReporter] = None
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
+    if sys.platform != "win32":
+        return False
     log = progress.log if progress else None
     bin_dir = resolve_toolchain_bin(project_root)
     if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
@@ -147,6 +159,10 @@ def prune_after_rebuild(
             progress.log(f"Pruned build tree to binary+assets under {build_dir}")
 
 
+# Windows Python has no lutimes; follow_symlinks=False raises NotImplementedError.
+_UTIME_NOFOLLOW = os.utime in os.supports_follow_symlinks
+
+
 def clamp_future_mtimes(
     root: Path,
     *,
@@ -203,7 +219,14 @@ def clamp_future_mtimes(
                 continue
             if mtime > stamp:
                 try:
-                    os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    if _UTIME_NOFOLLOW:
+                        os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    elif p.is_symlink():
+                        # Windows cannot retime a link itself; never retime
+                        # the target it points outside the tree at.
+                        continue
+                    else:
+                        os.utime(p, (stamp, stamp))
                     n += 1
                 except OSError:
                     pass
@@ -318,9 +341,16 @@ def _find_recompiler_tool(project_root: Path, basename: str, env_name: str) -> P
         # tool would be rebuilt correctly and then never used.
         project_root / "psxrecomp" / "recompiler" / "build-analyze",
         ROOT / "recompiler" / "build-analyze",
+        # The project's own emitter tree comes before the framework's. It is
+        # what tools/ci/build_emitters.sh (CI and the scaffold) builds from the
+        # pinned submodule, while psxrecomp/recompiler/build is whatever a
+        # developer last built there and can predate the pin by months. A
+        # stale one shadowed a fresh build-recompiler on 2026-09-30 and
+        # emitted a dispatch that called a helper the pinned runtime had
+        # removed; the release failed at link on every platform.
+        project_root / "build-recompiler",
         project_root / "psxrecomp" / "recompiler" / "build",
         project_root / "psxrecomp" / "recompiler" / "build" / "Release",
-        project_root / "build-recompiler",
         ROOT / "recompiler" / "build",
         ROOT / "recompiler" / "build" / "Release",
     ]
@@ -381,12 +411,24 @@ def ensure_emitters(
     Generate & rebuild without a pre-staged setup-host SDK.
     """
     if not force:
+        # With the framework's recompiler sources present, always run the
+        # (incremental) build: a binary that merely exists may predate the
+        # sources -- a submodule moved to another revision -- and would emit
+        # code for the old framework without a word (a hook site listed in
+        # game.toml silently missing). Ninja makes the up-to-date case cheap.
+        # Without sources (an SDK pack), the staged binaries are the only ones.
         try:
-            game, bios = find_emitters(project_root)
-            progress.log(f"Emitters ready: {game.name}, {bios.name}")
-            return game, bios
+            recompiler_source_dir(project_root)
+            have_sources = True
         except FileNotFoundError:
-            pass
+            have_sources = False
+        if not have_sources:
+            try:
+                game, bios = find_emitters(project_root)
+                progress.log(f"Emitters ready: {game}, {bios}")
+                return game, bios
+            except FileNotFoundError:
+                pass
 
     progress.phase(
         "emitters",
@@ -831,6 +873,29 @@ def regen_bios_profile(
         raise RuntimeError(
             f"psxrecomp-bios failed for {profile_rel} (exit {proc.returncode})"
         )
+    write_bios_emitter_stamp(fw, profile_rel, progress=progress)
+
+
+def write_bios_emitter_stamp(
+    fw: Path, profile_rel: str, *, progress: ProgressReporter
+) -> None:
+    """Record generated/<stem>.emitter.sha like tools/regen_bios.sh, so the next
+    configure does not report the fresh BIOS as STALE."""
+    recompiler = load_sections(fw / profile_rel).get("recompiler", {})
+    stem = recompiler.get("out_stem")
+    cmake = shutil.which("cmake")
+    if not stem or not cmake:
+        progress.log(f"emitter stamp skipped for {profile_rel} (no out_stem or cmake)")
+        return
+    proc = subprocess.run(
+        [cmake, f"-DROOT={fw}", f"-DPROFILE={profile_rel}",
+         "-P", str(fw / "tools" / "bios_emitter_fingerprint.cmake")],
+        cwd=str(fw), capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"emitter fingerprint failed for {profile_rel}: {proc.stderr.strip()}")
+    out_dir = fw / str(recompiler.get("out_dir") or "generated")
+    (out_dir / f"{stem}.emitter.sha").write_text(proc.stdout, encoding="utf-8")
 
 
 def load_sections(config: Path) -> dict[str, dict[str, Any]]:
@@ -1092,9 +1157,10 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     chd_lib = None
     if disc.suffix.lower() == ".chd" and disc.is_file():
         chd_lib = ensure_chd_reader(project_root, progress)
+    identity: Optional[dict[str, Any]] = None
     try:
         if disc.is_file():
-            verify_disc_path(
+            identity = verify_disc_path(
                 disc, prep, skip_hash=bool(args.skip_hash_check), progress=progress,
                 chd_lib=chd_lib,
             )
@@ -1300,6 +1366,23 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         )
         return EXIT_ERROR
 
+    # The static overlay shard is built from the same disc, emitters and
+    # config as the game C above, so it belongs to Generate: a title that
+    # declares one and ships without it silently interprets those overlays.
+    aot_status = run_aot_static(
+        project_root,
+        config,
+        game=game,
+        working_disc=working_disc,
+        marker=marker,
+        disc_matched_known=disc_matched_known_digests(identity, prep, args),
+        progress=progress,
+        force=bool(getattr(args, "force_aot_static", False)),
+        skip=bool(getattr(args, "no_aot_static", False)),
+    )
+    if aot_status is None:
+        return EXIT_ERROR
+
     progress.phase("done", pct=1.0, message="Generate complete")
     progress.result(
         ok=True,
@@ -1307,8 +1390,213 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         marker=str(marker),
         disc=str(working_disc),
         boot_exe=str(boot_path),
+        aot_static=aot_status,
     )
     return EXIT_OK
+
+
+def disc_matched_known_digests(
+    identity: Optional[dict[str, Any]], prep: dict[str, Any], args: argparse.Namespace
+) -> bool:
+    """True when the source dump matched a digest [prepare_disc] declares.
+
+    verify_disc_path also reports verified=True when a title declares no
+    digests at all; that is "nothing to check", not "this is the known disc"."""
+    if identity is None or not identity.get("verified") or getattr(args, "skip_hash_check", False):
+        return False
+    return bool(prep.get("known_md5") or prep.get("known_sha1") or prep.get("known_sizes"))
+
+
+def generated_game_is_cps(marker: Path) -> bool:
+    """True when psxrecomp-game emitted continuation-passing game C.
+
+    In CPS mode the emitter writes a psx_cps_mark_game constructor into the
+    dispatch it produces (recompiler/src/game_dispatch_emitter.cpp); overlay C compiled into
+    the same binary must use the same contract, so this reads the output
+    rather than guessing from the environment."""
+    try:
+        text = marker.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return "psx_cps_mark_game" in text
+
+
+def aot_disc_cue(
+    project_root: Path, game: dict[str, Any], working_disc: Path
+) -> Optional[Path]:
+    """The cue/bin the AOT pipeline reads raw sectors from, or None."""
+    if working_disc.suffix.lower() == ".cue" and working_disc.is_file():
+        return working_disc
+    configured = str(game.get("disc") or "").strip()
+    if configured:
+        cand = Path(configured).expanduser()
+        if not cand.is_absolute():
+            cand = project_root / cand
+        if cand.suffix.lower() == ".cue" and cand.is_file():
+            return cand.resolve()
+    return None
+
+
+def _aot_workers() -> int:
+    raw = os.environ.get("PSXRECOMP_AOT_WORKERS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return max(1, (os.cpu_count() or 4) - 2)
+
+
+def run_aot_static(
+    project_root: Path,
+    config: Path,
+    *,
+    game: dict[str, Any],
+    working_disc: Path,
+    marker: Path,
+    disc_matched_known: bool,
+    progress: ProgressReporter,
+    force: bool = False,
+    skip: bool = False,
+) -> Optional[str]:
+    """Build the static overlay shard the title's AOT profile declares.
+
+    Returns a status string ("none", "reused", "built", "skipped",
+    "not_applicable") or None after reporting an error. Nothing here is
+    title-specific: the profile's own static_output declaration decides
+    whether a shard exists, and tools/aot_overlay_pipeline.py decides what is
+    in it."""
+    profile = project_root / AOT_PROFILE_RELPATH
+    if not profile.is_file():
+        return "none"
+    try:
+        declared = "static_output" in json.loads(profile.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        progress.error(f"cannot read AOT profile {profile}: {exc}", code=EXIT_ERROR)
+        return None
+    if not declared:
+        progress.log(
+            f"{AOT_PROFILE_RELPATH.as_posix()} declares no static_output: this title "
+            "ships its verified overlays another way (an audited DLL cache from "
+            "aot_overlay_pipeline.py release), so Generate builds no static shard."
+        )
+        return "none"
+    if skip:
+        progress.log(
+            "WARNING: --no-aot-static: the static overlay shard this title declares "
+            "is NOT being built. Any existing shard is left as it is; with none, "
+            "those overlays run on the dirty-RAM interpreter.",
+            level="warning",
+        )
+        progress.event("aot_static", status="skipped")
+        return "skipped"
+    if sys.version_info < (3, 11):
+        progress.error(
+            "building this title's static overlay shard needs Python 3.11+ "
+            f"(running {sys.version.split()[0]}). Install a newer Python, or pass "
+            "--no-aot-static to generate without it (those overlays then run "
+            "interpreted).",
+            code=EXIT_ERROR,
+        )
+        return None
+
+    fw = framework_root(project_root)
+    pipeline = fw / "tools" / "aot_overlay_pipeline.py"
+    if not pipeline.is_file():
+        progress.error(f"missing {pipeline}; the framework checkout is incomplete", code=EXIT_ERROR)
+        return None
+    cue = aot_disc_cue(project_root, game, working_disc)
+    if cue is None:
+        progress.error(
+            "the static overlay shard is built from the disc's raw sectors and needs "
+            f"it as a cue/bin; {working_disc.name} is not one and game.toml's "
+            "[game].disc names no existing cue. Re-run generate with --force-prepare "
+            "to normalize the dump.",
+            code=EXIT_ERROR,
+        )
+        return None
+    try:
+        recompiler = find_psxrecomp_game(project_root)
+    except FileNotFoundError as exc:
+        progress.error(str(exc), code=EXIT_ERROR)
+        return None
+    toolchain_bin = resolve_embedded_toolchain_bin(project_root)
+    cmake = _tool_in_dir(toolchain_bin, "cmake") or _which_tool("cmake")
+    if cmake is None:
+        progress.error("cmake not found; the static overlay shard needs it for the "
+                       "overlay codegen hash", code=EXIT_ERROR)
+        return None
+    compiler = overlay_compiler(project_root) or _which_tool("gcc") or Path("gcc")
+    cps = generated_game_is_cps(marker)
+
+    work_root = project_root / ".cache" / "aot-static"
+    work_root.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="generate-", dir=str(work_root)))
+    cmd = [
+        sys.executable, str(pipeline), "static",
+        "--profile", str(profile),
+        "--game-toml", str(config),
+        "--disc", str(cue),
+        "--recompiler", str(recompiler),
+        "--work-dir", str(work),
+        "--gcc", str(compiler),
+        "--cmake", str(cmake),
+        "--workers", str(_aot_workers()),
+        "--clear-if-not-applicable",
+    ]
+    if cps:
+        cmd.append("--cps")
+    if not force:
+        cmd.append("--reuse")
+    progress.phase(
+        "aot_static", pct=0.7,
+        message="Building native code for the disc's verified overlays...",
+    )
+    progress.log(" ".join(cmd))
+    status = ""
+    reason = ""
+    proc = subprocess.Popen(
+        cmd, cwd=str(project_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.rstrip()
+        if not line:
+            continue
+        progress.log(line)
+        if line.startswith("RESULT_STATIC="):
+            status = line.split("=", 1)[1].split()[0]
+        elif line.startswith("aot_overlay_pipeline: "):
+            reason = line.split(": ", 2)[-1]
+    rc = proc.wait()
+    if rc == 0:
+        shutil.rmtree(work, ignore_errors=True)
+        status = status or "built"
+        progress.event("aot_static", status=status)
+        return status
+    if rc == AOT_PIPELINE_NOT_APPLICABLE:
+        shutil.rmtree(work, ignore_errors=True)
+        if disc_matched_known:
+            progress.error(
+                "this disc matches the digests game.toml [prepare_disc] declares, yet "
+                f"{AOT_PROFILE_RELPATH.as_posix()} does not apply to it: {reason}. The "
+                "title's AOT profile and its known-disc digests disagree; the title "
+                "must be fixed.",
+                code=EXIT_ERROR,
+            )
+            return None
+        progress.log(
+            f"WARNING: no static overlay shard for this disc: {reason}. Any previous "
+            "shard was removed; those overlays will run on the dirty-RAM interpreter.",
+            level="warning",
+        )
+        progress.event("aot_static", status="not_applicable", detail=reason)
+        return "not_applicable"
+    progress.error(
+        f"static overlay shard build failed (exit {rc})"
+        + (f": {reason}" if reason else "")
+        + f". Logs and evidence are kept in {work}.",
+        code=EXIT_ERROR,
+    )
+    return None
 
 
 def _which_tool(name: str) -> Optional[Path]:
@@ -1354,17 +1642,41 @@ def _pack_sysroot_cmake_args(
     return [f"-DCMAKE_SYSROOT={sysroot}", "-DOpenGL_GL_PREFERENCE=LEGACY"]
 
 
-def _read_cmake_cache_generator(cache_file: Path) -> str:
+def _read_cmake_cache_entry(cache_file: Path, key: str) -> str:
     if not cache_file.is_file():
         return ""
     try:
         text = cache_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    prefix = f"{key}:"
     for line in text.splitlines():
-        if line.startswith("CMAKE_GENERATOR:INTERNAL="):
+        if line.startswith(prefix) and "=" in line:
             return line.split("=", 1)[1].strip()
     return ""
+
+
+def _read_cmake_cache_generator(cache_file: Path) -> str:
+    return _read_cmake_cache_entry(cache_file, "CMAKE_GENERATOR")
+
+
+def _cmake_for_build_dir(build_dir: Path) -> Path:
+    """The cmake that configured *build_dir* (CMakeCache CMAKE_COMMAND).
+
+    Building must use the same cmake as configure. A bare ``cmake`` resolves
+    through PATH, and on Windows that is often an MSYS2 cmake that rewrites
+    the Windows build path as ``/f/.../F:/...`` and fails.
+    """
+    cached = _read_cmake_cache_entry(build_dir / "CMakeCache.txt", "CMAKE_COMMAND")
+    if cached and Path(cached).is_file():
+        return Path(cached)
+    found = _which_tool("cmake")
+    if found is None:
+        raise RuntimeError(
+            f"cmake not found: {build_dir} has no configured CMAKE_COMMAND "
+            "and no cmake is on PATH"
+        )
+    return found
 
 
 def _cmake_configure(
@@ -1496,7 +1808,7 @@ def _cmake_build(
         os.cpu_count() or 4
     )
     cmd = [
-        "cmake",
+        str(_cmake_for_build_dir(build_dir)),
         "--build",
         str(build_dir),
         "--parallel",
@@ -1796,8 +2108,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         "-DPSXRECOMP_ALLOW_NO_BIOS=OFF",
         "-DPSXRECOMP_REQUIRE_GAME_C=ON",
     ]
-    if args.cmake_extra:
-        cmake_extra.extend(args.cmake_extra)
+    user_extra = list(args.cmake_extra or [])
 
     clamped = clamp_future_mtimes(project_root, skip=build_dir)
     if clamped:
@@ -1827,7 +2138,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if not pgo_enabled:
             progress.phase("build", pct=0.2, message="cmake Release build...")
             _cmake_configure(
-                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"], progress=progress
+                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"] + user_extra, progress=progress
             )
             _cmake_build(build_dir, target, progress)
         else:
@@ -1847,7 +2158,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 project_root,
                 build_dir,
                 pgo="generate",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"],
+                extra=cmake_extra + user_extra + ["-DPSX_DEBUG_TOOLS=ON"],
                 progress=progress,
             )
             _cmake_build(build_dir, target, progress)
@@ -1874,7 +2185,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 project_root,
                 build_dir,
                 pgo="use",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"],
+                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"] + user_extra,
                 progress=progress,
             )
             _cmake_build(build_dir, target, progress)
@@ -1898,6 +2209,23 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     progress.phase("done", pct=1.0, message="Rebuild complete")
     progress.result(ok=True, exe=str(exe), pgo=pgo_enabled)
     return EXIT_OK
+
+
+def overlay_compiler(project_root: Path) -> Optional[Path]:
+    """The optimising compiler overlay code is built with, or None (tcc tier).
+
+    Windows: the portable toolchain's clang (the one the setup wizard
+    installs). Elsewhere: the first of gcc, cc, clang on PATH."""
+    if sys.platform == "win32":
+        bin_dir = resolve_toolchain_bin(project_root)
+        if bin_dir and (bin_dir / "clang.exe").is_file():
+            return bin_dir / "clang.exe"
+        return None
+    for name in ("gcc", "cc", "clang"):
+        w = shutil.which(name)
+        if w:
+            return Path(w)
+    return None
 
 
 def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progress) -> Optional[Path]:
@@ -1927,17 +2255,7 @@ def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progr
             if cand.is_file():
                 shutil.copy2(cand, tk / "include" / "overlay_codegen_hash.h")
                 break
-        compiler = None
-        if sys.platform == "win32":
-            bin_dir = resolve_toolchain_bin(project_root)
-            if bin_dir and (bin_dir / "clang.exe").is_file():
-                compiler = bin_dir / "clang.exe"
-        else:
-            for name in ("gcc", "cc", "clang"):
-                w = shutil.which(name)
-                if w:
-                    compiler = Path(w)
-                    break
+        compiler = overlay_compiler(project_root)
         if compiler:
             (tk / "compiler.txt").write_text(str(compiler) + "\n", encoding="utf-8")
             progress.log(f"overlay toolchain staged at {tk}; shard compiler: {compiler}")
@@ -2184,6 +2502,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-toolchain-download",
         action="store_true",
         help="when emitters are missing, do not download cmake-clang-v1",
+    )
+    g.add_argument(
+        "--force-aot-static",
+        action="store_true",
+        help="rebuild the static overlay shard even when every input is unchanged",
+    )
+    g.add_argument(
+        "--no-aot-static",
+        action="store_true",
+        help="do not build the static overlay shard aot/overlays.json declares "
+        "(its overlays then run interpreted)",
     )
     g.set_defaults(handler=cmd_generate)
 

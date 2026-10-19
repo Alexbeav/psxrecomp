@@ -11,6 +11,18 @@ import sys
 import tempfile
 import time
 
+if os.name == 'nt':
+    import ctypes
+    # Several publication checks deliberately probe non-PE synthetic DLLs.
+    # CTest's Windows child error mode can display a loader error dialog and
+    # block LoadLibrary indefinitely. Keep the real loader/export validation,
+    # but make its expected failures noninteractive in this test process.
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetErrorMode.restype = ctypes.c_uint
+    kernel32.SetErrorMode.argtypes = [ctypes.c_uint]
+    kernel32.SetErrorMode.restype = ctypes.c_uint
+    kernel32.SetErrorMode(kernel32.GetErrorMode() | 0x0001 | 0x8000)
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -1637,11 +1649,18 @@ def check_candidate_capacity_publication():
             capacity_lock, cache_dirs = MOD._candidate_capacity_namespace(final)
             assert capacity_lock == os.path.join(
                 tmp, 'GAME', '.overlay-candidate-capacity.lock')
+            # Each tier's leaf, then its per-segment shard directories
+            # (docs/SEGMENT_AWARE_CODE.md §5.7): one process-global table.
             assert cache_dirs == [
                 os.path.join(tmp, 'GAME', tier, 'win-x64',
-                             'cg9_a3003734_gc76b225b8')
+                             'cg9_a3003734_gc76b225b8', *sub)
                 for tier in ('gcc', 'tcc')
+                for sub in ((), ('seg-kuseg',), ('seg-kseg1',))
             ]
+            # A KUSEG shard counts against the same namespace and lock.
+            assert MOD._candidate_capacity_namespace(os.path.join(
+                leaf, 'seg-kuseg', '00010000_00000001.dll')) == (
+                    capacity_lock, cache_dirs)
 
         with tempfile.TemporaryDirectory() as tmp:
             first = os.path.join(tmp, '00010000_00000001.dll')
@@ -3864,6 +3883,43 @@ def check_packaged_game_toml_resolves_bios_profile(recompiler):
     assert MOD.recompiler_project_root_args(args) == []
 
 
+def check_return_adjacent_scheduled_frames():
+    # A compiler may schedule address setup before allocating the stack, or
+    # delay saving RA until after other callee-saved registers. Neither changes
+    # the function boundary proved by the preceding return and its delay slot.
+    def image(prefix):
+        words = [0x03E00008, 0x27BD0020] + prefix
+        return bytearray(struct.pack('<' + 'I' * len(words), *words))
+
+    delayed = ([0x27BDFFC8] + [0x26100001] * 12 +
+               [0xAFBF0034, 0xAFB10030, 0x03E00008, 0x27BD0038])
+    scheduled = [0x3C038001, 0x90620080, 0x27BDFFD8,
+                 0xAFB10014, 0xAFBF0020, 0x03E00008, 0x27BD0028]
+    for prefix in (delayed, scheduled):
+        data = image(prefix)
+        assert EXTRACT.return_adjacent_framed_entries(data, LOAD) == [LOAD + 8]
+
+    data = image(scheduled)
+    assert EXTRACT.prologues(data, LOAD) == [LOAD + 8]
+    assert LOAD + 16 not in EXTRACT.return_adjacent_framed_entries(data, LOAD)
+
+    # The extra reach must not promote data, an unrelated load, a second stack
+    # adjustment, or a save reached only after a control transfer.
+    bad_prefixes = [
+        [0x3C038001, 0x90820080] + scheduled[2:],  # load uses a different base
+        [0x27BDFFC8, jal(LOAD + 0x100), 0, 0xAFBF0034, 0x03E00008, 0],
+        [0x27BDFFC8, 0x27BDFFF0, 0xAFBF0034, 0x03E00008, 0],
+        [0x27BDFFC8, 0xAFBF0034, 0xAFB00038, 0x03E00008, 0],
+        [0x27BDFFC8, 0xAFBF0034, 0xFFFFFFFF, 0x03E00008, 0],
+        [0x27BDFFC8, 0xAFBF0034],  # no terminating control-flow evidence
+    ]
+    for prefix in bad_prefixes:
+        assert EXTRACT.return_adjacent_framed_entries(image(prefix), LOAD) == []
+    no_boundary = image(delayed)
+    put(no_boundary, 0, 0)
+    assert EXTRACT.return_adjacent_framed_entries(no_boundary, LOAD) == []
+
+
 def main():
     default_recompiler = ROOT / "recompiler" / "build" / "psxrecomp-game.exe"
     parser = argparse.ArgumentParser()
@@ -3872,6 +3928,7 @@ def main():
     if not os.path.isfile(args.recompiler):
         raise SystemExit(f"recompiler not found: {args.recompiler}")
 
+    check_return_adjacent_scheduled_frames()
     check_composite_call_boundaries()
     check_bounded_jump_table_discovery()
     check_scheduled_jump_table_discovery()

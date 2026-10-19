@@ -88,6 +88,12 @@ int hd_texture_pack_lookup(const HdTexturePack* pack,
                            uint32_t palette_hash,
                            HdTexturePackEntry* out_entry);
 
+/* The pack's identity: a hash of its replacement keys (nonzero), equal for
+ * two loads of the same pack. Binds saved residency to the pack. */
+uint32_t hd_texture_pack_identity(const HdTexturePack* pack);
+/* 1 when any replacement (any palette) is keyed by this upload hash. */
+int hd_texture_pack_has_texture(const HdTexturePack* pack, uint32_t texture_hash);
+
 /* Standard reflected IEEE CRC-32 (polynomial 0xEDB88320, initial/final XOR
  * 0xFFFFFFFF), feeding each uint16_t explicitly low byte then high byte. */
 uint32_t hd_texture_crc32_words_le(const uint16_t* words, size_t word_count);

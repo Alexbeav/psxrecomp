@@ -106,6 +106,54 @@ class CoverageVaultHistoryTests(unittest.TestCase):
             self.assertEqual(merged['static_dispatch_entry_pcs'],
                              ['0x80010004'])
 
+    def test_capture_merge_keeps_dispatch_segments(self):
+        # docs/SEGMENT_AWARE_CODE.md §5.7: a v3 record names the segments each
+        # dispatch entry entered through; a v2 record's entries are KSEG0.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = os.path.join(tmp, 'captures.json')
+            v2 = {
+                'load_addr': '0x80010000', 'size': 8,
+                'bytes_b64': 'AAAAAAAAAAA=',
+                'dispatch_entry_pcs': ['0x80010000'],
+            }
+            with open(vault, 'w', encoding='utf-8') as out:
+                json.dump([v2], out)
+            v3 = dict(v2, dispatch_entry_pcs=['0x80010000', '0x80010004'],
+                      dispatch_entry_segments={
+                          'kuseg': ['0x00010000', '0x00010004'],
+                          'kseg0': [], 'kseg1': ['0xA0010004']})
+            self.assertEqual(MOD.merge_capture_regions(vault, [v3]), (0, 0))
+            with open(vault, encoding='utf-8') as source:
+                merged = json.load(source)[0]
+            self.assertEqual(merged['dispatch_entry_pcs'],
+                             ['0x80010000', '0x80010004'])
+            self.assertEqual(merged['dispatch_entry_segments'], {
+                'kuseg': ['0x00010000', '0x00010004'],
+                'kseg0': ['0x80010000'],
+                'kseg1': ['0xA0010004']})
+            # v2 into v2 stays v2.
+            with open(vault, 'w', encoding='utf-8') as out:
+                json.dump([v2], out)
+            MOD.merge_capture_regions(vault, [dict(v2)])
+            with open(vault, encoding='utf-8') as source:
+                self.assertNotIn('dispatch_entry_segments', json.load(source)[0])
+
+    def test_compaction_crops_dispatch_segments(self):
+        image = bytes(0x3004)
+        region = {
+            'load_addr': '0x80010000', 'size': len(image),
+            'bytes_b64': base64.b64encode(image).decode('ascii'),
+            'executed_pcs': ['0x80010000', '0x80012000'],
+            'dispatch_entry_pcs': ['0x80010000', '0x80012000'],
+            'dispatch_entry_segments': {
+                'kuseg': ['0x00010000'], 'kseg0': ['0x80012000'],
+                'kseg1': ['0xA0012000']},
+        }
+        runs, _entries, _invalid = MOD._compact_region(region)
+        self.assertEqual([r['dispatch_entry_segments'] for r in runs], [
+            {'kuseg': ['0x00010000'], 'kseg0': [], 'kseg1': []},
+            {'kuseg': [], 'kseg0': ['0x80012000'], 'kseg1': ['0xA0012000']}])
+
     def test_cache_merge_preserves_resident_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, 'source')

@@ -1,5 +1,95 @@
 # Widescreen support (`feat/widescreen`)
 
+## Finite 2D backdrop falls back to 4:3 (2026-10-07)
+
+Pre-rendered 2D scenes draw their background as a few large textured
+rectangles before any polygon. Rects are screen-space blits, so the image is
+exactly as wide as those rects. Polygon overhang alone cannot see that: widened
+2D actor culls put sprite quads past the canonical edge, and Tomba's overhead
+village (384x256 ground image, fence/sign quads out to x=428) presented wide
+with black margins and props floating over them (`beads-eio.4.28`).
+
+`ws_backdrop_extent.h` takes each frame's leading run of rectangles (closed by
+the first polygon or line), keeps the untagged, unstretched textured ones and
+grids them over `[-reveal, W + reveal)` using the configured reveal. If they
+cover at least 90% of the canonical display but leave any reveal cell empty in
+the rows they occupy, the frame is short. Two short frames within six frames
+veto native-wide in the 2D-only-scene classifier until short frames stop for
+`WS_2D_SCENE_HYSTERESIS` frames. Tagged, stretched or host-extended backdrops,
+untextured rects and everything after the first polygon are neutral. The veto
+uses the same scope as the 2D-only classifier (sprite-tag titles; not
+`full_2d` or `gte_game_mode`), and an explicit title world-scene predicate
+still wins. Observability: `gpu_state.ws.backdrop` and the last field
+(`bd_veto`) of each `present_ring` event. Tests: `ws_backdrop_extent_test`,
+`ws_backdrop_scene_test`.
+
+## Opt-in native-wide view anchoring (2026-09-12)
+
+`gpu_ws_set_view_anchor(camera, min, max, active)` reads a game's signed
+16-bit camera and clamp bounds at BG renderer setup. It shifts only the host
+wide mirror, preserving the guest camera and canonical VRAM. The native
+view's left edge appears at `extra + shift`; `extra` remains the symmetric
+width budget. The geometry helper distributes reveal toward the room interior
+and centers rooms narrower than the frame with explicit padding.
+
+SW, OpenGL and Vulkan implement `gr_wide_set_view`. Explicit HUD packets keep
+their existing physical origin. OpenGL's canonical-center copy is disabled
+while anchoring is active because world and UI no longer share an origin.
+
+For the existing Capcom BG2D layout, bracket each layer's packet producer with
+`gpu_ws_bg2d_begin_view_layer` / `gpu_ws_bg2d_end_view_layer`. The independent
+layer mask permits parallax backdrops to anchor to their own map bounds;
+tile generation and ring refill use that layer's actual left/right coverage.
+Actor activation uses a constant envelope covering either edge origin.
+Zero configuration is inactive; 4:3 retains the original path.
+
+Tests: `ws_view_anchor_test`, `ws_view_anchor_gpu_test`, and the hidden real
+OpenGL `test_gl_readback_region.c` fixture. MMX6 is the first consumer;
+owner gameplay validation is still pending (`beads-eio.3.146`).
+
+## Earlier squash-mode implementation
+## Explicit native-wide background polygons (September 2026)
+
+A title plugin can call `gpu_ws_tag_background_prim(prim)` for each opaque
+background polygon in a verified composite, before submitting its ordering
+table. The command starts at `prim + 4`; an embedded command can therefore use
+`command_address - 4` even when that preceding word is not a DMA header.
+The framework validates command type, RAM bounds, complete packet contents,
+address and freshness. The title owns the proof that these are backgrounds
+and that their union covers the authored viewport. No fixed game addresses or
+background guesses belong in the shared API.
+
+OpenGL and software rendering stretch only those polygons about the display
+center in the native-wide surface, preserving canonical VRAM and the default
+4:3 path. Tag every part, including flat fills behind textured sky quads, so
+the composite remains continuous. Tags expire after two frames and reject
+reused packets whose words changed. This method performs no guest writes or
+extra guest allocations.
+
+OpenGL preserves the tag across flat and textured batching. Once a valid
+background has been tagged, it renders the full wide composite instead of
+copying the canonical center over it, which would create a scale seam. Packet
+freshness and displayed-pixel lifetime are separate: a slow game or held display
+can retain stretched pixels after the two-frame packet guard expires. The
+full-composite requirement therefore remains latched until GPU reset or snapshot
+restore; packet-address/content freshness is not relaxed. Sessions that have not
+tagged a background retain the center-copy optimization. Measure performance in
+the title and validate the visible sky at the requested aspect before release.
+Vulkan's native-wide compositor is not implemented; this API does not add one.
+
+### Parked validation checkpoint (2026-09-12)
+
+The focused GPU packet/tag regression passes, including expired packets,
+changed packet contents, disabled widescreen and retained composite lifetime.
+The V8 Windows runtime builds and both game CTests pass. In the oil-field
+21:9 playtest the owner reports that terrain looks fine and the background
+flickers less badly, but still flickers. This is partial improvement, not visual
+acceptance. State replay required the HLE scheduler; repeat the comparison with
+matched scheduler settings before attributing the improvement solely to this
+change. Work is parked in a draft; no release is approved.
+
+## Earlier projection-and-stretch implementation
+
 Status as of 2026-06-13. Branch `feat/widescreen` in **both** `psxrecomp`
 (framework) and `TombaRecomp` (game opt-in + config), pushed to remote.
 Experimental. Latest: the far-backdrop edge void is largely fixed (2D backdrop
@@ -69,12 +159,20 @@ auto_ui_squash     = true              # pre-scan the current GPU linked list,
                                        # select its highest populated UI rank,
                                        # and share one anchor across each
                                        # complete glyph/icon run.
+auto_ui_anchor     = "edges"           # "edges" (default): each run pins to
+                                       # its left/centre/right third.
+                                       # "in_place": each run squashes about
+                                       # its own centre.
+auto_ui_size       = "proportional"    # "original" (default): the HUD keeps
+                                       # the display height's scale.
+                                       # "proportional": beyond 16:9 it shrinks
+                                       # by sqrt((16:9) / aspect).
 clear_reveal       = true              # clear synthetic native-wide side margins
                                        # at opted-in scene/map boundaries (default false).
 nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
 nw_left_hud_packet_hi = "0x000E4100"  # (half-open); avoids shifting 2D scenery.
-offer_ultrawide    = true              # separate experimental 21:9 launcher row.
-adaptive_view      = true              # expose live resize-driven aspect mode.
+offer_ultrawide    = true              # inert on PSX (see below)
+adaptive_view      = true              # inert on PSX (see below)
 
 # Proven object/model participation comparisons may be forced only while a
 # widened world view is configured. The complete instruction word guards
@@ -85,16 +183,18 @@ expected = "0x28A21C01"                # SLT/SLTU/SLTI/SLTIU only
 result   = 1                           # forced comparison result, 0 or 1
 ```
 
-When `adaptive_view` is enabled by the game, the launcher's **Aspect ratio**
-selector gains an **Adaptive** entry. The previously selected fixed aspect
-still determines the initial window shape. Once the game window exists,
-resizing it continuously
-updates the GTE/native-wide projection, cull margins, wide render target, and
-present aspect. The live ratio is clamped to 4:3 on the narrow side and to the
-widest mode the game offers (`16:9`, or `21:9` with `offer_ultrawide`). BIOS,
-FMV, menus, and other title-classified 2D frames retain their existing 4:3
-pillarbox policy. The user choice persists as `[video] adaptive_view` in
-`settings.toml`.
+**`offer`, `offer_ultrawide` and `adaptive_view` are inert on PSX.** They are
+still parsed, but the runtime no longer offers widescreen in Settings
+(`main.cpp` pins `ws_offered`/`ws_ultrawide_offered` false) and nothing reads
+`adaptive_view`. Widescreen is owned by each title's mod catalog: a trusted
+plugin selects the view on activation with `psx_mod_set_fixed_display_aspect()`
+(which also shapes the first window) and, for Fit to Window,
+`psx_mod_set_adaptive_display_aspect(0, 0)` (follow every resize from 4:3 with
+no upper limit; pass a maximum to cap it). Once the game window exists,
+resizing it updates the projection, cull margins, wide render target and
+present aspect. BIOS, FMV, menus and other title-classified 2D frames keep
+their 4:3 pillarbox policy. TombaRecomp's and RidgeRacerType4Recomp's
+`*.enhancement.widescreen` packages are worked examples.
 
 The native-wide draw-area early-out correction was independently identified
 and contributed by **OpokXeno** in
@@ -108,16 +208,142 @@ the RTPS preamble stores the anchor SXY to scratchpad `0x1F800070`.
 
 `auto_ui_squash` is a runtime-only opt-in and does not require regenerated game
 code. It applies only on the projection-and-stretch path: eligible
-axis-aligned textured quads/rectangles in the front populated ordering-table
-layer are grouped by texture and screen row before any command is transformed.
+axis-aligned quads (textured, flat or gouraud) and rectangles in the front
+populated ordering-table layer are grouped by texture and screen row before any
+command is transformed. Untextured quads are included because HUD fills (health
+gradients, meter bars) sit inside textured frames and must squash with them.
+Widget pieces drawn one rank behind the HUD are also admitted, from the next
+populated rank only (it also carries world geometry): an untextured,
+axis-aligned panel that fully encloses an admitted piece (a text box under its
+glyphs), or a small (at most a quarter of the display each way) axis-aligned
+piece that overlaps or stacks within `WS_UI_GROUP_STACK_GAP` rows on an
+admitted piece (a gauge segment and its fill). This repeats to a fixed point.
+`ws_ui_groups` counts these as `backing_panels`.
 Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
 untouched.
+
+By default each run is pinned to the nearest screen edge or centre third, so
+corner HUD moves to the wide-frame corners. Some HUD widgets mix those flat
+quads with GTE-projected parts the correction cannot move: Spider-Man's compass
+is two ring quads around a 3D arrow. Edge-anchoring the ring pulled it ~70 px
+off its arrow at 32:9. `auto_ui_anchor = "in_place"` squashes each run about
+its own centre instead, which corrects its proportions and leaves it where the
+stretched 4:3 layout places it. `gpu_state` reports the mode as
+`ws.auto_ui.in_place`.
+
+The HUD is proportion-corrected horizontally but keeps the display height's
+scale, so on a very wide window it reads large against the much wider view.
+`auto_ui_size = "proportional"` leaves it unchanged up to 16:9 and shrinks it
+by sqrt((16:9) / aspect) beyond (0.87 at 21:9, 0.71 at 32:9), on both axes:
+each run about its horizontal anchor and its vertical anchor (its top edge in
+the upper half of the display, its bottom edge in the lower half), scaling
+both edges of rectangles and sprites so neighbouring parts stay butted. A mod
+may switch it per session with `psx_mod_set_widescreen_hud_size()`.
+Projection widescreen only (native-wide does not squash the HUD).
 
 **Changing `sprite_tag_funcs` requires a game regen** (the tag callback is
 emitted into the generated C). `widescreen.cull.keep` is consumed by both the
 native recompiler and the dirty-RAM interpreter: regenerate main/overlay native
 code after changing it, while the interpreter reads the same guarded records
 from the runtime config.
+
+### Explicit screen-X cull sites
+
+When a title's per-vertex screen-X rejects are not the shapes
+`auto_screen_x` recognises, list them. Every kind below is identity at 4:3
+(the live margin `m = psx_ws_x_margin()` is 0), emits nothing when its list is
+empty, and requires a regen after a change. In the main EXE a listed address
+holding anything but the instruction in the table is a hard build error
+(psxrecomp-game exits 1 and names the site); in captured overlays a different
+instruction at the same address is left vanilla, and a matching one is
+widened like the main EXE. Native code, overlay shards (the helpers are
+defined in `overlay_dispatch_preamble.c.inc`) and the dirty-RAM interpreter
+apply the same helpers.
+
+| Key | Instruction | While widened |
+|---|---|---|
+| `slti_sites` | `slti rt, SX, W` (right edge) | `rt = SX < W + m` |
+| `slti_lower_sites` | `slti rt, SX, -W` | `rt = SX < -W - m` |
+| `bltz_sites` | `bltz SX, reject` (last vertex of a left chain) | taken while `SX < -m` |
+| `bgez_sites` | `bgez SX, keep` (other vertices of a left chain) | taken while `SX >= -m` |
+| `clip_edge_x_load_sites` | `lh`/`lhu`/`lw` of a clip-rectangle X bound, to a nonzero register | a loaded `0` becomes `-m`, a loaded `clip_edge_width` becomes `W + m`; other values unchanged |
+| `branch_keep_sites` | a conditional reject branch (`beq`, `bne`, `blez`, `bgtz` or REGIMM) | not taken |
+
+`bgez_sites` pairs with `bltz_sites`. A compiled renderer often tests the left
+edge as `bgez x0,keep; bgez x1,keep; bgez x2,keep; bltz x3,reject`: widening
+only the `bltz` still rejects a quad whose first vertices sit in the revealed
+band (x0 in `[-m, 0)`, x3 `< -m`), so the quad pops out at the left edge.
+With both kinds listed the chain rejects exactly when every vertex is left of
+`-m`.
+
+`clip_edge_x_load_sites` covers renderers that compare vertices against a
+clip rectangle they load (R4 keeps one in scratchpad for each viewport). Only
+bounds equal to a screen edge move, so full-width viewports widen on each side
+that touches the display edge while interior viewports (a rear-view mirror,
+one half of a split screen) keep their vanilla culls. `clip_edge_width`
+defaults to the first `screen_w_imms` entry (`0x140`).
+
+```toml
+[widescreen.cull]
+slti_sites = ["0x80013F60"]              # slti v0,v0,0x140
+bgez_sites = ["0x80013F40", "0x80013F48", "0x80013F50"]
+bltz_sites = ["0x80013F58"]              # bltz a3,reject
+clip_edge_x_load_sites = ["0x8005F5F4"]  # lh v0,0x70(a0)
+clip_edge_width = 320                    # optional; default screen_w_imms[0]
+```
+
+The interpreter's copies of these lists are sorted and capped at 256 entries
+per key; a longer list is logged rather than silently truncated. `bgez_sites`
+and `clip_edge_x_load_sites` enter the overlay-cache identity only when they
+are non-empty, so titles that do not use them keep their caches.
+
+`screen_x_sites` is the explicit form of the `auto_screen_x` compare, for a
+title whose width is not in `screen_w_imms` or whose function has no paired
+height compare. It takes four instructions:
+
+| Instruction at the site | While widened |
+|---|---|
+| `sltiu rt, SX, W` | `rt = -m <= SX < W + m` |
+| `lui rt, W` (a screen edge kept as `W << 16`) | `rt = (W + m) << 16`; a negative `W` moves left instead |
+| `bltz x, outside` where `x` is `SX << 16` | taken while `SX < -m` |
+| `sltu rd, SX, W` with `W` in a register | `rd = -4m <= (int16)SX < W` |
+
+The `sltu` form covers a renderer that compares a 16-bit screen X
+(`andi SX, sxy, 0xffff`) against a width it keeps in a register, typically a
+clip bound loaded from RAM. The unsigned compare rejects every negative X, so
+widening the bound (`clip_edge_x_load_sites`) only reveals the right band; the
+band helper `psx_ws_cull_sltu_band` also accepts negative X. Its left reach
+is four margins: these tests check single vertices, so a large near polygon
+whose corners all lie past one margin would still drop, while an unbounded
+left side lets every off-screen polygon through and overflows a renderer's
+fixed primitive lists (Kula World's world-10 intro stalled for 5 s). Pair it with the
+load site so `W` already carries the right margin. A bound derived from the
+loaded one (`x + r < W + 2r` bounding-sphere tests) works the same way.
+Kula World (SCES-01000) is the first user: its object, level-quad and sky
+tests use this shape, and forcing them true instead overflowed its renderer.
+
+The last two cover a renderer that keeps a screen X in the high half of a
+register (`sll x, sx, 16`), tests the sign of differences against a `lui`-held
+edge and masks whole points at once; polygon splitters do this. `bltz_sites`
+does not fit that `bltz`: it compares the whole register with `-m`, and every
+negative `SX << 16` is far below that. Widen such tests rather than keeping
+the branch: a splitter that takes its pieces from a fixed list runs out of
+entries when every off-screen half is kept, and then drops polygons inside
+the 4:3 area.
+
+```toml
+[widescreen.cull]
+screen_x_sites = [
+  "0x80010100",   # sltiu s0,v1,0x200   midpoint inside the screen?
+  "0x80010200",   # lui   s6,0x200      right edge as 512 << 16
+  "0x80010210",   # bltz  t0,outside    t0 = SX << 16
+]
+```
+
+`screen_x_sites` is applied when code is generated: native code and overlay
+shards. The dirty-RAM interpreter does not consult this list. In the main EXE
+a listed address holding another non-branch instruction is a hard build error;
+a branch other than `bltz` at a listed address is left as it is.
 
 ---
 

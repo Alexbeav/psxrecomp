@@ -61,14 +61,17 @@ Usage (see each subcommand's --help):
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import time
 import urllib.request
 import zipfile
+from pathlib import Path
 
 _TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _TOOLS_DIR not in sys.path:
@@ -458,15 +461,21 @@ TOOLCHAIN_PINS = {
                        'download/20250115/cpython-3.13.1%2B20250115-x86_64-unknown-'
                        'linux-gnu-install_only_stripped.tar.gz'),
         'python_sha256': '56817aa976e4886bec1677699c136cb01c1cdfe0495104c0d8ef546541864bbb',
-        # tinycc publishes no prebuilt Linux binary (savannah ships source
-        # tarballs only), so there is no pinned tcc on this platform. The
-        # bundled interpreter plus compile_overlays.py can still drive a gcc
-        # from PATH, which is the common case on Linux; a player with no
-        # compiler at all gets the shipped AOT cache and no autocompile, and
-        # main.cpp says so on stdout rather than silently doing nothing.
-        'tcc_version': None,
+        # tinycc publishes no prebuilt Linux binary, so the packager BUILDS the
+        # pinned, unmodified 0.9.27 source (stage_linux_tcc). SteamOS (Steam
+        # Deck) has no compiler and a read-only root, so without it a Deck
+        # player's overlays stay interpreted. tcc's own headers cover the
+        # freestanding set; the libc headers overlay C needs (stdint, string,
+        # stdio) come from musl's MIT-licensed headers, so nothing from the
+        # player's system is required. Shards link with -nostdlib: their libc
+        # symbols resolve against the running game's glibc at dlopen.
+        'tcc_version': '0.9.27',
         'tcc_url': None,
-        'tcc_sha256': None,
+        'tcc_sha256': 'de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c',
+        'tcc_source_url': 'https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27.tar.bz2',
+        'musl_version': '1.2.5',
+        'musl_url': 'https://musl.libc.org/releases/musl-1.2.5.tar.gz',
+        'musl_sha256': 'a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4',
     },
     # macOS had no pin at all, so stage_toolchain died with "no toolchain pins"
     # (or, before that check, staged the Linux interpreter) and no Mac player
@@ -619,6 +628,118 @@ TOOLCHAIN_PY_REL = {'win': os.path.join('python', 'python.exe'),
                     'macos-arm64': os.path.join('python', 'bin', 'python3')}
 TOOLCHAIN_RECOMPILER = {'win': 'psxrecomp-game.exe', 'linux': 'psxrecomp-game',
                         'macos-x64': 'psxrecomp-game', 'macos-arm64': 'psxrecomp-game'}
+TOOLCHAIN_BIOS_EMITTER = {'win': 'psxrecomp-bios.exe', 'linux': 'psxrecomp-bios',
+                          'macos-x64': 'psxrecomp-bios', 'macos-arm64': 'psxrecomp-bios'}
+
+
+# TinyCC is LGPL-2.1 and its win64 binary zip carries no license file, so the
+# notice (license text, copyright, exact source URL) travels inside tcc/ too;
+# runtime/licenses/ ships the same file as licenses/TinyCC-LICENSE.txt.
+TCC_NOTICE = os.path.join(os.path.dirname(_TOOLS_DIR), 'runtime', 'licenses',
+                          'TinyCC-LICENSE.txt')
+
+
+def stage_tcc_notice(tcc_dir, pins):
+    """Write TinyCC's license notice as <tcc_dir>/COPYING; fail if the notice
+    is missing or does not name the pinned version and archive."""
+    if not os.path.isfile(TCC_NOTICE):
+        _die('TinyCC notice missing at %s; the bundled tcc cannot ship '
+             'without its LGPL-2.1 notice' % TCC_NOTICE)
+    with open(TCC_NOTICE, encoding='utf-8') as f:
+        text = f.read()
+    for needle in (pins['tcc_version'], pins['tcc_sha256'],
+                   'GNU LESSER GENERAL PUBLIC LICENSE'):
+        if needle not in text:
+            _die('%s does not name %s; update it with the tcc pin'
+                 % (TCC_NOTICE, needle))
+    shutil.copy2(TCC_NOTICE, os.path.join(tcc_dir, 'COPYING'))
+
+
+def _run_build(cmd, cwd, what):
+    r = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, text=True)
+    if r.returncode != 0:
+        _die('%s failed (exit %d): %s\n%s'
+             % (what, r.returncode, ' '.join(cmd), r.stdout[-4000:]))
+
+
+def adapt_musl_headers_for_tcc(libc_inc):
+    """musl spells va_list as GCC's __builtin_va_list, which tcc 0.9.27 does
+    not know ("';' expected (got va_list)" in every shard). Use tcc's own
+    stdarg.h, whose x86-64 va_list has GCC's layout, so v*printf calls into
+    the game's glibc agree: drop musl's stdarg.h and define musl's two
+    va_list typedefs from tcc's."""
+    stdarg = os.path.join(libc_inc, 'stdarg.h')
+    if os.path.isfile(stdarg):
+        os.remove(stdarg)
+    path = os.path.join(libc_inc, 'bits', 'alltypes.h')
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    a = 'typedef __builtin_va_list va_list;'
+    b = 'typedef __builtin_va_list __isoc_va_list;'
+    if a not in text or b not in text:
+        _die('%s no longer defines va_list as expected; re-check the musl pin'
+             % path)
+    text = text.replace(a, '#include <stdarg.h> /* tcc\'s va_list (psxrecomp) */')
+    text = text.replace(b, 'typedef va_list __isoc_va_list;')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+
+
+def stage_linux_tcc(toolchain, dl_cache, pins, log=print):
+    """Build the pinned TinyCC source and stage it with musl's libc headers as
+    overlay_toolchain/tcc/: tcc, libtcc1.a, include/ (tcc's), libc-include/
+    (musl's) and COPYING. compile_overlays.py recognises this layout and calls
+    tcc with -B<dir> -nostdlib -isystem <dir>/libc-include <dir>/libtcc1.a.
+    Needs a host C compiler and make on the PACKAGING machine only."""
+    work = os.path.join(dl_cache, 'tcc_linux_build')
+    if os.path.isdir(work):
+        shutil.rmtree(work)
+    _mkdirs(work)
+    src = get_pinned_archive(pins['tcc_source_url'], pins['tcc_sha256'],
+                             os.path.join(dl_cache, _url_basename(pins['tcc_source_url'])),
+                             log=log)
+    top = 'tcc-' + pins['tcc_version']
+    _extract_tar_top_level(src, work, top)
+    tcc_src = os.path.join(work, top)
+    inst = os.path.join(work, 'inst')
+    cc = os.environ.get('CC', 'cc')
+    _run_build(['./configure', '--prefix=' + inst, '--cc=' + cc,
+                '--extra-cflags=-O2'], tcc_src, 'tcc configure')
+    # BCHECK_O= : leave out lib/bcheck.o, tcc's legacy bounds-checking runtime
+    # (-b). Shards never use it, and it does not build against current glibc
+    # (it uses __malloc_hook, removed in glibc 2.34: Ubuntu 24.04 fails at
+    # lib/bcheck.c:738). libtcc1.a keeps every other object. Unconditional,
+    # so every build host produces the same bundle.
+    _run_build(['make', '-j%d' % (os.cpu_count() or 2), 'BCHECK_O='], tcc_src, 'tcc build')
+    _run_build(['make', 'install', 'BCHECK_O='], tcc_src, 'tcc install')
+
+    musl = get_pinned_archive(pins['musl_url'], pins['musl_sha256'],
+                              os.path.join(dl_cache, _url_basename(pins['musl_url'])),
+                              log=log)
+    mtop = 'musl-' + pins['musl_version']
+    _extract_tar_top_level(musl, work, mtop)
+    minst = os.path.join(work, 'musl-inst')
+    _run_build(['make', 'install-headers', 'ARCH=x86_64', 'prefix=' + minst],
+               os.path.join(work, mtop), 'musl install-headers')
+
+    dest = os.path.join(toolchain, 'tcc')
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    _mkdirs(dest)
+    shutil.copy2(os.path.join(inst, 'bin', 'tcc'), os.path.join(dest, 'tcc'))
+    os.chmod(os.path.join(dest, 'tcc'), 0o755)
+    libdir = os.path.join(inst, 'lib', 'tcc')
+    shutil.copy2(os.path.join(libdir, 'libtcc1.a'), dest)
+    shutil.copytree(os.path.join(libdir, 'include'), os.path.join(dest, 'include'))
+    shutil.copytree(os.path.join(minst, 'include'), os.path.join(dest, 'libc-include'))
+    adapt_musl_headers_for_tcc(os.path.join(dest, 'libc-include'))
+    shutil.copy2(os.path.join(work, mtop, 'COPYRIGHT'),
+                 os.path.join(dest, 'libc-include', 'COPYRIGHT'))
+    stage_tcc_notice(dest, pins)
+    shutil.rmtree(work)
+    log('TinyCC %s built from source with musl %s headers -> %s'
+        % (pins['tcc_version'], pins['musl_version'], dest))
 
 
 def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
@@ -654,6 +775,22 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
         # python-build-standalone: one `python/` top-level directory.
         _extract_tar_top_level(py_archive, toolchain, 'python')
 
+    if platform_tag == 'linux':
+        # Standalone Python includes pip's Windows entry-point resources even
+        # in Linux archives. They are data for installing Windows scripts,
+        # never Linux executables. Omit only these six known resources; keep
+        # the AppImage gate rejecting other mixed-platform binaries.
+        launchers = {'t32.exe', 't64.exe', 't64-arm.exe',
+                     'w32.exe', 'w64.exe', 'w64-arm.exe'}
+        removed = 0
+        for candidate in Path(py_dest).glob(
+                'lib/python*/site-packages/pip/_vendor/distlib/*.exe'):
+            if candidate.name in launchers:
+                candidate.unlink()
+                removed += 1
+        log('Omitted unused pip Windows launcher resources from Linux Python: %d'
+            % removed)
+
     if pins['tcc_url']:
         tcc_archive = get_pinned_archive(
             pins['tcc_url'], pins['tcc_sha256'],
@@ -665,6 +802,9 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
         inner = os.path.join(tcc_tmp, 'tcc')
         shutil.copytree(inner if os.path.isdir(inner) else tcc_tmp,
                         os.path.join(toolchain, 'tcc'), dirs_exist_ok=True)
+        stage_tcc_notice(os.path.join(toolchain, 'tcc'), pins)
+    elif pins.get('tcc_source_url'):
+        stage_linux_tcc(toolchain, dl_cache, pins, log=log)
 
     recompiler = TOOLCHAIN_RECOMPILER[platform_tag]
     src_recompiler = os.path.join(recomp_dir, recompiler)
@@ -691,6 +831,18 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
             % (copied, dll_src, '' if copied else ' -- assuming a static recompiler'))
 
     shutil.copy2(os.path.join(recomp_tools, 'compile_overlays.py'), toolchain)
+    # The BIOS module builder (docs/BIOS_SELECTION.md, "player-side backend
+    # build"): turns the player's own retail dump into a loadable backend with
+    # the same interpreter and compiler the overlay path uses. It needs the
+    # BIOS emitter, every shipped profile, and the seeds the profiles name.
+    shutil.copy2(os.path.join(recomp_tools, 'bios_module_build.py'), toolchain)
+    bios_emitter = TOOLCHAIN_BIOS_EMITTER[platform_tag]
+    src_bios_emitter = os.path.join(recomp_dir, bios_emitter)
+    if not os.path.isfile(src_bios_emitter):
+        _die('overlay toolchain needs the BIOS emitter at %s; build the '
+             'psxrecomp-bios target first' % src_bios_emitter)
+    shutil.copy2(src_bios_emitter, os.path.join(toolchain, bios_emitter))
+    os.chmod(os.path.join(toolchain, bios_emitter), 0o755)
     tool_inc = _mkdirs(os.path.join(toolchain, 'include'))
     for h in os.listdir(recomp_include):
         if h.endswith(('.h', '.c.inc')):
@@ -698,10 +850,16 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     recomp_root = os.path.abspath(os.path.join(recomp_include, '..', '..'))
     bios_src = os.path.join(recomp_root, 'bios')
     bios_dest = _mkdirs(os.path.join(toolchain, 'bios'))
-    for profile in ('SCPH1001.toml', 'OpenBIOS.toml'):
-        src = os.path.join(bios_src, profile)
-        if os.path.isfile(src):
-            shutil.copy2(src, bios_dest)
+    # Profiles only (TOML): never an image. A retail .BIN beside them in a
+    # developer's bios/ must not ride along, so the copy is by extension.
+    for profile in sorted(os.listdir(bios_src)):
+        if profile.endswith('.toml'):
+            shutil.copy2(os.path.join(bios_src, profile), bios_dest)
+    seeds_src = os.path.join(recomp_root, 'recompiler', 'seeds')
+    seeds_dest = _mkdirs(os.path.join(toolchain, 'recompiler', 'seeds'))
+    for seed in sorted(os.listdir(seeds_src)):
+        if seed.endswith('.json'):
+            shutil.copy2(os.path.join(seeds_src, seed), seeds_dest)
 
     # The runtime gates autocompile on this exact file. If the layout ever
     # changes, fail here rather than shipping a toolchain the runtime ignores.
@@ -713,7 +871,11 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
              % os.path.relpath(probe, toolchain))
     os.chmod(probe, 0o755)
     for required in (os.path.join('include', 'overlay_dispatch_preamble.c.inc'),
-                     os.path.join('bios', 'SCPH1001.toml')):
+                     os.path.join('include', 'psx_bios_module_glue.c.inc'),
+                     os.path.join('include', 'psx_bios_module.h'),
+                     'bios_module_build.py',
+                     os.path.join('bios', 'SCPH1001.toml'),
+                     os.path.join('recompiler', 'seeds', 'phase2_ghidra_seeds.json')):
         path = os.path.join(toolchain, required)
         if not os.path.isfile(path):
             _die('staged overlay_toolchain is missing %s; bundled shard '
@@ -737,9 +899,10 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
                 links += 1
                 continue
             total += st.st_size
-    log('Bundled overlay toolchain (pinned python%s + recompiler + headers): '
+    log('Bundled overlay toolchain (pinned python%s + recompiler + BIOS emitter + headers): '
         '~%d MB in %d file(s) + %d symlink(s)'
-        % (' + tcc' if pins['tcc_url'] else '', total // (1 << 20),
+        % (' + tcc' if (pins['tcc_url'] or pins.get('tcc_source_url')) else '',
+           total // (1 << 20),
            sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))
     return toolchain
 
@@ -796,6 +959,28 @@ def _find_catalog_manifest(build_path, runtime_target):
     return None
 
 
+def _excluded_manifest_for(manifest):
+    """psx_mod_catalog_<target>.txt -> psx_mod_catalog_<target>.excluded.txt.
+
+    runtime.cmake writes the pair side by side: the ids the target staged, and
+    the framework builtins it declined with EXCLUDE_BUILTIN_MODS.
+    """
+    if not manifest:
+        return None
+    root, ext = os.path.splitext(manifest)
+    return root + '.excluded' + (ext or '.txt')
+
+
+def _read_id_list(path):
+    ids = set()
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if ln and not ln.startswith('#'):
+                ids.add(ln)
+    return ids
+
+
 def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
                extra_sources=(), log=print):
     mods_src = os.path.join(build_path, 'mods')
@@ -834,16 +1019,23 @@ def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
         manifest = _find_catalog_manifest(build_path, runtime_target)
     want = set()
     origin = None
+    excluded = set()
     if manifest and os.path.isfile(manifest):
-        with open(manifest) as f:
-            want = {ln.strip() for ln in f if ln.strip()}
+        want = _read_id_list(manifest)
         origin = manifest
+        excluded_manifest = _excluded_manifest_for(manifest)
+        if excluded_manifest and os.path.isfile(excluded_manifest):
+            excluded = _read_id_list(excluded_manifest)
     for src in extra_sources:
         pkgs = os.path.join(src, 'packages')
         if os.path.isdir(pkgs):
             want |= {d for d in os.listdir(pkgs)
                      if os.path.isdir(os.path.join(pkgs, d))}
             origin = origin or 'source trees'
+    # A --mod-source tree (the framework's mods/builtin, typically) lists every
+    # builtin; the ones this title declined with EXCLUDE_BUILTIN_MODS are
+    # meant to be absent, not missing.
+    want -= excluded
     if not want:
         _die('cannot verify the mod catalog: neither the build-published '
              'manifest (psx_mod_catalog_<target>.txt in %s) nor any --mod-source '
@@ -858,11 +1050,23 @@ def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
              'Mods page the dev build does not have.'
              % (', '.join(missing), origin, staged_pkg_dir))
 
+    shipped_excluded = sorted(excluded & set(staged_ids))
+    if shipped_excluded:
+        _die('mod catalog contains package(s) the title EXCLUDES '
+             '(EXCLUDE_BUILTIN_MODS, per %s): %s. The build never stages an '
+             'excluded builtin, so something else put it into %s; the release '
+             'would ship a package the title declined.'
+             % (_excluded_manifest_for(manifest), ', '.join(shipped_excluded),
+                staged_pkg_dir))
+
     fw = [i for i in staged_ids if i.startswith('psx.')]
     game = [i for i in staged_ids if not i.startswith('psx.')]
     log('Bundled mod catalog: %d package(s) = %d game-owned + %d '
         'framework-owned (verified against %s)'
         % (len(staged_ids), len(game), len(fw), origin))
+    if excluded:
+        log('Excluded framework builtin(s), verified absent: %s'
+            % ', '.join(sorted(excluded)))
     return len(staged_ids)
 
 
@@ -877,6 +1081,64 @@ def cmd_stage_mods(args):
     return 0
 
 
+def stage_execution(binary, manifest=None, output=None):
+    """Bind a build's execution contract to the actual staged executable."""
+    default = os.path.splitext(binary)[0] + '.execution.json'
+    manifest, output = manifest or default, output or default
+    if os.path.normcase(os.path.realpath(binary)) == os.path.normcase(os.path.realpath(output)):
+        _die('execution manifest output must not overwrite the executable')
+    try:
+        with open(manifest, encoding='utf-8') as stream:
+            data = json.load(stream)
+        identity = data['identity']
+        profile = data['profile']
+        shared = data['shared_contract_sha256']
+        families = data['implementations']
+        if data['schema'] != 1 or profile not in ('ENHANCED', 'REFERENCE'):
+            raise ValueError('unsupported execution schema/profile')
+        if not re.fullmatch('[0-9a-f]{64}', identity) or not re.fullmatch('[0-9a-f]{64}', shared):
+            raise ValueError('malformed execution identity')
+        material = 'psx-execution-v1\n%s\nshared:%s\n' % (profile, shared)
+        names = set()
+        for family in sorted(families, key=lambda item: item['name']):
+            name, contract, source = family['name'], family['contract'], family['source_sha256']
+            if (not re.fullmatch('[a-z0-9][a-z0-9_.-]*', name) or name in names or
+                    not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]*', contract) or
+                    not re.fullmatch('[0-9a-f]{64}', source)):
+                raise ValueError('malformed or duplicate implementation family')
+            names.add(name)
+            material += '%s:%s:%s\n' % (name, contract, source)
+        if hashlib.sha256(material.encode()).hexdigest() != identity:
+            raise ValueError('manifest does not match its execution contract')
+        digest, tail, found = hashlib.sha256(), b'', False
+        with open(binary, 'rb') as stream:
+            while True:
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+                found |= identity.encode('ascii') in tail + block
+                tail = block[-63:]
+        # Runtime startup embeds/reports this exact identity. A sidecar from
+        # another profile or build must not certify the staged executable.
+        if not found:
+            raise ValueError('execution identity is absent from the staged binary')
+        data['binary_sha256'] = digest.hexdigest()
+        with open(output, 'w', encoding='utf-8', newline='\n') as stream:
+            json.dump(data, stream, indent=2)
+            stream.write('\n')
+        return data
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        _die('execution staging failed: %s' % error)
+
+
+def cmd_stage_execution(args):
+    data = stage_execution(args.binary, args.manifest, args.output)
+    print('execution staged: %s %s binary=%s' %
+          (data['profile'], data['identity'], data['binary_sha256']))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 def main(argv=None):
     ap = argparse.ArgumentParser(
@@ -884,6 +1146,12 @@ def main(argv=None):
         description='Shared release staging for every psxrecomp title, on every '
                     'platform. See the module docstring and bead beads-eio.3.102.')
     sub = ap.add_subparsers(dest='cmd', required=True)
+
+    p = sub.add_parser('stage-execution', help='verify and bind the execution manifest to a staged binary')
+    p.add_argument('--binary', required=True, help='actual executable being packaged')
+    p.add_argument('--manifest', help='build-published .execution.json (default: beside the binary)')
+    p.add_argument('--output', help='manifest destination (default: beside the binary)')
+    p.set_defaults(func=cmd_stage_execution)
 
     p = sub.add_parser('cg-tag', help='print the overlay codegen cache tag')
     p.add_argument('--runtime-include', required=True)

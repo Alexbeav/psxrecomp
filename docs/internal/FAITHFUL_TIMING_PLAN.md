@@ -213,6 +213,702 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-07 — DuckStation texture authoring fidelity (beads-qi66).**
+  The early Tomba capture report exposed per-draw crops and automatic page
+  fallback in the opt-in HD texture enhancement. An independent synthetic
+  PS-X GPU sequence run in the official DuckStation binary at reference
+  `697599c47a646a6cfcc4d246018adf4904d55001` produced one lifetime-unioned
+  36x32 STP4 image from nested 32x32/36x32 draws and a separate 40x24 image
+  for another palette. The new module matches both literal filenames,
+  dimensions, and every decoded RGBA byte from that binary. Focused module,
+  image-decoder (Windows/Linux), and real OpenGL checks pass. A Tomba title
+  and Village smoke displayed checkerboards, preserved the native texture
+  atlas, and flushed pending native PNG captures without errors. Canonical native VRAM remains
+  authoritative; this enhancement changes no guest CPU, BIOS, or cycle model.
+
+- **2026-10-03 - Render replay validation and texture streaming.** Increased the bounded small-transfer VRAM journal from 16 to 64 entries; Jersey Devil streams 31 texture/CLUT uploads in a draw. The 32-transfer rollback regression compares all VRAM bytes. Jersey Devil configures the SDK draw environment before replay packet allocation, preventing its command storage from overwriting a world quad. Final live runs completed at least 1,040 Jersey Devil and 1,088 A Bug's Life extra passes with zero state-verification mismatches, VRAM leaks, watchdogs or span failures. Changes remain local beyond base 9c1e716a.
+
+- **2026-10-03 - Ape Escape wall-flicker regression.** Dense frame/VRAM capture isolated world GT4s incorrectly promoted to UI behind a front-layer fade. UI grouping now selects the actual populated drawing layer, retaining empty trailing OT behavior. Captured-packet tests fail on the prior core and pass on the fix; software and 4K OpenGL/PGXP captures show no gaps in the affected camera interval. No guest timing or draw replay changes.
+
+- **2026-10-02 - Native high-rate rendering for Jersey Devil, A Bug's Life, and Ape Escape.** Added final RTPS/RTPT transform capture and guarded replay through the original draw sections. Projection overrides restore rotation/translation registers after each command. Camera cuts, unmatched geometry, stale captures, overflow, and aborted spans retain current poses or skip extra frames. Authoritative CPU/RAM/VRAM and guest timing remain isolated; live verification found zero mismatches in the sampled Ape Escape and A Bug's Life routes. GTE register and projection replay regressions pass. Ape Escape's card-menu scene predicate now applies in squash projection mode as well as native-wide; session resets clear it. Keyboard routing preserves analog mode on analog-locked titles. Changes are local beyond base 9c1e716a.
+
+
+- **2026-10-01 — MMX6 adaptive framework integration.** The opt-in function
+  filters from the MMX6 branch are being reconciled with the active-plan
+  function-entry registry and master overlay store-PC forwarding. A handled
+  filter publishes return registers and `pc=$ra`; snapshot requests defer until
+  its host callback returns. The combined callback ABI is v25 so stale v24
+  overlays cannot mix the two incompatible callback layouts. The adaptive
+  view, host tile packets, retained texture banks and screen masks remain
+  presentation-only enhancements; faithful guest timing is unchanged.
+
+- **2026-09-30 (Phase 5 owner-requested source checkpoint):** Preserve the
+  existing V8:2 combined-content title and generic callback/disc-extent support
+  on local `checkpoint/v82-combined-20260930` branches. Source, tests and
+  attribution only; donor media, generated outputs and playtest evidence stay
+  external. Owner explicitly paused further implementation, including
+  widescreen, original music and netplay, pending a check-in. No publication.
+
+- **2026-09-30 (Phase 5 Dreamland mushroom freeze):** `beads-eio.12.5`
+  identified an imported projectile flag write altering its callback, followed
+  by a skipped prologue and invalid return into the BIOS exception loop. The
+  title converter now tracks the local projectile factory and target pointers.
+  Added 4163 relocation/flag property cases and an opt-in native mushroom-event
+  stress driver; the old overlay fails and the repaired overlay completes both
+  families. All 16 title checks pass. No framework behavior changes.
+
+- **2026-09-30 (Phase 5 Dreamland effect cleanup):** `beads-eio.12.2` traced
+  the owner's frozen V8:2 match to an imported projectile effect writing its
+  matrix over the native child link. The title's input-overlay converter now
+  recognizes both effect-factory object returns. Five corrected field accesses,
+  owner-media regression checks, complete overlay code generation and a live
+  explosion allocation/free check validate the repair. No framework execution,
+  timing or generated-source changes; owner handoff remains at 1x rendering.
+
+- **2026-09-30 (Phase 5 instruction callbacks):** `beads-kbj0` adds plan-owned,
+  exact-word-guarded callbacks before opt-in game instructions, including branch
+  and delay slots. Native/overlay metadata participates in the codegen hash;
+  dirty-RAM execution routes through the same guard after load retirement.
+  Overlay ABI v27 forwards the callback. Runtime, parser/emitter and interpreter
+  routing checks pass. V8:2 uses seven seams for independent vehicle stats,
+  upgrades, transformation parts and special dependencies. Chassey's live match,
+  input/pause and savestate roundtrip were observed after correcting the title
+  allocator to retain shrinking allocations, matching its source implementation.
+
+- **2026-09-30 (Phase 5 mod-defined callbacks):** `beads-eio.3.212` adds
+  trusted mod-defined guest functions in an unused address range, separate
+  from original function-entry hooks. Active plans own availability and
+  callback resource context. Generated BIOS dispatch handles these through
+  its normal return/stack contract, with no synthetic guest instructions.
+  Runtime tests cover aliases, collisions, activation/clearing and nested
+  callback scopes; emitter tests cover routing before hardware dispatch.
+  OpenBIOS/SCPH1001 regenerated; V8:2 title rebuilt. Imported content still
+  needs its title-side runtime/selection adapters (`beads-eio.12.1`).
+
+- **2026-09-30 (Phase 5 combined V8 project):** Owner selected USA 2nd Offense
+  as the game-code base while retaining psxrecomp as the runtime/recompiler.
+  New local `Vigilante82PSXRecomp` builds against `071847ab`, reaches a stock
+  match, responds to driving input and reloads a savestate in an isolated run.
+  The reference's thirteen original-car conversions roundtrip successfully;
+  imported runtime/selector adapters remain title work (`beads-eio.12.1`).
+  No generic execution or hardware change was needed for this bring-up.
+
+- **2026-09-30 (Phase 5 callback reentrancy):** Plugin activation, VBlank and
+  function-entry callbacks now use the same scoped resource/completion context.
+  A native call inside an entry hook can deliver VBlank; previously those
+  callbacks cleared its plugin, making explicit completion fail and executing
+  the original function again. A regression fails before the fix and passes
+  after it, also refusing VBlank completion of the interrupted function. The
+  runtime test and seven V8 checks pass; isolated six-contact construction now
+  produces one chassis and survives drive/save/load. Tracked by `beads-i3ow`.
+
+- **2026-09-30 — Original-disc overlay discovery (beads-eio.3.215).**
+  Ape Escape Primordial Ooze exposed return-adjacent functions omitted by the
+  archive scanner: a scheduled LUI/load before stack setup and an RA save beyond
+  its fixed twelve-instruction prefix. Reuse the proven prelude recognizer and
+  validate the first basic block through its control transfer, rejecting invalid
+  instructions, SP changes and out-of-frame saves. Synthetic positive/negative
+  regressions pass. This changes offline discovery; guest instructions and
+  timing semantics are unchanged. Release regeneration and gameplay validation
+  are tracked in beads-eio.6.9.
+
+- **2026-09-30 (segment-aware code, rollout PR E review fixes):** folded into
+  `feat/overlay-segment-keys` (docs/SEGMENT_AWARE_CODE.md §5.7, §8 E).
+  - Overlay views move every exact-match config site that names their bytes
+    into their segment (`overlay_codegen_config()`), so a KUSEG or KSEG1 shard
+    emits the same mod function-entry hooks as the interpreter fires. Before,
+    such a hook fired on a cold cache and not on a warm one.
+  - A capture record with execution evidence only compiles as its v2 reading
+    again, and a `--force-interior` PC or a `game.toml` `[[overlays]]` table
+    keeps its view where the record saw no entry. The `--static`
+    isolated-fragment pass compiles each demand against its own segment's
+    view.
+  - `psx_ram_runtime_map_test` links on GNU toolchains again (its link doubles
+    lacked the new segment bitmap).
+  - No guest-visible change for existing titles. R4's game C, OpenBIOS C and
+    every shard compiled from D's and E's captures are byte-identical, and the
+    probe's shards too. R4 fingerprints (12000 frames) at the fixed head are
+    IDENTICAL to E's, cold and warm, locators included. A warm run with the
+    fixed head's own autocompiled KUSEG and KSEG1 shards is IDENTICAL to one
+    with E's, and to the cold run with the usual 501 VBlank straddles.
+  - Found by the probe, not caused by E: a BIOS file read takes about half
+    Beetle's cycles (ACCURACY_BURNDOWN axis 5, CDROM).
+
+- **2026-09-30 (segment-aware code, rollout PR E: overlay shards keyed by
+  segment):** `feat/overlay-segment-keys`, stacked on PR D
+  (docs/SEGMENT_AWARE_CODE.md §5.7, §7.2, §8 E). Overlay code now runs natively
+  in the segment it runs in. Before, it could run natively only at KSEG0, and
+  #417's gate interpreted every KUSEG or KSEG1 entry.
+  - Capture records the segment of each interpreted dispatch (schema v3).
+    `compile_overlays.py` builds one shard per segment with entries: KUSEG and
+    KSEG1 shards go in the cache tag's `seg-kuseg/` and `seg-kseg1/` with an
+    `S` record, and KSEG0 shards keep their place and names. The loader runs a
+    shard only for its own segment's PCs.
+  - Timing parity:
+    - On the probe's new disc-loaded overlay, KUSEG, KSEG0 and KSEG1 runs
+      equal Beetle in T2 deltas (56 / 56 / 82), links and cycle-watch
+      intervals, on both BIOSes, whether interpreted or run as shards.
+    - Warm and cold reach the spin on the same cycle.
+    - LLE boot anchors are unchanged from D (shell entry −126 on OpenBIOS,
+      −445 on SCPH-1001).
+  - R4: OpenBIOS's patch slots (`0x0000281C`, `0x00003554`, `0x0000357C`) and
+    its kernel code entered at KSEG1 (`0xA000DFAC`...) run as KUSEG and KSEG1
+    shards. `segment_alias_interp` falls to 0 on a warm cache. Fingerprints
+    against the same run with those entries interpreted are IDENTICAL,
+    locators included. Neither region is entered at KSEG0 in these runs, so
+    the KSEG0 shards built for them before did not run.
+  - Nothing reshards: the codegen hash, the ABI and the KSEG0 cache layout are
+    unchanged.
+
+- **2026-09-30 (segment-aware code, rollout PR D review fixes):** folded into
+  `feat/segment-variants` (docs/SEGMENT_AWARE_CODE.md §5.4, §5.5, §7.2, §8 D).
+  - The BIOS dispatch picks the body through `psx_bios_hit_body()`. An alias PC
+    of a compiled BIOS window with no variant still runs the home body, as
+    before, but is now recorded in the segment-miss ring as kind `bios` (TCP
+    `segment_misses`, exit report) instead of passing silently. Timing is
+    unchanged: every LLE anchor hit on both BIOSes, with and without #435, and
+    the probe's results and cycles equal D before the fixes. Neither boot
+    records a BIOS segment miss through the probe's spin. With SCPH-1001's
+    `0xA0000500` seed removed, the ring records exactly that PC and the shell
+    entry returns to −454, so the next alias entry cannot hide.
+  - Seeds in segments that do not map physical memory (`0x20000000`-`0x7FFFFFFF`,
+    KSEG2) stop the game and BIOS builds instead of compiling variants that no
+    fetch can reach.
+  - Claim corrected: the jump-table rule (a case in another segment is
+    dispatched) applies to every game and overlay compile, not only to
+    variants. R4's game C and 26 overlay shard sources are still byte-identical.
+  - Tests: the emitted BIOS hit lookup is compiled and queried; new cases for
+    a BIOS branch-only closure, same-segment BIOS seeds, variant data stubs,
+    variant alias groups declared for every shard, KSEG0 home tables of KUSEG
+    PCs and seeds outside the physical segments. 21 new single-site mutants,
+    all killed.
+  - R4 against D before the fixes: fingerprints (12000 frames, cold and warm)
+    IDENTICAL on every column, locators included; smoke reaches a live race
+    with 0 dispatch misses and 0 segment misses of either kind.
+
+- **2026-09-29 (segment-aware code, rollout PR D: per-segment compiled variants):**
+  `feat/segment-variants`, stacked on PR C (docs/SEGMENT_AWARE_CODE.md §5.4, §5.5,
+  §5.6).
+  - A segment-qualified seed compiles a variant: the home functions it reaches by
+    direct edges, compiled again through a view of the image in that segment. Its
+    names, dispatch rows and every baked PC are that segment's; a KSEG1 variant
+    charges a fetch per instruction. A cached variant is the home C with the
+    segment swapped. Dispatch keeps a row per compiled segment of a word and
+    looks up the exact PC; a jump-table case in another segment is dispatched.
+  - BIOS: a runtime-PC seed in another segment than its copy window compiles a
+    variant too. SCPH-1001's seeds gain `0xA0000500` (the reset code's KSEG1 entry
+    into the relocated kernel): its 4-instruction trampoline now charges 20
+    cycles, as Beetle does, instead of the cached body's 11.
+  - The call contract compares return PCs in full: `psx_call_contract` and the
+    four checks of the emitted BIOS dispatch loop.
+  - Timing, against live Beetle: LLE boot, SCPH-1001: the first hit of every
+    anchor now matches (0; it was −9), and the shell entry moves from −454 to
+    −445, the IsC gap alone. OpenBIOS is unchanged (−126). With #435 (IsC) merged
+    locally on top, both BIOSes are at 0 at every hit of every anchor up to and
+    including the shell entry. The synthetic probe compiles its KSEG0 and KSEG1
+    `probe_run` variants: result words and cycle-watch intervals equal Beetle and
+    the interpreter on both BIOSes (T2 56/56/82, 90/90, 10/10/15), and the
+    segment-miss ring at the spin is empty (C had six entries).
+  - R4 (KSEG0): game C and the 26 overlay shard sources are byte-identical to C;
+    OpenBIOS C changes only in the four exact return checks. Fingerprints (12000
+    frames, cold and warm) are identical to C on every column, locators included;
+    against R4 master's pin they show #429's known split. Smoke reaches a live
+    race with 0 dispatch misses and 0 segment misses.
+  - Ledger: `segment-variants` and `kseg1-fetch-charge` close, `KNOWN_GAPS` is
+    empty; new guard `exact-return-contract`. New tests `segment_variants_test`
+    and `bios_segment_variants`. A 21-site mutation sweep kills every mutant.
+  - Cross-title: the codegen hash changes (`eea16175` → `bd3a72ac` with the
+    2026-09-30 review fixes), so overlay caches recompile once and pre-D
+    savestates, rewind buffers and boot-state caches are refused. Game C and
+    overlay shards change only for a title with variant seeds or with a jump
+    table of another segment's PCs of its own bytes. BIOS C: every dispatch
+    changes in the four return checks and gains the hit helpers (review fixes);
+    SCPH-1001 also gains the kernel-entry variant.
+
+- **2026-09-29 (segment-aware code, rollout PR C: KUSEG-linked EXEs, exact dispatch):**
+  `feat/kuseg-linked-exe`, stacked on PR B (docs/SEGMENT_AWARE_CODE.md §5.3, §5.5).
+  - The EXE parser keeps the header's segment (`link_segment()`); the image is
+    analysed and compiled at its link virtual addresses, so a KUSEG-linked EXE's
+    links, fetch tags, IRQ resume PCs, CPS exits, store-PC stamps and dispatch rows
+    are KUSEG. A KSEG1-linked image compiles uncached (a fetch per instruction).
+    The three KSEG0-only JAL scans in function_analysis take the PC's segment.
+  - Seeds and config code sites are checked by physical address and segment: a
+    link-segment seed is an entry (it was dropped before), another segment's seed
+    is a reported variant request (compiled by PR D), and a foreign-segment config
+    site is refused instead of silently matching nothing.
+  - Dispatch (`game_dispatch_emitter.cpp`) indexes the physical word and requires
+    the exact PC. A segment miss is interpreted and recorded in an always-on ring
+    (`segment_misses`, `dispatch_stats`, psx_last_run_report.json).
+  - Timing: on the synthetic probe, compiled code now equals the interpreter and
+    Beetle: T2 56/56/82, cycle-watch 90/90 and 10/10/15 on OpenBIOS and SCPH-1001,
+    and compiled and interpreted runs reach the spin on the same cycle (198,522,602 /
+    398,724,722; B's compiled build was 98 cycles short). LLE boot anchors against
+    Beetle are unchanged at every hit (shell entry −126 / −454). R4 game C is
+    byte-identical except the lookup's exact compare; fingerprints (cold and warm,
+    12000 frames) are identical to B on every column; smoke reaches a race with 0
+    dispatch misses and 0 segment misses.
+  - The ledger closes eight ids (two open: `segment-variants`,
+    `kseg1-fetch-charge`). B's two surviving dispatch-row mutants are now killed by
+    `emitter_runtime_pc_test` (76 and 12 failing checks). New tests:
+    `psx_segment_miss_test`, `segment_miss_wiring_test`, `collect_game_misses`.
+  - Review fixes (same day): the lookup's binary-search form (tables spanning
+    2 MiB or more) and the duplicate-word build error are now tested; the dispatch
+    hook is a tested helper (`psx_segment_miss_note`) whose call site, TCP command,
+    stats fields and exit-report section a guard pins. `[load_accel.vsync_query]`
+    event-horizon return PCs join the refused foreign-segment config sites; the
+    physically matched kinds (byte patches, full-word-guarded cull keep, angle,
+    aspect-cone and signed-X-bound sites, dome call sites) are not refused. Seeds
+    directives in a foreign segment are refused with their link-segment spelling.
+    `tools/collect_game_misses.py` writes seeds in the link segment and segment
+    misses at their full PC (it wrote every seed as KSEG0). No codegen change: the
+    probe, BIOS and R4 generated C are byte-identical to the pre-review build.
+  - Cross-title: the codegen hash changes, so every title's overlay cache
+    recompiles once and pre-C savestates, rewind buffers and boot-state caches are
+    refused. Until PR E a KUSEG title's overlay code runs interpreted (its static
+    code enters overlays at KUSEG); a KSEG0 title that runs its static text through
+    an alias runs that path interpreted after regeneration (segment misses).
+
+- **2026-09-29 (segment-aware code, rollout PR B: every baked PC through `runtime_pc()`):**
+  `refactor/emitter-runtime-pc`, stacked on #419 (docs/SEGMENT_AWARE_CODE.md §5.2).
+  - Game/overlay emitter: `CodeGenerator` has a code segment and
+    `runtime_pc()`. Links (including a `jalr` in a delay slot), fetch tags
+    (including `emit_pre_icache`'s uncached test), IRQ resume PCs, the RI
+    EPC, CPS exits and continuation keys, dispatch targets, store-PC stamps,
+    the VSync-query hook's base PC and the dispatch rows go through it. The
+    default is the image's own segment, so the output is unchanged. The
+    VSync-query hook is not emitted for uncached code: its hand-timed body
+    charges cached fetches only.
+  - BIOS emitter: `StrictTranslator::translate(d, runtime_pc)`. Store-PC
+    stamps, syscall EPCs, break/unaligned PCs and fallthrough PCs of relocated
+    code are runtime PCs, as the interpreter's are.
+  - memory.c re-keys its seven SCPH-1001 ROM-address keys to runtime PCs in
+    the same commit, gated (`scph1001_relocated_store`) to SCPH-1001's own
+    instruction: other BIOSes and game code at those RAM addresses never
+    match, as they never matched the ROM keys.
+  - Review pass: a single-site mutation sweep over every route found gaps in
+    `emitter_runtime_pc_test`; it now reaches every emission path, and the
+    sweep kills 77 of 80 routes. The survivors are the two dispatch-row
+    routes (PR C's ledger covers them) and a mid-block continuation key the
+    CFG analyzer does not produce. The RAM 0x0-0xF store filters diverge
+    from Beetle (recorded in ACCURACY_BURNDOWN axis 4); B keeps them as they
+    were.
+  - Timing: none. LLE boot against live psx-beetle matches the previous build
+    at every anchor (shell entry −126 OpenBIOS, −454 SCPH-1001). The segment
+    probe's cycles to its spin are unchanged on both BIOSes. R4 regenerates
+    byte-identically (game and overlay shards). R4's fingerprints agree on
+    every guest-state column; only the store-PC-hashing `mmio`/`pc` columns
+    move.
+  - Interpreter column of the probe: equal to Beetle on both BIOSes (links,
+    segment probes, T2 56/56/82). It needed `PSX_FORCE_INTERP`, which had
+    stopped routing clean game text to the interpreter since the
+    native-safety checks started deciding by bytes; fixed on the same
+    branch.
+  - The ledger closes no id (10 gaps). It gains two regression guards,
+    `bios-runtime-pc` and `store-pc-keys-runtime`. New test:
+    `emitter_runtime_pc_test`.
+
+- **2026-09-29 (segment-aware code — rebased after #429, #431 and #433 merged):**
+  PR A (#429) is on master, so the ledger no longer lists `bios-kseg1-fetch-charge`
+  and `segment_aware_codegen` passes with 10 known gaps. Its OpenBIOS check stays as a
+  regression guard. docs/SEGMENT_AWARE_CODE.md §5.6, §7.1 and §8 record A as landed;
+  PR D now needs only the KSEG1 variants (`kseg1-fetch-charge` stays open until D).
+  §5.6 notes that PR B must route `emit_pre_icache`'s `psx_fetch_uncached()` argument,
+  not just the fetch tag, through `runtime_pc()`. The macOS oracle recipe is
+  docs/beetle-macos.md (#431). Emitter line citations refreshed for #429's shift.
+  No behaviour change.
+
+- **2026-09-29 (segment-aware code — rebased on master, first Beetle run of the probe):**
+  #417, #418 and #420 merged; the design branch (#419) is rebased onto master and
+  docs/SEGMENT_AWARE_CODE.md now records PR A (#429) and its passed LLE land gate
+  (shell entry −126 OpenBIOS / −454 SCPH-1001; residue = the IsC gap and SCPH-1001's
+  KSEG1 kernel entry `0xA0000500`, −9, which PR D closes). The synthetic EXE ran in
+  psx-beetle on macOS (recipe #431). Disc boot works on OpenBIOS and SCPH-1001;
+  sideloading does not, because Beetle's loader forces a KSEG0 start. Links
+  `0x00010018/24/38` and the three segment probes came back as designed. The T2 deltas
+  were garbage: the subtraction sat in the load delay slot, unmasked. Fixed (`nop`,
+  `andi 0xFFFF`), and the call sites and `probe_run` are line-aligned. Beetle now
+  reads 56/56/82 cycles for KUSEG/KSEG0/KSEG1 on both BIOSes, a 26-cycle KSEG1
+  surcharge equal to the fetch model's. Ledger unchanged (11 ids); cited source lines
+  refreshed for current master. No behaviour change.
+
+- **2026-09-29 (cache-isolated stores reach the caches, as in Beetle):**
+  memory.c dropped every store made while SR.IsC was set, so the I-cache model
+  never saw FlushCache (A 44h) or the boot cache init. Beetle's
+  PS_CPU::WriteMemory (mednafen/psx/cpu.cpp:482-512) handles an isolated store
+  before any address decode:
+  - With the I-cache on (BIU bit 11) and a tag-test, invalidate or lock mode bit,
+    the store rewrites the tag and valid bits of its line's four words. In
+    tag-test mode the valid bits come from the stored byte lane; otherwise none
+    are set.
+  - With the I-cache on and no mode bit, Beetle writes an instruction word. The
+    tag model holds no words, so nothing changes.
+  - With the D-cache on and lock mode off ((BIU & 0x81) == 0x80), the store
+    lands in the scratchpad at addr & 0x3FF, whatever the address.
+  - Nothing reaches the bus, the BIU register at 0xFFFE0130 included: Beetle
+    routes it through MemRW, which only non-isolated stores reach. Beetle does
+    not model SR.SwC.
+  - DMA is not a CPU store. Beetle's DMA writes RAM directly, so native DMA now
+    bypasses IsC instead of being dropped. Host stores (mods, FMV skip, debug
+    pokes, enhancement fills) are not CPU stores either: they go through
+    `psx_host_write_*`, which bypasses IsC the same way.
+  - Implementation: `psx_icache_isc_store` (psx_icache.c) is the tag write, and
+    memory.c's `isc_store` runs at the top of the three `psx_write_*_raw`
+    chokepoints. Static code, overlay shards and both interpreters all store
+    through those chokepoints. A render pass applies the same effect, and its
+    checkpoint restores tags and scratchpad afterwards. The overlay shadow
+    record (PSX_OVERLAY_DIFF) fails closed on an isolated store, because its
+    replay cannot redo it. Lockstep replay leaves the shared tags alone, as it
+    does for refills.
+  - LAND GATE (live psx-beetle, same images and method as the #429 gate below).
+    The LLE boot to the shell was run on four native builds. "master" is
+    1ec24e9d (#429 merged), "pre" is 9a8737d5 (master just before #429), and
+    each was also run with this fix. Deltas are native − Beetle:
+    - OpenBIOS, 15 anchors from `_boot` to shell main: master is 0 up to the
+      first flushes and −126 from initEvents on; master + fix is 0 at all 15.
+      pre goes from −2,165,591 to −2,165,478 at the shell entry with the fix:
+      113 of master's 126 flush cycles (36, 40 and 37 per flush, against 42).
+      The remaining gap is #429's.
+    - SCPH-1001, 14 anchors from cache init to the shell entry: master is −9
+      from kernel init 0x598 and −438/−454 from the boot functions on. master
+      + fix is −9 at every anchor from 0x598 on. pre goes from −7,049,462 to
+      −7,049,017 at the shell entry, the same 445 cycles the fix removes on
+      master.
+    - The −9 is the retail kernel entry through its KSEG1 alias
+      (SEGMENT_AWARE_CODE.md §3.3, PR D). It is the only residual left before
+      the shell.
+    - Every hit, counted separately: FlushCache (5 hits on each BIOS), the A0
+      gate (12 OpenBIOS, 17 SCPH-1001) and the B0 gate (147 SCPH-1001). On
+      master the gap grew after each flush: −42 per OpenBIOS flush, and −52,
+      −149, −149, −95 on SCPH-1001. With the fix it stays at 0 (OpenBIOS)
+      and −9 (SCPH-1001) on every hit.
+  - Ruler #1 [0x80001C5C→0x80001CA4], SCPH-1001, 64 passes: all four builds
+    equal Beetle pass for pass (53 × 56, 9 × 77, 2 × 84).
+  - Ruler #2 (15-loop ROM, OpenBIOS): all four builds equal Beetle on all 14
+    components, on an HLE boot and on an LLE boot.
+  - R4 (SLUS-00797, OpenBIOS): with the default boot (recompiled LLE kernel,
+    HLE boot-skip), the game entry 0x8007D8F4 moves from 100,589,404 to
+    100,589,746 (+342). With the LLE boot, it moves from 268,764,292 to
+    268,764,310 (+18); the CD-ROM waits absorb most of it. Two boots of each
+    build gave the same numbers. R4 reached a race with 0 dispatch misses, and
+    R4's 10 developer tests pass.
+  - Every title changes timing, toward Beetle: each boot-time and in-game cache
+    flush now costs the refills Beetle charges. The change is runtime-only. The
+    codegen hash is unchanged (04ed5e51), generated BIOS and game C are
+    byte-identical, and overlay caches stay valid. Savestates and the netplay
+    digest already carry the tags, so their formats do not change.
+  - Test: ctest `isc_store_test` drives the real memory.c and psx_icache.c
+    stores. It covers flush invalidation, tag-test valid bits, data mode, the
+    scratchpad write, the BIU, DMA and host-store exclusions, and lockstep
+    replay. 17 of its checks fail on master.
+  - Left: IsC SWL/SWR differ from Beetle in two corner cases (ACCURACY_BURNDOWN
+    axis 4). The BIU bit 11 fetch cost is still open.
+- **2026-09-29 (uncached KSEG1 fetch charged per instruction, both emitters):**
+  Beetle ReadInstruction never fills a line for a fetch at 0xA0000000 or above:
+  each one costs +4 and clears the load give-back. The interp fetches at every PC,
+  but both emitters emitted `psx_icache_fetch` only at line leaders, which is exact
+  for cached code only. In OpenBIOS, 5,477 of the 9,592 in-place ROM (KSEG1)
+  instruction sites were uncharged: 21,908 cycles per pass through that code.
+  Both emitters now charge a fetch before every instruction whose runtime PC is
+  uncached. The predicate is `psx_fetch_uncached` (psx_instr_cost.h), which
+  psx_icache.c also uses. The A0/B0/C0 call-vector stubs charge one fetch per
+  executed word.
+  - Cached code keeps the leader rule. R4's regenerated game C (50 shards and the
+    dispatch table) is byte-identical. So is every R4 overlay shard compiled in
+    more than one run (26 of the 45 captured; runs capture different sets).
+  - For the uncached fix, the OpenBIOS diff is insertions only: 5,477 fetches
+    plus 5 stub fetches.
+  - The codegen hash changes because the emitter sources do, and
+    psx_instr_cost.h is now in the hash list. Every title reshards its overlay
+    cache once.
+  - Tests: ctest `uncached_fetch_charge` checks compiled == interp fetch path ==
+    Beetle transcription per instruction on OpenBIOS, the stubs and synthetic
+    sequences. `uncached_fetch_codegen_test` checks the game emitter at KSEG1
+    and KSEG0. Both fail on master.
+  - R4 (OpenBIOS: recompiled LLE kernel, HLE boot that skips the shell): the
+    game entry 0x8007D8F4 moves from guest cycle 97,718,389 to 100,583,391
+    (+2,865,002, about 5.1 frames). The count was the same on two baseline
+    boots. R4 reached a race with 0 dispatch misses.
+  - Same day, second fix in the BIOS emitter: the cached line-start test now
+    uses the runtime PC instead of the ROM address. OpenBIOS copies its kernel
+    from ROM 0x1FC1E4D4 to RAM 0x500, which shifts bits[3:0] by 4. Each kernel
+    line crossing was charged one instruction early (a hit), and the real
+    crossing went uncharged: 1,152 kernel sites differed from the interp.
+    In the OpenBIOS kernel, 823 misplaced fetch sites go and 773 are added at
+    runtime line starts. Retail profiles are unaffected: SCPH-1001's windows
+    are 16-byte aligned and SCPH-101/5552 declare none. With both fixes, the
+    R4 game entry is at 100,589,404 (+2,871,015 over master; +6,013 from this
+    fix). R4 reached a race with 0 dispatch misses.
+  - LLE boot of R4 (`PSX_BIOS_HLE=0`, the OpenBIOS shell runs), both fixes:
+    the game entry moves from 265,829,410 to 268,764,320 (+2,934,910,
+    +1.10%), identical on two boots of each build; 0 dispatch misses.
+  - In-game cost on OpenBIOS: the charge is not boot-only. OpenBIOS runs its
+    A0/B0/C0 services in place: after boot, 148 of the 192 A0 table entries
+    point into ROM, A(2Ah) memcpy at 0xBFC085D8 among them. During gameplay,
+    every such call now pays the +4 fetch on each instruction, not only at
+    block leaders and line starts. This holds on every title that uses the
+    OpenBIOS default. Measured in an R4 race with cyc_watch: memcpy's byte
+    loop goes from 25 to 42 cycles per byte (four more fetches, +16, and one
+    lost load give-back, +1). R4 makes two memcpy calls per 30 fps game frame
+    (20 and 92 bytes): 2,824 -> 4,744 cycles, +1,920, about 0.17% of the
+    frame. Only memcpy was measured; other ROM services scale the same way.
+  - Closes `bios-kseg1-fetch-charge` in the segment-aware ledger (PR #419).
+  - LAND GATE (DONE, 2026-09-29, live psx-beetle built on macOS from
+    docs/beetle-macos.md, the official Beetle 5759277b plus the
+    docs/beetle_*.patch hooks):
+    SEGMENT_AWARE_CODE.md §7.2's LLE boot parity to the
+    shell and ruler #1, run twice with the same image on both sides: OpenBIOS
+    (`bios/openbios.bin`, SHA-1 95419841b5104d552b14810b1ecbe6c1358bcdf1) and
+    the owner's own SCPH-1001 dump (v2.2, SHA-1
+    10155d8d6e6e832d6ea66db9bc098321fb5e8ebf). Native: master `44a45d3c` and
+    this branch, each with #418 merged locally so the mult/div flush cannot
+    mask the fetch change. `PSX_BIOS_HLE=0`, cyc_watch armed from power-on on
+    both backends through `PSX_CYC_WATCH` / `PSX_CYC_WATCH_N` (psx-beetle
+    also `PSX_BEETLE_UNPACED=1`; docs/beetle-macos.md step 7), first hit per
+    anchor; tools/cycle_compare.py `--no-arm` reads the same values. Anchors
+    are the same PC on both sides except the shell, which both profiles
+    declare `dispatch_key = "rom"`: native keys it at its ROM copy
+    (OpenBIOS 0xBFC0A500, SCPH-1001 0xBFC18000; a native watch on
+    0x80030000 records nothing). Current master `470f03b7` (#418 merged)
+    emits the same BIOS C as the baseline and gives the same cycle at every
+    anchor checked.
+    - OpenBIOS, native − Beetle (master / this branch): kernel copy done
+      0xBFC00330 (Beetle 178,560) −96,208 / 0; main 0xBFC00144 (311,434)
+      −149,433 / 0; first C0, B0 and A0 calls (1,572,770 to 1,588,895)
+      −679,408 to −685,851 / 0; initEvents (1,764,760) −753,238 / −126;
+      startShell (1,845,885) −783,706 / −126; shell entry (Beetle
+      0x80030000, native 0xBFC0A500) (5,015,670) −2,165,591 / −126.
+    - SCPH-1001: cache init done 0xBFC00328 (7,560) −4,404 / 0; main
+      0xBFC06EC4 (86,887) −42,489 / 0; kernel copy done 0xBFC0044C (393,861)
+      −195,802 / 0; kernel init 0x598 (393,901) −195,819 / −9; first C0, A0
+      and B0 calls (406,782 to 414,468) −198,576 to −202,796 / −9; shell entry
+      (Beetle 0x80030000, native 0xBFC18000) (15,051,449) −7,049,462 / −454.
+    - Both residuals are known unmodeled axes, not this change. (1) IsC stores
+      do not reach the I-cache model (ACCURACY_BURNDOWN axis 4). Each
+      FlushCache in Beetle invalidates the I-cache tags through isolated
+      stores. Native drops those stores, so the cached kernel handlers keep
+      hitting where Beetle refills them (7 cycles per full line). The residual
+      grows only after a flush: −42 after each of the three OpenBIOS flushes
+      between 1,592,251 and 1,606,381, and −445 in all after the first four
+      SCPH-1001 flushes (−52, −149, −149, −95). A local prototype of
+      Beetle's IsC tag write brings OpenBIOS to 0 at every anchor to the shell
+      and SCPH-1001 to −9. (2) That −9: the retail BIOS enters its copied
+      kernel through the KSEG1 alias (`jr` to 0xA0000500). Beetle runs the four
+      trampoline words uncached (4 × 5 = 20 cycles); native runs the body
+      compiled for 0x500 (cached: one line refill, 11 cycles). That is the
+      KSEG1-alias gap of SEGMENT_AWARE_CODE.md §3.3, closed by PR D.
+      Beetle takes no exception before the shell on either BIOS, so the IRQ
+      and exception axes do not enter the gate.
+    - After the shell the backends part for reasons outside the gate: CD-ROM
+      and frame-paced device timing. For example, the cycle-test EXE entry on
+      OpenBIOS: Beetle 225,409,068, master −29,367,622, this branch
+      −26,435,449, unchanged by the IsC prototype.
+    - Ruler #1 [0x80001C5C->0x80001CA4], SCPH-1001, 64 region passes: Beetle,
+      master and this branch agree pass for pass (84 cold, 56 steady, 77 on a
+      refill; 53 × 56, 9 × 77, 2 × 84). The range is cached SCPH-1001 kernel
+      code, which this change does not touch. Under OpenBIOS the address holds
+      other code; the OpenBIOS boot anchors above cover its kernel.
+    - Ruler #2 (tools/cycle_testrom, 15-loop ROM): this branch with #418, on
+      both an HLE and an LLE boot, equals Beetle on all 14 components (alu +1,
+      load +5, load2 +11, load_use +5, div +38, div_spaced +38, mult +15,
+      gte_rtps +11, gte_nclip +4, gte_read_use +11, ld_div +46, mmio_timer +3,
+      mmio_spu +38, icache_miss +16). Master with #418 does too; master without
+      it reads div +39, div_spaced +41, mult +16.
+    - memcpy A(2Ah) at 0xBFC085D8 (OpenBIOS) in Beetle: 39 cycles per byte
+      during boot (ROM source). In R4 after its game entry (the attract loop;
+      RAM source) it is 42 per byte, and R4's per-frame 20- and 92-byte calls
+      cost 860 and 3,884 cycles. This branch matches: 39 per byte and the same
+      entry-to-return cost on all 16 boot calls, and 42 / 860 / 3,884 in the
+      R4 race measurement above. Master: 22 and 25 per byte.
+    - Rebased onto master `470f03b7`, which carries #418, and re-checked on
+      that tree with no local merges: the regenerated OpenBIOS and SCPH-1001
+      C is byte-identical to the gated build's, every boot anchor above gives
+      the same cycle, ruler #1 matches Beetle on all 64 passes, and ruler #2
+      equals Beetle on all 14 components on an HLE and an LLE boot. The two
+      new ctests pass; the recompiler suite shows only the three
+      environmental failures that master shows here (`cli_generate_aot_static`,
+      `gpu_frame`, `aot_overlay_discovery`).
+
+- **2026-09-29 (generic A/B identity tool, `feat/fp-identity-tool` on #420):**
+  `tools/fp_identity.py` moves R4's warm/cold check into the framework for
+  any title (launch template or `--runtime/--game/--disc`, `--seed` overlay
+  state, FMV-quiet and autocompile off by default). It judges on
+  cyc/mmio/mc/sp/sc/wc/ws/qc. `wr`/`pc` only locate a fork. The one-write VBlank
+  straddle and the FMV-quiet `wc+qc` shift are tolerated, counted and listed,
+  and `--strict` rejects them. Measurement only; no runtime or codegen change.
+  R4 on #420+#417+#418, 12000 seeded frames: warm/warm and cold/cold are
+  IDENTICAL with no tolerance, even on `wr`/`pc`. Warm/cold is IDENTICAL with
+  497 one-write straddles, the same count #420 reported. With FMV-quiet on,
+  warm/cold is IDENTICAL over 8076 frames, with 497 carried shifts. Self-test:
+  ctest `fp_identity`.
+
+- **2026-09-29 (segment-aware code — owner decisions, store-PC correction, no behaviour change):**
+  docs/SEGMENT_AWARE_CODE.md §10 records the owner's four decisions, all as recommended:
+  I-cache tags follow Beetle (hardware bit-31 difference recorded, ACCURACY_BURNDOWN
+  axis 4); static-code segment misses interpret loudly until regenerated; extra
+  segments come from segment-qualified seeds; the overlay cache uses per-segment
+  subdirectories. Correction: `g_debug_last_store_pc` is not debug-only. memory.c's
+  store filters (RAM 0x0-0xF, opt-in Tomba EvCB) compare it with exact PCs, and its
+  GP0 write path (1292) keys the widescreen GP0 source on `0xBFC38B1C`; both run in
+  every build. #420 (ABI v24) forwards overlay stamps to the host. It is now a baked PC that goes through
+  `runtime_pc()`. Option A's re-measured cost with the 1,261 store-PC stamps is
+  +3.8 % / +27.6 % (it was +3.2 % / +27.2 %). New ledger id `store-pc-segment` (11 known gaps).
+  Seven memory.c keys in SCPH1001's relocated windows name ROM addresses (six
+  store-filter keys and the GP0 key `0xBFC38B1C`, runtime `0x80050B1C`) and must be
+  re-keyed with the BIOS stamp (§9). Rollout PR A (`fix/uncached-fetch-per-insn`,
+  on master) is in preparation; the ledger drops `bios-kseg1-fetch-charge` when
+  this branch is rebased after A lands.
+
+- **2026-09-28 (segment-aware code — design + acceptance ledger, no behaviour change):**
+  docs/SEGMENT_AWARE_CODE.md. Compiled code bakes KSEG0 into links, CPS/IRQ resume PCs
+  and I-cache tags; KUSEG-linked EXEs (Kula World, Alien Resurrection) run KUSEG PCs
+  through those bodies, and KUSEG seeds are silently dropped. New finding: both
+  emitters charge the uncached KSEG1 fetch (+4, Beetle ReadInstruction) only at line
+  leaders, so compiled BIOS ROM code is 4 cycles short on 5,477 of 9,592 OpenBIOS KSEG1
+  sites vs the interp and Beetle. Recommends per-segment compiled variants (0 cost for
+  KSEG0 titles) over segment-relative emission (measured +3.2 % / +27.2 % .text on R4).
+  Ledger `recompiler/tests/test_segment_aware_codegen.py` (synthetic KUSEG EXE,
+  Beetle fetch transcription vs psx_icache.c): 10 known gaps, model checks exact.
+  Not a live Beetle run (no oracle binary on the Mac); §7.2 lists the oracle runs.
+- **2026-10-02 (Phase 5 V8:2 enhanced netplay/HFR):** Owner requested the
+  single-player enhanced renderer in multiplayer, fixed 16:9/21:9, and the
+  high-frame-rate branch in the combined mods build, including true netplay
+  render passes (`beads-eio.12.14`, `beads-eio.3.232`). Isolated integration
+  worktree `_wt-v82-enhanced-net-fw` preserves the modern core and prior LAN
+  content changes. Forward-netplay passes require explicit title opt-in and
+  skip resimulation; dual-raster pass draws bypass software authoritative VRAM.
+  Native local wide views now use the direct GL presenter and both Y buffers.
+  Split dividers remain canonical-only; full local surfaces avoid copying
+  canonical seam columns back into the expanded view. Nine focused framework
+  tests pass, including both buffer bands/ratios and netplay pass gates.
+  Paired Meteor captures show the same local car in native and intermediate
+  frames; 2,023 passes verified with zero machine-state mismatches or failures.
+  Fresh 21:9 Meteor Versus: 743 additional passes, zero verify mismatches,
+  confirmed ticks through 24,904; all 682 compared core checkpoints matched
+  through tick 24,896. Owner accepted the playtest and deferred the observed
+  intermediate-frame HUD identity/position jitter until after v0.1.0.
+  The visible pair uses 144 Hz target with costly verification disabled.
+  No simulation cadence or generated instruction semantics changed; the title
+  regenerated one shard to add guarded draw-boundary callbacks.
+
+- **2026-10-02 (V8:2 private release, beads-eio.12.15):** Production builds
+  disable debug tooling. Added the missing no-op GP0 capture-freeze accessor
+  for that build and resolved imported SDL target aliases in header probes
+  for Ubuntu CMake 3.28. Regenerated both BIOS profiles with the current
+  emitter: generated C is unchanged; fingerprints now match. Windows and
+  Linux title builds pass all 21 checks; each overlay cache compiled 59
+  native shards without failures. Game media, captures and personal state
+  remain outside source and player packages. No guest timing changes.
+
+- **2026-10-02 (Phase 5 V8:2 LAN content):** Resumed interrupted mod sync
+  work under `beads-eio.3.218`. LAN carries the host's verified portable plan
+  in settings and start messages. Media preparation precedes guest fingerprint
+  verification; direct peers compare all SHA-256 words before execution.
+  Offline choices remain intact. Five focused framework checks pass. Owner
+  validation isolated a separate missing simultaneous two-player carousel in
+  the title; its new hooks expose original cars to both players. Owner verified
+  both original cars load into a match, correct selection voices and imported
+  music work, and the latest offline Meteor Crater view looks fine. All 21
+  title checks pass with the owner package fixture.
+  No faithful timing-core changes or generated-code edits.
+
+- **2026-10-01 (Phase 5 V8:2 music and widescreen):** Owner resumed original
+  soundtrack selection/rotation and adaptive native-wide rendering through
+  32:9 (`beads-eio.12.8`, `beads-eio.12.7`). Preserve the uncommitted netplay
+  implementation; keep native 1x as the performance default. Adapt title
+  render/culling hooks from the original V8 mod with sequel instruction guards.
+  Donor audio and all converted media remain external. No timing-core change.
+
+- **2026-10-01 (Phase 5 combined V8 netplay):** Owner resumed two-player
+  netplay only (`beads-eio.12.6`); widescreen and original music remain parked.
+  `beads-eio.3.218` ports Toshinden's generic online mod-plan negotiation and
+  admits only immutable, size/SHA-256-verified external resources. Host plan
+  mismatches fail before replacement; offline selections survive session exit.
+  Read-only `netplay_status` exposes the existing hash-confirm watermark.
+  Headless netplay now accepts injected local input and honors controller mode.
+  Two isolated peers reached native V8:2 Versus gameplay, independently drove
+  both cars and matched state hashes through tick 43944. Online combined-content
+  play and WAN conditions remain for human validation. No timing/codegen change.
+
+- **2026-09-30 (Phase 5 owner-requested source checkpoint):** Preserve the
+  existing V8:2 combined-content title and generic callback/disc-extent support
+  on local `checkpoint/v82-combined-20260930` branches. Source, tests and
+  attribution only; donor media, generated outputs and playtest evidence stay
+  external. Owner explicitly paused further implementation, including
+  widescreen, original music and netplay, pending a check-in. No publication.
+
+- **2026-09-30 (Phase 5 Dreamland mushroom freeze):** `beads-eio.12.5`
+  identified an imported projectile flag write altering its callback, followed
+  by a skipped prologue and invalid return into the BIOS exception loop. The
+  title converter now tracks the local projectile factory and target pointers.
+  Added 4163 relocation/flag property cases and an opt-in native mushroom-event
+  stress driver; the old overlay fails and the repaired overlay completes both
+  families. All 16 title checks pass. No framework behavior changes.
+
+- **2026-09-30 (Phase 5 Dreamland effect cleanup):** `beads-eio.12.2` traced
+  the owner's frozen V8:2 match to an imported projectile effect writing its
+  matrix over the native child link. The title's input-overlay converter now
+  recognizes both effect-factory object returns. Five corrected field accesses,
+  owner-media regression checks, complete overlay code generation and a live
+  explosion allocation/free check validate the repair. No framework execution,
+  timing or generated-source changes; owner handoff remains at 1x rendering.
+
+- **2026-09-30 (Phase 5 instruction callbacks):** `beads-kbj0` adds plan-owned,
+  exact-word-guarded callbacks before opt-in game instructions, including branch
+  and delay slots. Native/overlay metadata participates in the codegen hash;
+  dirty-RAM execution routes through the same guard after load retirement.
+  Overlay ABI v27 forwards the callback. Runtime, parser/emitter and interpreter
+  routing checks pass. V8:2 uses seven seams for independent vehicle stats,
+  upgrades, transformation parts and special dependencies. Chassey's live match,
+  input/pause and savestate roundtrip were observed after correcting the title
+  allocator to retain shrinking allocations, matching its source implementation.
+
+- **2026-09-30 (Phase 5 mod-defined callbacks):** `beads-eio.3.212` adds
+  trusted mod-defined guest functions in an unused address range, separate
+  from original function-entry hooks. Active plans own availability and
+  callback resource context. Generated BIOS dispatch handles these through
+  its normal return/stack contract, with no synthetic guest instructions.
+  Runtime tests cover aliases, collisions, activation/clearing and nested
+  callback scopes; emitter tests cover routing before hardware dispatch.
+  OpenBIOS/SCPH1001 regenerated; V8:2 title rebuilt. Imported content still
+  needs its title-side runtime/selection adapters (`beads-eio.12.1`).
+
+- **2026-09-30 (Phase 5 combined V8 project):** Owner selected USA 2nd Offense
+  as the game-code base while retaining psxrecomp as the runtime/recompiler.
+  New local `Vigilante82PSXRecomp` builds against `071847ab`, reaches a stock
+  match, responds to driving input and reloads a savestate in an isolated run.
+  The reference's thirteen original-car conversions roundtrip successfully;
+  imported runtime/selector adapters remain title work (`beads-eio.12.1`).
+  No generic execution or hardware change was needed for this bring-up.
+
+- **2026-09-30 (Phase 5 callback reentrancy):** Plugin activation, VBlank and
+  function-entry callbacks now use the same scoped resource/completion context.
+  A native call inside an entry hook can deliver VBlank; previously those
+  callbacks cleared its plugin, making explicit completion fail and executing
+  the original function again. A regression fails before the fix and passes
+  after it, also refusing VBlank completion of the interrupted function. The
+  runtime test and seven V8 checks pass; isolated six-contact construction now
+  produces one chassis and survives drive/save/load. Tracked by `beads-i3ow`.
+
+- **2026-09-29 (Phase 5 mod function completion):** Trusted entry callbacks
+  may explicitly complete the current guest function through
+  `psx_mod_finish_function`. Static codegen, native overlay forwarding and both
+  dirty-RAM entry paths honor the callback result; nested callback completion
+  remains scoped to its CPU and invocation. ABI 26 / codegen 16 reject old
+  caches and states. Five focused framework checks pass. V8's independent
+  sequel-bank integration is being exercised separately under `beads-jogl`;
+  the generic mechanism is tracked by `beads-i3ow`. No title address or content
+  behavior is embedded in the framework.
+
+- **2026-09-29 (Phase 5 enhancement media):** Added format-8 verified donor
+  resources (exact canonical size/SHA-256, immutable snapshots scoped to the
+  owning plugin). N64 byte orders normalize before hashing; PSX identity covers
+  the first data track using the existing disc reader. Mixed-mode retail volume
+  sizes include audio and are not data-track lengths. Framework media/package/
+  runtime tests pass; V8's isolated headless importer validates Super Dreamland
+  64 from owner media. No CPU execution or timing changes. Arena conversion and
+  gameplay integration remain open. Local uncommitted work tracked by
+  `beads-09ww` and `beads-ip30`; content epic `beads-eio.5.13` remains open.
+
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
   plus SELECT-time ACK fabrication and INTC-pending ACK requeueing with the
@@ -896,6 +1592,10 @@ on a fixed region -> next.
   rebuild runtime/cyctest. New ruler #2 loops `mmio_timer` (Timer0 read → +3 = 1 dev + 2 compl)
   and `mmio_spu` (32-bit SPU read → +38 = 36 + 2). VALIDATED: cyctest COMPILED (4600) == Beetle
   (4382) EXACT on ALL 15 loops incl. mmio_timer +3 / mmio_spu +38; the 13 prior loops unchanged.
+  (Correction, 2026-09-29: except `icache_miss`, which reads +16 on this 15-loop ROM on both
+  backends, not +14. The two new loops sit before it and move its loop top from 0x80010144 to
+  0x80010170, a different offset in its cache line, so each of its two misses costs one cycle
+  more. Re-measured against live psx-beetle; see tools/cycle_testrom/README.md.)
   Tomba 2 boots past the BIOS to its "SCEA Presents" intro splash, total_checks advancing, no
   freeze (the faster-MMIO change did not trigger a device-timing cascade like load=4 did).
   RESIDUAL (documented, unmodeled dynamic axis): DMACycleSteal — Beetle adds the live DMA
@@ -1254,3 +1954,36 @@ on a fixed region -> next.
   `PSX_PRECISE_SLICE` left in tree (inert). −8 mechanism located in
   code_generator.cpp (delay-slot-is-leader undercount). Tree builds + boots clean.
   NEXT: P1 (cycle-audit) → P2 (delay-slot ownership fix).
+
+
+### 2026-10-01 ? Shared owner-media setup (beads-eio.3.220)
+
+Format 9 adds shared launcher source bindings, hidden derived resources, and
+linked trusted preparers at offline/online commit. Preparation inherits the
+main disc and user cache; output binding is transactional and the existing
+size/SHA snapshot checks remain authoritative. Shared-picker/reload, disabled
+preparation, inherited disc, failure preservation and corrupt-output checks
+pass with mod_packages_test and mod_runtime_test. V8:2 supplies its own bundled
+conversion worker; no title asset rules enter the framework. V8:2 terrain-ray
+arithmetic is an enhancement in the title plugin. Owner live game untouched.
+
+### 2026-10-02: V82 extra-frame HUD replay investigation
+
+V82 split rendering interleaves world(0)/HUD(1), then world(1)/HUD(0).
+Replaying a complete split section pairs the local world with the remote HUD.
+The title now captures both HUD CPU contexts and replays the matching HUD after
+its local world. This exposed a framework contract defect: forced replay could
+hand straight-line flow into a compiled continuation before checking its stop
+PC. Forced spans now retain interpreter ownership through the boundary instead
+of entering that continuation. Normal native execution and callee dispatch
+remain unchanged. Actual LAN replay verification has passed thousands of spans
+with no state mismatch, watchdog or VRAM leak. Consecutive presentation captures
+confirmed stable local HUDs at fixed 16:9 and 21:9, while a comparison build
+reproduced both swapping icons and shifting bounds. Single-player Meteor Crater
+was also entered through the menus and produced verified extra frames.
+
+The presented-image ring now assigns each swap a unique sequence ID.
+Guest-frame lookup merged multiple extra presentations and could not verify
+HUD stability. Added duplicate-frame/freeze/eviction regression coverage and
+retained legacy frame lookup. Six focused framework checks and all 21 title
+checks pass on Windows and Linux, and both runtime builds link successfully.

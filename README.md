@@ -50,6 +50,7 @@ coverage continue to improve per title.
 | *Mega Man X6* | [MegaManX6Recomp](https://github.com/mstan/MegaManX6Recomp) | [releases](https://github.com/mstan/MegaManX6Recomp/releases/latest) | Playable; stages, controller, save/load; 2D widescreen to 21:9. |
 | *Tsumu Light* | [TsumuLightRecomp](https://github.com/mstan/TsumuLightRecomp) | [releases](https://github.com/mstan/TsumuLightRecomp/releases/latest) | Japanese-only title (SLPS-02253); first consumer of [live language switching](#swap-language-on-the-fly). |
 | *Xenogears* — **community** | [OpokXeno/xenogears-recomp](https://github.com/OpokXeno/xenogears-recomp) | — | Independent project by [@OpokXeno](https://github.com/OpokXeno), who also contributed widescreen cull-site work upstream. |
+| *Mega Man Legends* — **community** | [VuloB1/MegaManLegendsRecomp](https://github.com/VuloB1/MegaManLegendsRecomp) | [releases](https://github.com/VuloB1/MegaManLegendsRecomp/releases/latest) | Native 16:9 widescreen, analog movement with right-stick camera, 60/120 Hz presentation, skip FMVs, PGXP precision. |
 
 Each game repo carries its own build/run instructions, keyboard/controller
 mappings, and per-game settings. **This repository builds the framework and a
@@ -58,7 +59,7 @@ see [Release Package](#release-package) below.
 
 Bringing up a title of your own? Start with
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (submodules,
-setup-host CI template, release checklist), then
+bundled-release CI template, release checklist), then
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Community projects are listed here
 alongside the rest.
 
@@ -230,7 +231,7 @@ These are the 3 most important folders to be aware of:
 | Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
 | **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
 | **Netplay** (rollback, SFU/ICE, dual-raster, disc gates) | [`docs/NETPLAY.md`](docs/NETPLAY.md) |
-| Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
+| Bundled-release CI template | [`docs/ci/templates/game-release.yml`](docs/ci/templates/game-release.yml) |
 | Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
 | Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
 | Widescreen / native-wide | [`docs/WIDESCREEN.md`](docs/WIDESCREEN.md) |
@@ -813,7 +814,7 @@ regenerate), and a change proves itself against the Beetle oracle / on screen
 rather than by assertion. Game-specific work lives in the game repos, which pin
 exact framework and UI commits as root-level submodules.
 
-- New title / setup-host release:
+- New title / bundled release:
   [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md)
 - Framework PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md) (rules, verification,
   regression checklist, how a fix reaches a game through its pin)

@@ -266,10 +266,14 @@ uint32_t BiosAddressModel::rom_keyed_ram_hi_incl() const {
 
 std::string BiosAddressModel::emit_normalize_c() const {
     std::string out;
+    out += "extern uint32_t g_psx_ram_mask;  /* live main-RAM geometry, psx_memory.h */\n";
     out += "static uint32_t normalize(uint32_t addr) {\n";
     out += "    uint32_t phys = addr & 0x1FFFFFFFu;\n";
-    out += "    /* PSX main RAM: 2 MiB mirrored through physical 0x007FFFFF. */\n";
-    out += "    if (phys < 0x00800000u) phys &= 0x001FFFFFu;\n";
+    out += "    /* PSX main RAM decode window [0, 0x00800000). Retail RAM folds its\n";
+    out += "     * 2 MiB mirrors onto the BIOS RAM keys (mask 0x1FFFFF, unchanged\n";
+    out += "     * behaviour); the opt-in 8 MB map decodes the window uniquely\n";
+    out += "     * (mask 0x7FFFFF), so a high-bank PC never reaches a BIOS RAM key. */\n";
+    out += "    if (phys < 0x00800000u) phys &= g_psx_ram_mask;\n";
     for (const BiosAddrCopy& c : copies_) {
         if (c.key_is_ram) {
             out += fmt::format("    /* {}: ROM 0x{:X}+ -> RAM 0x{:X}+ */\n",
@@ -288,6 +292,30 @@ std::string BiosAddressModel::emit_normalize_c() const {
         }
     }
     out += "    return phys;\n";
+    out += "}\n\n";
+    return out;
+}
+
+std::string BiosAddressModel::emit_key_home_pc_c(uint32_t rom_va) const {
+    std::string out;
+    out += "/* The runtime PC each dispatch key's home body was compiled for\n";
+    out += " * (docs/SEGMENT_AWARE_CODE.md §5.4): its copy window's runtime address,\n";
+    out += " * or the ROM run in place. 0 = in no window. */\n";
+    out += "static uint32_t psx_bios_key_home_pc(uint32_t key) {\n";
+    for (const BiosAddrCopy& c : copies_) {
+        const uint32_t lo = c.key_is_ram ? c.ram_lo : c.rom_lo;
+        out += fmt::format("    /* {}: {} key 0x{:X}+ runs at 0x{:08X}+ */\n", c.name,
+                           c.key_is_ram ? "RAM" : "ROM", lo, c.runtime_base);
+        out += fmt::format("    if (key >= 0x{:08X}u && key <= 0x{:08X}u)\n", lo,
+                           lo + c.len() - 1u);
+        out += fmt::format("        return key - 0x{:08X}u + 0x{:08X}u;\n", lo,
+                           c.runtime_base);
+    }
+    out += "    /* The ROM, run in place. */\n";
+    out += fmt::format("    if (key >= 0x{:08X}u && key <= 0x{:08X}u)\n", rom_base_phys_,
+                       rom_base_phys_ + rom_size_ - 1u);
+    out += fmt::format("        return 0x{:08X}u | key;\n", rom_va & 0xE0000000u);
+    out += "    return 0u;\n";
     out += "}\n\n";
     return out;
 }

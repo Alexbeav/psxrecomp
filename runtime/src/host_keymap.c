@@ -110,6 +110,8 @@ static void apply_defaults(void) {
         add_bind(HOST_KEYMAP_SCANLINES, (int)SDLK_F6, (int)SDL_SCANCODE_F6, 0);
     if (want_default(HOST_KEYMAP_TURBO_TOGGLE))
         add_bind(HOST_KEYMAP_TURBO_TOGGLE, (int)SDLK_F9, (int)SDL_SCANCODE_F9, 0);
+    if (want_default(HOST_KEYMAP_CAPTURE_MARK))
+        add_bind(HOST_KEYMAP_CAPTURE_MARK, (int)SDLK_m, (int)SDL_SCANCODE_M, KMOD_CTRL);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -169,6 +171,7 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
     if (ieq(name, "Scanlines")) return HOST_KEYMAP_SCANLINES;
     if (ieq(name, "TurboToggle")) return HOST_KEYMAP_TURBO_TOGGLE;
+    if (ieq(name, "CaptureMark")) return HOST_KEYMAP_CAPTURE_MARK;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 
@@ -223,6 +226,17 @@ void host_keymap_load(const char *config_ini_path) {
     apply_defaults();
 }
 
+/* A physical key event reports which side's modifier is down (KMOD_LCTRL or
+ * KMOD_RCTRL), while a binding means "either Ctrl". Compare on the side-less
+ * Ctrl/Alt/Shift set so Ctrl+X binds match a real left- or right-Ctrl press. */
+static int canonical_mods(int mod) {
+    int m = 0;
+    if (mod & KMOD_CTRL)  m |= KMOD_CTRL;
+    if (mod & KMOD_ALT)   m |= KMOD_ALT;
+    if (mod & KMOD_SHIFT) m |= KMOD_SHIFT;
+    return m;
+}
+
 int host_keymap_match_event(HostKeymapAction action, int keycode,
                             int scancode, int mod) {
     const HostKeyAction *a;
@@ -234,7 +248,7 @@ int host_keymap_match_event(HostKeymapAction action, int keycode,
         if (a->binds[i].keycode != keycode &&
             (scancode <= 0 || a->binds[i].scancode != scancode))
             continue;
-        if ((mod & relevant) == a->binds[i].mods) return 1;
+        if (canonical_mods(mod & relevant) == canonical_mods(a->binds[i].mods)) return 1;
     }
     return 0;
 }
@@ -253,7 +267,7 @@ int host_keymap_down(HostKeymapAction action, const uint8_t *keys, int mod) {
         const int sc = a->binds[i].scancode;
         if (sc <= 0 || sc >= SDL_NUM_SCANCODES) continue;
         if (!keys[sc]) continue;
-        if ((mod & relevant) == a->binds[i].mods) return 1;
+        if (canonical_mods(mod & relevant) == canonical_mods(a->binds[i].mods)) return 1;
     }
     return 0;
 }

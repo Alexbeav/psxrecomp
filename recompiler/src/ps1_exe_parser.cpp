@@ -6,6 +6,27 @@
 
 namespace PSXRecomp {
 
+namespace {
+// Main-RAM decode window, 8 MiB at the start of each of KUSEG, KSEG0 and
+// KSEG1. Retail 2 MiB DRAM mirrors across all of it (a game may place code or
+// its stack in the 2nd-4th mirror) and expanded 8 MiB targets decode it
+// uniquely; the runtime folds per its geometry.
+constexpr uint32_t kRamWindowBytes = 0x00800000u;
+
+// The segment a main-RAM address is in, or kNoSegment when it is not in one
+// of the three windows (docs/SEGMENT_AWARE_CODE.md §5.3).
+constexpr uint32_t kNoSegment = 0xFFFFFFFFu;
+uint32_t ram_window_segment(uint32_t addr) {
+    const uint32_t seg = addr & kSegmentMask;
+    if (seg != kSegKUSEG && seg != kSegKSEG0 && seg != kSegKSEG1) return kNoSegment;
+    return (addr & kPhysMask) < kRamWindowBytes ? seg : kNoSegment;
+}
+
+const char* segment_name(uint32_t seg) {
+    return seg == kSegKUSEG ? "KUSEG" : seg == kSegKSEG0 ? "KSEG0" : "KSEG1";
+}
+}  // namespace
+
 uint32_t decode_analysis_guard_bytes(const PS1ExeHeader& header,
                                      uint32_t file_size) {
     const uint8_t* raw = reinterpret_cast<const uint8_t*>(&header);
@@ -31,8 +52,10 @@ bool apply_static_analysis_bound(PS1Executable& exe,
                                  uint32_t configured_size,
                                  std::string& error_msg) {
     const uint32_t image_size = exe.header.file_size;
+    // Bounded by the link segment's RAM window (physical, so KUSEG, KSEG0
+    // and KSEG1 images get the same 8 MiB).
     const uint64_t configured_end =
-        static_cast<uint64_t>(exe.header.load_address) + configured_size;
+        static_cast<uint64_t>(exe.header.load_address & kPhysMask) + configured_size;
 
     if (configured_size == 0) {
         error_msg = "game.text_size must be nonzero";
@@ -43,7 +66,7 @@ bool apply_static_analysis_bound(PS1Executable& exe,
             "game.text_size 0x{:X} is not instruction-aligned", configured_size);
         return false;
     }
-    if (configured_end > 0x80200000ull) {
+    if (configured_end > kRamWindowBytes) {
         error_msg = fmt::format(
             "game.text_size 0x{:X} extends past PS1 RAM", configured_size);
         return false;
@@ -112,10 +135,15 @@ bool PS1ExeParser::validate_header(const PS1ExeHeader& header, std::string& erro
         return false;
     }
 
-    // Check load address is in KSEG0 (cached kernel segment)
-    if (header.load_address < 0x80000000 || header.load_address >= 0xA0000000) {
+    // The load address must lie in the main-RAM window of KUSEG, KSEG0 or
+    // KSEG1. The header's segment is the link segment: the program runs at
+    // those PCs, and the recompiler compiles it there (§5.3).
+    const uint32_t load_seg = ram_window_segment(header.load_address);
+    if (load_seg == kNoSegment) {
         error_msg = fmt::format(
-            "Invalid load address 0x{:08X}. Must be in KSEG0 (0x80000000-0x9FFFFFFF)",
+            "Invalid load address 0x{:08X}. Must be in main RAM: KUSEG "
+            "0x00000000-0x007FFFFF, KSEG0 0x80000000-0x807FFFFF or KSEG1 "
+            "0xA0000000-0xA07FFFFF",
             header.load_address
         );
         return false;
@@ -127,29 +155,43 @@ bool PS1ExeParser::validate_header(const PS1ExeHeader& header, std::string& erro
         return false;
     }
 
-    if (header.file_size > 2 * 1024 * 1024) {  // > 2MB
+    if (header.file_size > kRamWindowBytes) {
         error_msg = fmt::format(
-            "Suspicious file size: {} bytes (> 2MB). PS1 only has 2MB RAM",
+            "Suspicious file size: {} bytes (> 8 MiB main-RAM window)",
             header.file_size
         );
         return false;
     }
 
-    // Check load region doesn't overflow RAM
-    uint32_t end_address = header.load_address + header.file_size;
-    if (end_address > 0x80200000) {  // Beyond 2MB RAM
+    // Check load region stays inside the main-RAM decode window
+    const uint64_t end_address =
+        static_cast<uint64_t>(header.load_address) + header.file_size;
+    if ((header.load_address & kPhysMask) + static_cast<uint64_t>(header.file_size) >
+            kRamWindowBytes) {
         error_msg = fmt::format(
-            "Load region overflows RAM: 0x{:08X}-0x{:08X} (beyond 0x80200000)",
-            header.load_address, end_address
+            "Load region overflows RAM: 0x{:08X}-0x{:08X} (beyond 0x{:08X})",
+            header.load_address, end_address, load_seg | kRamWindowBytes
         );
         return false;
     }
 
-    // Check entry point is valid
-    if (header.initial_pc < 0x80000000 || header.initial_pc >= 0xA0000000) {
+    // The entry point must be main RAM in the same segment: one link segment
+    // per image, and direct control flow never changes segment (§2).
+    const uint32_t entry_seg = ram_window_segment(header.initial_pc);
+    if (entry_seg == kNoSegment) {
         error_msg = fmt::format(
-            "Invalid entry point 0x{:08X}. Must be in KSEG0",
+            "Invalid entry point 0x{:08X}. Must be in main RAM (KUSEG, KSEG0 "
+            "or KSEG1)",
             header.initial_pc
+        );
+        return false;
+    }
+    if (entry_seg != load_seg) {
+        error_msg = fmt::format(
+            "Entry point 0x{:08X} ({}) and load address 0x{:08X} ({}) are in "
+            "different segments; an image has one link segment",
+            header.initial_pc, segment_name(entry_seg),
+            header.load_address, segment_name(load_seg)
         );
         return false;
     }
@@ -187,22 +229,24 @@ bool PS1Executable::validate(std::string& error_msg) const {
     // while declaring BSS at the end of the meaningful bytes. Loading those
     // zero padding bytes and then clearing them as BSS is equivalent. Reject
     // every overlap that contains actual code/data.
+    // Compared physically: the header may name BSS in another segment than
+    // the code (the parser keeps every field as the header wrote it).
     if (header.memfill_size > 0) {
-        uint32_t bss_start = header.memfill_start;
-        uint32_t bss_end = header.bss_end();
-        uint32_t code_end = end_address();
+        uint32_t bss_start = header.memfill_start & kPhysMask;
+        uint32_t code_end = end_address() & kPhysMask;
 
         if (bss_start < code_end) {
-            if (bss_start < load_address()) {
+            if (bss_start < (load_address() & kPhysMask)) {
                 error_msg = fmt::format(
                     "BSS section [0x{:08X}, 0x{:08X}) begins before code "
                     "[0x{:08X}, 0x{:08X})",
-                    bss_start, bss_end, load_address(), code_end
+                    header.memfill_start, header.bss_end(), load_address(),
+                    end_address()
                 );
                 return false;
             }
             const size_t overlap_offset =
-                static_cast<size_t>(bss_start - load_address());
+                static_cast<size_t>(bss_start - (load_address() & kPhysMask));
             const bool has_nonzero_payload = std::any_of(
                 code_data.begin() + overlap_offset, code_data.end(),
                 [](uint8_t byte) { return byte != 0; });
@@ -210,7 +254,8 @@ bool PS1Executable::validate(std::string& error_msg) const {
                 error_msg = fmt::format(
                     "BSS section [0x{:08X}, 0x{:08X}) overlaps non-zero "
                     "code/data [0x{:08X}, 0x{:08X})",
-                    bss_start, bss_end, load_address(), code_end
+                    header.memfill_start, header.bss_end(), load_address(),
+                    end_address()
                 );
                 return false;
             }
@@ -274,21 +319,13 @@ std::optional<PS1Executable> PS1ExeParser::parse_buffer(
     // Copy header (first 2048 bytes)
     std::memcpy(&exe.header, buffer.data(), sizeof(PS1ExeHeader));
 
-    // Some EXEs (e.g. Kula World SCES-01000) store KUSEG addresses
-    // (0x00011000) instead of KSEG0 (0x80011000). KUSEG 0x0-0x1FFFFFFF
-    // mirrors the same physical RAM, so normalize to KSEG0 before
-    // validation. Only remap addresses that fall inside the 2 MB RAM
-    // mirror; 0 stays 0 (unused fields like initial_gp).
-    auto to_kseg0 = [](uint32_t& addr) {
-        if (addr != 0 && addr < 0x00200000) addr |= 0x80000000;
-    };
-    to_kseg0(exe.header.initial_pc);
-    to_kseg0(exe.header.initial_gp);
-    to_kseg0(exe.header.load_address);
-    to_kseg0(exe.header.memfill_start);
-    to_kseg0(exe.header.initial_sp);
-    to_kseg0(exe.header.initial_fp);
-    to_kseg0(exe.header.stack_base);
+    // The header's addresses are kept as written. Some EXEs (Kula World
+    // SCES-01000, Alien Resurrection SLUS-00633) carry KUSEG addresses
+    // (0x00011000) instead of KSEG0 ones (0x80011000): the BIOS jumps to the
+    // KUSEG entry and the program runs at KUSEG PCs, so its links, EPCs and
+    // I-cache tags are KUSEG. Folding them to KSEG0 compiled the program for
+    // a segment it never runs in (docs/SEGMENT_AWARE_CODE.md §3.2, §5.3).
+    // link_segment() names the segment; physical helpers do byte addressing.
 
     // Validate header
     if (!validate_header(exe.header, error_msg)) {

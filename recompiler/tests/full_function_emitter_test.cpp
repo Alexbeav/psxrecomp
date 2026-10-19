@@ -260,6 +260,19 @@ void patch_range_delay_boundaries(BiosConfig config) {
     }
 }
 
+void mod_guest_dispatch_precedes_hardware_routes() {
+    const auto result = run_case("mod-guest-dispatch", {0x03E00008u, 0u},
+                                {function_at(kBase, kBase + 4u, {kBase})});
+    const auto dispatch = result.dispatch.find("static void psx_dispatch_impl(");
+    const auto hook = result.dispatch.find("found = psx_mod_dispatch_guest_function(cpu, addr)", dispatch);
+    const auto hle = result.dispatch.find("if (!found && g_psx_bios_hle_hook", dispatch);
+    const auto hardware = result.dispatch.find("if (!found && psx_bios_try_native_call_stub", dispatch);
+    expect(dispatch != std::string::npos && hook > dispatch && hook < hle && hle < hardware,
+           "mod-defined guest calls are handled before address normalization and hardware dispatch");
+    expect(result.dispatch.find("if (g_psx_mod_guest_functions)", dispatch) < hook,
+           "no active mod guest functions keeps the dispatch path dormant");
+}
+
 int main() {
     BiosConfig config{};
     config.config_path = "test://full-function-emitter";
@@ -282,6 +295,7 @@ int main() {
     fragment_split_load_falls_back();
     noncomplementary_lwl_falls_back();
     complementary_lwl_lwr_stays_native();
+    mod_guest_dispatch_precedes_hardware_routes();
     patch_range_guards(config);
     patch_range_delay_boundaries(config);
 

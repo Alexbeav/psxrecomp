@@ -12,6 +12,8 @@ extern "C" {
 
 /* Initialize software renderer */
 void sw_renderer_init(uint16_t* vram);
+/* Rebind the VRAM array only; draw state is kept. */
+void sw_renderer_rebind_vram(uint16_t* vram);
 
 /* Internal-resolution supersampling (SSAA).
  * scale == 1 : disabled, renderer behaves exactly as native VRAM only.
@@ -41,6 +43,14 @@ uint32_t sw_perspective_triangle_count(void);
  * transparency-aware). Independent of supersampling. */
 void sw_set_texture_filter(int bilinear);
 int  sw_texture_filter(void);
+
+/* Netplay CPU-authoritative VRAM (dual-raster SW@1x or the software GPU):
+ * on = ignore the precise/perspective overrides and texture filtering, so the
+ * guest-visible VRAM (GP0 C0 readback, savestates) is the hardware image on
+ * every peer. The filter request is remembered and restored when it goes off.
+ * The GPU presentation surface keeps every enhancement. */
+void sw_set_faithful_authority(int on);
+int  sw_faithful_authority(void);
 
 /* Draw state — must be set by gpu.c before each primitive */
 void sw_set_semi_transparency(int enabled, int mode);
@@ -109,10 +119,13 @@ void sw_set_draw_offset(int x, int y);
  * base_x. wide_w<=0 disables. set_target selects/clears the mirror per back
  * buffer; render_wide_display is the present source for the displayed buffer. */
 void sw_wide_configure(int wide_w, int offset);
+void sw_wide_set_view(int enabled, int shift, int pad_left, int pad_right);
 void sw_wide_set_target(int base_x);
 void sw_wide_disable_target(void);
 void sw_wide_clear(int base_x, int y, int h, uint16_t color);
 void sw_wide_clear_margins(int base_x, int y, int h, uint16_t color, int sides);
+void sw_wide_feedback_rect(int src_base, int src_x, int src_y, int dst_x, int dst_y,
+                           int w, int h, int r, int g, int b, int raw, int semi);
 /* MMX6 native-wide reveal-column tile: rasterize a 16x16 textured tile into the
  * wide surface ONLY (canonical VRAM + hi-res mirror untouched). See definition. */
 void sw_wide_emit_tile(int band_y, int x, int y, int u, int v,

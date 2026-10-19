@@ -17,6 +17,13 @@
 #endif
 #include <time.h>
 #include "debug_server.h"
+#include "host_launch_timing.h"
+#include "host_sampler.h"
+#include "savestate.h"
+#include "guest_cycle_profile.h"
+#include "host_osd.h"
+#include "psx_video_timing.h"
+#include "psx_netplay.h"
 #include "psx_bss.h"
 #include "nd_intro_ot.h"
 #include "latency_ring.h"
@@ -25,11 +32,20 @@
 #include "code_provider.h"
 #include "overlay_backend.h"
 #include "cpu_state.h"
+#include "psx_openxr.h"
+#include "mod_controller_source.h"
 #include "pgxp.h"
+#ifndef PSX_NO_DEBUG_TOOLS
+#include "psx_disasm.h"
+#endif
 #include "dma.h"
 #include "gpu.h"
+#include "gpu_hd_textures.h"
 #include "gpu_render.h"   /* gr_scale + gr_render_display_hires (screenshot_hires) */
 #include "present_ring.h"
+#include "gpu_timeline.h"
+#include "gte_nclip_stats.h"
+#include "present_image_ring.h"
 #include "load_transition_ring.h"
 #include "cdrom.h"
 #include "sio.h"
@@ -41,18 +57,29 @@
 #include "psx_cycles.h"
 #include "timers.h"
 #include "dirty_ram_interp.h"
+#include "psx_memory.h"
 #include "card_read_summary.h"
 #include "card_data_writes.h"
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
+#include "render_pass.h"
+#include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
 #include "guest_tty.h"
+#include "frame_fingerprint.h"
+#include "psx_segment_miss.h"
+#include "psx_rewind.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+
+#if defined(_MSC_VER)
+/* MSVC's three-argument reentrant tokenizer is named strtok_s. */
+#  define strtok_r strtok_s
+#endif
 
 #ifndef DEFAULT_DEBUG_PORT
 #error DEFAULT_DEBUG_PORT must be defined by the runtime target.
@@ -86,6 +113,7 @@
 #endif
 
 #include "psx_sdl.h"
+#include "debug_socket_io.h"
 
 /* ---- Externs from runtime ---- */
 extern uint32_t i_stat;
@@ -121,7 +149,15 @@ static SDL_mutex  *s_io_mutex    = NULL;
 static SDL_cond   *s_io_req_cv   = NULL;   /* emu waits on this for a request   */
 static SDL_cond   *s_io_resp_cv  = NULL;   /* I/O waits on this for a response  */
 static volatile int s_io_state   = IO_IDLE;
-static volatile int s_io_running  = 0;
+#if defined(PSX_SDL3)
+static SDL_AtomicInt s_io_running;
+static int io_is_running(void *ctx) { (void)ctx; return SDL_GetAtomicInt(&s_io_running); }
+static void io_set_running(int on) { SDL_SetAtomicInt(&s_io_running, on); }
+#else
+static SDL_atomic_t s_io_running;
+static int io_is_running(void *ctx) { (void)ctx; return SDL_AtomicGet(&s_io_running); }
+static void io_set_running(int on) { SDL_AtomicSet(&s_io_running, on); }
+#endif
 static char  s_io_req[RECV_BUF_SIZE];      /* request line (I/O -> emu)         */
 static char *s_resp_buf = NULL;            /* response bytes (emu -> I/O)       */
 static size_t s_resp_len = 0, s_resp_cap = 0;
@@ -151,58 +187,26 @@ int debug_server_fmv_quiet(void)
 uint64_t s_frame_count = 0;
 
 /* ---- Layer-1 first-divergence per-frame fingerprint ----------------------
- * Cumulative, ORDER-DEPENDENT rolling hashes over MAIN-RAM guest writes.
- * The point: native and dirty-interp are the SAME deterministic program run
- * two ways; they must produce an identical sequence of (addr,val,store_pc)
- * guest-RAM writes until a codegen/timing bug forks them. A guest RAM write
- * (and the PC issuing it) is pure guest semantics — granularity-invariant
- * across native vs interp (unlike host block/dispatch counts). We accumulate
- * two rolling hashes and snapshot them once per guest frame. Diff two runs'
- * per-frame columns: the FIRST frame whose hash differs is the first-divergence
- * frame, found in O(1) instead of O(n) function guesses. wr_hash vs pc_hash
- * classifies the fork: pc differs but wr matches => same writes via a different
- * control path; wr differs => actual state divergence. Reusable for any title.
- * Hashed over main RAM (phys < 0x200000) only — game state lives there; MMIO/
- * scratchpad churn (device polling) would add benign cross-backend noise. */
-uint64_t g_fp_wr_hash    = 1469598103934665603ULL;  /* FNV-1a-style seed (main RAM) */
-uint64_t g_fp_pc_hash    = 1469598103934665603ULL;  /* store-PC path sig (main RAM)  */
-uint64_t g_fp_write_count = 0;
-uint64_t g_fp_mmio_hash  = 1469598103934665603ULL;  /* SEPARATE: device-register writes */
-uint64_t g_fp_mmio_count = 0;
-uint64_t g_fp_sp_hash    = 1469598103934665603ULL;  /* SEPARATE: scratchpad (0x1F8000xx) writes */
-uint64_t g_fp_sp_count   = 0;
+ * Cumulative hashes over guest writes, snapshotted once per guest frame.
+ * Native and dirty-interp are the SAME deterministic program run two ways;
+ * diff two runs' per-frame columns and the FIRST frame that differs is the
+ * first-divergence frame, found in O(1) instead of O(n) function guesses.
+ * Column semantics (which ones judge guest state, which only locate a fork)
+ * live in frame_fingerprint.h and docs/TCP_COMMANDS.md. Reusable for any
+ * title. */
+static PsxFrameFingerprint s_fp = PSX_FRAME_FINGERPRINT_INIT;
 #define FP_RING_CAP 32768
-typedef struct { uint32_t frame; uint64_t wr_hash; uint64_t pc_hash; uint64_t wcount;
-                 uint64_t mmio_hash; uint64_t mmio_count;
-                 uint64_t sp_hash; uint64_t sp_count; uint64_t cyc; } FpEntry;
+typedef struct { uint32_t frame; PsxFrameFingerprint fp; uint64_t cyc; } FpEntry;
 static PSX_BSS FpEntry  s_fp_ring[FP_RING_CAP];
 static uint32_t s_fp_head  = 0;
 static uint64_t s_fp_total = 0;
 
-/* Record a guest WRITE into the per-frame fingerprint. Main RAM (phys<0x200000)
- * feeds the proven wr/pc hashes. Scratchpad (0x1F800000..0x1F8003FF) feeds a
- * SEPARATE sp_hash — it was previously dropped entirely (the blind spot that
- * hid a possible pre-1823 scratchpad-state fork), but folding it into wr_hash
- * would pollute the main-RAM signal with benign device-poll churn, so it gets
- * its own classified column instead. */
+/* Record a guest WRITE into the per-frame fingerprint. Live main RAM feeds
+ * the wr/pc/wc/ws columns; scratchpad (0x1F800000..0x1F8003FF) feeds its own
+ * sp column so device-poll churn there cannot pollute the main-RAM signal. */
 static inline void fp_record_write(uint32_t phys, uint32_t val, uint32_t pc)
 {
-    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {   /* scratchpad — separate hash */
-        uint64_t s = g_fp_sp_hash;
-        s = (s ^ (uint64_t)phys) * 1099511628211ULL;
-        s = (s ^ (uint64_t)val)  * 1099511628211ULL;
-        s = (s ^ (uint64_t)pc)   * 1099511628211ULL;
-        g_fp_sp_hash = s;
-        g_fp_sp_count++;
-        return;
-    }
-    if (phys >= 0x200000u) return;                  /* main RAM only */
-    uint64_t h = g_fp_wr_hash;
-    h = (h ^ (uint64_t)phys) * 1099511628211ULL;
-    h = (h ^ (uint64_t)val)  * 1099511628211ULL;
-    g_fp_wr_hash = h;
-    g_fp_pc_hash = (g_fp_pc_hash ^ (uint64_t)pc) * 1099511628211ULL;
-    g_fp_write_count++;
+    psx_fp_record_write(&s_fp, phys, val, pc, psx_ram_live_bytes());
 }
 
 /* MMIO/device-register write signature — separate hash so the diff can tell a
@@ -211,25 +215,14 @@ static inline void fp_record_write(uint32_t phys, uint32_t val, uint32_t pc)
  * only sees the RAM AFTERMATH of a CD/IRQ-register divergence. */
 static inline void fp_record_mmio(uint32_t addr, uint32_t val, uint32_t pc)
 {
-    uint64_t h = g_fp_mmio_hash;
-    h = (h ^ (uint64_t)addr) * 1099511628211ULL;
-    h = (h ^ (uint64_t)val)  * 1099511628211ULL;
-    h = (h ^ (uint64_t)pc)   * 1099511628211ULL;
-    g_fp_mmio_hash = h;
-    g_fp_mmio_count++;
+    psx_fp_record_mmio(&s_fp, addr, val, pc);
 }
 
 static void fp_snapshot(uint32_t frame)
 {
     FpEntry *e = &s_fp_ring[s_fp_head];
-    e->frame      = frame;
-    e->wr_hash    = g_fp_wr_hash;
-    e->pc_hash    = g_fp_pc_hash;
-    e->wcount     = g_fp_write_count;
-    e->mmio_hash  = g_fp_mmio_hash;
-    e->mmio_count = g_fp_mmio_count;
-    e->sp_hash    = g_fp_sp_hash;
-    e->sp_count   = g_fp_sp_count;
+    e->frame = frame;
+    e->fp    = s_fp;
     { extern uint64_t psx_get_cycle_count(void); e->cyc = psx_get_cycle_count(); }
     s_fp_head  = (s_fp_head + 1) % FP_RING_CAP;
     s_fp_total++;
@@ -311,11 +304,20 @@ static uint64_t s_dirty_break_hits = 0;
 /* ---- Input override ---- */
 static int s_input_override = -1;
 static int s_input_frames   = 0;
+/* Port 2 (set_input / press / clear_input "port":2): digital buttons only,
+ * for driving two-player modes headless. */
+static int s_input_override_p2 = -1;
+static int s_input_frames_p2   = 0;
 /* Optional analog-stick override (set_input lx/ly/rx/ry, 0..255, 0x80 =
  * centre). Lets injected input drive analog-mode movement; consumed by the
  * pad sampler alongside the button word. */
 static int     s_axis_override = 0;
 static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
+/* Test-only controller identity override for set_input/press. -1 follows the
+ * selected host device/config; 0/1/2 force digital/DualShock/JogCon. */
+static int s_pad_type_override = -1;
+/* Explicit serial presence while a set_input/press injection is active. */
+static int s_pad_connected_override[2] = { -1, -1 };
 
 /*
  * Exact guest-VBlank input route. A client queues run-length encoded digital
@@ -333,6 +335,9 @@ static uint32_t s_input_route_count = 0;
 static uint32_t s_input_route_index = 0;
 static uint32_t s_input_route_remaining = 0;
 static int      s_input_route_active = 0;
+/* input_route_start at_frame: the route waits for this vblank count, so a
+ * route replays on the same guest frames in every run (0 = start now). */
+static uint64_t s_input_route_start_frame = 0;
 
 /* ---- Frontend turbo override ---- */
 static volatile int s_turbo_enabled = 0;
@@ -408,9 +413,18 @@ static uint32_t s_wtrace_head = 0;
 static WriteTraceEntry *s_wtrace_boot = NULL;
 static uint64_t s_wtrace_boot_total = 0;  /* matching writes ever seen */
 static uint32_t s_wtrace_boot_count = 0;  /* entries retained */
-#define WTRACE_BOOT_MAX_RANGES 12
+/* Launch-time PSX_WTRACE_BOOT_RANGES entries get their OWN slots in both the
+ * boot and transition rings, on top of the built-in defaults (boot uses up to
+ * 12, transition up to 10), so a default set can never crowd them out. */
+#define WTRACE_ENV_MAX_RANGES 8
+#define WTRACE_BOOT_DEFAULT_MAX_RANGES 12
+#define WTRACE_BOOT_MAX_RANGES (WTRACE_BOOT_DEFAULT_MAX_RANGES + WTRACE_ENV_MAX_RANGES)
 static struct { uint32_t lo, hi; } s_wtrace_boot_ranges[WTRACE_BOOT_MAX_RANGES];
 static int s_wtrace_boot_range_count = 0;
+/* Outcome of PSX_WTRACE_BOOT_RANGES, reported by wtrace_boot_stats and
+ * wtrace_trans_stats: ranges applied, and why a spec was refused (empty = ok). */
+static int  s_wtrace_env_ranges = 0;
+static char s_wtrace_env_error[96] = "";
 
 /* Multi-range filter: up to 64 [lo, hi) address ranges. Boot defaults
  * occupy ~15; investigative arms must always have headroom. */
@@ -446,7 +460,8 @@ static uint32_t s_wtrace_all_head = 0;
  * long-lived timeseries for high-value scheduler/render state by recording only
  * writes whose value changed. */
 #define WRITE_TRACE_TRANS_CAP (1 << 20)
-#define WTRACE_TRANS_MAX_RANGES 16
+#define WTRACE_TRANS_DEFAULT_MAX_RANGES 16
+#define WTRACE_TRANS_MAX_RANGES (WTRACE_TRANS_DEFAULT_MAX_RANGES + WTRACE_ENV_MAX_RANGES)
 typedef struct {
     uint64_t seq;
     uint32_t addr;
@@ -747,7 +762,7 @@ static uint32_t trace_read_word(CPUState *cpu, uint32_t addr)
 {
     (void)cpu;
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys > 0x001FFFFCu &&
+    if (phys > psx_ram_live_bytes() - 4u &&
         (phys < 0x1F800000u || phys > 0x1F8003FCu)) {
         return 0;
     }
@@ -764,7 +779,7 @@ static uint32_t trace_read_half(CPUState *cpu, uint32_t addr)
 {
     (void)cpu;
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys > 0x001FFFFEu &&
+    if (phys > psx_ram_live_bytes() - 2u &&
         (phys < 0x1F800000u || phys > 0x1F8003FEu)) {
         return 0;
     }
@@ -1367,7 +1382,7 @@ static void evcb_snapshot_capture(EvCBTag tag, uint64_t fn_entry_seq) {
 
     /* Convert RAM base ptr to RAM offset (kernel uses cached + uncached
      * mirrors; mask off region bits). */
-    uint32_t base_ram = base_ptr & 0x001FFFFFu;
+    uint32_t base_ram = psx_ram_canonical_offset(base_ptr);
 
     EvCBSnapshot *e = &s_evcb_ring[s_evcb_ring_seq % EVCB_RING_CAP];
     e->seq              = s_evcb_ring_seq;
@@ -1391,7 +1406,7 @@ static void evcb_snapshot_capture(EvCBTag tag, uint64_t fn_entry_seq) {
 
     for (uint32_t i = 0; i < n_entries; i++) {
         uint32_t off = base_ram + i * EVCB_ENTRY_SIZE;
-        if (off + EVCB_ENTRY_SIZE > 0x00200000u) break;
+        if (off + EVCB_ENTRY_SIZE > psx_ram_live_bytes()) break;
         e->entries[i].cls      = evcb_read_u32_ram(off + 0);
         e->entries[i].status   = evcb_read_u32_ram(off + 4);
         e->entries[i].spec     = evcb_read_u32_ram(off + 8);
@@ -1702,7 +1717,7 @@ static void call_focus_record(uint32_t func_addr)
         e->obj_18    = psx_read_word(phys + 0x18u);
         e->obj_30    = psx_read_word(phys + 0x30u);
         uint32_t out_phys = e->obj_30 & 0x1FFFFFFFu;
-        if (out_phys < 0x00200000u - 1u) {
+        if (out_phys < psx_ram_live_bytes() - 1u) {
             e->obj_30_0 = psx_read_byte(out_phys);
             e->obj_30_1 = psx_read_byte(out_phys + 1u);
         }
@@ -2054,6 +2069,12 @@ static inline void cyc_watch_observe(uint32_t block_leader_phys);  /* defined be
  * kernel exception-exit body (measured 55% on 0xF40) instead of the code that
  * actually ran. Entry-stamp attribution is leaf-biased but honest. */
 volatile uint32_t g_psx_last_fn_entry = 0;
+
+/* Last basic-block leader (phys) observed by debug_server_cyc_observe, which
+ * the recompiler emits at every compiled block leader and the dirty-RAM
+ * interpreter calls per block. Read by the guest-cycle profile ring. Stays 0
+ * in PSX_NO_DEBUG_TOOLS builds, which emit no per-block hook. */
+volatile uint32_t g_psx_last_block = 0;
 
 /* Addressable entry for overlay CPS callbacks (header inlines the Release path). */
 void debug_server_log_call_entry_fn(uint32_t func_addr) {
@@ -2676,8 +2697,9 @@ void debug_server_cyc_observe(uint32_t block_leader_phys) {
     (void)block_leader_phys;
     return;
 #else
-    if (s_fmv_quiet) return;
     uint32_t phys = block_leader_phys & 0x1FFFFFFFu;
+    g_psx_last_block = phys;
+    if (s_fmv_quiet) return;
     /* ND debug: PSX_ND_WOOD_CLEAR80=1 clears model+184 bit0x80 at the flag-load
      * leader so 0x5CF/'cras' models enter NdIntroWoodBatchSetup's textured path.
      * Fires before lw v1,184(a2) @ AB3C. Default-off. */
@@ -2694,7 +2716,7 @@ void debug_server_cyc_observe(uint32_t block_leader_phys) {
             if (a2) {
                 uint32_t fl = psx_read_word(a2 + 184u);
                 if (fl & 0x80u)
-                    psx_write_word(a2 + 184u, fl & ~0x80u);
+                    psx_host_write_word(a2 + 184u, fl & ~0x80u);
             }
         }
     }
@@ -2925,10 +2947,27 @@ static void handle_dirty_ram_stats(int id, const char *json)
              (unsigned long long)g_dirty_ram_native_handoffs,
              (unsigned)dirty_ram_get_bitmap());
 
+    /* Optional {"lo":"0x..","hi":"0x.."} keeps rows whose PC (compared with
+     * the KSEG bits masked off, as rows are keyed) lies in [lo, hi), and
+     * {"skip":N} pages past the first N matching rows. The row list is capped
+     * by the response buffer, so per_pc_matching / per_pc_emitted say whether
+     * this page is complete instead of truncating silently. */
+    char lo_s[32] = {0}, hi_s[32] = {0};
+    uint32_t lo = 0, hi = 0xFFFFFFFFu;
+    if (json_get_str(json, "lo", lo_s, sizeof(lo_s))) lo = hex_to_u32(lo_s) & 0x1FFFFFFFu;
+    if (json_get_str(json, "hi", hi_s, sizeof(hi_s))) hi = hex_to_u32(hi_s) & 0x1FFFFFFFu;
+    int skip = json_get_int(json, "skip", 0);
+    int matching = 0, emitted = 0;
     int first = 1;
     for (int i = 0; i < DIRTY_RAM_PC_TABLE_SIZE; i++) {
         DirtyRamPcEntry *e = &g_dirty_ram_pc_table[i];
         if (e->pc == 0 || e->hits == 0) continue;
+        uint32_t key = (uint32_t)e->pc & 0x1FFFFFFFu;
+        if (key < lo || key >= hi) continue;
+        if (matching++ < skip) continue;
+        /* Reserve enough tail room for all bitmap/guard diagnostics below. */
+        if (n >= (int)sizeof(buf) - 2048) continue;
+        emitted++;
         n += snprintf(buf + n, sizeof(buf) - n,
                       "%s{\"pc\":\"0x%08X\",\"hits\":%llu,\"insns\":%llu,"
                       "\"entries\":%llu,\"occ_crc\":\"0x%08X\","
@@ -2942,10 +2981,11 @@ static void handle_dirty_ram_stats(int id, const char *json)
                       (unsigned)e->occ_ok,
                       (unsigned)e->last_ext_ra);
         first = 0;
-        /* Reserve enough tail room for all bitmap/guard diagnostics below. */
-        if (n >= (int)sizeof(buf) - 2048) break;
     }
-    n += snprintf(buf + n, sizeof(buf) - n, "],\"dirty_bitmap_words\":[");
+    n += snprintf(buf + n, sizeof(buf) - n,
+                  "],\"per_pc_matching\":%d,\"per_pc_skipped\":%d,"
+                  "\"per_pc_emitted\":%d,\"dirty_bitmap_words\":[",
+                  matching, matching < skip ? matching : skip, emitted);
     uint32_t word_count = dirty_ram_get_bitmap_word_count();
     for (uint32_t i = 0; i < word_count; i++) {
         n += snprintf(buf + n, sizeof(buf) - n,
@@ -4975,13 +5015,17 @@ static void handle_ping(int id, const char *json)
     (void)json;
     /* Surface accumulated dispatch misses on every ping so they can't go
      * unnoticed across sessions (NES recomp template PRINCIPLES.md §13a:
-     * "A dispatch miss is a SILENT GAME-BREAKING BUG"). 0 = healthy. */
+     * "A dispatch miss is a SILENT GAME-BREAKING BUG"). 0 = healthy. Segment
+     * misses (docs/SEGMENT_AWARE_CODE.md §5.5) run interpreted rather than
+     * fail, and are surfaced the same way. */
     send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,"
              "\"dispatch_miss_total\":%llu,"
-             "\"dispatch_miss_unique\":%d}",
+             "\"dispatch_miss_unique\":%d,"
+             "\"segment_miss_total\":%llu}",
              id, (unsigned long long)s_frame_count,
              (unsigned long long)s_unknown_seq,
-             s_unknown_unique_count);
+             s_unknown_unique_count,
+             (unsigned long long)psx_segment_miss_total());
 }
 
 static void handle_frame(int id, const char *json)
@@ -4993,12 +5037,34 @@ static void handle_frame(int id, const char *json)
 
 /* Layer-1 first-divergence: dump the per-frame write fingerprint ring.
  * Params: count (default 1024), frame_lo / frame_hi (optional inclusive
- * filter). Entries are oldest-first within the window. Diff the wr/pc columns
- * of two runs (native vs interp/oracle): the first frame whose wr or pc differs
- * is the first-divergence frame. Small integer fields only — no large/ragged
+ * filter). Entries are oldest-first within the window. Judge two runs
+ * (native vs interp/oracle) on cyc/wc/ws/mmio/mc/sp/sc/qc; wr/pc are ordered
+ * locators (frame_fingerprint.h). Small integer fields only — no large/ragged
  * payload, so it never trips the trace-dump JSON/eviction problems. */
+/* Longest entry the format below can produce: every hash at 16 hex digits and
+ * every counter at 20 decimal digits comes to 284 bytes with the separator. */
+#define FP_JSON_ENTRY_MAX 320
+/* frame_fingerprint reset_on_load=1: restart the rolling hashes and the ring
+ * when the next savestate load completes, so two runs that load the same state
+ * (for example with and without a presentation mod) compare frame by frame
+ * from that guest point on, independent of what happened before the load. */
+static int s_fp_reset_on_load = 0;
+void debug_server_note_savestate_loaded(void)
+{
+    if (!s_fp_reset_on_load) return;
+    s_fp_reset_on_load = 0;
+    s_fp = (PsxFrameFingerprint)PSX_FRAME_FINGERPRINT_INIT;
+    s_fp_head = 0;
+    s_fp_total = 0;
+}
+
 static void handle_frame_fingerprint(int id, const char *json)
 {
+    if (json_get_int(json, "reset_on_load", 0)) {
+        s_fp_reset_on_load = 1;
+        send_fmt("{\"id\":%d,\"ok\":true,\"armed\":1}", id);
+        return;
+    }
     int count = json_get_int(json, "count", 1024);
     if (count < 1) count = 1;
     if (count > FP_RING_CAP) count = FP_RING_CAP;
@@ -5008,7 +5074,7 @@ static void handle_frame_fingerprint(int id, const char *json)
     uint32_t avail = (s_fp_total < FP_RING_CAP) ? (uint32_t)s_fp_total : FP_RING_CAP;
     uint32_t start = (s_fp_total < FP_RING_CAP) ? 0 : s_fp_head;
 
-    size_t BUF = 512 + (size_t)count * 224;
+    size_t BUF = 512 + (size_t)count * FP_JSON_ENTRY_MAX;
     char *out = (char *)malloc(BUF);
     if (!out) { send_err(id, "oom"); return; }
     size_t pos = 0;
@@ -5022,16 +5088,19 @@ static void handle_frame_fingerprint(int id, const char *json)
         if (fhi >= 0 && (int)e->frame > fhi) continue;
         pos += snprintf(out + pos, BUF - pos,
                         "%s{\"frame\":%u,\"wr\":\"0x%016llx\",\"pc\":\"0x%016llx\",\"wc\":%llu,"
+                        "\"ws\":\"0x%016llx\","
                         "\"mmio\":\"0x%016llx\",\"mc\":%llu,"
-                        "\"sp\":\"0x%016llx\",\"sc\":%llu,\"cyc\":%llu}",
+                        "\"sp\":\"0x%016llx\",\"sc\":%llu,\"qc\":%llu,\"cyc\":%llu}",
                         emitted ? "," : "", e->frame,
-                        (unsigned long long)e->wr_hash,
-                        (unsigned long long)e->pc_hash,
-                        (unsigned long long)e->wcount,
-                        (unsigned long long)e->mmio_hash,
-                        (unsigned long long)e->mmio_count,
-                        (unsigned long long)e->sp_hash,
-                        (unsigned long long)e->sp_count,
+                        (unsigned long long)e->fp.wr_hash,
+                        (unsigned long long)e->fp.pc_hash,
+                        (unsigned long long)e->fp.wcount,
+                        (unsigned long long)e->fp.wsum,
+                        (unsigned long long)e->fp.mmio_hash,
+                        (unsigned long long)e->fp.mmio_count,
+                        (unsigned long long)e->fp.sp_hash,
+                        (unsigned long long)e->fp.sp_count,
+                        (unsigned long long)e->fp.quiet_count,
                         (unsigned long long)e->cyc);
         emitted++;
     }
@@ -5162,6 +5231,60 @@ static void handle_get_registers(int id, const char *json)
     free(buf);
 }
 
+/* disasm: disassemble guest instructions. {"cmd":"disasm","addr":"0x8001121C",
+ * "count":32}. Reads live guest memory, so it works on EXE code and on
+ * RAM-installed/overlay code alike. Uses the recompiler's MIPS decoder.
+ * Reads go through psx_peek_word (main RAM / scratchpad / BIOS ROM only, no
+ * device reads, no read hooks); a word outside those comes back as
+ * {"word":null,"text":"<unreadable>"}. Compiled only with the debug tools,
+ * like the sources it needs (runtime.cmake). */
+#ifndef PSX_NO_DEBUG_TOOLS
+static void handle_disasm(int id, const char *json)
+{
+    char addr_str[32];
+    if (!json_get_str(json, "addr", addr_str, sizeof(addr_str))) {
+        send_err(id, "missing addr"); return;
+    }
+    const char *hex = addr_str;
+    if (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) hex += 2;
+    char *hex_end = NULL;
+    unsigned long long addr_val = strtoull(hex, &hex_end, 16);
+    if (hex_end == hex || *hex_end != '\0' || addr_val > 0xFFFFFFFFull) {
+        send_err(id, "bad addr"); return;
+    }
+    uint32_t addr = (uint32_t)addr_val & ~3u;
+    int count = json_get_int(json, "count", 16);
+    if (count < 1) count = 1;
+    if (count > 256) count = 256;
+
+    size_t bufsz = 512u + (size_t)count * 160u;
+    char *out = (char *)malloc(bufsz);
+    if (!out) { send_err(id, "oom"); return; }
+    int pos = snprintf(out, bufsz,
+                       "{\"id\":%d,\"ok\":true,\"addr\":\"0x%08X\",\"count\":%d,\"lines\":[",
+                       id, addr, count);
+    char text[128];
+    for (int i = 0; i < count; i++) {
+        uint32_t a = addr + (uint32_t)i * 4u;
+        uint32_t w = 0;
+        if (!psx_peek_word(a, &w)) {
+            pos += snprintf(out + pos, bufsz - (size_t)pos,
+                            "%s{\"addr\":\"0x%08X\",\"word\":null,\"text\":\"<unreadable>\"}",
+                            i ? "," : "", a);
+            continue;
+        }
+        text[0] = '\0';
+        (void)psx_disasm_one(w, a, text, (int)sizeof(text));
+        pos += snprintf(out + pos, bufsz - (size_t)pos,
+                        "%s{\"addr\":\"0x%08X\",\"word\":\"0x%08X\",\"text\":\"%s\"}",
+                        i ? "," : "", a, w, text);
+    }
+    pos += snprintf(out + pos, bufsz - (size_t)pos, "]}");
+    debug_server_send_line(out);
+    free(out);
+}
+#endif /* !PSX_NO_DEBUG_TOOLS */
+
 static void handle_read_ram(int id, const char *json)
 {
     char addr_str[32];
@@ -5171,9 +5294,9 @@ static void handle_read_ram(int id, const char *json)
     uint32_t addr = hex_to_u32(addr_str);
     int len = json_get_int(json, "len", 1);
     if (len < 1) len = 1;
-    /* Effectively the entire 2 MB RAM in one shot.  Response uses a heap-
-     * sized envelope so we don't truncate. */
-    if (len > 0x200000) len = 0x200000;
+    /* Effectively the entire live RAM (2 MB, or 8 MB with the opt-in map) in
+     * one shot.  Response uses a heap-sized envelope so we don't truncate. */
+    if (len > (int)psx_ram_live_bytes()) len = (int)psx_ram_live_bytes();
 
     /* Heap buffer for hex chars + JSON envelope.  Each byte = 2 hex chars. */
     size_t env = 256;
@@ -5216,7 +5339,7 @@ static void handle_write_ram(int id, const char *json)
     }
     uint32_t addr = hex_to_u32(addr_str);
     uint8_t val = (uint8_t)hex_to_u32(val_str);
-    psx_write_byte(addr, val);
+    psx_host_write_byte(addr, val);
     send_ok(id);
 }
 
@@ -5256,19 +5379,29 @@ static void handle_geom_correction(int id, const char *json)
     uint64_t tc_att = 0, tc_arm = 0, tc_off = 0, tc_nosrc = 0, tc_noz = 0;
     gpu_texture_correction_stats(&tc_att, &tc_arm, &tc_off, &tc_nosrc, &tc_noz);
     send_fmt("{\"id\":%d,\"ok\":true,"
-             "\"geometry_correction\":%d,"
+             "\"geometry_correction\":%d,\"texture_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
              "\"perspective_triangles\":%u,"
              "\"texcorr\":{\"attempts\":%llu,\"armed\":%llu,"
              "\"no_correction\":%llu,\"no_source\":%llu,\"no_depth\":%llu},"
              "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u,"
              "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
+             "\"position_fallback\":%d,\"preserve_projection\":%d,"
+             "\"culling\":%d,"
              "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
              "\"native\":%llu,\"value_mismatch\":%llu,\"trunc_reject\":%llu,"
-             "\"tolerance_reject\":%llu,\"w_valid\":%llu,"
-             "\"produced\":%llu,\"swc2_stores\":%llu}}",
+             "\"tolerance_reject\":%llu,\"depth_only\":%llu,\"w_valid\":%llu,"
+             "\"produced\":%llu,\"swc2_stores\":%llu,\"ppp_produced\":%llu,"
+             "\"ppp_window_fallback\":%llu,"
+             "\"tri_precise\":%llu,\"tri_mixed\":%llu,\"tri_native\":%llu,"
+             "\"rect_bypass\":%llu,\"rect_partial\":%llu,"
+             "\"nclip_precise\":%llu,\"nclip_disagree\":%llu,"
+             "\"nclip_corrected\":%llu,"
+             "\"word\":{\"lookups\":%llu,\"hit\":%llu,\"untracked\":%llu,"
+             "\"mismatch\":%llu,\"partial\":%llu,\"no_z\":%llu}}}",
              id,
              gte_geometry_correction_enabled(),
+             gpu_texture_correction_enabled(),
              (unsigned)hits,
              (unsigned)gpu_texture_correction_hits(),
              (unsigned long long)tc_att, (unsigned long long)tc_arm,
@@ -5276,6 +5409,8 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)tc_noz,
              (unsigned)lookups, (unsigned)unrec, (unsigned)ambig,
              pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
+             pgxp_position_fallback(), pgxp_preserve_projection(),
+             pgxp_culling(),
              (unsigned long long)ps.lookups,
              (unsigned long long)ps.dataflow_hit,
              (unsigned long long)ps.fallback_hit,
@@ -5283,14 +5418,281 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)ps.value_mismatch,
              (unsigned long long)ps.trunc_reject,
              (unsigned long long)ps.tolerance_reject,
+             (unsigned long long)ps.depth_only,
              (unsigned long long)ps.w_valid,
              (unsigned long long)ps.produced,
-             (unsigned long long)ps.swc2_stores);
+             (unsigned long long)ps.swc2_stores,
+             (unsigned long long)ps.ppp_produced,
+             (unsigned long long)ps.ppp_window_fallback,
+             (unsigned long long)ps.tri_precise,
+             (unsigned long long)ps.tri_mixed,
+             (unsigned long long)ps.tri_native,
+             (unsigned long long)ps.rect_bypass,
+             (unsigned long long)ps.rect_partial,
+             (unsigned long long)ps.nclip_precise,
+             (unsigned long long)ps.nclip_disagree,
+             (unsigned long long)ps.nclip_corrected,
+             (unsigned long long)ps.word_lookups,
+             (unsigned long long)ps.word_hit,
+             (unsigned long long)ps.word_untracked,
+             (unsigned long long)ps.word_mismatch,
+             (unsigned long long)ps.word_partial,
+             (unsigned long long)ps.word_no_z);
+}
+
+/* host_profile — histogram of the always-on host CPU sampler (host_sampler.c)
+ * over a window of the ring: {"cmd":"host_profile","since":SEQ} or
+ * {"cmd":"host_profile","frames":N} (the last N guest frames), optional
+ * "pass":1 (only samples inside render passes) / "pass":0 (outside), "top":K.
+ * Addresses are executable-relative; tools/host_profile.py names them. Take
+ * "seq" from one reply as "since" of the next to profile what ran between. */
+static void handle_host_profile(int id, const char *json)
+{
+    enum { MAXB = 4096 };
+    static uint64_t rvas[MAXB];
+    static uint32_t counts[MAXB];
+    const uint64_t seq = host_sampler_seq();
+    const uint64_t oldest = seq > HOST_SAMPLER_CAP ? seq - HOST_SAMPLER_CAP : 0;
+    int since = json_get_int(json, "since", -1);
+    const int frames = json_get_int(json, "frames", -1);
+    const int pass = json_get_int(json, "pass", -1);
+    int top = json_get_int(json, "top", 60);
+    if (top < 1) top = 1;
+    if (top > 400) top = 400;
+    uint64_t from = since >= 0 ? (uint64_t)since : oldest;
+    if (from < oldest) from = oldest;
+    uint32_t frame_lo = 0;
+    if (frames > 0) frame_lo = (uint32_t)s_frame_count - (uint32_t)frames;
+    int nb = 0;
+    uint64_t total = 0, dropped = 0;
+    for (uint64_t i = from; i < seq; i++) {
+        HostSample smp;
+        if (!host_sampler_get(i, &smp)) continue;
+        if (frames > 0 && (int32_t)(smp.frame - frame_lo) < 0) continue;
+        if (pass >= 0 && (int)smp.in_pass != pass) continue;
+        total++;
+        int b = 0;
+        while (b < nb && rvas[b] != smp.rva) b++;
+        if (b == nb) {
+            if (nb == MAXB) { dropped++; continue; }
+            rvas[nb] = smp.rva; counts[nb] = 0; nb++;
+        }
+        counts[b]++;
+    }
+    size_t cap = 256 + (size_t)top * 48;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { send_err(id, "oom"); return; }
+    size_t n = (size_t)snprintf(buf, cap,
+        "{\"id\":%d,\"ok\":true,\"supported\":%d,\"seq\":%llu,"
+        "\"image_base\":\"0x%llX\",\"samples\":%llu,\"unbinned\":%llu,\"top\":[",
+        id, host_sampler_supported(), (unsigned long long)seq,
+        (unsigned long long)host_sampler_image_base(),
+        (unsigned long long)total, (unsigned long long)dropped);
+    for (int k = 0; k < top; k++) {
+        int best = -1;
+        for (int b = 0; b < nb; b++)
+            if (counts[b] && (best < 0 || counts[b] > counts[best])) best = b;
+        if (best < 0) break;
+        n += (size_t)snprintf(buf + n, cap - n, "%s[\"0x%llX\",%u]", k ? "," : "",
+                              (unsigned long long)rvas[best], counts[best]);
+        counts[best] = 0;
+    }
+    snprintf(buf + n, cap - n, "]}");
+    send_fmt("%s", buf);
+    free(buf);
+}
+
+/* pgxp_shadow — read PGXP shadow slots: {"cmd":"pgxp_shadow","addr":A,
+ * "count":N} walks N guest words from A (RAM / scratchpad); "space":"gpr" or
+ * "gte" with "index"/"count" reads register shadows instead. Each slot: the
+ * word it describes, whether it is live this generation, the per-half/depth
+ * flags (1 = X, 2 = Y, 4 = Z) and the 16.16 positions. Pair it with read_ram
+ * to see whether a packet word still matches its shadow. */
+static void handle_pgxp_shadow(int id, const char *json)
+{
+    char sp[16] = "";
+    json_get_str(json, "space", sp, sizeof sp);
+    int space = strcmp(sp, "gpr") == 0 ? 1 : strcmp(sp, "gte") == 0 ? 2 : 0;
+    char addr_str[32] = "";
+    uint32_t key = space ? (uint32_t)json_get_int(json, "index", 0)
+                         : (json_get_str(json, "addr", addr_str, sizeof addr_str)
+                                ? hex_to_u32(addr_str) : 0u);
+    int count = json_get_int(json, "count", 1);
+    if (count < 1) count = 1;
+    if (count > 256) count = 256;
+    static char buf[256 * 112 + 128];
+    size_t n = (size_t)snprintf(buf, sizeof buf, "{\"id\":%d,\"ok\":true,\"slots\":[", id);
+    for (int i = 0; i < count && n < sizeof buf - 128; i++) {
+        uint32_t k = space ? key + (uint32_t)i : key + (uint32_t)i * 4u;
+        int live = 0; uint32_t value = 0, flags = 0; int32_t x16 = 0, y16 = 0; uint16_t z = 0;
+        if (!pgxp_debug_shadow(space, k, &live, &value, &flags, &x16, &y16, &z))
+            break;
+        n += (size_t)snprintf(buf + n, sizeof buf - n,
+                              "%s{\"key\":\"0x%08X\",\"live\":%d,\"value\":\"0x%08X\","
+                              "\"flags\":%u,\"x16\":%d,\"y16\":%d,\"z\":%u}",
+                              i ? "," : "", k, live, value, flags, x16, y16, z);
+    }
+    snprintf(buf + n, sizeof buf - n, "]}");
+    send_fmt("%s", buf);
+}
+
+/* pgxp_miss_ring — the newest refused perspective-depth lookups (always-on
+ * ring, PGXP_MISS_RING_CAP deep): {"cmd":"pgxp_miss_ring","count":N}. Each
+ * entry: packet word address (canonical RAM offset), the word the GPU
+ * consumed, the word/flags the shadow held, and the reason (untracked,
+ * mismatch, partial, no_z). Join addr with wtrace_dump to name the writer. */
+static void handle_pgxp_miss_ring(int id, const char *json)
+{
+    static const char *const reasons[] = { "?", "untracked", "mismatch",
+                                           "partial", "no_z" };
+    const PGXPWordMiss *ring; uint32_t cap;
+    uint64_t total = pgxp_word_miss_ring(&ring, &cap);
+    int count = json_get_int(json, "count", 256);
+    uint64_t avail = total < cap ? total : cap;
+    if (count < 0) count = 0;
+    if ((uint64_t)count > avail) count = (int)avail;
+    size_t sz = (size_t)count * 160u + 256u;
+    char *buf = (char *)malloc(sz);
+    if (!buf) { send_err(id, "oom"); return; }
+    size_t n = (size_t)snprintf(buf, sz, "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
+                                id, (unsigned long long)total);
+    for (int i = 0; i < count; i++) {
+        const PGXPWordMiss *m = &ring[(total - (uint64_t)count + (uint64_t)i) % cap];
+        n += (size_t)snprintf(buf + n, sz - n,
+                              "%s{\"seq\":%llu,\"addr\":\"0x%08X\",\"packet\":\"0x%08X\","
+                              "\"shadow\":\"0x%08X\",\"flags\":%u,\"live\":%u,\"reason\":\"%s\"}",
+                              i ? "," : "", (unsigned long long)m->seq, m->addr, m->packet,
+                              m->shadow_value, m->shadow_flags, m->live,
+                              reasons[m->reason < 5 ? m->reason : 0]);
+    }
+    snprintf(buf + n, sz - n, "]}");
+    send_fmt("%s", buf);
+    free(buf);
+}
+
+/* pgxp_tri_ring — the always-on ring of geometry-corrected triangles:
+ * {"cmd":"pgxp_tri_ring","frame":F,"pass":0|1,"x0":..,"y0":..,"x1":..,
+ * "y1":..,"count":N}. Every filter is optional: frame keeps one guest frame,
+ * pass keeps game (0) or render-pass (1) triangles, the box keeps triangles
+ * with any packet vertex inside [x0,x1]x[y0,y1] (packet integers). Returns
+ * the newest N matches (default 4096) oldest first. Per triangle: packet
+ * address, opcode, and per vertex the packet word, its integers, the 16.16
+ * position handed to the rasterizer, its source (0 native, 1 fallback,
+ * 2 dataflow) and the validated GTE depth handed on (0 none). Join vertices
+ * by word across triangles to find cracks. */
+static void handle_pgxp_tri_ring(int id, const char *json)
+{
+    const PGXPTriRecord *ring; uint32_t cap;
+    const uint64_t total = pgxp_tri_ring(&ring, &cap);
+    const uint64_t avail = total < cap ? total : cap;
+    const int frame = json_get_int(json, "frame", -1);
+    const int pass = json_get_int(json, "pass", -1);
+    const int has_box = strstr(json, "\"x0\"") != NULL;
+    const int x0 = json_get_int(json, "x0", -2048), y0 = json_get_int(json, "y0", -2048);
+    const int x1 = json_get_int(json, "x1", 2047),  y1 = json_get_int(json, "y1", 2047);
+    int count = json_get_int(json, "count", 4096);
+    if (count < 1) count = 1;
+    if (count > 16384) count = 16384;
+    /* Walk newest -> oldest collecting matches, then emit oldest first. */
+    uint64_t *hits = (uint64_t *)malloc((size_t)count * sizeof(uint64_t));
+    if (!hits) { send_err(id, "oom"); return; }
+    int n = 0;
+    for (uint64_t k = 0; k < avail && n < count; k++) {
+        const uint64_t seq = total - 1 - k;
+        const PGXPTriRecord *r = &ring[seq % cap];
+        if (frame >= 0 && r->frame != (uint32_t)frame) continue;
+        if (pass >= 0 && r->pass != (uint8_t)pass) continue;
+        if (has_box) {
+            int in = 0;
+            for (int i = 0; i < 3; i++)
+                if (r->raw_x[i] >= x0 && r->raw_x[i] <= x1 &&
+                    r->raw_y[i] >= y0 && r->raw_y[i] <= y1) in = 1;
+            if (!in) continue;
+        }
+        hits[n++] = seq;
+    }
+    const size_t sz = (size_t)n * 400u + 256u;
+    char *buf = (char *)malloc(sz);
+    if (!buf) { free(hits); send_err(id, "oom"); return; }
+    size_t p = (size_t)snprintf(buf, sz, "{\"id\":%d,\"ok\":true,\"total\":%llu,\"count\":%d,\"tris\":[",
+                                id, (unsigned long long)total, n);
+    for (int j = n - 1; j >= 0; j--) {
+        const PGXPTriRecord *r = &ring[hits[j] % cap];
+        p += (size_t)snprintf(buf + p, sz - p,
+            "%s{\"seq\":%llu,\"f\":%u,\"a\":\"0x%08X\",\"op\":\"0x%02X\",\"pass\":%u,\"v\":[",
+            j == n - 1 ? "" : ",", (unsigned long long)r->seq, r->frame, r->src_addr,
+            r->op, r->pass);
+        for (int i = 0; i < 3; i++)
+            p += (size_t)snprintf(buf + p, sz - p,
+                "%s[%u,\"0x%08X\",%d,%d,%d,%d,%u,%u]", i ? "," : "", r->vidx[i], r->word[i],
+                r->raw_x[i], r->raw_y[i], r->x16[i], r->y16[i], r->src[i], r->z[i]);
+        p += (size_t)snprintf(buf + p, sz - p, "]}");
+    }
+    snprintf(buf + p, sz - p, "]}");
+    debug_server_send_line(buf);
+    free(buf);
+    free(hits);
+}
+
+/* pgxp_store_ring — the always-on ring of shadowed memory writes:
+ * {"cmd":"pgxp_store_ring","addr_lo":"0x..","addr_hi":"0x..","pc":"0x..",
+ * "frame":F,"count":N}. addr range is [lo, hi); pc keeps one storing
+ * instruction; frame keeps one guest frame.
+ * Returns the newest N matches oldest first: store PC, address, value,
+ * opcode, source register and its shadow (live, flags) and the destination
+ * shadow afterwards (flags, 16.16 halves). */
+static void handle_pgxp_store_ring(int id, const char *json)
+{
+    const PGXPStoreRecord *ring; uint32_t cap;
+    const uint64_t total = pgxp_store_ring(&ring, &cap);
+    if (!cap) { send_err(id, "pgxp store ring not allocated (engine never armed)"); return; }
+    const uint64_t avail = total < cap ? total : cap;
+    char s[32];
+    uint32_t lo = 0, hi = 0xFFFFFFFFu, pc = 0;
+    int has_pc = 0;
+    if (json_get_str(json, "addr_lo", s, sizeof s)) lo = hex_to_u32(s);
+    if (json_get_str(json, "addr_hi", s, sizeof s)) hi = hex_to_u32(s);
+    if (json_get_str(json, "pc", s, sizeof s)) { pc = hex_to_u32(s); has_pc = 1; }
+    const int frame = json_get_int(json, "frame", -1);
+    int count = json_get_int(json, "count", 1024);
+    if (count < 1) count = 1;
+    if (count > 65536) count = 65536;
+    uint64_t *hits = (uint64_t *)malloc((size_t)count * sizeof(uint64_t));
+    if (!hits) { send_err(id, "oom"); return; }
+    int n = 0;
+    for (uint64_t k = 0; k < avail && n < count; k++) {
+        const uint64_t seq = total - 1 - k;
+        const PGXPStoreRecord *r = &ring[seq % cap];
+        if (frame >= 0 && r->frame != (uint32_t)frame) continue;
+        if (r->addr < lo || r->addr >= hi) continue;
+        if (has_pc && r->pc != pc) continue;
+        hits[n++] = seq;
+    }
+    const size_t sz = (size_t)n * 200u + 256u;
+    char *buf = (char *)malloc(sz);
+    if (!buf) { free(hits); send_err(id, "oom"); return; }
+    size_t p = (size_t)snprintf(buf, sz, "{\"id\":%d,\"ok\":true,\"total\":%llu,\"count\":%d,\"stores\":[",
+                                id, (unsigned long long)total, n);
+    for (int j = n - 1; j >= 0; j--) {
+        const PGXPStoreRecord *r = &ring[hits[j] % cap];
+        p += (size_t)snprintf(buf + p, sz - p,
+            "%s{\"seq\":%llu,\"f\":%u,\"pc\":\"0x%08X\",\"a\":\"0x%08X\",\"v\":\"0x%08X\","
+            "\"op\":\"0x%02X\",\"reg\":%u,\"src_live\":%u,\"src_flags\":%u,"
+            "\"dst_flags\":%u,\"x16\":%d,\"y16\":%d}",
+            j == n - 1 ? "" : ",", (unsigned long long)r->seq, r->frame, r->pc, r->addr,
+            r->value, r->op, r->reg, r->src_live, r->src_flags, r->dst_flags,
+            r->dst_x16, r->dst_y16);
+    }
+    snprintf(buf + p, sz - p, "]}");
+    debug_server_send_line(buf);
+    free(buf);
+    free(hits);
 }
 
 /* pgxp — live-tune the value-propagation engine for one-toggle isolation runs
- * without a rebuild: {"cmd":"pgxp","cpu_mode":0|1,"tolerance":F}. Fields are
- * optional; the reply echoes the resulting state (same shape as
+ * without a rebuild: {"cmd":"pgxp","cpu_mode":0|1,"tolerance":F,
+ * "position_fallback":0|1,"preserve_projection":0|1,"culling":0|1}. Fields
+ * are optional; the reply echoes the resulting state (same shape as
  * geom_correction's "pgxp" object, flattened). */
 static void handle_pgxp(int id, const char *json)
 {
@@ -5309,6 +5711,15 @@ static void handle_pgxp(int id, const char *json)
     int cm = json_get_int(json, "cpu_mode", -1);
     if (cm >= 0)
         pgxp_set_cpu_mode(cm != 0);
+    int pf = json_get_int(json, "position_fallback", -1);
+    if (pf >= 0)
+        pgxp_set_position_fallback(pf != 0);
+    int pp = json_get_int(json, "preserve_projection", -1);
+    if (pp >= 0)
+        pgxp_set_preserve_projection(pp != 0);
+    int cu = json_get_int(json, "culling", -1);
+    if (cu >= 0)
+        pgxp_set_culling(cu != 0);
     /* tolerance is fractional (sub-pixel), so scan it directly — json_get_int
      * would truncate 0.5 to 0. */
     const char *p = strstr(json, "\"tolerance\"");
@@ -5318,10 +5729,28 @@ static void handle_pgxp(int id, const char *json)
         if (*p == '-' || (*p >= '0' && *p <= '9') || *p == '.')
             pgxp_set_tolerance((float)strtod(p, NULL));
     }
+    /* Renderer side (G1.14): depth-buffer state and cumulative counts of
+     * depth-tested triangles, depth clears and seam-expanded triangles. */
+    uint64_t depth_tris = 0, depth_clears = 0, seam_tris = 0;
+    gl_renderer_pgxp_render_stats(&depth_tris, &depth_clears, &seam_tris);
+    uint64_t dr[5];
+    gl_renderer_pgxp_depth_clear_reasons(dr);
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"cpu_mode\":%d,"
-             "\"tolerance\":%.3f,\"suppress\":%u,\"active\":%d}",
+             "\"tolerance\":%.3f,\"position_fallback\":%d,"
+             "\"preserve_projection\":%d,\"culling\":%d,"
+             "\"suppress\":%u,\"active\":%d,\"depth_buffer\":%d,"
+             "\"depth_tris\":%llu,\"depth_clears\":%llu,\"seam_tris\":%llu,"
+             "\"depth_clear_reasons\":{\"config\":%llu,\"area\":%llu,\"fill\":%llu,"
+             "\"threshold\":%llu,\"present\":%llu}}",
              id, pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
-             (unsigned)pgxp_test_suppress_depth(), pgxp_test_active());
+             pgxp_position_fallback(), pgxp_preserve_projection(),
+             pgxp_culling(),
+             (unsigned)pgxp_test_suppress_depth(), pgxp_test_active(),
+             gl_renderer_get_pgxp_depth(), (unsigned long long)depth_tris,
+             (unsigned long long)depth_clears, (unsigned long long)seam_tris,
+             (unsigned long long)dr[0], (unsigned long long)dr[1],
+             (unsigned long long)dr[2], (unsigned long long)dr[3],
+             (unsigned long long)dr[4]);
 }
 
 static void handle_gpu_state(int id, const char *json)
@@ -5359,10 +5788,13 @@ static void handle_gpu_state(int id, const char *json)
              "\"present_native_43\":%d,\"x_margin\":%d,"
              "\"activation_margin\":%d,\"squash\":[%d,%d],"
              "\"mode\":%d,\"nw_extra\":%d,"
+             "\"view_anchor\":%d,\"view_left\":%d,\"view_right\":%d,"
+             "\"view_shift\":%d,\"view_padding\":[%d,%d],"
+             "\"bg2d_generations\":%u,"
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
              "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
-             "\"auto_ui\":{\"configured\":%d,\"dense\":%d,\"ot_rank\":%u,"
+             "\"auto_ui\":{\"configured\":%d,\"in_place\":%d,\"dense\":%d,\"ot_rank\":%u,"
              "\"candidates\":%llu,\"transforms\":%llu},"
              "\"aspect_cone\":{\"calls\":%llu,\"identity_43\":%llu,"
              "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
@@ -5370,7 +5802,11 @@ static void handle_gpu_state(int id, const char *json)
              "\"outside_reject\":%llu,\"queue_reject\":%llu,"
              "\"queue_highwater\":[%u,%u,%u]},"
              "\"terrain_angle\":{\"calls\":%llu,\"identity_43\":%llu,"
-             "\"max_vanilla\":%u,\"max_widened\":%u}}}",
+             "\"max_vanilla\":%u,\"max_widened\":%u},"
+             "\"backdrop\":{\"veto\":%d,\"eval_frame\":%u,\"rects\":%u,"
+             "\"full\":%d,\"short\":%d,\"x\":[%d,%d],\"reveal\":%d,"
+             "\"canon_pct\":%u,\"left_pct\":%u,\"right_pct\":%u,"
+             "\"last_short\":%u,\"evaluations\":%llu,\"short_frames\":%llu}}}",
              id, di.display_x, di.display_y,
              di.width, di.height,
              di.screen_offset_y,
@@ -5389,10 +5825,14 @@ static void handle_gpu_state(int id, const char *json)
              ws.present_native_43, ws.x_margin, ws.activation_margin,
              ws.xnum, ws.xden,
              ws.mode, ws.nw_extra,
+             ws.view_anchor, ws.view_left, ws.view_right, ws.view_shift,
+             ws.view_pad_left, ws.view_pad_right,
+             ws.bg2d_generations,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
               ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
               ws.ovh_prims, ws.last_ovh_frame,
-              ws.auto_ui_squash, ws.auto_ui_dense, ws.auto_ui_ot_rank,
+              ws.auto_ui_squash, ws.auto_ui_in_place, ws.auto_ui_dense,
+              ws.auto_ui_ot_rank,
               (unsigned long long)ws.auto_ui_candidates,
               (unsigned long long)ws.auto_ui_transforms,
               (unsigned long long)ws.aspect_cone_calls,
@@ -5408,7 +5848,12 @@ static void handle_gpu_state(int id, const char *json)
              ws.aspect_cone_queue_highwater[2],
              (unsigned long long)ws.angle_calls,
              (unsigned long long)ws.angle_43_identity,
-             ws.angle_max_vanilla, ws.angle_max_widened);
+             ws.angle_max_vanilla, ws.angle_max_widened,
+             ws.bd_veto, ws.bd_eval_frame, ws.bd_rects,
+             ws.bd_full, ws.bd_short, ws.bd_min_x, ws.bd_max_x, ws.bd_reveal,
+             ws.bd_canon_pct, ws.bd_left_pct, ws.bd_right_pct,
+             ws.bd_last_short, (unsigned long long)ws.bd_evaluations,
+             (unsigned long long)ws.bd_short_frames);
 }
 
 static void handle_ws_aspect_cone_site(int id, const char *json)
@@ -5524,12 +5969,19 @@ static void handle_vblank_rate(int id, const char *json)
              "\"cycle_paced_raise\":%llu,"
              "\"delivered\":%llu,"
              "\"pollhack_raise\":%llu,"
-             "\"doff_min\":%d,\"doff_max\":%d,\"doff_cnt\":%u}",
+             "\"doff_min\":%d,\"doff_max\":%d,\"doff_cnt\":%u,"
+             "\"video_standard\":\"%s\",\"vblank_cycles\":%u,"
+             "\"hblank_cycles\":%u,\"lines_per_frame\":%u,"
+             "\"video_standard_changes\":%u}",
              id,
              (unsigned long long)g_vblank_raise_count,
              (unsigned long long)g_vblank_deliver_count,
              (unsigned long long)g_pollhack_vblank_count,
-             g_doff_min_last, g_doff_max_last, g_doff_cnt_last);
+             g_doff_min_last, g_doff_max_last, g_doff_cnt_last,
+             psx_video_timing_is_pal() ? "PAL" : "NTSC",
+             (unsigned)g_psx_vblank_cycles, (unsigned)g_psx_hblank_cycles,
+             (unsigned)g_psx_lines_per_frame,
+             (unsigned)psx_video_timing_generation());
 }
 
 static void handle_timers_state(int id, const char *json)
@@ -5565,6 +6017,8 @@ static const char *cdrom_trace_kind_name(uint8_t kind)
     case 's': return "sector_skip";
     case 'A': return "xa_audio";
     case 'a': return "xa_skip";
+    case 'd': return "cdda_sector";
+    case 'P': return "int1_lost";
     case 'X': return "xa_unsupported";
     case 'O': return "overwrite";
     case 'R': return "read";
@@ -5858,7 +6312,7 @@ static void handle_cdrom_trace_dump(int id, const char *json)
     uint64_t start = (total > (uint64_t)count) ? total - (uint64_t)count : 0;
     if (start < oldest) start = oldest;
 
-    size_t bufsz = 256u + (size_t)count * 360u;
+    size_t bufsz = 256u + (size_t)count * 640u;
     char *buf = (char *)malloc(bufsz);
     if (!buf) { send_err(id, "oom"); return; }
 
@@ -5867,7 +6321,7 @@ static void handle_cdrom_trace_dump(int id, const char *json)
     pos += snprintf(buf + pos, bufsz - pos,
                     "{\"id\":%d,\"ok\":true,\"total\":%llu,\"oldest\":%llu,\"entries\":[",
                     id, (unsigned long long)total, (unsigned long long)oldest);
-    for (uint64_t seq = start; seq < total && pos < bufsz - 400; seq++) {
+    for (uint64_t seq = start; seq < total && pos < bufsz - 640; seq++) {
         const CDROMTraceEntry *e = &entries[seq % CDROM_TRACE_CAP];
         if (e->seq != seq) continue;
         if (frame_lo >= 0 && (int)e->frame < frame_lo) continue;
@@ -6164,6 +6618,8 @@ static void handle_a0_history(int id, const char *json)
 }
 
 extern int gpu_get_c0_count(void);
+extern uint64_t gpu_get_c0_total(void);
+extern uint32_t gpu_get_c0_frame(int index);
 extern int gpu_get_c0_history(int index, int *x, int *y, int *w, int *h,
                               uint32_t *func, uint32_t *sp, uint32_t *s1,
                               uint32_t *fw0, uint32_t *fw1, int *rcount);
@@ -6172,17 +6628,18 @@ static void handle_c0_history(int id, const char *json)
 {
     (void)json;
     int count = gpu_get_c0_count();
-    char buf[8192];
-    int pos = snprintf(buf, sizeof(buf), "{\"id\":%d,\"ok\":true,\"count\":%d,\"reads\":[", id, count);
+    char buf[65536];
+    int pos = snprintf(buf, sizeof(buf), "{\"id\":%d,\"ok\":true,\"count\":%d,\"total\":%llu,\"reads\":[",
+                       id, count, (unsigned long long)gpu_get_c0_total());
     for (int i = 0; i < count && pos < (int)sizeof(buf) - 300; i++) {
         int x, y, w, h, rcount;
         uint32_t func, sp, s1, fw0, fw1;
         gpu_get_c0_history(i, &x, &y, &w, &h, &func, &sp, &s1, &fw0, &fw1, &rcount);
         pos += snprintf(buf + pos, sizeof(buf) - pos,
-            "%s{\"i\":%d,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+            "%s{\"i\":%d,\"frame\":%u,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
             "\"func\":\"0x%08X\",\"sp\":\"0x%08X\",\"s1\":\"0x%08X\","
             "\"fw0\":\"0x%08X\",\"fw1\":\"0x%08X\",\"reads\":%d}",
-            i ? "," : "", i, x, y, w, h, func, sp, s1, fw0, fw1, rcount);
+            i ? "," : "", i, gpu_get_c0_frame(i), x, y, w, h, func, sp, s1, fw0, fw1, rcount);
     }
     pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
     send_fmt("%s", buf);
@@ -6332,10 +6789,10 @@ static void handle_gte_ring_dump(int id, const char *json)
 {
     extern unsigned long long gte_rtp_ring_total(void);
     extern int gte_rtp_ring_dump_json(char *out, int outsz, int max_count,
-                                      int newest_first, long frame_filter);
+                                      int newest_first, long frame_filter, int offset, int render_filter);
     int count = json_get_int(json, "count", 64);
     if (count < 1) count = 1;
-    if (count > 512) count = 512;
+    if (count > 4096) count = 4096;
     int newest = json_get_int(json, "newest", 1) != 0;
     long frame = (long)json_get_int(json, "frame", -1);
 
@@ -6343,7 +6800,11 @@ static void handle_gte_ring_dump(int id, const char *json)
     char *entries = (char *)malloc(BUF_SZ);
     char *reply   = (char *)malloc(BUF_SZ + 256u);
     if (!entries || !reply) { free(entries); free(reply); send_err(id, "oom"); return; }
-    int n = gte_rtp_ring_dump_json(entries, (int)BUF_SZ, count, newest, frame);
+    int offset = json_get_int(json,"offset",0);
+    if (offset < 0) offset=0;
+    int render_filter = json_get_int(json,"render",-1);
+    if (render_filter != 0 && render_filter != 1) render_filter=-1;
+    int n = gte_rtp_ring_dump_json(entries, (int)BUF_SZ, count, newest, frame, offset, render_filter);
     snprintf(reply, BUF_SZ + 256u,
              "{\"id\":%d,\"ok\":true,\"total\":%llu,\"emitted\":%d,\"entries\":[%s]}",
              id, gte_rtp_ring_total(), n, entries);
@@ -6767,7 +7228,8 @@ static void handle_audio_stats(int id, const char *json)
              "\"out\":{\"active\":%d,\"mode\":\"%s\",\"host_rate\":%d,"
              "\"fill_ms\":%.1f,\"target_ms\":%.1f,\"underruns\":%llu,"
              "\"overflow_drops\":%llu,"
-             "\"correction\":%.5f}}",
+             "\"correction\":%.5f},"
+             "\"spu_out\":{\"queued\":%u,\"drops\":%llu}}",
              id,
              (unsigned long long)st.tap_frames[0],
              (unsigned long long)st.tap_nonzero[0],
@@ -6792,7 +7254,9 @@ static void handle_audio_stats(int id, const char *json)
              fill_ms, target_ms,
              (unsigned long long)out_underruns,
              (unsigned long long)overflow_drops,
-             correction);
+             correction,
+             spu_output_available(),
+             (unsigned long long)spu_output_overflow_drops());
 }
 
 static void handle_audio_wav(int id, const char *json)
@@ -7278,13 +7742,13 @@ static void handle_evcb_snapshot(int id, const char *json)
     snap.flag_755A       = (uint32_t)psx_read_byte(0x0000755A);
     snap.flag_75C0       = evcb_read_u32_ram(0x000075C0);
     snap.frame           = (uint32_t)s_frame_count;
-    uint32_t base_ram    = base_ptr & 0x001FFFFFu;
+    uint32_t base_ram    = psx_ram_canonical_offset(base_ptr);
     uint32_t n_entries   = (total_bytes / EVCB_ENTRY_SIZE);
     if (n_entries > EVCB_MAX_ENTRIES) n_entries = EVCB_MAX_ENTRIES;
     snap.entry_count     = n_entries;
     for (uint32_t i = 0; i < n_entries; i++) {
         uint32_t off = base_ram + i * EVCB_ENTRY_SIZE;
-        if (off + EVCB_ENTRY_SIZE > 0x00200000u) break;
+        if (off + EVCB_ENTRY_SIZE > psx_ram_live_bytes()) break;
         snap.entries[i].cls      = evcb_read_u32_ram(off + 0);
         snap.entries[i].status   = evcb_read_u32_ram(off + 4);
         snap.entries[i].spec     = evcb_read_u32_ram(off + 8);
@@ -7613,12 +8077,61 @@ static void handle_unwatch(int id, const char *json)
     send_err(id, "watchpoint not found");
 }
 
+static int s_trigger_override;
+static uint32_t s_trigger_lt, s_trigger_rt;
+/* Host-pad layer (set_input {"layer":"host"}): a virtual P1 gamepad that
+ * feeds stage 1 of the normal offline input path (and host shortcut
+ * polling) instead of replacing it, so title transforms, direct shortcuts
+ * and trigger values see it like a physical pad. Persistent until
+ * clear_input. A plain override still wins while armed. */
+static int s_host_layer = 0;
+static uint16_t s_host_buttons = 0xFFFF;
+static uint8_t s_host_axes[4] = { 0x80, 0x80, 0x80, 0x80 };
+static uint8_t s_host_lt = 0, s_host_rt = 0;
+
+static uint8_t clamp_u8_arg(int v, uint8_t dflt) {
+    if (v < 0) return dflt;
+    return (uint8_t)(v > 255 ? 255 : v);
+}
+
 static void handle_set_input(int id, const char *json)
 {
     char val_str[32];
+    char layer[16];
+    const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
+    if (json_get_str(json, "layer", layer, sizeof(layer)) &&
+        strcmp(layer, "host") == 0) {
+        s_host_buttons = json_get_str(json, "buttons", val_str, sizeof(val_str))
+            ? (uint16_t)hex_to_u32(val_str) : (uint16_t)0xFFFF;
+        s_host_axes[0] = clamp_u8_arg(json_get_int(json, "lx", -1), 0x80);
+        s_host_axes[1] = clamp_u8_arg(json_get_int(json, "ly", -1), 0x80);
+        s_host_axes[2] = clamp_u8_arg(json_get_int(json, "rx", -1), 0x80);
+        s_host_axes[3] = clamp_u8_arg(json_get_int(json, "ry", -1), 0x80);
+        s_host_lt = clamp_u8_arg(json_get_int(json, "lt", -1), 0);
+        s_host_rt = clamp_u8_arg(json_get_int(json, "rt", -1), 0);
+        s_host_layer = 1;
+        send_ok(id);
+        return;
+    }
     if (!json_get_str(json, "buttons", val_str, sizeof(val_str))) {
         send_err(id, "missing buttons"); return;
     }
+    if (pad_type < -1 || pad_type > 2) {
+        send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
+    }
+    if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
+        s_input_override_p2 = (int)(hex_to_u32(val_str) & 0xFFFFu);
+        s_input_frames_p2 = 0;
+        send_ok(id);
+        return;
+    }
+    s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = (int)hex_to_u32(val_str);
     s_input_frames = 0;
     /* Optional stick override: any of lx/ly/rx/ry (0..255) arms it; omitted
@@ -7630,14 +8143,47 @@ static void handle_set_input(int id, const char *json)
         int v = ax[i] < 0 ? 0x80 : (ax[i] > 255 ? 255 : ax[i]);
         s_axis_st[i] = (uint8_t)v;
     }
+    /* Optional host triggers lt/rt (0..255) for a title pad transform, as a
+     * gamepad's analog triggers would give it. Absent -> released. */
+    {
+        const int lt = json_get_int(json, "lt", -1), rt = json_get_int(json, "rt", -1);
+        s_trigger_override = lt >= 0 || rt >= 0;
+        s_trigger_lt = (uint32_t)(lt < 0 ? 0 : (lt > 255 ? 255 : lt));
+        s_trigger_rt = (uint32_t)(rt < 0 ? 0 : (rt > 255 ? 255 : rt));
+    }
     send_ok(id);
+}
+
+int debug_server_get_trigger_override(uint32_t *lt, uint32_t *rt)
+{
+    if (!s_trigger_override) return 0;
+    *lt = s_trigger_lt;
+    *rt = s_trigger_rt;
+    return 1;
 }
 
 static void handle_press(int id, const char *json)
 {
     int buttons = json_get_int(json, "buttons", -1);
     int frames  = json_get_int(json, "frames", 2);
+    const int pad_type = json_get_int(json, "pad_type", -1);
+    const int connected = json_get_int(json, "connected", -1);
+    if (connected < -1 || connected > 1) {
+        send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
+    }
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
+    if (pad_type < -1 || pad_type > 2) {
+        send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
+    }
+    if (json_get_int(json, "port", 1) == 2) {
+        s_pad_connected_override[1] = connected;
+        s_input_override_p2 = buttons & 0xFFFF;
+        s_input_frames_p2   = frames;
+        send_ok(id);
+        return;
+    }
+    s_pad_type_override = pad_type;
+    s_pad_connected_override[0] = connected;
     s_input_override = buttons;
     s_input_frames   = frames;
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
@@ -7657,39 +8203,81 @@ extern uint16_t sio_get_pad_buttons_slot(int slot);
 extern int sio_get_pad_connected(int slot);
 extern int sio_get_pad_analog(int slot);
 extern void sio_get_pad_sticks(int slot, uint8_t out[4]);
+extern void sio_get_pad_negcon(int slot, uint8_t out[3]);
+extern int sio_get_pad_mode_locked(int slot);
+/* Local Rewind: enabled, panel open, title block (psx_mod_set_rewind_blocked)
+ * and the snapshots held, so scripted runs can check capture and opening. */
+static void handle_rewind_status(int id, const char *json)
+{
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%s,\"open\":%s,"
+             "\"title_blocked\":%s,\"snaps\":%u}\n",
+             id, psx_rewind_enabled() ? "true" : "false",
+             psx_rewind_is_open() ? "true" : "false",
+             psx_rewind_title_blocked() ? "true" : "false",
+             (unsigned)psx_rewind_snap_count());
+}
+
 static void handle_pad_status(int id, const char *json)
 {
     (void)json;
     uint16_t pad0 = sio_get_pad_buttons_slot(0);
     uint16_t pad1 = sio_get_pad_buttons_slot(1);
-    uint8_t sticks0[4], sticks1[4];
+    uint8_t sticks0[4], sticks1[4], neg0[3], neg1[3];
     sio_get_pad_sticks(0, sticks0);
     sio_get_pad_sticks(1, sticks1);
+    sio_get_pad_negcon(0, neg0);
+    sio_get_pad_negcon(1, neg1);
     send_fmt("{\"id\":%d,\"ok\":true,\"pad\":\"0x%04X\","
-             "\"slot0\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"sticks\":[%u,%u,%u,%u]},"
-             "\"slot1\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"sticks\":[%u,%u,%u,%u]},"
-             "\"override\":%d,\"override_frames\":%d,"
-             "\"override_axes\":[%u,%u,%u,%u],\"override_axes_valid\":%s}\n",
+             "\"slot0\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"type\":%d,\"sticks\":[%u,%u,%u,%u],"
+             "\"negcon\":[%u,%u,%u],\"mode_locked\":%s},"
+             "\"slot1\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"type\":%d,\"sticks\":[%u,%u,%u,%u],"
+             "\"negcon\":[%u,%u,%u],\"mode_locked\":%s},"
+             "\"override\":%d,\"override_frames\":%d,\"override_pad_type\":%d,"
+             "\"override_p2\":%d,\"override_p2_frames\":%d,"
+             "\"override_axes\":[%u,%u,%u,%u],\"override_axes_valid\":%s,"
+             "\"host_layer\":%s,\"host_buttons\":\"0x%04X\",\"host_axes\":[%u,%u,%u,%u],"
+             "\"host_lt\":%u,\"host_rt\":%u}\n",
              id, pad0,
              pad0, sio_get_pad_connected(0) ? "true" : "false", sio_get_pad_analog(0) ? "true" : "false",
+             sio_get_pad_analog(0),
              sticks0[0], sticks0[1], sticks0[2], sticks0[3],
+             neg0[0], neg0[1], neg0[2], sio_get_pad_mode_locked(0) ? "true" : "false",
              pad1, sio_get_pad_connected(1) ? "true" : "false", sio_get_pad_analog(1) ? "true" : "false",
+             sio_get_pad_analog(1),
              sticks1[0], sticks1[1], sticks1[2], sticks1[3],
-             s_input_override, s_input_frames,
+             neg1[0], neg1[1], neg1[2], sio_get_pad_mode_locked(1) ? "true" : "false",
+             s_input_override, s_input_frames, s_pad_type_override,
+             s_input_override_p2, s_input_frames_p2,
              s_axis_st[0], s_axis_st[1], s_axis_st[2], s_axis_st[3],
-             s_axis_override ? "true" : "false");
+             s_axis_override ? "true" : "false",
+             s_host_layer ? "true" : "false", s_host_buttons,
+             s_host_axes[0], s_host_axes[1], s_host_axes[2], s_host_axes[3],
+             s_host_lt, s_host_rt);
 }
 
 static void handle_clear_input(int id, const char *json)
 {
-    (void)json;
+    const int port = json_get_int(json, "port", 0);   /* 0 = both */
+    if (port == 0 || port == 2) {
+        s_pad_connected_override[1] = -1;
+        s_input_override_p2 = -1;
+        s_input_frames_p2 = 0;
+    }
+    if (port == 2) { send_ok(id); return; }
     s_input_route_active = 0;
     s_input_route_index = 0;
     s_input_route_remaining = 0;
     s_input_override = -1;
     s_input_frames   = 0;
     s_axis_override  = 0;
+    s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
+    s_host_layer = 0;
+    s_host_buttons = 0xFFFF;
+    s_host_axes[0] = s_host_axes[1] = s_host_axes[2] = s_host_axes[3] = 0x80;
+    s_host_lt = s_host_rt = 0;
     send_ok(id);
 }
 
@@ -7728,19 +8316,23 @@ static void handle_input_route_append(int id, const char *json)
 
 static void handle_input_route_start(int id, const char *json)
 {
-    (void)json;
     if (s_input_route_count == 0) {
         send_err(id, "input route is empty"); return;
     }
     s_input_override = -1;
     s_input_frames = 0;
     s_axis_override = 0;
+    s_pad_type_override = -1;
+    s_pad_connected_override[0] = -1;
     s_input_route_index = 0;
     s_input_route_remaining = s_input_route[0].frames;
+    const int at = json_get_int(json, "at_frame", 0);
+    s_input_route_start_frame = at > 0 && (uint64_t)at > s_frame_count ? (uint64_t)at : 0u;
     s_input_route_active = 1;
     send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u,\"start_frame\":%llu}\n",
              id, (unsigned)s_input_route_count,
-             (unsigned long long)s_frame_count);
+             (unsigned long long)(s_input_route_start_frame ? s_input_route_start_frame
+                                                            : s_frame_count));
 }
 
 static void handle_input_route_stop(int id, const char *json)
@@ -7765,12 +8357,211 @@ static void handle_input_route_status(int id, const char *json)
  *   {"cmd":"ws_hud_mode","tag_rects":0|1}
  * tag_rects=1 lets TAGGED rect-family prims re-anchor too (Tomba's AP
  * counter renders through the tagged sprite funnel). */
+/* Named plugin counters (psx_mod_counter_add), always on:
+ *   {"cmd":"mod_counters"}
+ * -> counters: [{name, count, last_frame}], overflow. */
+/* Read-only view of the live session and its existing hash-confirm watermark. */
+static void handle_netplay_status(int id, const char *json)
+{
+    (void)json;
+    char arch[32], stall[64];
+    int max_players = 0, players = 0, lead = 0;
+    uint32_t tick = 0, bad_tick = 0, local_hash = 0, remote_hash = 0;
+    psx_netplay_diag_snapshot(arch, sizeof(arch), &max_players, &players);
+    psx_netplay_admit_wait_info(stall, sizeof(stall), &tick, &lead);
+    int desync = psx_netplay_input_desync(&bad_tick, &local_hash, &remote_hash);
+    char out[768];
+    snprintf(out, sizeof(out), "{\"id\":%d,\"ok\":true,\"active\":%d,\"host\":%d,"
+          "\"rollback\":%d,\"architecture\":\"%s\",\"max_players\":%d,"
+          "\"players\":%d,\"tick\":%u,\"resolved_through\":%u,"
+          "\"stall\":\"%s\",\"remote_lead\":%d,\"desync\":%d,"
+          "\"desync_tick\":%u,\"local_hash\":%u,\"remote_hash\":%u}",
+          id, psx_netplay_active(), psx_netplay_is_host(),
+          psx_netplay_rollback_mode(), arch, max_players, players, tick,
+          psx_netplay_resolved_through(), stall, lead, desync,
+          bad_tick, local_hash, remote_hash);
+    debug_server_send_line(out);
+}
+
+/* Startup host work recorded before TCP was initialized; always-on, read-only.
+ * Completion order is not start order. Parents include their children. */
+static void handle_host_launch_timings(int id, const char *json)
+{
+    int requested = json_get_int(json, "count", HOST_LAUNCH_TIMING_CAPACITY);
+    if (requested < 1) requested = 1;
+    if (requested > (int)HOST_LAUNCH_TIMING_CAPACITY)
+        requested = HOST_LAUNCH_TIMING_CAPACITY;
+    HostLaunchTimingEvent *events = (HostLaunchTimingEvent *)malloc(
+        (size_t)requested * sizeof(*events));
+    if (!events) { send_err(id, "alloc failed"); return; }
+    uint64_t total = 0, overwritten = 0;
+    uint32_t n = host_launch_timing_snapshot(events, (uint32_t)requested,
+                                            &total, &overwritten);
+    /* Two labels may each expand sixfold when JSON-escaped. */
+    size_t cap = 512u + (size_t)n * 1536u;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { free(events); send_err(id, "alloc failed"); return; }
+    size_t off = (size_t)snprintf(buf, cap,
+        "{\"id\":%d,\"ok\":true,\"clock\":\"steady_us\","
+        "\"nested_durations_overlap\":true,\"capacity\":%u,"
+        "\"total\":%llu,\"overwritten\":%llu,\"entries\":[",
+        id, HOST_LAUNCH_TIMING_CAPACITY, (unsigned long long)total,
+        (unsigned long long)overwritten);
+    for (uint32_t i = 0; i < n; ++i) {
+        const HostLaunchTimingEvent *e = &events[i];
+        char package[HOST_LAUNCH_TIMING_LABEL * 6u + 1u];
+        char feature[HOST_LAUNCH_TIMING_LABEL * 6u + 1u];
+        json_escape_string(package, sizeof(package), e->package_id);
+        json_escape_string(feature, sizeof(feature), e->feature_id);
+        off += (size_t)snprintf(buf + off, cap - off,
+            "%s{\"seq\":%llu,\"scope_id\":%llu,\"parent_id\":%llu,"
+            "\"stage\":\"%s\",\"start_us\":%llu,\"duration_us\":%llu,"
+            "\"ok\":%u,\"package\":\"%s\",\"feature\":\"%s\","
+            "\"labels_truncated\":%u}",
+            i ? "," : "", (unsigned long long)e->seq,
+            (unsigned long long)e->scope_id, (unsigned long long)e->parent_id,
+            host_launch_timing_stage_name(e->stage),
+            (unsigned long long)e->start_us, (unsigned long long)e->duration_us,
+            e->ok, package, feature, e->labels_truncated);
+    }
+    snprintf(buf + off, cap - off, "]}");
+    debug_server_send_line(buf);
+    free(buf);
+    free(events);
+}
+
+static void handle_mod_counters(int id, const char *json)
+{
+    extern int psx_mod_counters_snapshot(const char **names, uint64_t *counts,
+                                         uint64_t *last_frames, int cap,
+                                         uint64_t *overflow);
+    (void)json;
+    enum { CAP = 128 };
+    const char *names[CAP];
+    uint64_t counts[CAP], last[CAP], overflow = 0;
+    int n = psx_mod_counters_snapshot(names, counts, last, CAP, &overflow);
+    if (n > CAP) n = CAP;
+    size_t cap = 256u + (size_t)n * 160u;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    size_t off = 0;
+    off += (size_t)snprintf(buf + off, cap - off,
+                            "{\"id\":%d,\"ok\":true,\"frame\":%llu,\"counters\":[",
+                            id, (unsigned long long)s_frame_count);
+    for (int i = 0; i < n && off < cap; i++) {
+        char esc[96];
+        size_t e = 0;
+        for (const char *p = names[i]; *p && e + 2 < sizeof esc; p++)
+            if (*p != '"' && *p != '\\' && (unsigned char)*p >= 0x20) esc[e++] = *p;
+        esc[e] = '\0';
+        off += (size_t)snprintf(buf + off, cap - off,
+                                "%s{\"name\":\"%s\",\"count\":%llu,\"last_frame\":%llu}",
+                                i ? "," : "", esc, (unsigned long long)counts[i],
+                                (unsigned long long)last[i]);
+    }
+    if (off < cap)
+        snprintf(buf + off, cap - off, "],\"overflow\":%llu}",
+                 (unsigned long long)overflow);
+    debug_server_send_line(buf);
+    free(buf);
+}
+
+/* Resident disc packs prepared by seamless-loading adapters (mod_resident.h):
+ *   {"cmd":"resident_status"}
+ * -> packs: [{title, format, state, error, path, files, modified, derived,
+ *            blobs, bytes, ms}] */
+static void handle_resident_status(int id, const char *json)
+{
+    extern int psx_resident_status_json(char *out, uint32_t capacity);
+    (void)json;
+    for (uint32_t cap = 4096u; cap <= (1u << 22); cap *= 4u) {
+        char *packs = (char *)malloc(cap);
+        if (!packs) break;
+        if (psx_resident_status_json(packs, cap)) {
+            char *buf = (char *)malloc(cap + 64u);
+            if (buf) {
+                snprintf(buf, cap + 64u, "{\"id\":%d,\"ok\":true,\"packs\":%s}", id, packs);
+                debug_server_send_line(buf);
+                free(buf);
+            }
+            free(packs);
+            if (!buf) send_err(id, "alloc failed");
+            return;
+        }
+        free(packs);
+    }
+    send_err(id, "resident status too large");
+}
+
+/* Always-on resident-loading service ring (psx_resident_record):
+ *   {"cmd":"resident_events","frame_lo":a,"frame_hi":b,"count":n}
+ * -> total, capacity, entries [{seq, frame, cycle, op, file, lba, bytes,
+ *    served}] oldest first: the newest `count` (default 4096) whose guest
+ *    frame lies in [frame_lo, frame_hi] (defaults: everything held). */
+static void handle_resident_events(int id, const char *json)
+{
+    extern int psx_resident_events_json(char *out, uint32_t capacity,
+                                        uint64_t frame_lo, uint64_t frame_hi,
+                                        uint32_t max);
+    const int lo = json_get_int(json, "frame_lo", 0);
+    const int hi = json_get_int(json, "frame_hi", -1);
+    const int count = json_get_int(json, "count", 4096);
+    if (count <= 0) { send_err(id, "count must be positive"); return; }
+    for (uint32_t cap = 65536u; cap <= (1u << 24); cap *= 4u) {
+        char *events = (char *)malloc(cap);
+        if (!events) break;
+        if (psx_resident_events_json(events, cap, lo < 0 ? 0u : (uint64_t)lo,
+                                     hi < 0 ? UINT64_MAX : (uint64_t)hi,
+                                     (uint32_t)count)) {
+            char *buf = (char *)malloc(cap + 64u);
+            if (buf) {
+                /* events is an object; splice id/ok into it. */
+                snprintf(buf, cap + 64u, "{\"id\":%d,\"ok\":true,%s", id, events + 1);
+                debug_server_send_line(buf);
+                free(buf);
+            }
+            free(events);
+            if (!buf) send_err(id, "alloc failed");
+            return;
+        }
+        free(events);
+    }
+    send_err(id, "resident events too large");
+}
+
 static void handle_ws_hud_mode(int id, const char *json)
 {
     int v = json_get_int(json, "tag_rects", -1);
     if (v < 0) { send_err(id, "missing tag_rects (0|1)"); return; }
     gpu_ws_set_nw_hud_tag_rects(v);
     send_fmt("{\"id\":%d,\"ok\":true,\"tag_rects\":%d}", id, v ? 1 : 0);
+}
+
+/* Explicit HUD-anchor / background tag pipeline counters (always on):
+ *   {"cmd":"ws_tag_stats"}
+ * -> hud / background: tag_calls, tag_rejected, hit, stale, guard_mismatch,
+ *    last_tag_frame, last_hit_frame. A title plugin that tags but never hits
+ *    is either tagging the wrong address or rewriting packets after tagging. */
+static void handle_ws_tag_stats(int id, const char *json)
+{
+    (void)json;
+    GpuWsTagStats hud, bg;
+    gpu_ws_get_tag_stats(&hud, &bg);
+    const GpuWsTagStats *s[2] = { &hud, &bg };
+    char part[2][256];
+    for (int i = 0; i < 2; i++)
+        snprintf(part[i], sizeof part[i],
+                 "{\"tag_calls\":%llu,\"tag_rejected\":%llu,\"hit\":%llu,"
+                 "\"stale\":%llu,\"guard_mismatch\":%llu,"
+                 "\"last_tag_frame\":%u,\"last_hit_frame\":%u}",
+                 (unsigned long long)s[i]->tag_calls,
+                 (unsigned long long)s[i]->tag_rejected,
+                 (unsigned long long)s[i]->hit,
+                 (unsigned long long)s[i]->stale,
+                 (unsigned long long)s[i]->guard_mismatch,
+                 s[i]->last_tag_frame, s[i]->last_hit_frame);
+    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,\"hud\":%s,\"background\":%s}",
+             id, (unsigned long long)s_frame_count, part[0], part[1]);
 }
 
 /* Kernel-image bless state: {"cmd":"kernel_bless"} ->
@@ -7831,6 +8622,88 @@ static void handle_synth_recurse(int id, const char *json)
 #endif
 }
 
+/* post_aa: post-process anti-aliasing, live. {"cmd":"post_aa"} reads it,
+ * {"cmd":"post_aa","mode":0|1|2} sets it (off, fxaa, fxaa_hq). */
+/* bloom: {"cmd":"bloom"} reads; optional "strength" (0..2), "threshold",
+ * and "time" (1: time
+ * each pass; the mean resets on read) set. */
+static void handle_bloom(int id, const char *json)
+{
+    const char *p = strstr(json, "\"strength\"");
+    float strength = -1.0f, threshold = -1.0f;
+    if (p && (p = strchr(p, ':'))) strength = (float)strtod(p + 1, NULL);
+    p = strstr(json, "\"threshold\"");
+    if (p && (p = strchr(p, ':'))) threshold = (float)strtod(p + 1, NULL);
+    GlBloomInfo bi;
+    gl_renderer_bloom_debug(strength, threshold, json_get_int(json, "time", -1), &bi);
+    send_fmt("{\"id\":%d,\"ok\":true,\"strength\":%.3f,\"threshold\":%.3f,"
+             "\"passes\":%llu,\"timed\":%llu,\"us_mean\":%.1f,\"gen_timed\":%llu,"
+             "\"gen_us_mean\":%.1f,\"reused\":%llu}",
+             id, bi.strength, bi.threshold, (unsigned long long)bi.passes,
+             (unsigned long long)bi.us_n, bi.us_mean, (unsigned long long)bi.gen_us_n,
+             bi.gen_us_mean, (unsigned long long)bi.reused);
+}
+
+static void handle_post_aa(int id, const char *json)
+{
+    int mode = json_get_int(json, "mode", -1);
+    if (mode >= 0) (void)gl_renderer_set_post_aa(mode);
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d,\"passes\":%llu,\"gpu_us\":%.1f}", id,
+             gl_renderer_post_aa(), (unsigned long long)gl_renderer_post_aa_passes(),
+             gl_renderer_post_aa_gpu_us());
+}
+
+/* fmv_chroma: {"cmd":"fmv_chroma"} reads, {"cmd":"fmv_chroma","on":0|1} sets
+ * [video] fmv_chroma_smoothing live. Replies the smoothed-present count. */
+static void handle_fmv_chroma(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    if (on >= 0) gl_renderer_set_fmv_chroma_smoothing(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"frames\":%llu}", id,
+             gl_renderer_fmv_chroma_smoothing(),
+             (unsigned long long)gl_renderer_fmv_chroma_frames());
+}
+
+/* texture_lod: {"cmd":"texture_lod"} reads, {"cmd":"texture_lod","mode":0|1,
+ * "aniso":1..16} sets [video] texture_lod / anisotropic_filtering live. */
+static void handle_texture_lod(int id, const char *json)
+{
+    int mode = json_get_int(json, "mode", -1);
+    int aniso = json_get_int(json, "aniso", -1);
+    if (mode >= 0 || aniso >= 0)
+        gl_renderer_set_texture_lod(mode >= 0 ? mode : gl_renderer_texture_lod(),
+                                    aniso >= 0 ? aniso : gl_renderer_anisotropy());
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d,\"aniso\":%d}", id,
+             gl_renderer_texture_lod(), gl_renderer_anisotropy());
+}
+
+/* accurate_blending: {"cmd":"accurate_blending"} reads, {"cmd":
+ * "accurate_blending","on":0|1} sets [video] accurate_blending live. */
+static void handle_accurate_blending(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    if (on >= 0) gl_renderer_set_accurate_blending(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id, gl_renderer_accurate_blending());
+}
+
+/* texture_filter: {"cmd":"texture_filter"} reads, {"cmd":"texture_filter",
+ * "mode":0..3} sets it live (nearest, bilinear, stable world, xbr). */
+static void handle_texture_filter(int id, const char *json)
+{
+    int mode = json_get_int(json, "mode", -1);
+    if (mode >= 0) gr_set_texture_filter(mode);
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d}", id, gr_texture_filter());
+}
+
+/* dithering: {"cmd":"dithering"} reads, {"cmd":"dithering","mode":0|1|2}
+ * sets [video] dithering live (0 off, 1 on = native grid, 2 fine). */
+static void handle_dithering(int id, const char *json)
+{
+    int mode = json_get_int(json, "mode", -1);
+    if (mode >= 0) gl_renderer_set_dithering(mode);
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d}", id, gl_renderer_dithering());
+}
+
 static void handle_frame_perf(int id, const char *json)
 {
     (void)json;
@@ -7848,11 +8721,11 @@ static void handle_frame_perf(int id, const char *json)
     double wcanon = wide[5] - wide[10]; if (wcanon < 0) wcanon = 0;
     double wmpp   = wide[12] > 0 ? wide[10] * 1000.0 / wide[12] : 0.0;
     double tex_frac = 0.0; gl_renderer_perf_prim_split(&tex_frac);
-    uint64_t br[8]; extern void gl_renderer_batch_diag(uint64_t out[8]);
+    uint64_t br[9]; extern void gl_renderer_batch_diag(uint64_t out[9]);
     gl_renderer_batch_diag(br);
     send_fmt("{\"id\":%d,\"ok\":true,\"samples\":%d,\"wide_frames\":%d,\"frames_4_3\":%d,"
              "\"tex_frac\":%.3f,\"ws_ablate\":%d,"
-             "\"batch_diag\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu],"
+             "\"batch_diag\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu],"
              "\"all\":{\"total_ms_avg\":%.3f,\"total_ms_max\":%.3f,\"emu_cpu_ms_avg\":%.3f,"
              "\"present_wall_ms_avg\":%.3f,\"scene_gpu_ms_avg\":%.3f,\"scene_gpu_ms_max\":%.3f,"
              "\"present_gpu_ms_avg\":%.3f,\"present_gpu_ms_max\":%.3f,\"prims_avg\":%.0f},"
@@ -7872,12 +8745,35 @@ static void handle_frame_perf(int id, const char *json)
              (unsigned long long)br[2], (unsigned long long)br[3],
              (unsigned long long)br[4], (unsigned long long)br[5],
              (unsigned long long)br[6], (unsigned long long)br[7],
+             (unsigned long long)br[8],
              all[1], all[2], all[3], all[4], all[5], all[6], all[7], all[8], all[9],
              (int)wide[0], wide[1], wide[3], wide[5], wide[6], wide[7], wide[9], wpp,
              wide[10], wide[11], wcanon, wide[12], wmpp,
              wide[13], wide[14], wide[15], wide[16], wide[17],
              (int)n43[0], n43[1], n43[3], n43[5], n43[6], n43[7], n43[9], npp,
              n43[13], n43[15]);
+}
+
+/* batch_sites: cumulative non-empty batch flushes by caller line in
+ * gpu_gl_renderer.c, "tex" and "flat" as [line,count] pairs. Diff two reads
+ * to attribute a window (always on; no arming). */
+static void handle_batch_sites(int id, const char *json)
+{
+    (void)json;
+    char buf[8192];
+    int len = snprintf(buf, sizeof buf, "{\"id\":%d,\"ok\":true", id);
+    for (int kind = 0; kind < 2; kind++) {
+        int lines[128]; uint64_t counts[128];
+        int n = gl_renderer_batch_sites(kind, lines, counts, 128);
+        len += snprintf(buf + len, sizeof buf - (size_t)len, ",\"%s\":[",
+                        kind ? "flat" : "tex");
+        for (int i = 0; i < n && len < (int)sizeof buf - 64; i++)
+            len += snprintf(buf + len, sizeof buf - (size_t)len, "%s[%d,%llu]",
+                            i ? "," : "", lines[i], (unsigned long long)counts[i]);
+        len += snprintf(buf + len, sizeof buf - (size_t)len, "]");
+    }
+    snprintf(buf + len, sizeof buf - (size_t)len, "}");
+    send_fmt("%s", buf);
 }
 
 /* gl_ws_ablate mode=<0..3>: native-wide mirror ablation for perf attribution.
@@ -7897,12 +8793,410 @@ static void handle_gl_interp(int id, const char *json)
     int enabled = 0, suspended = 0, history = 0;
     double host_hz = 0.0, target_hz = 0.0;
     uint64_t swaps = 0;
+    int source = 0;
+    uint32_t flip_period = 0;
+    uint64_t captures = 0, duplicates = 0;
     gl_renderer_interpolation_diag(&enabled, &suspended, &history,
                                    &host_hz, &target_hz, &swaps);
+    gl_renderer_interpolation_source_diag(&source, &flip_period, &captures,
+                                          &duplicates);
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"suspended\":%d,\"history\":%d,"
-             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu}",
+             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu,"
+             "\"source\":\"%s\",\"flip_period\":%u,\"captures\":%llu,"
+             "\"duplicates\":%llu}",
              id, enabled, suspended, history, host_hz, target_hz,
-             (unsigned long long)swaps);
+             (unsigned long long)swaps, source ? "flip" : "vblank",
+             (unsigned)flip_period, (unsigned long long)captures,
+             (unsigned long long)duplicates);
+}
+
+/* render_pass_stats: host-timed render passes (docs/RENDER_PASSES.md).
+ * Counters are per mod session; `dropped` counts device stores a pass tried
+ * to make (SPU key-ons, CD, timers, ...), which never reach the device. */
+static void handle_render_pass_stats(int id, const char *json)
+{
+    (void)json;
+    RenderPassStats st;
+    GLRenderPassPlanDiag admission;
+    uint64_t gd[10], image_bytes = 0;
+    uint32_t image_textures;
+    char failure_json[2048];
+    char admission_json[768];
+    char abort_detail_json[sizeof st.last_abort_detail * 6 + 1];
+    DirtyRamSpanFailure sf;
+    render_pass_get_stats(&st);
+    dirty_ram_span_last_failure(&sf);
+    json_escape_string(abort_detail_json, sizeof abort_detail_json,
+                       st.last_abort_detail);
+    const RenderPassFailure *f = &st.last_failure;
+    const GLRenderPassBeginDiag *b = &f->gl;
+    if (!f->reason) {
+        strcpy(failure_json, "null");
+    } else {
+        snprintf(failure_json, sizeof failure_json,
+                 "{\"reason\":\"%s\",\"attempt\":%llu,\"plan\":%llu,"
+                 "\"guest_cycle\":%llu,\"status\":%u,\"alpha_q16\":%u,"
+                 "\"struct_size\":%u,\"rect\":{\"x\":%u,\"y\":%u,\"w\":%u,\"h\":%u},"
+                 "\"gl\":{\"reason\":\"%s\",\"resource\":\"%s\",\"status\":%u,"
+                 "\"active\":%d,\"open_gen\":%d,\"generation\":%d,"
+                 "\"valid\":%d,\"promoted\":%d,\"hr_scale\":%d,\"out_scale\":%d,"
+                 "\"source_path\":%d,\"wide\":%d,"
+                 "\"requested_w\":%d,\"requested_h\":%d,\"capture_w\":%d,\"capture_h\":%d,"
+                 "\"generation_rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
+                 "\"fbo_status\":%u,\"gl_error_before\":%u,\"gl_error\":%u}}",
+                 f->reason, (unsigned long long)f->attempt, (unsigned long long)f->plan,
+                 (unsigned long long)f->guest_cycle, f->status, f->alpha_q16,
+                 f->struct_size, (unsigned)f->x, (unsigned)f->y, (unsigned)f->w, (unsigned)f->h,
+                 b->reason ? b->reason : "", b->resource ? b->resource : "", b->status,
+                 b->active, b->open_gen, b->generation, b->valid, b->promoted,
+                 b->hr_scale, b->out_scale, b->source_path, b->wide,
+                 b->requested_w, b->requested_h, b->capture_w, b->capture_h,
+                 b->generation_x, b->generation_y, b->generation_w, b->generation_h,
+                 b->fbo_status, b->gl_error_before, b->gl_error);
+    }
+    gl_renderer_pass_diag(gd);
+    gl_renderer_pass_plan_diag(&admission);
+    snprintf(admission_json, sizeof admission_json,
+             "{\"plans\":%llu,\"frame\":%llu,\"zero_credit_refusals\":%llu,"
+             "\"idle_ms\":%.3f,\"present_ms\":%.3f,\"prior_pass_ms\":%.3f,"
+             "\"present_reserve_ms\":%.3f,\"spare_ms\":%.3f,\"frame_ms\":%.3f,"
+             "\"cost_ms\":%.3f,\"budget_ms\":%.3f,\"wanted\":%u,\"planned\":%u}",
+             (unsigned long long)admission.plans,
+             (unsigned long long)admission.frame,
+             (unsigned long long)admission.zero_credit_refusals,
+             admission.idle_ms, admission.present_ms, admission.prior_pass_ms,
+             admission.present_reserve_ms, admission.spare_ms, admission.frame_ms,
+             admission.cost_ms, admission.budget_ms, admission.wanted, admission.planned);
+    image_textures = gl_renderer_pass_image_textures(&image_bytes);
+    send_fmt("{\"id\":%d,\"ok\":true,\"plans\":%llu,\"planned\":%llu,"
+             "\"wanted\":%llu,\"refused\":%llu,\"passes\":%llu,"
+             "\"aborted\":%llu,\"discarded\":%llu,\"watchdog\":%llu,\"vram_leaks\":%llu,"
+             "\"nesting_repairs\":%llu,"
+             "\"device_reads\":%llu,\"last_device_read\":\"0x%08X\",\"last_device_read_width\":%u,"
+             "\"verify_checks\":%llu,\"verify_mismatch\":%llu,"
+             "\"dropped\":{\"spu\":%llu,\"cd\":%llu,\"timer\":%llu,"
+             "\"dma\":%llu,\"gpu\":%llu,\"other\":%llu},"
+             "\"last_pass_ms\":%.3f,\"avg_pass_ms\":%.3f,"
+             "\"avg_begin_ms\":%.3f,\"avg_guest_ms\":%.3f,"
+             "\"avg_end_ms\":%.3f,\"avg_restore_ms\":%.3f,"
+             "\"guest_cycles_last\":%llu,\"disabled\":%d,"
+             "\"promotions\":%llu,\"pass_presents\":%llu,"
+             "\"blended_presents\":%llu,\"expired\":%llu,\"late_presents\":%llu,"
+             "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
+             "\"cost_us\":%llu,\"cost_rewarms\":%llu,\"frame_images\":%llu,"
+             "\"journaled\":%llu,"
+             "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u,"
+             "\"backups_reused\":%llu,\"pass_attempts\":%llu,"
+             "\"argument_refused\":%llu,\"status_refused\":%llu,"
+             "\"begin_refused\":%llu,\"checkpoint_refused\":%llu,"
+             "\"spans\":%llu,\"span_failures\":%llu,"
+             "\"local_views\":%llu,\"local_attempts\":%llu,"
+             "\"local_status\":%u,"
+             "\"admission\":%s,\"last_failure\":%s,\"last_abort_detail\":\"%s\","
+             "\"span_fail\":{\"reason\":%u,\"pc\":\"0x%08X\",\"start\":\"0x%08X\","
+             "\"stop\":\"0x%08X\",\"ra\":\"0x%08X\",\"after\":\"0x%08X\","
+             "\"insns\":%llu}}",
+             id, (unsigned long long)st.plans, (unsigned long long)st.planned,
+             (unsigned long long)st.wanted, (unsigned long long)st.refused,
+             (unsigned long long)st.passes, (unsigned long long)st.aborted,
+             (unsigned long long)st.discarded, (unsigned long long)st.watchdog, (unsigned long long)st.vram_leaks,
+             (unsigned long long)st.nesting_repairs,
+             (unsigned long long)st.device_reads, st.last_device_read, st.last_device_read_width,
+             (unsigned long long)st.verify_checks,
+             (unsigned long long)st.verify_mismatch,
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_SPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_CD],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_TIMER],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_DMA],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_GPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_OTHER],
+             st.last_pass_ms, st.avg_pass_ms,
+             st.avg_begin_ms, st.avg_guest_ms, st.avg_end_ms, st.avg_restore_ms,
+             (unsigned long long)st.guest_cycles_last, st.disabled,
+             (unsigned long long)gd[0], (unsigned long long)gd[1],
+             (unsigned long long)gd[2], (unsigned long long)gd[3],
+             (unsigned long long)gd[8],
+             (unsigned long long)gd[4], (unsigned long long)gd[5],
+             (unsigned long long)gd[6], (unsigned long long)gd[9],
+             (unsigned long long)gd[7],
+             (unsigned long long)gl_renderer_pass_journaled(),
+             (unsigned)image_textures, (unsigned long long)image_bytes,
+             (unsigned)psx_mod_render_pass_status(),
+             (unsigned long long)gl_renderer_pass_backups_reused(),
+             (unsigned long long)st.pass_attempts,
+             (unsigned long long)st.argument_refused, (unsigned long long)st.status_refused,
+             (unsigned long long)st.begin_refused, (unsigned long long)st.checkpoint_refused,
+             (unsigned long long)st.spans, (unsigned long long)st.span_failures,
+             (unsigned long long)st.local_views,
+             (unsigned long long)st.local_attempts,
+             psx_mod_render_local_view_status(),
+             admission_json, failure_json, abort_detail_json,
+             (unsigned)sf.reason, (unsigned)sf.pc, (unsigned)sf.start_pc,
+             (unsigned)sf.stop_pc, (unsigned)sf.ra, (unsigned)sf.after,
+             (unsigned long long)sf.insns);
+}
+
+/* render_pass_refuse on=<0|1>: make the OpenGL backend decline render passes
+ * (status BACKEND), as a renderer mode without them would; for testing a
+ * plugin's fallback. Same as PSX_RENDER_PASS_REFUSE=1 at start. */
+static void handle_render_pass_refuse(int id, const char *json)
+{
+    int on = json_get_int(json, "on", 1);
+    gl_renderer_pass_force_refuse(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"status\":%u}", id, on ? 1 : 0,
+             (unsigned)psx_mod_render_pass_status());
+}
+
+static void handle_openxr_stats(int id, const char *json) {
+    PSXOpenXRStats s; (void)json; psx_openxr_stats(&s);
+    send_fmt("{\"id\":%d,\"ok\":true,\"compiled\":%u,\"enabled\":%u,"
+             "\"initialized\":%u,\"running\":%u,\"state\":%u,\"tracking\":%u,"
+             "\"frame_open\":%u,\"result\":%d,\"stage\":\"%s\",\"runtime\":\"%s\","
+             "\"last_failure\":\"%s\",\"last_failure_result\":%d,\"view_flags\":%llu,"
+             "\"waits\":%llu,\"submitted\":%llu,\"empty\":%llu,\"failures\":%llu,"
+             "\"predicted_time\":%llu,\"ipd_m\":%.6f,\"units_per_meter\":%.6f,"
+             "\"gl_version\":%llu,\"min_gl_version\":%llu,\"max_gl_version\":%llu,\"swapchain_format\":%lld,"
+             "\"submitted_layer\":%u,\"quad_submitted\":%llu,"
+             "\"submitted_source\":%u,\"native_submitted\":%llu,\"submitted_native_frame\":%llu,"
+             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu,"
+             "\"submitted_surfaces\":%u,\"surface_uploads\":%llu,\"surface_failures\":%llu}", id,s.compiled,s.enabled,
+             s.initialized,s.running,s.state,s.tracking,s.frame_open,s.result,
+             s.stage?s.stage:"off",s.runtime,s.last_failure?s.last_failure:"",s.last_failure_result,
+             (unsigned long long)s.view_flags,(unsigned long long)s.waits,
+             (unsigned long long)s.submitted,(unsigned long long)s.empty,
+             (unsigned long long)s.failures,(unsigned long long)s.predicted_time,s.ipd_m,s.units_per_meter,
+             (unsigned long long)s.gl_version,(unsigned long long)s.min_gl_version,
+             (unsigned long long)s.max_gl_version,(long long)s.swapchain_format,s.submitted_layer,
+             (unsigned long long)s.quad_submitted,s.submitted_source,
+             (unsigned long long)s.native_submitted,(unsigned long long)s.submitted_native_frame,
+             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses,
+             s.submitted_surfaces,(unsigned long long)s.surface_uploads,(unsigned long long)s.surface_failures);
+}
+static void handle_openxr_views(int id,const char *json) {
+    PSXOpenXRStats s; (void)json;psx_openxr_stats(&s);
+    send_fmt("{\"id\":%d,\"ok\":true,\"predicted_time\":%llu,"
+             "\"submitted_pair_id\":%llu,\"submitted_guest_cycle\":%llu,"
+             "\"submitted_predicted_time\":%llu,\"eyes\":[",id,
+             (unsigned long long)s.predicted_time,(unsigned long long)s.submitted_pair_id,
+             (unsigned long long)s.submitted_guest_cycle,(unsigned long long)s.submitted_predicted_time);
+    for(int e=0;e<2;e++) {
+        PSXModRenderView *v=&s.view[e];
+        send_fmt("%s{\"eye\":%d,\"position_m\":[%.6f,%.6f,%.6f],"
+                 "\"orientation_xyzw\":[%.6f,%.6f,%.6f,%.6f],"
+                 "\"fov_lrud\":[%.6f,%.6f,%.6f,%.6f],"
+                 "\"rotation_q12\":[%d,%d,%d,%d,%d,%d,%d,%d,%d],"
+                 "\"translation\":[%d,%d,%d],\"projection_q16\":[%d,%d,%d,%d]}",
+                 e?",":"",e,s.pose[e][0],s.pose[e][1],s.pose[e][2],s.pose[e][3],s.pose[e][4],s.pose[e][5],s.pose[e][6],
+                 s.fov[e][0],s.fov[e][1],s.fov[e][2],s.fov[e][3],
+                 v->rotation_q12[0],v->rotation_q12[1],v->rotation_q12[2],v->rotation_q12[3],v->rotation_q12[4],
+                 v->rotation_q12[5],v->rotation_q12[6],v->rotation_q12[7],v->rotation_q12[8],
+                 v->translation[0],v->translation[1],v->translation[2],
+                 v->fx_q16,v->fy_q16,v->cx_delta_q16,v->cy_delta_q16);
+    }
+    send_fmt("]}");
+}
+
+static void handle_openxr_control(int id,const char *json) {
+    if (json_get_int(json,"recenter",0)) psx_mod_openxr_recenter();
+    int enable=json_get_int(json,"enable",-1);
+    if (enable>=0 && !psx_mod_openxr_enable(enable!=0)) { send_err(id,"OpenXR enable refused (not compiled or rendering)");return; }
+    handle_openxr_stats(id,json);
+}
+
+/* Snapshot only: querying never syncs actions or consumes a controller sample. */
+static void handle_openxr_input(int id,const char *json) {
+    (void)json;
+    PSXModOpenXRInput s; psx_openxr_input_snapshot(&s);
+    send_fmt("{\"id\":%d,\"ok\":true,\"sequence\":%llu,\"synthetic\":%u,"
+             "\"focused\":%u,\"active\":[%u,%u],\"stick\":[[%.6f,%.6f],[%.6f,%.6f]],"
+             "\"trigger\":[%.6f,%.6f],\"squeeze\":[%.6f,%.6f],"
+             "\"trigger_active\":[%u,%u],\"squeeze_active\":[%u,%u],"
+             "\"buttons\":[%u,%u],\"buttons_active\":[%u,%u],"
+             "\"p1_source\":%d}",id,(unsigned long long)s.sequence,s.synthetic,s.focused,
+             s.active[0],s.active[1],s.stick[0][0],s.stick[0][1],s.stick[1][0],s.stick[1][1],
+             s.trigger[0],s.trigger[1],s.squeeze[0],s.squeeze[1],
+             s.trigger_active[0],s.trigger_active[1],s.squeeze_active[0],s.squeeze_active[1],
+             s.buttons[0],s.buttons[1],s.buttons_active[0],s.buttons_active[1],
+             mod_controller_source_present(0));
+}
+/* Read-only controller poses from the eye frame's predicted time. */
+static void handle_openxr_hands(int id,const char *json) {
+    (void)json;PSXModOpenXRHands s={0};s.struct_size=sizeof s;
+    if(!psx_openxr_hands(&s)){send_err(id,"hand snapshot unavailable");return;}
+    char buf[4096];size_t pos=0;
+    pos+=(size_t)snprintf(buf+pos,sizeof buf-pos,
+        "{\"id\":%d,\"ok\":true,\"sequence\":%llu,\"synthetic\":%u,\"focused\":%u,"
+        "\"origin_valid\":%u,\"predicted_time\":%llu,\"age_ms\":%u,"
+        "\"origin_position_m\":[%.9f,%.9f,%.9f],\"origin_orientation_xyzw\":[%.9f,%.9f,%.9f,%.9f],\"pose\":[",
+        id,(unsigned long long)s.sequence,s.synthetic,s.focused,s.origin_valid,
+        (unsigned long long)s.predicted_time,s.age_ms,
+        s.origin_position_m[0],s.origin_position_m[1],s.origin_position_m[2],
+        s.origin_orientation_xyzw[0],s.origin_orientation_xyzw[1],
+        s.origin_orientation_xyzw[2],s.origin_orientation_xyzw[3]);
+    for(int e=0;e<2;e++) {
+        pos+=(size_t)snprintf(buf+pos,sizeof buf-pos,"%s[",e?",":"");
+        for(int k=0;k<2;k++) {
+            const PSXModTrackedPose *v=&s.pose[e][k];
+            pos+=(size_t)snprintf(buf+pos,sizeof buf-pos,
+                "%s{\"active\":%u,\"flags\":%u,\"position_m\":[%.9f,%.9f,%.9f],"
+                "\"orientation_xyzw\":[%.9f,%.9f,%.9f,%.9f]}",k?",":"",v->active,v->flags,
+                v->position_m[0],v->position_m[1],v->position_m[2],
+                v->orientation_xyzw[0],v->orientation_xyzw[1],v->orientation_xyzw[2],v->orientation_xyzw[3]);
+        }
+        pos+=(size_t)snprintf(buf+pos,sizeof buf-pos,"]");
+    }
+    (void)snprintf(buf+pos,sizeof buf-pos,"]}");debug_server_send_line(buf);
+}
+#ifndef PSX_NO_DEBUG_TOOLS
+static void handle_openxr_hands_override(int id,const char *json) {
+    if(json_get_int(json,"clear",0)){psx_openxr_hands_override(NULL);handle_openxr_hands(id,json);return;}
+    char hand[16],pose[16];
+    if(!json_get_str(json,"hand",hand,sizeof hand) || !json_get_str(json,"pose",pose,sizeof pose)) {
+        send_err(id,"hand=left|right and pose=grip|aim required");return;
+    }
+    int e=!strcmp(hand,"left")?0:!strcmp(hand,"right")?1:-1;
+    int k=!strcmp(pose,"grip")?0:!strcmp(pose,"aim")?1:-1;
+    int active=json_get_int(json,"active",1),focused=json_get_int(json,"focused",1),flags=json_get_int(json,"flags",15);
+    if(e<0 || k<0 || active<0 || active>1 || focused<0 || focused>1 || flags<0 || flags>15) {
+        send_err(id,"invalid hand, pose, focus, activity or flags");return;
+    }
+    PSXModOpenXRHands s={0};s.struct_size=sizeof s;(void)psx_openxr_hands(&s);
+    if(!s.synthetic){memset(&s,0,sizeof s);s.struct_size=sizeof s;s.origin_valid=1;s.origin_orientation_xyzw[3]=1;}
+    s.focused=(uint32_t)focused;s.predicted_time=0;
+    PSXModTrackedPose *v=&s.pose[e][k];memset(v,0,sizeof *v);
+    v->active=(uint32_t)active;v->flags=(uint32_t)flags;
+    const char *pn[3]={"px_mm","py_mm","pz_mm"},*qn[4]={"qx","qy","qz","qw"};
+    for(int i=0;i<3;i++) {
+        int value=json_get_int(json,pn[i],0);
+        if(value < -100000 || value > 100000){send_err(id,"position must be -100000..100000 mm");return;}
+        v->position_m[i]=(float)value/1000;
+    }
+    for(int i=0;i<4;i++) {
+        int value=json_get_int(json,qn[i],i==3?1000000:0);
+        if(value < -1000000 || value > 1000000){send_err(id,"quaternion components must be -1000000..1000000");return;}
+        v->orientation_xyzw[i]=(float)value/1000000;
+    }
+    if(!psx_openxr_hands_override(&s)){send_err(id,"invalid synthetic pose numbers");return;}
+    handle_openxr_hands(id,json);
+}
+#endif
+
+/* Debug-only synthetic action sample; axes are signed thousandths [-1000,1000].
+ * Explicitly tagged so desktop controls cannot be mistaken for device evidence. */
+#ifndef PSX_NO_DEBUG_TOOLS
+static void handle_openxr_input_override(int id,const char *json) {
+    if(json_get_int(json,"clear",0)) psx_openxr_input_override(NULL);
+    else {
+        PSXModOpenXRInput s; memset(&s,0,sizeof s);s.struct_size=sizeof s;
+        int focused=json_get_int(json,"focused",1);
+        int left=json_get_int(json,"left_active",1),right=json_get_int(json,"right_active",1);
+        if(focused<0 || focused>1 || left<0 || left>1 || right<0 || right>1) {
+            send_err(id,"focused/active must be 0 or 1");return;
+        }
+        s.focused=(uint32_t)focused;s.active[0]=(uint32_t)left;s.active[1]=(uint32_t)right;
+        int a[4]={json_get_int(json,"lx",0),json_get_int(json,"ly",0),
+                  json_get_int(json,"rx",0),json_get_int(json,"ry",0)};
+        for(int i=0;i<4;i++) {
+            if(a[i]<-1000 || a[i]>1000) { send_err(id,"axis must be -1000..1000");return; }
+            s.stick[i/2][i%2]=(float)a[i]/1000;
+        }
+        const char *t[2]={"left_trigger","right_trigger"}, *g[2]={"left_squeeze","right_squeeze"};
+        const char *ta[2]={"left_trigger_active","right_trigger_active"};
+        const char *ga[2]={"left_squeeze_active","right_squeeze_active"};
+        const char *b[2]={"left_buttons","right_buttons"};
+        const char *ba[2]={"left_buttons_active","right_buttons_active"};
+        for(int e=0;e<2;e++) {
+            int trigger=json_get_int(json,t[e],0),squeeze=json_get_int(json,g[e],0);
+            int trigger_active=json_get_int(json,ta[e],1),squeeze_active=json_get_int(json,ga[e],1);
+            int buttons=json_get_int(json,b[e],0),buttons_active=json_get_int(json,ba[e],15);
+            if(trigger<0 || trigger>1000 || squeeze<0 || squeeze>1000 ||
+               trigger_active<0 || trigger_active>1 || squeeze_active<0 || squeeze_active>1 ||
+               buttons<0 || buttons>15 || buttons_active<0 || buttons_active>15) {
+                send_err(id,"trigger/squeeze must be 0..1000, activity 0|1, click masks 0..15");return;
+            }
+            s.trigger[e]=(float)trigger/1000;s.squeeze[e]=(float)squeeze/1000;
+            s.trigger_active[e]=(uint32_t)trigger_active;s.squeeze_active[e]=(uint32_t)squeeze_active;
+            s.buttons[e]=(uint32_t)buttons;s.buttons_active[e]=(uint32_t)buttons_active;
+        }
+        if(!psx_openxr_input_override(&s)) { send_err(id,"invalid synthetic input");return; }
+    }
+    handle_openxr_input(id,json);
+}
+#endif
+
+
+static void handle_stereo_stats(int id, const char *json) {
+    RenderStereoStats s;
+    GLRenderStereoDiag g;
+    (void)json;
+    GLRenderStereoCapture records[100];
+    char captures[32768];
+    size_t pos = 0;
+    uint32_t count = gl_renderer_stereo_capture_records(records, 100);
+    captures[pos++] = '[';
+    for (uint32_t i = 0; i < count; ++i) {
+        const GLRenderStereoCapture *r = &records[i];
+        int written = snprintf(captures + pos, sizeof captures - pos,
+            "%s{\"pair_id\":%llu,\"guest_cycle\":%llu,\"width\":%u,\"height\":%u,"
+            "\"left_eye\":0,\"right_eye\":1,\"view_offset\":[[%d,%d,%d],[%d,%d,%d]]}",
+            i ? "," : "", (unsigned long long)r->pair_id,
+            (unsigned long long)r->guest_cycle, r->width, r->height,
+            r->view_offset[0][0], r->view_offset[0][1], r->view_offset[0][2],
+            r->view_offset[1][0], r->view_offset[1][1], r->view_offset[1][2]);
+        if (written < 0 || (size_t)written >= sizeof captures - pos - 2) {
+            send_err(id, "capture metadata response overflow"); return;
+        }
+        pos += (size_t)written;
+    }
+    captures[pos++] = ']'; captures[pos] = '\0';
+    render_stereo_get_stats(&s); gl_renderer_stereo_diag(&g);
+    send_fmt("{\"id\":%d,\"ok\":true,\"attempts\":%llu,\"pairs\":%llu,"
+             "\"refused\":%llu,\"failed\":%llu,\"shed\":%llu,\"status\":%u,"
+             "\"last_pair_id\":%llu,\"last_guest_cycle\":%llu,"
+             "\"eye_cycles\":[%llu,%llu],\"eye_hashes\":[\"%016llx\",\"%016llx\"],"
+             "\"eye_view\":[[%d,%d,%d],[%d,%d,%d]],"
+             "\"last_eye\":%d,\"last_failure\":\"%s\","
+             "\"last_failed_attempt\":%llu,\"last_failed_eye\":%d,"
+             "\"last_failed_reason\":\"%s\",\"retained_pair_id\":%llu,"
+             "\"last_pair_ms\":%.3f,\"avg_pair_ms\":%.3f,"
+             "\"published\":{\"valid\":%u,\"pair_id\":%llu,\"guest_cycle\":%llu,"
+             "\"width\":%u,\"height\":%u,\"staged_mask\":%u,\"mode\":%u,\"presents\":%llu},\"captures\":%s}",
+             id, (unsigned long long)s.attempts, (unsigned long long)s.pairs,
+             (unsigned long long)s.refused, (unsigned long long)s.failed,
+             (unsigned long long)s.shed, psx_mod_render_stereo_status(),
+             (unsigned long long)s.last_pair_id, (unsigned long long)s.last_guest_cycle,
+             (unsigned long long)s.eye_cycle[0], (unsigned long long)s.eye_cycle[1],
+             (unsigned long long)s.eye_hash[0], (unsigned long long)s.eye_hash[1],
+             s.eye_view[0][0], s.eye_view[0][1], s.eye_view[0][2],
+             s.eye_view[1][0], s.eye_view[1][1], s.eye_view[1][2],
+             s.last_eye, s.last_failure ? s.last_failure : "",
+             (unsigned long long)s.last_failed_attempt, s.last_failed_eye,
+             s.last_failed_reason ? s.last_failed_reason : "",
+             (unsigned long long)s.retained_pair_id,
+             s.last_pair_ms, s.avg_pair_ms, g.valid, (unsigned long long)g.pair_id,
+             (unsigned long long)g.guest_cycle, g.width, g.height, g.staged_mask,
+             g.mode, (unsigned long long)g.presents, captures);
+}
+/* Bounded PNG evidence capture. Pair metadata stays on the TCP surface. */
+static void handle_stereo_dump(int id, const char *json) {
+    char dir[400];
+    int count = json_get_int(json, "count", 1);
+    if (!json_get_str(json, "path", dir, sizeof dir)) { send_err(id, "missing path"); return; }
+    if (count < 1 || count > 100) { send_err(id, "count must be 1..100"); return; }
+    gl_renderer_stereo_dump_arm(dir, count);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
+}
+
+/* render_pass_dump path=<dir> count=<n>: write the images (the game's own
+ * frame, then each render pass in phase order) of the next n frames that get
+ * render passes, as <dir>/g<frame>_<index>_a<phase q16>.png. */
+static void handle_render_pass_dump(int id, const char *json)
+{
+    char dir[400];
+    int count = json_get_int(json, "count", 1);
+    if (!json_get_str(json, "path", dir, sizeof dir)) { send_err(id, "missing path"); return; }
+    gl_renderer_pass_dump_arm(dir, count);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
 }
 
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
@@ -7916,6 +9210,20 @@ static void handle_gl_wide_fast(int id, const char *json)
     int on = json_get_int(json, "on", -1);
     if (on >= 0) gl_renderer_set_wide_fast(on);
     send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id, gl_renderer_get_wide_fast());
+}
+
+/* gl_texwin_batch on=<0|1>: [video] texture_window_batching, live. 1 = textured
+ * prims with different GP0(E2h) texture windows share a batch; 0 = a window
+ * change ends the batch. The image is the same; for A/B of batch counts
+ * (frame_perf batch_diag[6] = window flushes) and frame time. */
+extern void gl_renderer_set_texture_window_batching(int on);
+extern int  gl_renderer_get_texture_window_batching(void);
+static void handle_gl_texwin_batch(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    if (on >= 0) gl_renderer_set_texture_window_batching(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id,
+             gl_renderer_get_texture_window_batching());
 }
 
 /* Live GTE widescreen-squash toggle (diagnostic for 8C far-backdrop void):
@@ -7936,23 +9244,99 @@ static void handle_display_aspect(int id, const char *json) {
     int num=json_get_int(json,"num",-1), den=json_get_int(json,"den",-1);
     int adaptive=json_get_int(json,"adaptive",0);
     if (!psx_debug_display_aspect(num,den,adaptive)) {
-        send_err(id,"invalid display aspect (4:3 through 32:9)");return;
+        send_err(id,"invalid display aspect (4:3 or wider, terms 1..99)");return;
     }
     send_fmt("{\"id\":%d,\"ok\":true,\"num\":%d,\"den\":%d,\"adaptive\":%d}",id,num,den,adaptive!=0);
+}
+
+extern int psx_debug_window_size(int w, int h);
+static void handle_window_size(int id, const char *json) {
+    int w = json_get_int(json, "w", -1), h = json_get_int(json, "h", -1);
+    if (!psx_debug_window_size(w, h)) { send_err(id, "need a window and 64<=w,h<=16384"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"w\":%d,\"h\":%d}", id, w, h);
 }
 
 /* Live native-wide vs squash toggle (A/B): ws_nw on=<0|1> re-engages the wide
  * path in the chosen mode without a relaunch. 2 = native-wide, 1 = squash. */
 extern void psx_ws_set_native_wide(int on);
 extern int  psx_ws_get_native_wide(void);
+/* Live A/B keys (main.cpp debug_toggle_key): `debug_key key=<0-9>` acts as
+ * if the key was pressed in the game window. */
+extern int psx_debug_toggle_key(int ch, char *out, int cap);
+static void handle_debug_key(int id, const char *json)
+{
+    int k = json_get_int(json, "key", -1);
+    char msg[256] = "";
+    /* key 0-9, or 110-112 for F10-F12 */
+    int ok = (k >= 0 && k <= 9 && psx_debug_toggle_key('0' + k, msg, (int)sizeof msg)) ||
+             (k >= 110 && k <= 112 && psx_debug_toggle_key('a' + (k - 109), msg, (int)sizeof msg));
+    for (char *c = msg; *c; c++) if (*c == '"' || *c == '\\') *c = '\'';
+    send_fmt("{\"id\":%d,\"ok\":%s,\"state\":\"%s\"}", id, ok ? "true" : "false", msg);
+}
+
+/* host_pause on=<1|0>: push/pop a host pause (host_overlay.h P1). */
+#include "host_overlay.h"
+static void handle_host_pause(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    int ok = 1;
+    if (on == 1) ok = psx_host_pause_push("debug");
+    else if (on == 0) psx_host_pause_pop();
+    send_fmt("{\"id\":%d,\"ok\":%s,\"depth\":%d}", id, ok ? "true" : "false",
+             psx_host_pause_depth());
+}
+
+/* menu_host: in-game menu host state (psx_menu_host.h): provider, attached,
+ * open, pause, ui capture, and the video/netplay snapshot. */
+extern int psx_debug_menu_host_json(char *out, size_t cap);
+static void handle_menu_host(int id, const char *json)
+{
+    char body[768];
+    (void)json;
+    psx_debug_menu_host_json(body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+/* host_key name=<SDL scancode name> down=<1|0> (both when omitted). */
+extern int psx_debug_push_host_key(const char *name, int down);
+static void handle_host_key(int id, const char *json)
+{
+    char name[64] = "";
+    json_get_str(json, "name", name, sizeof name);
+    int down = json_get_int(json, "down", -1);
+    int ok = down < 0 ? (psx_debug_push_host_key(name, 1) && psx_debug_push_host_key(name, 0))
+                      : psx_debug_push_host_key(name, down);
+    send_fmt("{\"id\":%d,\"ok\":%s}", id, ok ? "true" : "false");
+}
+
+/* host_mouse x=<pt> y=<pt> [wheel=<steps>]: click (or scroll) at a window point. */
+extern int psx_debug_push_host_mouse(float x, float y, int wheel);
+static void handle_host_mouse(int id, const char *json)
+{
+    int ok = psx_debug_push_host_mouse((float)json_get_int(json, "x", 0),
+                                       (float)json_get_int(json, "y", 0),
+                                       json_get_int(json, "wheel", 0));
+    send_fmt("{\"id\":%d,\"ok\":%s}", id, ok ? "true" : "false");
+}
+
 static void handle_ws_nw(int id, const char *json)
 {
     int on = json_get_int(json, "on", -1);
     if (on >= 0) psx_ws_set_native_wide(on);
+    int correction = json_get_int(json, "projection_correction", -1);
+    if (correction >= 0)
+        psx_mod_set_native_wide_projection_correction(correction);
+    uint64_t corrected_vertices = 0;
+    correction = gpu_ws_native_wide_projection_correction(&corrected_vertices);
     GpuWsDebug ws;
     gpu_ws_get_debug(&ws);
-    send_fmt("{\"id\":%d,\"ok\":true,\"native_wide\":%d,\"mode\":%d,\"nw_extra\":%d}",
-             id, psx_ws_get_native_wide(), ws.mode, ws.nw_extra);
+    send_fmt("{\"id\":%d,\"ok\":true,\"native_wide\":%d,\"mode\":%d,\"nw_extra\":%d,"
+             "\"projection_correction\":%d,\"projection_vertices\":%llu,\"nclip_rescues\":%llu,"
+             "\"oversize_triangles\":%llu}",
+             id, psx_ws_get_native_wide(), ws.mode, ws.nw_extra,
+             correction, (unsigned long long)corrected_vertices,
+             (unsigned long long)gpu_ws_native_wide_nclip_rescues(),
+             (unsigned long long)gl_renderer_wide_triangle_recovery_count());
 }
 
 /* Live scanline post-process toggle (A/B): `scanline on=<0|1> pct=<0..100>`.
@@ -8191,6 +9575,12 @@ static void handle_savestate(int id, const char *json)
     extern int psx_netplay_request_load(int slot);
     int slot = json_get_int(json, "slot", -1);
     if (slot < 0) { send_err(id, "missing slot"); return; }
+    if (slot >= SAVESTATE_SLOTS) {
+        /* Name the real reason: the generic refusal below blamed LLE runs. */
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"slot %d out of range (0..%d)\"}",
+                 id, slot, SAVESTATE_SLOTS - 1);
+        return;
+    }
     char op[16];
     if (!json_get_str(json, "op", op, sizeof(op))) { send_err(id, "missing op"); return; }
     int staged;
@@ -8229,6 +9619,18 @@ static void handle_savestate_status(int id, const char *json)
     char status[256];
     savestate_status_json(status, sizeof status);
     send_fmt("{\"id\":%d,\"ok\":true,%s}", id, status);
+}
+
+static void handle_snapshot_status(int id, const char *json)
+{
+    (void)json;
+    extern int psx_mod_function_entry_active(void);
+    const uint32_t pc = psx_irq_resume_context_snapshot_pc();
+    send_fmt("{\"id\":%d,\"ok\":true,\"callback_active\":%s,"
+             "\"host_call_depth\":%u,\"site\":%d,\"pc\":\"0x%08X\",\"safe\":%s}",
+             id, psx_mod_function_entry_active() ? "true" : "false",
+             psx_snapshot_host_call_depth(), psx_irq_resume_context_snapshot_site(),
+             pc, psx_irq_resume_context_snapshot_safe_at(pc) ? "true" : "false");
 }
 
 static void handle_turbo(int id, const char *json)
@@ -8632,26 +10034,31 @@ static void handle_get_snapshots(int id, const char *json)
  * deterministic runs (GL vs software) can each serve the display for the
  * SAME frame number, giving a pixel-exact renderer-divergence census.
  * GL reads GPU-side truth via the fbo peek; software reads CPU VRAM (its
- * authoritative surface). depth24 scanout frames are tagged and refused
- * (15-bit only). */
-#define DISP_RING_CAP   64    /* full-VRAM entries are 1MB each; 32 frames of
-                               * lookback (~0.3-0.5s) for exact-frame forensics */
-#define DISP_RING_MAX_W 640
-#define DISP_RING_MAX_H 256
-/* Full-VRAM aux capture alongside the display: the entire 1024x512 raw VRAM
- * as the renderer sees it at this frame (GL: FBO truth; SW: CPU truth), so an
- * offline client can micro-cosim ANY prim of the frame — rasterize it from
- * the GP0 ring against the exact same-frame texels/CLUTs — and attribute a
- * bad pixel to sampling vs content. Streamed texture pages and palette
- * cycling make later peeks worthless; only a same-frame capture is evidence. */
+ * authoritative surface). Each entry is the full 1024x512 VRAM plus the
+ * display geometry of that frame, and the PNG is decoded from it with the
+ * same scanout decode as screenshot_file — so 480-line interlaced displays
+ * and depth24 (FMV) frames are served whole, not cropped or refused. */
+#define DISP_RING_CAP   64    /* full-VRAM entries are 1MB each; ~1s of
+                               * lookback for exact-frame forensics */
+/* The entire 1024x512 raw VRAM as the renderer sees it at this frame (GL: FBO
+ * truth; SW and depth24: CPU truth), so an offline client can micro-cosim ANY
+ * prim of the frame — rasterize it from the GP0 ring against the exact
+ * same-frame texels/CLUTs — and attribute a bad pixel to sampling vs content.
+ * Streamed texture pages and palette cycling make later peeks worthless; only
+ * a same-frame capture is evidence. */
 typedef struct {
     uint32_t frame;
-    uint16_t w, h;
-    uint8_t  depth24, valid;
-    uint16_t *px;                 /* DISP_RING_MAX_W*DISP_RING_MAX_H halfwords */
+    uint8_t  valid;
+    GpuDisplayInfo di;            /* display geometry/depth at capture */
     uint16_t *vram;               /* full 1024x512 */
 } DispRingEntry;
 static PSX_BSS DispRingEntry s_disp_ring[DISP_RING_CAP];
+/* Capture mark state (debug_server_capture_mark / capture_mark). */
+static int      s_capture_frozen = 0;
+static uint64_t s_capture_mark_frame = 0;
+static uint64_t s_capture_mark_count = 0;
+static char     s_capture_wide_path[512];
+static int      s_capture_wide_ok = 0;
 static uint16_t     *s_disp_ring_px = NULL;   /* one block for all entries */
 
 static void disp_ring_capture(void)
@@ -8665,17 +10072,13 @@ static void disp_ring_capture(void)
         const char *e = getenv("PSX_DISPLAY_RING");
         enabled = (!e || !*e || *e != '0') ? 1 : 0;
     }
-    if (!enabled) return;
+    if (!enabled || s_capture_frozen) return;
     if (!s_disp_ring_px) {
-        size_t per  = (size_t)DISP_RING_MAX_W * DISP_RING_MAX_H;
         size_t vram = (size_t)1024 * 512;
-        s_disp_ring_px = (uint16_t *)malloc(DISP_RING_CAP * (per + vram) * sizeof(uint16_t));
+        s_disp_ring_px = (uint16_t *)malloc(DISP_RING_CAP * vram * sizeof(uint16_t));
         if (!s_disp_ring_px) return;
-        for (int i = 0; i < DISP_RING_CAP; i++) {
-            uint16_t *base = s_disp_ring_px + (size_t)i * (per + vram);
-            s_disp_ring[i].px   = base;
-            s_disp_ring[i].vram = base + per;
-        }
+        for (int i = 0; i < DISP_RING_CAP; i++)
+            s_disp_ring[i].vram = s_disp_ring_px + (size_t)i * vram;
     }
     DispRingEntry *e = &s_disp_ring[(uint32_t)(s_frame_count % DISP_RING_CAP)];
     e->frame = (uint32_t)s_frame_count;
@@ -8683,28 +10086,16 @@ static void disp_ring_capture(void)
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
     if (di.disabled || di.width == 0 || di.height == 0) return;
-    uint32_t w = di.width, h = di.height;
-    if (w > DISP_RING_MAX_W) w = DISP_RING_MAX_W;
-    if (h > DISP_RING_MAX_H) h = DISP_RING_MAX_H;
-    e->w = (uint16_t)w; e->h = (uint16_t)h;
-    e->depth24 = (uint8_t)(di.depth24 ? 1 : 0);
-    /* GPU-side truth when the GL raster pipeline is live (scissored pack of
-     * just the display rect + one small readback); CPU VRAM otherwise (the
-     * software backend's authoritative surface). Runs on the present thread,
-     * where the GL context is current. */
-    extern int gl_renderer_fbo_peek(int x, int y, int w_, int h_, uint16_t *out);
-    int got = 0;
-    if (di.display_x + w <= 1024 && di.display_y + h <= 512)
-        got = gl_renderer_fbo_peek((int)di.display_x, (int)di.display_y,
-                                   (int)w, (int)h, e->px);
-    if (!got) {
-        for (uint32_t y = 0; y < h; y++)
-            for (uint32_t x = 0; x < w; x++)
-                e->px[y * w + x] =
-                    gpu_vram_peek((int)(di.display_x + x), (int)(di.display_y + y));
-    }
-    /* Full-VRAM aux capture (same GL-truth/CPU-truth split as the display). */
-    if (!gl_renderer_fbo_peek(0, 0, 1024, 512, e->vram)) {
+    gpu_timeline_note(GTL_DISP_CAPTURE, 0, di.display_x | (di.display_y << 16));
+    e->di = di;
+    /* GPU-side truth when the GL raster pipeline is live; CPU VRAM otherwise
+     * (the software backend's authoritative surface). depth24 always reads
+     * the CPU mirror: packed RGB888 MDEC bytes live there, not in the FBO
+     * (see screenshot_file). Runs on the present thread, where the GL context
+     * is current. Deferred: with the render thread on, the readback is
+     * recorded at this point of the command stream and filled in by the
+     * render thread (ring readers sync first). */
+    if (di.depth24 || !gl_renderer_fbo_peek_deferred(0, 0, 1024, 512, e->vram)) {
         const uint16_t *v = gpu_get_vram();
         memcpy(e->vram, v, (size_t)1024 * 512 * sizeof(uint16_t));
     }
@@ -8715,6 +10106,7 @@ static void disp_ring_capture(void)
  * (1024x512 row-major). */
 static void handle_display_ring_aux(int id, const char *json)
 {
+    gl_renderer_render_thread_sync("display_ring");
     int f = json_get_int(json, "frame", -1);
     if (f < 0) { send_err(id, "missing frame"); return; }
     char path[512];
@@ -8736,6 +10128,7 @@ static void handle_display_ring_aux(int id, const char *json)
 
 static void handle_display_ring_stats(int id, const char *json)
 {
+    gl_renderer_render_thread_sync("display_ring");
     (void)json;
     uint32_t oldest = 0, newest = 0;
     int n = 0;
@@ -8753,6 +10146,7 @@ static void handle_display_ring_stats(int id, const char *json)
 
 static void handle_display_ring_get(int id, const char *json)
 {
+    gl_renderer_render_thread_sync("display_ring");
     int f = json_get_int(json, "frame", -1);
     if (f < 0) { send_err(id, "missing frame"); return; }
     char path[512];
@@ -8764,16 +10158,17 @@ static void handle_display_ring_get(int id, const char *json)
     if (!e->valid || e->frame != (uint32_t)f) {
         send_err(id, "frame not in display ring"); return;
     }
-    if (e->depth24) { send_err(id, "frame is 24bpp scanout (unsupported)"); return; }
-    uint32_t w = e->w, h = e->h;
+    /* Same clamp and scanout decode as screenshot_file, against this frame's
+     * VRAM snapshot. */
+    uint32_t w = e->di.width;  if (w > 640) w = 640;
+    uint32_t h = e->di.height; if (h > 512) h = 512;
     uint8_t *rgb = (uint8_t *)malloc((size_t)w * h * 3);
     if (!rgb) { send_err(id, "alloc failed"); return; }
-    for (uint32_t i = 0; i < w * h; i++) {
-        uint16_t p = e->px[i];
-        rgb[i * 3 + 0] = (uint8_t)((p & 0x1F) << 3);
-        rgb[i * 3 + 1] = (uint8_t)(((p >> 5) & 0x1F) << 3);
-        rgb[i * 3 + 2] = (uint8_t)(((p >> 10) & 0x1F) << 3);
-    }
+    for (uint32_t y = 0; y < h; y++)
+        for (uint32_t x = 0; x < w; x++) {
+            uint8_t *p = rgb + ((size_t)y * w + x) * 3;
+            gpu_display_pixel_rgb_in(e->vram, &e->di, x, y, &p[0], &p[1], &p[2]);
+        }
     FILE *fp = fopen(path, "wb");
     if (!fp) { free(rgb); send_err(id, "cannot open file"); return; }
     int ok = png_write_rgb(fp, rgb, w, h);
@@ -8781,7 +10176,8 @@ static void handle_display_ring_get(int id, const char *json)
     fclose(fp);
     if (!ok) { send_err(id, "png encode failed"); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%d,\"path\":\"%s\","
-             "\"width\":%u,\"height\":%u}", id, f, path, w, h);
+             "\"width\":%u,\"height\":%u,\"depth24\":%d}", id, f, path, w, h,
+             e->di.depth24 ? 1 : 0);
 }
 
 static void handle_screenshot_file(int id, const char *json)
@@ -8873,6 +10269,16 @@ static void handle_screenshot_hires(int id, const char *json)
      * deterministic black, never whatever the allocator handed back. */
     uint32_t *argb = (uint32_t *)calloc((size_t)ow * oh, sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
+    /* OpenGL keeps the internal resolution in its FBO only (the CPU-side
+     * mirror is native), so read it from there. This is the capture that
+     * proves what an internal-resolution preset really renders. */
+    if (gr_backend() == GR_BACKEND_OPENGL && scale > 1) {
+        int gw = 0, gh = 0;
+        int n = gl_renderer_read_display_hires((int)di.display_x, (int)di.display_y,
+                                               (int)w, (int)h, argb,
+                                               (int)((size_t)ow * oh), &gw, &gh);
+        if (n > 0 && (uint32_t)gw == ow && (uint32_t)gh == oh) goto encode;
+    }
     /* Renderer pitches are byte strides (the live SDL presentation path uses
      * the same contract). Passing `ow` here advanced each row by only one
      * quarter of its ARGB width, overlapping four rows and producing a PNG
@@ -8902,6 +10308,7 @@ static void handle_screenshot_hires(int id, const char *json)
         }
     }
 
+encode:;
     uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
     if (!rgb) { free(argb); send_err(id, "alloc failed"); return; }
     for (size_t i = 0; i < (size_t)ow * oh; i++) {
@@ -8921,6 +10328,240 @@ static void handle_screenshot_hires(int id, const char *json)
 
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
              "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
+/* video_info — the Internal resolution state end to end: the preset and its
+ * reference height, the scale requested of the backend, the scale the GL hr
+ * surface was actually allocated at (after the driver/memory clamp), the
+ * driver limit, the hr surface size, and the window's point and pixel sizes
+ * (the HiDPI drawable). Everything a preset needs to be verified against. */
+static void handle_hd_textures(int id, const char *json)
+{
+    GpuHdTextureDiag info;
+    gpu_hd_textures_get_diag(&info);
+    /* Development validation controls run at the emulation-thread boundary.
+     * The normal owner workflow remains the Mods controls applied on Play. */
+    const int replacements = json_get_int(json, "replacements", -1);
+    const int dump = json_get_int(json, "dump", -1);
+    const int reload = json_get_int(json, "reload", 0);
+    if (replacements != -1 || dump != -1 || reload) {
+        if ((replacements < -1 || replacements > 1) || (dump < -1 || dump > 1)) {
+            send_err(id, "replacements and dump must be 0 or 1"); return;
+        }
+        if (!info.root || !info.root[0]) {
+            send_err(id, "no texture pack is configured; enable the mod and click Play"); return;
+        }
+        char error[512] = "";
+        if (replacements != -1) {
+            if (!gpu_hd_textures_configure(info.root, replacements,
+                    dump == -1 ? info.dump : dump, error, sizeof(error))) {
+                send_err(id, error); return;
+            }
+        } else {
+            if (dump != -1) gpu_hd_textures_set_dump_enabled(dump);
+            if (reload && !gpu_hd_textures_reload(error, sizeof(error))) {
+                send_err(id, error); return;
+            }
+        }
+        gpu_hd_textures_get_diag(&info);
+    }
+    char root_json[8192];
+    json_escape_string(root_json, sizeof(root_json), info.root ? info.root : "");
+    char diagnostic_json[4096];
+    json_escape_string(diagnostic_json, sizeof(diagnostic_json),
+                       info.diagnostic ? info.diagnostic : "");
+    const int backend = gr_backend();
+    send_fmt("{\"id\":%d,\"ok\":true,\"root\":\"%s\",\"active\":%s,"
+             "\"replacements\":%s,\"dump\":%s,\"format\":%d,"
+             "\"backend\":\"%s\",\"replacement_backend_supported\":%s,"
+             "\"replacement_count\":%llu,\"draw_queries\":%llu,"
+             "\"matched_draws\":%llu,\"ready_draws\":%llu,"
+             "\"applied_draws\":%llu,\"dumped_textures\":%llu,"
+             "\"pending_dump_sources\":%llu,"
+             "\"composition_hits\":%llu,\"composition_builds\":%llu,\"composition_pixels\":%llu,"
+             "\"gl_uploads\":%llu,\"gl_evictions\":%llu,"
+             "\"decoded_images\":%llu,\"decode_evictions\":%llu,\"decoded_bytes\":%llu,"
+             "\"diagnostic\":\"%s\"}",
+             id, root_json, info.active ? "true" : "false",
+             info.replacements ? "true" : "false", info.dump ? "true" : "false", info.format,
+             backend == GR_BACKEND_OPENGL ? "opengl" :
+                 backend == GR_BACKEND_VULKAN ? "vulkan" : "software",
+             backend == GR_BACKEND_OPENGL ? "true" : "false",
+             (unsigned long long)info.replacement_count,
+             (unsigned long long)info.draw_queries, (unsigned long long)info.matched_draws,
+             (unsigned long long)info.ready_draws, (unsigned long long)info.applied_draws,
+             (unsigned long long)info.dumped_textures,
+             (unsigned long long)info.pending_dump_sources,
+             (unsigned long long)info.composition_hits, (unsigned long long)info.composition_builds,
+             (unsigned long long)info.composition_pixels,
+             (unsigned long long)info.gl_uploads, (unsigned long long)info.gl_evictions,
+             (unsigned long long)info.decoded_images, (unsigned long long)info.decode_evictions,
+             (unsigned long long)info.decoded_bytes, diagnostic_json);
+}
+
+/* Dynamic internal resolution ([video] dynamic_resolution; docs/TCP_COMMANDS.md).
+ * dynres: the controller's state and the last step. */
+static void handle_dynres(int id, const char *json)
+{
+    (void)json;
+    extern int psx_dynres_status_json(char *out, int cap);
+    char body[2048];
+    psx_dynres_status_json(body, (int)sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+/* dynres_force {"scale":N}: pin the level (clamped to floor..ceiling);
+ * {"scale":0} releases the pin. */
+static void handle_dynres_force(int id, const char *json)
+{
+    extern int psx_dynres_force(int scale);
+    int s = json_get_int(json, "scale", -1);
+    if (s < 0) { send_err(id, "need scale (0 releases)"); return; }
+    int l = psx_dynres_force(s);
+    if (l < 0) { send_err(id, "dynamic resolution is not on"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"level\":%d,\"forced\":%d}", id, l, s > 0);
+}
+
+/* FNV-1a over the guest-visible VRAM (the CPU array after a GL sync). */
+static uint64_t dynres_vram_hash(void) {
+    gl_renderer_sync_cpu();
+    uint64_t h = 1469598103934665603ull;
+    for (int y = 0; y < 512; y++)
+        for (int x = 0; x < 1024; x++) {
+            uint16_t p = gpu_vram_peek(x, y);
+            h = (h ^ (p & 0xFF)) * 1099511628211ull;
+            h = (h ^ (p >> 8)) * 1099511628211ull;
+        }
+    return h;
+}
+
+/* dynres_check {"seq":"9,8,3,10"}: hash the guest-visible VRAM, step through
+ * seq inside this one handler (no guest code runs in between), hash after
+ * each step, then step back to the level it started at. Any change is a
+ * mismatch. The regression probe for runtime scale steps. */
+static void handle_dynres_check(int id, const char *json)
+{
+    char seq[256];
+    if (!json_get_str(json, "seq", seq, sizeof(seq))) { send_err(id, "need seq"); return; }
+    GlDynresStats st;
+    gl_renderer_dynres_stats(&st);
+    if (st.ceiling < 2) { send_err(id, "runtime scale steps are not available"); return; }
+    const int start = st.level;
+    const uint64_t h0 = dynres_vram_hash();
+    char out[4096];
+    int pos = 0, bad = 0, first = 1;
+    pos += snprintf(out + pos, sizeof(out) - (size_t)pos, "[");
+    char *save = NULL;
+    for (char *t = strtok_r(seq, ",", &save); t && pos < (int)sizeof(out) - 160;
+         t = strtok_r(NULL, ",", &save)) {
+        int s = atoi(t);
+        int ok = gl_renderer_step_internal_scale_now(s);
+        gl_renderer_dynres_stats(&st);
+        uint64_t h = dynres_vram_hash();
+        if (h != h0) bad++;
+        pos += snprintf(out + pos, sizeof(out) - (size_t)pos,
+                        "%s{\"to\":%d,\"ok\":%d,\"level\":%d,\"same\":%d,\"ms\":%.3f,"
+                        "\"rects\":%d}", first ? "" : ",", s, ok, st.level, h == h0,
+                        st.last_ms, st.last_rects);
+        first = 0;
+    }
+    pos += snprintf(out + pos, sizeof(out) - (size_t)pos, "]");
+    (void)gl_renderer_step_internal_scale_now(start);
+    if (dynres_vram_hash() != h0) bad++;
+    send_fmt("{\"id\":%d,\"ok\":true,\"hash0\":\"%016llx\",\"mismatches\":%d,"
+             "\"restored\":%d,\"steps\":%s}", id, (unsigned long long)h0, bad, start, out);
+}
+
+static void handle_video_info(int id, const char *json)
+{
+    (void)json;
+    extern void psx_video_resolution_info(int *preset, int *ref_lines, int *requested,
+                                          int *hidpi, int *win_w, int *win_h,
+                                          int *px_w, int *px_h);
+    int preset = 0, ref = 0, req = 0, hidpi = 0, ww = 0, wh = 0, pw = 0, ph = 0;
+    psx_video_resolution_info(&preset, &ref, &req, &hidpi, &ww, &wh, &pw, &ph);
+    GlScaleInfo si;
+    int gl = gl_renderer_scale_info(&si);
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    int eff = gr_scale();
+    extern void psx_dynres_summary(int *enabled, int *level, int *floor_s, int *ceiling);
+    int dyn_on = 0, dyn_level = 0, dyn_floor = 0, dyn_ceiling = 0;
+    psx_dynres_summary(&dyn_on, &dyn_level, &dyn_floor, &dyn_ceiling);
+    send_fmt("{\"id\":%d,\"ok\":true,\"dynamic\":%d,\"level\":%d,\"floor\":%d,"
+             "\"alloc_scale\":%d,\"backend\":\"%s\",\"preset\":%d,"
+             "\"reference_lines\":%d,\"requested_scale\":%d,\"effective_scale\":%d,\"texture_filter\":%d,"
+             "\"internal_lines\":%u,\"gl\":%d,\"gl_max_dim\":%d,\"gl_max_scale\":%d,"
+             "\"gl_swap_interval\":%d,"
+             "\"gl_clamp_reason\":%d,\"gl_alloc_retries\":%d,\"gl_budget_mib\":%d,"
+             "\"fbo_w\":%d,\"fbo_h\":%d,\"hidpi_window\":%d,\"window_w\":%d,"
+             "\"window_h\":%d,\"drawable_w\":%d,\"drawable_h\":%d,"
+             "\"display_x\":%u,\"display_y\":%u,"
+             "\"display_w\":%u,\"display_h\":%u,\"hr_scale\":%d,\"windowed\":%d,"
+             "\"hires_window_x\":%d,\"hires_window_w\":%d,\"hires_fbo_w\":%d,"
+             "\"hires_fbo_h\":%d,\"hires_window_grows\":%d,\"hires_window_tiles\":%d,"
+             "\"hires_window_mib\":%d}",
+             id, dyn_on, dyn_level, dyn_floor, gl ? si.alloc_scale : 0,
+             gr_backend() == GR_BACKEND_OPENGL ? "opengl"
+                 : gr_backend() == GR_BACKEND_VULKAN ? "vulkan" : "software",
+             preset, ref, req, eff, gr_texture_filter(), di.height * (unsigned)(eff > 0 ? eff : 1), gl,
+             si.max_dim, si.max_scale, gl_renderer_get_swap_interval(), si.clamp_reason, si.alloc_retries, si.budget_mib,
+             si.fbo_w, si.fbo_h, hidpi, ww, wh, pw, ph, di.display_x, di.display_y,
+             di.width, di.height,
+             si.hr_scale, si.windowed, si.window_x, si.window_w, si.window_fbo_w,
+             si.window_fbo_h, si.window_grows, si.window_tiles, si.window_mib);
+}
+
+/* screenshot_wide_hires — the displayed band of the native-wide surface at
+ * internal resolution (GL): wide_w*S x h*S. present_shot is capped at the
+ * window, so this is how a widescreen + internal-resolution combination is
+ * checked without an 8K monitor. */
+static void handle_screenshot_wide_hires(int id, const char *json)
+{
+    extern int gr_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh, int base_x);
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.height == 0) { send_err(id, "display disabled"); return; }
+    int S = gr_scale();
+    if (S < 1) S = 1;
+    int base_x = json_get_int(json, "base_x", (int)di.display_x);
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_screenshot_wide_hires.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+    /* The dump reads rows from the top of the surface: size it to reach the
+     * end of the displayed band (at 8K the lower double-buffer band ends at
+     * row 8640, past a fixed 8192x8192 budget for a 21:9 or wider surface). */
+    long long need = (long long)ws_nw_present_width() * S *
+                     (((long long)di.display_y + di.height) * S);
+    int cap = need > 8192LL * 8192 && need < (1LL << 28) ? (int)need : 8192 * 8192;
+    uint32_t *buf = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    int W = 0, H = 0;
+    int n = gr_wide_dump_full(buf, cap, &W, &H, base_x);
+    if (n <= 0) { free(buf); send_err(id, "no wide surface (native-wide not engaged?)"); return; }
+    int y0 = (int)di.display_y * S, oh = (int)di.height * S;
+    if (y0 < 0) y0 = 0;
+    if (y0 + oh > H) oh = H - y0;
+    if (oh <= 0) { free(buf); send_err(id, "display band outside the surface"); return; }
+    uint8_t *rgb = (uint8_t *)malloc((size_t)W * oh * 3);
+    if (!rgb) { free(buf); send_err(id, "alloc failed"); return; }
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < W; x++) {
+            uint32_t px = buf[(size_t)(y0 + y) * W + x];
+            uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+            p[0] = (uint8_t)((px >> 16) & 0xFF);
+            p[1] = (uint8_t)((px >> 8) & 0xFF);
+            p[2] = (uint8_t)(px & 0xFF);
+        }
+    free(buf);
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(rgb); send_err(id, "cannot open file"); return; }
+    int ok = png_write_rgb(f, rgb, (uint32_t)W, (uint32_t)oh);
+    free(rgb); fclose(f);
+    if (!ok) { send_err(id, "png encode failed"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d,"
+             "\"scale\":%d}", id, path, W, oh, S);
 }
 
 /* present_shot — PNG of the COMPOSED renderer output: the frame after SDL fits
@@ -8973,6 +10614,34 @@ static void handle_present_shot_seq(int id, const char *json)
              id, present_shot_seq(), present_shot_ok());
 }
 
+/* Capture host text independently of a visible present surface. This makes
+ * diagnostic input rows and runtime toasts inspectable in hidden runs. */
+static void handle_host_osd_shot(int id, const char *json)
+{
+    char path[512];
+    const uint32_t *pixels = NULL;
+    int w = 0, h = 0;
+    if (!json_get_str(json, "path", path, sizeof(path))) {
+        send_err(id, "need path"); return;
+    }
+    if (!host_osd_image(&pixels, &w, &h) || !pixels || w <= 0 || h <= 0) {
+        send_err(id, "no host OSD text image"); return;
+    }
+    uint8_t *rgb = (uint8_t *)malloc((size_t)w * h * 3);
+    if (!rgb) { send_err(id, "alloc failed"); return; }
+    for (size_t i = 0; i < (size_t)w * h; ++i) {
+        rgb[i*3] = (uint8_t)(pixels[i] >> 16);
+        rgb[i*3+1] = (uint8_t)(pixels[i] >> 8);
+        rgb[i*3+2] = (uint8_t)pixels[i];
+    }
+    FILE *file = fopen(path, "wb");
+    int ok = file && png_write_rgb(file, rgb, (uint32_t)w, (uint32_t)h);
+    if (file) fclose(file);
+    free(rgb);
+    if (!ok) { send_err(id, "png write failed"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"width\":%d,\"height\":%d}", id, w, h);
+}
+
 /* dump_buffer: dump a raw 512x240 VRAM region starting at display Y = `y` to a
  * PNG, regardless of what the game currently displays. Used to inspect BOTH
  * double-buffer halves (y=0 and y=256) coherently in one call to see whether a
@@ -9018,7 +10687,10 @@ static void handle_dump_buffer(int id, const char *json)
  * present path uses (gr_render_wide_display into a scratch buffer), so the dump
  * reflects the composited wide frame 1:1, orientation included. Errors if the
  * active backend has no wide compositor or native-wide isn't engaged. */
-static void handle_wide_shot(int id, const char *json)
+/* Write the presented native-wide frame to `path`. Returns NULL on success
+ * (and the pixel size), or a static error string. Shared by wide_shot and
+ * the capture mark. */
+static const char *write_wide_png(const char *path, int *out_w, int *out_h)
 {
     extern int gr_wide_supported(void);
     extern int gr_scale(void);
@@ -9027,33 +10699,30 @@ static void handle_wide_shot(int id, const char *json)
     extern void gl_renderer_sync_cpu(void);
     gl_renderer_sync_cpu();   /* no-op on SW / when no GL frame pending */
 
-    if (!gr_wide_supported()) { send_err(id, "active backend has no wide compositor"); return; }
+    if (!gr_wide_supported()) return "active backend has no wide compositor";
     int extra = ws_nw_extra();
-    if (extra <= 0) { send_err(id, "native-wide not engaged (extra=0; need a wide game frame)"); return; }
+    if (extra <= 0) return "native-wide not engaged (extra=0; need a wide game frame)";
 
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
-    if (di.disabled || di.width == 0 || di.height == 0) { send_err(id, "display disabled"); return; }
+    if (di.disabled || di.width == 0 || di.height == 0) return "display disabled";
 
     int scale = gr_scale(); if (scale < 1) scale = 1;
-    int present_w = (int)di.width + extra;
+    int local_width = gpu_ws_netplay_local_viewport_width();
+    int base_x = local_width > 0 ? gpu_ws_netplay_local_viewport_base_x() : (int)di.display_x;
+    int present_w = local_width > 0 ? local_width : (int)di.width + extra;
     int W = present_w * scale, H = (int)di.height * scale;
 
-    char path[512];
-    if (!json_get_str(json, "path", path, sizeof(path)))
-        strncpy(path, "psx_wide.png", sizeof(path) - 1);
-    path[sizeof(path) - 1] = '\0';
-
     uint32_t *buf = (uint32_t *)malloc((size_t)W * H * sizeof(uint32_t));
-    if (!buf) { send_err(id, "alloc failed"); return; }
+    if (!buf) return "alloc failed";
     int n = gr_render_wide_display(buf, W * (int)sizeof(uint32_t),
-                                   (int)di.display_x, (int)di.display_y, (int)di.height);
-    if (n <= 0) { free(buf); send_err(id, "no wide surface for displayed buffer"); return; }
+                                   base_x, (int)di.display_y, (int)di.height);
+    if (n <= 0) { free(buf); return "no wide surface for displayed buffer"; }
 
     /* ARGB8888 (0xAARRGGBB) -> RGB, written in the buffer's row order (so the
      * PNG shows exactly the present orientation — the point of this probe). */
     uint8_t *rgb = (uint8_t *)malloc((size_t)W * H * 3);
-    if (!rgb) { free(buf); send_err(id, "alloc failed"); return; }
+    if (!rgb) { free(buf); return "alloc failed"; }
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             uint32_t px = buf[(size_t)y * W + x];
@@ -9065,12 +10734,147 @@ static void handle_wide_shot(int id, const char *json)
     }
     free(buf);
     FILE *f = fopen(path, "wb");
-    if (!f) { free(rgb); send_err(id, "cannot open file"); return; }
+    if (!f) { free(rgb); return "cannot open file"; }
     int ok = png_write_rgb(f, rgb, (uint32_t)W, (uint32_t)H);
     free(rgb); fclose(f);
-    if (!ok) { send_err(id, "png encode failed"); return; }
+    if (!ok) return "png encode failed";
+    if (out_w) *out_w = W;
+    if (out_h) *out_h = H;
+    return NULL;
+}
+
+static void handle_wide_shot(int id, const char *json)
+{
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_wide.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+    int W = 0, H = 0;
+    const char *err = write_wide_png(path, &W, &H);
+    if (err) { send_err(id, err); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d}",
              id, path, W, H);
+}
+
+/* Operator capture mark. Runs on the present thread (hotkey handler), where
+ * the renderer's context is current. Freezes the display and GP0 rings so the
+ * frames and draw lists leading up to the mark survive until read, and saves
+ * the presented native-wide frame (the only record of the compositor output).
+ * A second mark while frozen is ignored; release with capture_mark op=release. */
+void debug_server_capture_mark(void)
+{
+    if (s_capture_frozen) return;
+    s_capture_mark_frame = s_frame_count;
+    s_capture_mark_count++;
+    snprintf(s_capture_wide_path, sizeof s_capture_wide_path,
+             "capture_mark_%llu_wide.png", (unsigned long long)s_frame_count);
+    s_capture_wide_ok = write_wide_png(s_capture_wide_path, NULL, NULL) == NULL;
+    s_capture_frozen = 1;
+    gpu_gp0_ring_set_frozen(1);
+    gl_renderer_render_thread_sync("capture_mark");
+    present_image_ring_set_frozen(1);
+    gpu_timeline_set_frozen(1);
+}
+
+/* Render thread ([video] render_thread, docs/RENDER_THREAD.md):
+ *   {"cmd":"render_thread"} -> active, held, frames produced/consumed, presents
+ *   (and stale presents skipped), sync points (acquires) with the most recent
+ *   reasons, backpressure / ring-full waits, render busy/idle time.
+ * Reading it is not a sync point. */
+static void handle_render_thread(int id, const char *json)
+{
+    (void)json;
+    char buf[4096];
+    if (gl_renderer_render_thread_json(buf, sizeof buf) <= 0) buf[0] = 0;
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, buf[0] ? buf : "\"active\":0");
+}
+
+/* Smooth motion (frame generation; [video] frame_generation, docs/FRAME_GENERATION.md):
+ *   {"cmd":"frame_gen"} -> enabled, active, generated / real presents, flips,
+ *   the last plan (in-between frames per game frame, display slots), costs,
+ *   match counts, breaker. Not a sync point (render-thread counters, racy). */
+static void handle_frame_gen(int id, const char *json)
+{
+    (void)json;
+    char buf[4096];
+    if (gl_renderer_frame_gen_json(buf, sizeof buf) <= 0) buf[0] = 0;
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, buf[0] ? buf : "\"enabled\":0");
+}
+
+/* Presented-image ring (see present_image_ring.h):
+ *   {"cmd":"present_image_ring_stats"} -> oldest, newest, count, frozen
+ *   {"cmd":"present_image_ring_get","frame":N,"path":"x.png"} */
+static void handle_present_image_ring_stats(int id, const char *json)
+{
+    (void)json;
+    gl_renderer_render_thread_sync("present_image_ring");  /* render thread writes it */
+    uint32_t lo = 0, hi = 0, seq_lo = 0, seq_hi = 0; int n = 0;
+    present_image_ring_span(&lo, &hi, &n);
+    present_image_ring_sequence_span(&seq_lo, &seq_hi);
+    send_fmt("{\"id\":%d,\"ok\":true,\"oldest\":%u,\"newest\":%u,\"count\":%d,"
+             "\"oldest_sequence\":%u,\"newest_sequence\":%u,\"frozen\":%d,\"capacity\":%d,\"height\":%d}",
+             id, lo, hi, n, seq_lo, seq_hi, present_image_ring_frozen(),
+             PRESENT_IMAGE_RING_CAP, PRESENT_IMAGE_RING_H);
+}
+static void handle_present_image_ring_get(int id, const char *json)
+{
+    gl_renderer_render_thread_sync("present_image_ring");
+    int f = json_get_int(json, "frame", -1);
+    int seq = json_get_int(json, "sequence", -1);
+    char path[512];
+    if ((f < 0 && seq < 0) || !json_get_str(json, "path", path, sizeof path)) {
+        send_err(id, "need frame or sequence and path"); return;
+    }
+    uint8_t *rgb = NULL; int w = 0, h = 0;
+    uint32_t frame = f < 0 ? 0u : (uint32_t)f;
+    int found = seq >= 0
+        ? present_image_ring_get_sequence_rgb((uint32_t)seq, &rgb, &w, &h, &frame)
+        : present_image_ring_get_rgb(frame, &rgb, &w, &h);
+    if (!found) {
+        send_err(id, "image not in presented-image ring"); return;
+    }
+    FILE *fp = fopen(path, "wb");
+    int ok = fp && png_write_rgb(fp, rgb, (uint32_t)w, (uint32_t)h);
+    if (fp) fclose(fp);
+    free(rgb);
+    if (!ok) { send_err(id, "png write failed"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%u,\"sequence\":%d,\"width\":%d,\"height\":%d}",
+             id, frame, seq, w, h);
+}
+
+/* {"cmd":"capture_mark","op":"status"|"mark"|"release"}
+ * status  -> frozen, mark_frame, count, wide_path/wide_ok, and the frozen
+ *            display-ring / GP0-ring frame spans to query.
+ * mark    -> same as the hotkey (use only when nobody is at the window).
+ * release -> resume continuous capture. */
+static void handle_capture_mark(int id, const char *json)
+{
+    char op[16] = "status";
+    (void)json_get_str(json, "op", op, sizeof op);
+    if (!strcmp(op, "mark")) debug_server_capture_mark();
+    else if (!strcmp(op, "release")) {
+        s_capture_frozen = 0;
+        gpu_gp0_ring_set_frozen(0);
+        present_image_ring_set_frozen(0);
+        gpu_timeline_set_frozen(0);
+    } else if (strcmp(op, "status")) { send_err(id, "op must be status|mark|release"); return; }
+    uint32_t oldest = 0, newest = 0;
+    gpu_gp0_ring_frame_span(&oldest, &newest);
+    gl_renderer_render_thread_sync("display_ring");
+    uint32_t d_old = UINT32_MAX, d_new = 0;
+    for (int i = 0; i < DISP_RING_CAP; i++) {
+        if (!s_disp_ring[i].valid) continue;
+        if (s_disp_ring[i].frame < d_old) d_old = s_disp_ring[i].frame;
+        if (s_disp_ring[i].frame > d_new) d_new = s_disp_ring[i].frame;
+    }
+    if (d_old == UINT32_MAX) d_old = 0;
+    send_fmt("{\"id\":%d,\"ok\":true,\"frozen\":%d,\"mark_frame\":%llu,"
+             "\"count\":%llu,\"wide_path\":\"%s\",\"wide_ok\":%d,"
+             "\"display_ring\":[%u,%u],\"gp0_ring\":[%u,%u],\"frame\":%llu}",
+             id, s_capture_frozen, (unsigned long long)s_capture_mark_frame,
+             (unsigned long long)s_capture_mark_count, s_capture_wide_path,
+             s_capture_wide_ok, d_old, d_new, oldest, newest,
+             (unsigned long long)s_frame_count);
 }
 
 /* screenshot: capture what the player is actually being shown. Native-wide
@@ -9102,6 +10906,8 @@ static void handle_wide_full(int id, const char *json)
     extern void gl_renderer_sync_cpu(void);
     gl_renderer_sync_cpu();   /* no-op on SW; ensures pending GL frame is flushed */
     int base_x = json_get_int(json, "base_x", 0);
+    /* "alpha":1 writes bit 15 (GL: the surface alpha) as white/black. */
+    int show_alpha = json_get_int(json, "alpha", 0);
     char path[512];
     if (!json_get_str(json, "path", path, sizeof(path)))
         strncpy(path, "psx_wide_full.png", sizeof(path) - 1);
@@ -9120,6 +10926,10 @@ static void handle_wide_full(int id, const char *json)
         for (int x = 0; x < W; x++) {
             uint32_t px = buf[(size_t)y * W + x];
             uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+            if (show_alpha) {
+                p[0] = p[1] = p[2] = (uint8_t)(px >> 24);
+                continue;
+            }
             p[0] = (uint8_t)((px >> 16) & 0xFF);
             p[1] = (uint8_t)((px >> 8) & 0xFF);
             p[2] = (uint8_t)(px & 0xFF);
@@ -9282,7 +11092,7 @@ extern uint64_t gl_renderer_pres_total(void);
 
 static void handle_gl_present_ring(int id, const char *json)
 {
-    static const char *path_name[5] = { "vram", "wide", "cpu", "blank", "interp" };
+    static const char *path_name[6] = { "vram", "wide", "cpu", "blank", "interp", "stereo" };
     int n = json_get_int(json, "n", 300);
     if (n < 1) n = 1;
     if (n > 4096) n = 4096;
@@ -9301,7 +11111,7 @@ static void handle_gl_present_ring(int id, const char *json)
         pos += snprintf(buf + pos, bufsz - pos,
                         "%s[%llu,%u,\"%s\",%u,[%d,%d,%d,%d],[%d,%d,%d,%d],[%u,%u,%u],%u,[%u,%u,%u,%u]]",
                         first ? "" : ",", (unsigned long long)s, e.frame,
-                        e.path < 5 ? path_name[e.path] : "?", e.t_ms,
+                        e.path < 6 ? path_name[e.path] : "?", e.t_ms,
                         e.dx, e.dy, e.w, e.h, e.lx, e.ly, e.lw, e.lh,
                         e.px_r, e.px_g, e.px_b, e.glerr,
                         e.src_r, e.src_g, e.src_b, e.src_valid);
@@ -9320,7 +11130,7 @@ static void handle_gl_present_ring(int id, const char *json)
  *   {"cmd":"present_ring","n":600}
  * -> events: [seq, frame, path, present_w, disp_w, disp_h, game_mode,
  *             native_43, fellback, tag_delta, nw_extra, gte_verts,
- *             ovh_prims] */
+ *             ovh_prims, bd_veto] */
 static void handle_present_ring(int id, const char *json)
 {
     static const char *pres_path_name[4] =
@@ -9330,7 +11140,7 @@ static void handle_present_ring(int id, const char *json)
     if (n > 4096) n = 4096;
     uint64_t total = present_ring_total();
     uint64_t start = total > (uint64_t)n ? total - (uint64_t)n : 0;
-    int bufsz = 96 + n * 112;
+    int bufsz = 96 + n * 128;
     char *buf = (char *)malloc((size_t)bufsz);
     if (!buf) { send_err(id, "alloc failed"); return; }
     int pos = snprintf(buf, bufsz,
@@ -9341,16 +11151,97 @@ static void handle_present_ring(int id, const char *json)
         PresRingEntry e;
         if (!present_ring_get(s, &e)) continue;
         pos += snprintf(buf + pos, bufsz - pos,
-                        "%s[%llu,%u,\"%s\",%u,%u,%u,%u,%u,%u,%ld,%u,%u,%u]",
+                        "%s[%llu,%u,\"%s\",%u,%u,%u,%u,%u,%u,%ld,%u,%u,%u,%u]",
                         first ? "" : ",", (unsigned long long)s, e.frame,
                         e.path < 4 ? pres_path_name[e.path] : "?",
                         e.present_w, e.disp_w, e.disp_h,
                         e.game_mode, e.native_43, e.wide_fellback,
                         (long)e.tag_delta, e.nw_extra,
-                        e.gte_verts, e.ovh_prims);
+                        e.gte_verts, e.ovh_prims, e.bd_veto);
         first = 0;
     }
     pos += snprintf(buf + pos, bufsz - pos, "]}");
+    send_fmt("%s", buf);
+    free(buf);
+}
+
+/* Precise-NCLIP attribution (gte_nclip_stats.h).
+ *   {"cmd":"nclip_stats"}            totals + per-function + per-site tables
+ *   {"cmd":"nclip_stats","reset":1}  clear the tables after reading
+ *   {"cmd":"nclip_stats","exact":0|1} switch exact-site consumers off/on
+ * funcs: [near_store_pc, nclips, disagree, saturated, last_frame] (1 = unknown)
+ * sites: [pc, evals, flips, fallbacks, last_frame] */
+static void handle_nclip_stats(int id, const char *json)
+{
+    extern int gpu_ws_precise_nclip_enabled(void);
+    static GteNclipFuncStat funcs[GTE_NCLIP_STAT_CAP];
+    static GteNclipSiteStat sites[GTE_NCLIP_STAT_CAP];
+    uint64_t hits = 0, fallbacks = 0, disagree = 0;
+    gte_nclip_precise_stats(&hits, &fallbacks, &disagree);
+    const int nf = gte_nclip_func_stats(funcs, GTE_NCLIP_STAT_CAP);
+    const int ns = gte_nclip_site_stats(sites, GTE_NCLIP_STAT_CAP);
+    const int bufsz = 256 + (nf + ns) * 72;
+    char *buf = (char *)malloc((size_t)bufsz);
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    int pos = snprintf(buf, bufsz,
+        "{\"id\":%d,\"ok\":true,\"enabled\":%d,\"exact\":%d,\"hits\":%llu,\"fallbacks\":%llu,"
+        "\"disagreements\":%llu,\"funcs\":[",
+        id, gpu_ws_precise_nclip_enabled(), gte_nclip_exact_enabled(),
+        (unsigned long long)hits,
+        (unsigned long long)fallbacks, (unsigned long long)disagree);
+    for (int i = 0; i < nf; i++)
+        pos += snprintf(buf + pos, bufsz - pos, "%s[\"0x%08X\",%u,%u,%u,%u]",
+                        i ? "," : "", funcs[i].func, funcs[i].nclips,
+                        funcs[i].disagree, funcs[i].saturated, funcs[i].last_frame);
+    pos += snprintf(buf + pos, bufsz - pos, "],\"sites\":[");
+    for (int i = 0; i < ns; i++)
+        pos += snprintf(buf + pos, bufsz - pos, "%s[\"0x%08X\",%u,%u,%u,%u]",
+                        i ? "," : "", sites[i].pc, sites[i].evals,
+                        sites[i].flips, sites[i].fallbacks, sites[i].last_frame);
+    snprintf(buf + pos, bufsz - pos, "]}");
+    if (json_get_int(json, "reset", 0)) gte_nclip_stats_reset();
+    {
+        const int exact = json_get_int(json, "exact", -1);
+        if (exact >= 0) gte_nclip_exact_set_enabled(exact);
+    }
+    send_fmt("%s", buf);
+    free(buf);
+}
+
+/* GPU frame timeline (gpu_timeline.h): cycle-ordered vblank / flip /
+ * draw-area / linked-list DMA / present events.
+ *   {"cmd":"gpu_timeline","from":F,"to":T}   frames [F,T] (default: last 8)
+ * events: [seq, cycle, frame, kind, a, b] */
+static void handle_gpu_timeline(int id, const char *json)
+{
+    uint64_t total = gpu_timeline_total();
+    uint64_t oldest = total > GPU_TIMELINE_CAP ? total - GPU_TIMELINE_CAP : 0;
+    GpuTimelineEntry last;
+    uint32_t newest_frame = (total && gpu_timeline_get(total - 1, &last)) ? last.frame : 0;
+    int to = json_get_int(json, "to", (int)newest_frame);
+    int from = json_get_int(json, "from", to - 7);
+    if (from < 0) from = 0;
+    if (to < from) { send_err(id, "to < from"); return; }
+    int bufsz = 256 + 4096 * 80;
+    char *buf = (char *)malloc((size_t)bufsz);
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    GpuTimelineEntry first_e;
+    uint32_t oldest_frame = (total && gpu_timeline_get(oldest, &first_e)) ? first_e.frame : 0;
+    int pos = snprintf(buf, bufsz,
+                       "{\"id\":%d,\"ok\":true,\"total\":%llu,\"frames\":[%u,%u],\"events\":[",
+                       id, (unsigned long long)total, oldest_frame, newest_frame);
+    int first = 1, n = 0;
+    for (uint64_t s = oldest; s < total && pos < bufsz - 128 && n < 4096; s++) {
+        GpuTimelineEntry e;
+        if (!gpu_timeline_get(s, &e)) continue;
+        if ((int)e.frame < from || (int)e.frame > to) continue;
+        pos += snprintf(buf + pos, bufsz - pos, "%s[%llu,%llu,%u,\"%s\",%u,%u]",
+                        first ? "" : ",", (unsigned long long)s,
+                        (unsigned long long)e.cyc, e.frame,
+                        gpu_timeline_kind_name(e.kind), e.a, e.b);
+        first = 0; n++;
+    }
+    pos += snprintf(buf + pos, bufsz - pos, "],\"truncated\":%s}", n >= 4096 ? "true" : "false");
     send_fmt("%s", buf);
     free(buf);
 }
@@ -9377,7 +11268,7 @@ static void wtrace_fill_entry(WriteTraceEntry *e, uint64_t seq,
      * instead of the stale last-CPU-store PC (which is meaningless mid-DMA). */
     if (g_dma_exec_depth > 0) {
         e->dma_ch = (int8_t)g_dma_cur_ch;
-        if (g_dma_initiator_pc) e->pc = g_dma_initiator_pc;
+        e->pc = g_dma_initiator_pc; /* 0 = unknown; never a stale CPU store PC */
     } else {
         e->dma_ch = -1;
     }
@@ -9584,12 +11475,18 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
     (void)phys; (void)old_val; (void)new_val; (void)width;
     return;
 #endif
-    if (s_fmv_quiet) return;
+    /* Render passes are rolled back; keep them out of the live timeline's
+     * fingerprints and write traces (docs/RENDER_PASSES.md). */
+    if (g_psx_render_pass_active) return;
+    if (s_fmv_quiet) {
+        if (psx_fp_write_eligible(phys, psx_ram_live_bytes())) psx_fp_note_quiet(&s_fp);
+        return;
+    }
     if (is_card_critical_addr(phys)) card_trace_record(phys, old_val, new_val, width);
     fp_record_write(phys, new_val, g_debug_last_store_pc);
     {
         uint32_t ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0;
-        if (phys < 0x200000u)
+        if (phys < psx_ram_live_bytes())
             rec_event(REC_KIND_RAM_W, phys, new_val, g_debug_last_store_pc, ra);
         else if (phys >= 0x1F800000u && phys <= 0x1F8003FFu)
             rec_event(REC_KIND_SP_W, phys, new_val, g_debug_last_store_pc, ra);
@@ -9609,11 +11506,12 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
 /* MMIO write trace — called from memory.c mmio_write32/16/8. */
 void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width)
 {
+    if (g_psx_render_pass_active) return;   /* rolled back: not live */
 #ifdef PSX_NO_DEBUG_TOOLS
     (void)addr; (void)val; (void)width;
     return;
 #endif
-    if (s_fmv_quiet) return;
+    if (s_fmv_quiet) { psx_fp_note_quiet(&s_fp); return; }
     /* First-divergence fingerprint + frame recorder also see device writes. */
     fp_record_mmio(addr, val, g_debug_last_store_pc);
     rec_event(REC_KIND_MMIO_W, addr, val, g_debug_last_store_pc,
@@ -9770,24 +11668,12 @@ static void handle_wtrace_ranges(int id, const char *json)
 
 /* ---- cyc_watch command handlers (see cyc_watch_observe above) ---- */
 
-/* cyc_watch — arm an anchor PC. {"pc":"0x...","n":16}. Clears the ring,
- * masks the anchor to physical, and starts recording. The Beetle side
- * (psx-beetle, added parent-side) implements the SAME command/spec. */
-static void handle_cyc_watch(int id, const char *json)
+/* Arm cyc_watch: clear the ring, mask the anchor(s) to physical, start
+ * recording. end_raw != 0 selects REGION mode (each entry = Δcycles A->B). */
+static void cyc_watch_arm(uint32_t raw, uint32_t end_raw, int n)
 {
-    char pcbuf[64];
-    if (!json_get_str(json, "pc", pcbuf, sizeof(pcbuf))) {
-        send_err(id, "cyc_watch requires pc");
-        return;
-    }
-    uint32_t raw = hex_to_u32(pcbuf);
-    int n = json_get_int(json, "n", 16);
     if (n < 1) n = 1;
     if (n > CYC_WATCH_RING_CAP) n = CYC_WATCH_RING_CAP;
-    /* Optional second anchor -> REGION mode: each entry = Δcycles of one A->B pass. */
-    char endbuf[64];
-    uint32_t end_raw = json_get_str(json, "end", endbuf, sizeof(endbuf)) ? hex_to_u32(endbuf) : 0u;
-
     /* Disarm first so the hot path can't sample mid-reset. */
     s_cyc_watch_armed = 0;
     s_cyc_watch_anchor_raw  = raw;
@@ -9802,6 +11688,22 @@ static void handle_cyc_watch(int id, const char *json)
     s_cyc_watch_last_cycle  = 0xFFFFFFFFFFFFFFFFull;
     memset(s_cyc_watch_ring, 0, sizeof(s_cyc_watch_ring));
     s_cyc_watch_armed = 1;
+}
+
+/* cyc_watch — arm an anchor PC. {"pc":"0x...","n":16}. Clears the ring,
+ * masks the anchor to physical, and starts recording. The Beetle side
+ * (psx-beetle, added parent-side) implements the SAME command/spec. */
+static void handle_cyc_watch(int id, const char *json)
+{
+    char pcbuf[64];
+    if (!json_get_str(json, "pc", pcbuf, sizeof(pcbuf))) {
+        send_err(id, "cyc_watch requires pc");
+        return;
+    }
+    /* Optional second anchor -> REGION mode: each entry = Δcycles of one A->B pass. */
+    char endbuf[64];
+    uint32_t end_raw = json_get_str(json, "end", endbuf, sizeof(endbuf)) ? hex_to_u32(endbuf) : 0u;
+    cyc_watch_arm(hex_to_u32(pcbuf), end_raw, json_get_int(json, "n", 16));
 
     send_fmt("{\"id\":%d,\"ok\":true,\"anchor\":\"0x%08X\","
              "\"anchor_phys\":\"0x%08X\",\"end\":\"0x%08X\",\"end_phys\":\"0x%08X\","
@@ -9981,13 +11883,103 @@ static void handle_d44_ring(int id, const char *json)
  * callback word [0x80079D44], CD-DMA-active + dma-depth, and COP0/IRQ state. Shows
  * whether VBlank was delivered while 0x80079D44 was the clobbered 0x016F0110 AND a
  * CD DMA was mid-transfer (the VSync-in-DMA-window bug). */
+/* irq_exc_stats: cumulative per-source exception accounting since boot
+ * (interrupts.c). Each delivery is charged to every I_STAT&I_MASK bit pending
+ * at entry ("sw" = software interrupt only), with the guest cycles from entry
+ * to the exit restore decision. Diff two snapshots for a window. */
+static void handle_irq_exc_stats(int id, const char *json)
+{
+    (void)json;
+    extern uint64_t g_exc_src_deliveries[12], g_exc_src_cycles[12];
+    extern uint64_t g_exc_cycles_total, g_exc_exits_total, g_irqctx_seq;
+    static const char *names[12] = { "vblank", "gpu", "cdrom", "dma", "tmr0",
+        "tmr1", "tmr2", "sio0", "sio1", "spu", "lightpen", "sw" };
+    char buf[2048];
+    size_t pos = 0;
+    pos += snprintf(buf + pos, sizeof(buf) - pos,
+                    "{\"id\":%d,\"ok\":true,\"cycle\":%llu,\"frame\":%llu,"
+                    "\"deliveries\":%llu,\"exits\":%llu,\"exc_cycles\":%llu,\"src\":{",
+                    id, (unsigned long long)psx_get_cycle_count(),
+                    (unsigned long long)s_frame_count,
+                    (unsigned long long)g_irqctx_seq,
+                    (unsigned long long)g_exc_exits_total,
+                    (unsigned long long)g_exc_cycles_total);
+    for (int b = 0; b < 12; b++)
+        pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "%s\"%s\":{\"n\":%llu,\"cyc\":%llu}", b ? "," : "", names[b],
+                        (unsigned long long)g_exc_src_deliveries[b],
+                        (unsigned long long)g_exc_src_cycles[b]);
+    snprintf(buf + pos, sizeof(buf) - pos, "}}");
+    debug_server_send_line(buf);
+}
+
+/* dma_hold_stats: cumulative totals for CPU holds on kicked GPU linked-list
+ * walks (dma.c), split by kicks made inside an exception handler. */
+static void handle_dma_hold_stats(int id, const char *json)
+{
+    (void)json;
+    DMAGpuHoldStats st;
+    dma_debug_get_gpu_hold(&st, NULL);
+    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,\"count\":%llu,\"held_cycles\":%llu,"
+             "\"host_us\":%llu,\"words\":%llu,\"steps\":%llu,\"exc_count\":%llu,"
+             "\"exc_held_cycles\":%llu,\"exc_host_us\":%llu}",
+             id, (unsigned long long)s_frame_count,
+             (unsigned long long)st.count, (unsigned long long)st.held_cycles,
+             (unsigned long long)st.host_us, (unsigned long long)st.words,
+             (unsigned long long)st.steps, (unsigned long long)st.exc_count,
+             (unsigned long long)st.exc_held_cycles, (unsigned long long)st.exc_host_us);
+}
+
+/* dma_hold_ring: newest `count` held kicks (default 256, max ring cap),
+ * optionally windowed by frame_lo/frame_hi. */
+static void handle_dma_hold_ring(int id, const char *json)
+{
+    int count = json_get_int(json, "count", 256);
+    int flo = json_get_int(json, "frame_lo", -1);
+    int fhi = json_get_int(json, "frame_hi", -1);
+    if (count < 1) count = 1;
+    if (count > (int)DMA_GPU_HOLD_RING_CAP) count = (int)DMA_GPU_HOLD_RING_CAP;
+    DMAGpuHoldStats st;
+    const DMAGpuHoldEntry *ring = NULL;
+    dma_debug_get_gpu_hold(&st, &ring);
+    uint64_t total = st.count;
+    uint32_t avail = total < DMA_GPU_HOLD_RING_CAP ? (uint32_t)total : DMA_GPU_HOLD_RING_CAP;
+    uint32_t n = (uint32_t)count < avail ? (uint32_t)count : avail;
+    size_t BUF_SZ = 256u + (size_t)n * 260u;
+    char *buf = (char *)malloc(BUF_SZ);
+    if (!buf) { send_err(id, "oom"); return; }
+    size_t pos = 0;
+    int emitted = 0;
+    pos += snprintf(buf + pos, BUF_SZ - pos,
+                    "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
+                    id, (unsigned long long)total);
+    for (uint32_t i = 0; i < n && pos < BUF_SZ - 260; i++) {
+        const DMAGpuHoldEntry *e = &ring[(total - n + i) & (DMA_GPU_HOLD_RING_CAP - 1u)];
+        if (flo >= 0 && (int)e->frame < flo) continue;
+        if (fhi >= 0 && (int)e->frame > fhi) continue;
+        pos += snprintf(buf + pos, BUF_SZ - pos,
+            "%s{\"seq\":%llu,\"cycle\":%llu,\"frame\":%u,\"held_cycles\":%u,"
+            "\"words\":%u,\"steps\":%u,\"host_us\":%u,\"kick_pc\":\"0x%08X\","
+            "\"madr\":\"0x%08X\",\"in_exc\":%u,\"still_active\":%u}",
+            emitted ? "," : "", (unsigned long long)e->seq,
+            (unsigned long long)e->cycle, e->frame, e->held_cycles, e->words,
+            e->steps, e->host_us, e->kick_pc, e->madr,
+            (unsigned)e->in_exception, (unsigned)e->still_active);
+        emitted++;
+    }
+    pos += snprintf(buf + pos, BUF_SZ - pos, "],\"emitted\":%d}", emitted);
+    debug_server_send_line(buf);
+    free(buf);
+}
+
 static void handle_irqctx_ring(int id, const char *json)
 {
     typedef struct { uint64_t seq, cycle; uint32_t frame, istat, imask, sr, d44,
                      cdrom_active, is_vblank; int dma_depth;
                      uint32_t take_pc, real_epc, exit_pc, exit_reason, same_thread,
                      restored, v0_exit, v0_saved, v1_exit, v1_saved, ra_exit,
-                     ra_saved, redirects, entry_sp, pump_site; } E;
+                     ra_saved, redirects, entry_sp, pump_site;
+                     uint64_t exit_cycle; } E;   /* must match IrqCtxEntry */
     extern E g_irqctx_ring[]; extern uint64_t g_irqctx_seq;
     /* Ring cap must track IRQCTX_RING_CAP in interrupts.c. */
     uint32_t cap = 4096u;
@@ -10001,7 +11993,7 @@ static void handle_irqctx_ring(int id, const char *json)
     uint64_t total = g_irqctx_seq;
     uint32_t avail = total < cap ? (uint32_t)total : cap;
     uint32_t n = (uint32_t)count < avail ? (uint32_t)count : avail;
-    size_t BUF_SZ = 512u + (size_t)n * 410u;
+    size_t BUF_SZ = 512u + (size_t)n * 480u;
     char *buf = (char *)malloc(BUF_SZ); if (!buf) { send_err(id, "oom"); return; }
     size_t pos = 0;
     pos += snprintf(buf + pos, BUF_SZ - pos,
@@ -10022,13 +12014,14 @@ static void handle_irqctx_ring(int id, const char *json)
             "\"v0_exit\":\"0x%08X\",\"v0_saved\":\"0x%08X\","
             "\"v1_exit\":\"0x%08X\",\"v1_saved\":\"0x%08X\","
             "\"ra_exit\":\"0x%08X\",\"ra_saved\":\"0x%08X\",\"redirects\":%u,"
-            "\"entry_sp\":\"0x%08X\",\"pump_site\":%u}",
+            "\"entry_sp\":\"0x%08X\",\"pump_site\":%u,\"exit_cycle\":%llu}",
             emitted ? "," : "", (unsigned long long)e->seq, (unsigned long long)e->cycle,
             e->frame, e->is_vblank, e->d44, e->cdrom_active, e->dma_depth,
             e->sr, e->istat, e->imask,
             e->take_pc, e->real_epc, e->exit_pc, e->exit_reason, e->same_thread,
             e->restored, e->v0_exit, e->v0_saved, e->v1_exit, e->v1_saved,
-            e->ra_exit, e->ra_saved, e->redirects, e->entry_sp, e->pump_site);
+            e->ra_exit, e->ra_saved, e->redirects, e->entry_sp, e->pump_site,
+            (unsigned long long)e->exit_cycle);
         emitted++;
     }
     pos += snprintf(buf + pos, BUF_SZ - pos, "],\"emitted\":%d}", emitted);
@@ -10369,11 +12362,12 @@ static void handle_wtrace_boot_stats(int id, const char *json)
     uint64_t newest = (s_wtrace_boot_total > 0) ? s_wtrace_boot_total - 1 : 0;
     send_fmt("{\"id\":%d,\"ok\":true,\"total\":%llu,\"stored\":%u,"
              "\"capacity\":%d,\"newest_seq\":%llu,\"ranges\":%d,"
-             "\"full\":%s}",
+             "\"full\":%s,\"env_ranges\":%d,\"env_error\":\"%s\"}",
              id, (unsigned long long)s_wtrace_boot_total,
              s_wtrace_boot_count, WRITE_TRACE_BOOT_CAP,
              (unsigned long long)newest, s_wtrace_boot_range_count,
-             (s_wtrace_boot_count >= WRITE_TRACE_BOOT_CAP) ? "true" : "false");
+             (s_wtrace_boot_count >= WRITE_TRACE_BOOT_CAP) ? "true" : "false",
+             s_wtrace_env_ranges, s_wtrace_env_error);
 }
 
 static void handle_wtrace_boot_clear(int id, const char *json)
@@ -10715,10 +12709,12 @@ static void handle_wtrace_trans_stats(int id, const char *json)
     uint64_t oldest = (total <= WRITE_TRACE_TRANS_CAP) ? 0 : total - WRITE_TRACE_TRANS_CAP;
     uint64_t newest = (total > 0) ? total - 1 : 0;
     send_fmt("{\"id\":%d,\"ok\":true,\"total\":%llu,\"capacity\":%d,"
-             "\"oldest_seq\":%llu,\"newest_seq\":%llu,\"ranges\":%d}",
+             "\"oldest_seq\":%llu,\"newest_seq\":%llu,\"ranges\":%d,"
+             "\"env_ranges\":%d,\"env_error\":\"%s\"}",
              id, (unsigned long long)total, WRITE_TRACE_TRANS_CAP,
              (unsigned long long)oldest, (unsigned long long)newest,
-             s_wtrace_trans_range_count);
+             s_wtrace_trans_range_count, s_wtrace_env_ranges,
+             s_wtrace_env_error);
 }
 
 static void handle_wtrace_trans_reset(int id, const char *json)
@@ -10970,6 +12966,22 @@ static void handle_wtrace_dump(int id, const char *json)
     if (json_get_str(json, "addr_hi", hi_str, sizeof(hi_str)))
         filter_hi = hex_to_u32(hi_str) & 0x1FFFFFFFu;
 
+    /* Filter the recorded producer PC, segment-masked like the address filter
+     * (KSEG0/KSEG1/KUSEG alias). DMA entries use the initiator PC stored by
+     * wtrace_fill_entry; an unknown (0) initiator matches only when no PC
+     * bound is given. Post-hoc only: recording, fingerprints and guest
+     * execution are unchanged. pc_lo/pc_hi echo the raw request. */
+    uint32_t pc_lo = 0, pc_hi = 0xFFFFFFFFu;
+    int pc_filtered = 0;
+    /* Default upper bound sits above every masked PC so no entry is excluded. */
+    uint32_t pc_lo_m = 0, pc_hi_m = 0x20000000u;
+    if (json_get_str(json, "pc_lo", lo_str, sizeof(lo_str))) {
+        pc_lo = hex_to_u32(lo_str); pc_lo_m = pc_lo & 0x1FFFFFFFu; pc_filtered = 1;
+    }
+    if (json_get_str(json, "pc_hi", hi_str, sizeof(hi_str))) {
+        pc_hi = hex_to_u32(hi_str); pc_hi_m = pc_hi & 0x1FFFFFFFu; pc_filtered = 1;
+    }
+
     /* Optional frame-window filter — the "query the ring for the window of
      * interest" primitive.  Lets a caller reach entries in the MIDDLE of a deep,
      * high-traffic ring (which oldest-N / newest-N paging cannot). -1 = unbounded. */
@@ -10993,8 +13005,9 @@ static void handle_wtrace_dump(int id, const char *json)
     size_t pos = 0;
     uint32_t emitted = 0;
     pos += snprintf(buf + pos, BUF_SZ - pos,
-                    "{\"id\":%d,\"ok\":true,\"total\":%llu,\"available\":%u,\"entries\":[",
-                    id, (unsigned long long)total, avail);
+                    "{\"id\":%d,\"ok\":true,\"total\":%llu,\"available\":%u,"
+                    "\"pc_lo\":\"0x%08X\",\"pc_hi\":\"0x%08X\",\"entries\":[",
+                    id, (unsigned long long)total, avail, pc_lo, pc_hi);
     for (uint32_t i = 0; i < avail && emitted < MAX_OUT && pos < BUF_SZ - 256; i++) {
         uint32_t idx;
         if (newest_first) {
@@ -11005,6 +13018,10 @@ static void handle_wtrace_dump(int id, const char *json)
         }
         WriteTraceEntry *e = &s_wtrace[idx];
         if (e->addr < filter_lo || e->addr >= filter_hi) continue;
+        if (pc_filtered) {
+            uint32_t epc = e->pc & 0x1FFFFFFFu;
+            if (e->pc == 0 || epc < pc_lo_m || epc >= pc_hi_m) continue;
+        }
         if (frame_lo >= 0 && (int)e->frame < frame_lo) continue;
         if (frame_hi >= 0 && (int)e->frame > frame_hi) continue;
         pos += snprintf(buf + pos, BUF_SZ - pos,
@@ -11447,18 +13464,75 @@ static void handle_quit(int id, const char *json)
 
 /* ---- Command dispatch table ---- */
 
-/* dispatch_stats: static hit vs. miss coverage summary */
+/* dispatch_stats: static hit vs. miss coverage summary. segment_miss_* are
+ * the static-game-text PCs that had a compiled row only in another segment
+ * and ran interpreted (docs/SEGMENT_AWARE_CODE.md §5.5; `segment_misses`). */
 static void handle_dispatch_stats(int id, const char *json)
 {
     (void)json;
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"static_hits\":%llu,"
              "\"miss_total\":%llu,"
-             "\"miss_unique\":%d}",
+             "\"miss_unique\":%d,"
+             "\"segment_miss_total\":%llu,"
+             "\"segment_miss_unique\":%u}",
              id,
              (unsigned long long)g_dispatch_static_hits,
              (unsigned long long)s_unknown_seq,
-             s_unknown_unique_count);
+             s_unknown_unique_count,
+             (unsigned long long)psx_segment_miss_total(),
+             psx_segment_miss_unique());
+}
+
+/* segment_misses: static game text entered at a PC whose physical word has a
+ * compiled row only in another segment (docs/SEGMENT_AWARE_CODE.md §5.5),
+ * kind "game": each ran interpreted. Kind "bios": a compiled BIOS window
+ * entered in another segment than its body's, with no segment variant; the
+ * home body ran (§5.4). The fix is a segment-qualified seed (§5.4) and a
+ * regeneration, in the game's or the BIOS's seeds by kind. {"tail":N}
+ * returns the last N ring entries in order; otherwise a per-PC summary,
+ * highest count first (at most 200 rows). */
+static void handle_segment_misses(int id, const char *json)
+{
+    int tail = json_get_int(json, "tail", 0);
+    const uint64_t total = psx_segment_miss_total();
+    const size_t BUF_SZ = 512 * 1024;
+    char *out = (char *)malloc(BUF_SZ);
+    if (!out) { send_err(id, "oom"); return; }
+    size_t pos = 0;
+    pos += snprintf(out + pos, BUF_SZ - pos,
+                    "{\"id\":%d,\"ok\":true,\"total\":%llu,\"unique\":%u,",
+                    id, (unsigned long long)total, psx_segment_miss_unique());
+    if (tail > 0) {
+        uint64_t avail = total < PSX_SEGMENT_MISS_RING_CAP ? total : PSX_SEGMENT_MISS_RING_CAP;
+        if ((uint64_t)tail > avail) tail = (int)avail;
+        pos += snprintf(out + pos, BUF_SZ - pos, "\"tail\":%d,\"entries\":[", tail);
+        for (int i = 0; i < tail && pos < BUF_SZ - 160; i++) {
+            PsxSegmentMissEntry e = psx_segment_miss_get(total - (uint64_t)tail + (uint64_t)i);
+            pos += snprintf(out + pos, BUF_SZ - pos,
+                            "%s{\"seq\":%llu,\"pc\":\"0x%08X\",\"home\":\"0x%08X\","
+                            "\"ra\":\"0x%08X\",\"sp\":\"0x%08X\",\"frame\":%u,"
+                            "\"kind\":\"%s\"}",
+                            i ? "," : "", (unsigned long long)e.seq, e.addr, e.home,
+                            e.ra, e.sp, e.frame, psx_segment_miss_kind_name(e.kind));
+        }
+    } else {
+        enum { kRows = 200 };
+        uint32_t addrs[kRows], homes[kRows], kinds[kRows];
+        uint64_t counts[kRows];
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, kRows);
+        pos += snprintf(out + pos, BUF_SZ - pos, "\"summary\":[");
+        for (uint32_t i = 0; i < n && pos < BUF_SZ - 112; i++) {
+            pos += snprintf(out + pos, BUF_SZ - pos,
+                            "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu,"
+                            "\"kind\":\"%s\"}",
+                            i ? "," : "", addrs[i], homes[i], (unsigned long long)counts[i],
+                            psx_segment_miss_kind_name(kinds[i]));
+        }
+    }
+    pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
+    debug_server_send_line(out);
+    free(out);
 }
 
 /* dispatch_check: check if a specific address was ever dispatched */
@@ -12222,7 +14296,8 @@ static void handle_overlay_loader_status(int id, const char *json)
             "\"reval_attempts\":%u,\"reval_crc_miss\":%u,\"last_reval_crc\":\"0x%08X\","
             "\"gen_fastpath\":%llu,\"range_links\":%d,\"range_index_overflow\":%d,"
             "\"lazy_manifests\":%d,\"lazy_manifest_overflow\":%d,"
-            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu",
+            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu,"
+            "\"segment_alias_interp\":%llu,\"segment_native\":%llu",
             r0v, r0w, r0lo, r0hi, r0crc, ratt, rmiss, rlast,
             (unsigned long long)overlay_loader_gen_fastpath(),
             overlay_loader_range_link_count(),
@@ -12230,7 +14305,9 @@ static void handle_overlay_loader_status(int id, const char *json)
             overlay_loader_lazy_manifest_count(),
             overlay_loader_lazy_manifest_overflow(),
             (unsigned long long)overlay_loader_candidate_overflow(),
-            (unsigned long long)overlay_loader_pair_aliases());
+            (unsigned long long)overlay_loader_pair_aliases(),
+            (unsigned long long)overlay_loader_segment_alias_interp(),
+            (unsigned long long)overlay_loader_segment_native());
         uint64_t nd=0, ni=0, sn=0, ss=0, sc=0, sx=0;
         psx_interrupt_delivery_diag(&nd, &ni, &sn, &ss, &sc, &sx);
         n += snprintf(buf + n, sizeof(buf) - n,
@@ -12293,6 +14370,79 @@ static void handle_overlay_candidates(int id, const char *json)
         : overlay_loader_dump_candidates(cbuf, (int)sizeof(cbuf));
     if (len < 0) len = 0;
     send_fmt("{\"id\":%d,\"ok\":true,\"candidates\":%s}\n", id, cbuf);
+}
+
+/* overlay_static_entries: always-on per-entry dispatch counts of the
+ * build-time static overlay dispatcher (generated overlays_static.c). The
+ * global static_hits in overlay_loader_status cannot say WHICH image ran; this
+ * can (a mod engine linked at 0x80780000 versus a menu overlay at 0x800BF800).
+ * Optional addr_lo/addr_hi restrict the sums and the list to [lo, hi) code
+ * addresses (segment bits ignored); `limit` (default 64, max 1024) lists the
+ * busiest entries in the range, most hits first. */
+static void handle_overlay_static_entries(int id, const char *json)
+{
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+    extern uint32_t psx_overlay_static_entry_count(void);
+    extern int psx_overlay_static_entry_stats(uint32_t index, uint32_t *addr,
+                                              uint32_t *variants, uint64_t *hits);
+    typedef struct { uint32_t addr, variants; uint64_t hits; } TopEntry;
+    char lo_str[32], hi_str[32];
+    uint32_t lo = 0u, hi = 0x20000000u;
+    if (json_get_str(json, "addr_lo", lo_str, sizeof(lo_str)))
+        lo = hex_to_u32(lo_str) & 0x1FFFFFFFu;
+    if (json_get_str(json, "addr_hi", hi_str, sizeof(hi_str)))
+        hi = hex_to_u32(hi_str) & 0x1FFFFFFFu;
+    int limit = json_get_int(json, "limit", 64);
+    if (limit < 0) limit = 0;
+    if (limit > 1024) limit = 1024;
+    TopEntry *top = (TopEntry *)calloc((size_t)(limit ? limit : 1), sizeof(TopEntry));
+    char *out = (char *)malloc((size_t)limit * 96u + 512u);
+    if (!top || !out) { free(top); free(out); send_err(id, "oom"); return; }
+    const uint32_t n = psx_overlay_static_entry_count();
+    uint64_t total_hits = 0, range_hits = 0;
+    uint32_t range_entries = 0, range_variants = 0, range_hit_entries = 0;
+    int kept = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t addr = 0, variants = 0;
+        uint64_t hits = 0;
+        if (!psx_overlay_static_entry_stats(i, &addr, &variants, &hits)) break;
+        total_hits += hits;
+        const uint32_t phys = addr & 0x1FFFFFFFu;
+        if (phys < lo || phys >= hi) continue;
+        range_entries++;
+        range_variants += variants;
+        range_hits += hits;
+        if (!hits) continue;
+        range_hit_entries++;
+        /* Insertion into the busiest-first list. */
+        int pos = kept < limit ? kept : limit;
+        while (pos > 0 && top[pos - 1].hits < hits) {
+            if (pos < limit) top[pos] = top[pos - 1];
+            pos--;
+        }
+        if (pos < limit) {
+            top[pos].addr = addr; top[pos].variants = variants; top[pos].hits = hits;
+            if (kept < limit) kept++;
+        }
+    }
+    int w = snprintf(out, 512u,
+        "{\"id\":%d,\"ok\":true,\"entries\":%u,\"total_hits\":%llu,"
+        "\"range_lo\":\"0x%08X\",\"range_hi\":\"0x%08X\",\"range_entries\":%u,"
+        "\"range_variants\":%u,\"range_hits\":%llu,\"range_hit_entries\":%u,\"top\":[",
+        id, n, (unsigned long long)total_hits, lo, hi, range_entries,
+        range_variants, (unsigned long long)range_hits, range_hit_entries);
+    for (int i = 0; i < kept; i++)
+        w += snprintf(out + w, 96u, "%s{\"addr\":\"0x%08X\",\"variants\":%u,\"hits\":%llu}",
+                      i ? "," : "", top[i].addr, top[i].variants,
+                      (unsigned long long)top[i].hits);
+    snprintf(out + w, 8u, "]}");
+    debug_server_send_line(out);
+    free(out);
+    free(top);
+#else
+    (void)json;
+    send_err(id, "no static overlay dispatcher linked (GAME_OVERLAY_STATIC_C unset)");
+#endif
 }
 
 /* overlay_native_ring: dump the always-on ring of native overlay calls + the
@@ -13512,6 +15662,101 @@ static void handle_phase_profile(int id, const char *json)
              (unsigned long long)s_phase_interp_all);
 }
 
+/* gcp_ring: always-on guest-cycle profile ring (guest_cycle_profile.c).
+ *   {"cmd":"gcp_ring"}                               -> ring stats
+ *   {"cmd":"gcp_ring","frame_lo":a,"frame_hi":b,"path":"x.csv"}
+ *       -> writes every held sample with guest frame in [a, b] as CSV
+ *          (seq,cycle,frame,weight,phase,flags,block,fn,ra,native,disp)
+ *   {"cmd":"gcp_ring","frame_lo":a,"frame_hi":b,"key":"fn|block|ra|native|disp",
+ *    "top":N}  -> top N keys by weight (sample periods) in the window
+ * One weight unit = `period` guest cycles. Samples are taken on a fixed
+ * guest-cycle cadence (folded into the device deadline), so shares are
+ * shares of guest CPU time, including idle-skipped waits. */
+static void handle_gcp_ring(int id, const char *json)
+{
+    const uint64_t total = guest_cycle_profile_total();
+    const uint64_t oldest = guest_cycle_profile_oldest();
+    GcpSample first, last;
+    int have = total > oldest && guest_cycle_profile_get(oldest, &first) &&
+               guest_cycle_profile_get(total - 1u, &last);
+    const int lo = json_get_int(json, "frame_lo", 0);
+    const int hi = json_get_int(json, "frame_hi", -1);
+    const uint64_t flo = lo < 0 ? 0u : (uint64_t)lo;
+    const uint64_t fhi = hi < 0 ? UINT64_MAX : (uint64_t)hi;
+    char head[384];
+    snprintf(head, sizeof head,
+             "\"id\":%d,\"ok\":true,\"period\":%u,\"total\":%llu,"
+             "\"capacity\":%u,\"oldest_frame\":%u,\"newest_frame\":%u,"
+             "\"oldest_cycle\":%llu,\"newest_cycle\":%llu",
+             id, guest_cycle_profile_period(), (unsigned long long)total,
+             guest_cycle_profile_capacity(), have ? first.frame : 0u,
+             have ? last.frame : 0u,
+             (unsigned long long)(have ? first.cycle : 0u),
+             (unsigned long long)(have ? last.cycle : 0u));
+    char path[512];
+    if (json_get_str(json, "path", path, sizeof path) && path[0]) {
+        uint64_t rows = 0, weight = 0;
+        if (!guest_cycle_profile_write_csv(path, flo, fhi, &rows, &weight)) {
+            send_err(id, "cannot open path");
+            return;
+        }
+        send_fmt("{%s,\"rows\":%llu,\"weight\":%llu}", head,
+                 (unsigned long long)rows, (unsigned long long)weight);
+        return;
+    }
+    char key[16] = "";
+    if (!json_get_str(json, "key", key, sizeof key) || !key[0]) {
+        send_fmt("{%s}", head);
+        return;
+    }
+    int top = json_get_int(json, "top", 32);
+    if (top < 1) top = 1;
+    if (top > 256) top = 256;
+    enum { HSLOTS = 16384 };
+    uint32_t *ha = (uint32_t *)calloc(HSLOTS, sizeof(uint32_t));
+    uint64_t *hw = (uint64_t *)calloc(HSLOTS, sizeof(uint64_t));
+    uint8_t  *hu = (uint8_t *)calloc(HSLOTS, 1);
+    if (!ha || !hw || !hu) { free(ha); free(hw); free(hu); send_err(id, "oom"); return; }
+    uint64_t weight = 0, rows = 0, drops = 0;
+    for (uint64_t s = oldest; s < total; s++) {
+        GcpSample e;
+        if (!guest_cycle_profile_get(s, &e)) continue;
+        if (e.frame < flo || e.frame > fhi) continue;
+        uint32_t k = key[0] == 'b' ? e.block : key[0] == 'r' ? e.ra :
+                     key[0] == 'n' ? e.native : key[0] == 'd' ? e.disp : e.fn;
+        rows++;
+        weight += e.weight;
+        uint32_t h = (k >> 2) * 2654435761u;
+        int placed = 0;
+        for (uint32_t p = 0; p < 64; p++) {
+            uint32_t i = (h + p) & (HSLOTS - 1u);
+            if (hu[i] && ha[i] == k) { hw[i] += e.weight; placed = 1; break; }
+            if (!hu[i]) { hu[i] = 1; ha[i] = k; hw[i] = e.weight; placed = 1; break; }
+        }
+        if (!placed) drops += e.weight;
+    }
+    char *buf = (char *)malloc(1024u + (size_t)top * 96u);
+    if (!buf) { free(ha); free(hw); free(hu); send_err(id, "oom"); return; }
+    size_t pos = (size_t)snprintf(buf, 1024u,
+        "{%s,\"key\":\"%s\",\"rows\":%llu,\"weight\":%llu,\"drops\":%llu,\"top\":[",
+        head, key, (unsigned long long)rows, (unsigned long long)weight,
+        (unsigned long long)drops);
+    for (int t = 0; t < top; t++) {
+        int best = -1;
+        for (int i = 0; i < HSLOTS; i++)
+            if (hu[i] && (best < 0 || hw[i] > hw[best])) best = i;
+        if (best < 0) break;
+        pos += (size_t)snprintf(buf + pos, 96u,
+            "%s{\"addr\":\"0x%08X\",\"weight\":%llu,\"share\":%.4f}",
+            t ? "," : "", ha[best], (unsigned long long)hw[best],
+            weight ? (double)hw[best] / (double)weight : 0.0);
+        hu[best] = 0;
+    }
+    snprintf(buf + pos, 8u, "]}");
+    debug_server_send_line(buf);
+    free(buf); free(ha); free(hw); free(hu);
+}
+
 /* phase_hot: top guest functions by native wall-time samples (cumulative
  * since boot — diff two snapshots for a window). {"cmd":"phase_hot","top":N}
  * Optional {"set":"static"} ranks the STATIC-phase histogram instead
@@ -13686,6 +15931,7 @@ static const CmdEntry s_commands[] = {
     { "vsync_query_hle",   handle_vsync_query_hle },
     { "warm_cd_route",     handle_warm_cd_route },
     { "phase_hot",         handle_phase_hot },
+    { "gcp_ring",          handle_gcp_ring },
     { "idle_skip",         handle_idle_skip },
     { "lockstep",          handle_lockstep },
     { "lockstep_func",     handle_lockstep_func },
@@ -13715,13 +15961,35 @@ static const CmdEntry s_commands[] = {
     { "gpu_state",         handle_gpu_state },
     { "geom_correction",   handle_geom_correction },
     { "pgxp",              handle_pgxp },
+    { "pgxp_tri_ring",     handle_pgxp_tri_ring },
+    { "pgxp_store_ring",   handle_pgxp_store_ring },
+    { "pgxp_shadow",       handle_pgxp_shadow },
+    { "host_profile",      handle_host_profile },
+    { "pgxp_miss_ring",    handle_pgxp_miss_ring },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },
+    { "ws_tag_stats",      handle_ws_tag_stats },
+    { "mod_counters",      handle_mod_counters },
+    { "host_launch_timings", handle_host_launch_timings },
+    { "resident_status",   handle_resident_status },
+    { "netplay_status",    handle_netplay_status },
+    { "resident_events",   handle_resident_events },
+    { "capture_mark",      handle_capture_mark },
+    { "present_image_ring_stats", handle_present_image_ring_stats },
+    { "render_thread",     handle_render_thread },
+    { "frame_gen",         handle_frame_gen },
+    { "present_image_ring_get",   handle_present_image_ring_get },
     { "kernel_bless",      handle_kernel_bless },
     { "ws_aspect",         handle_ws_aspect },
     { "display_aspect",    handle_display_aspect },
+    { "window_size",       handle_window_size },
     { "ws_nw",             handle_ws_nw },
+    { "debug_key",         handle_debug_key },
+    { "host_pause",        handle_host_pause },
+    { "host_key",          handle_host_key },
+    { "menu_host",         handle_menu_host },
+    { "host_mouse",        handle_host_mouse },
     { "scanline",          handle_scanline },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
     { "ws_ui_groups",      handle_ws_ui_groups },
@@ -13738,10 +16006,38 @@ static const CmdEntry s_commands[] = {
     { "gl_coh_ring",       handle_gl_coh_ring },
     { "gl_present_ring",   handle_gl_present_ring },
     { "present_ring",      handle_present_ring },
+    { "gpu_timeline",      handle_gpu_timeline },
+    { "nclip_stats",       handle_nclip_stats },
     { "frame_perf",        handle_frame_perf },
+    { "batch_sites",       handle_batch_sites },
+    { "post_aa",           handle_post_aa },
+    { "fmv_chroma",        handle_fmv_chroma },
+    { "texture_lod",       handle_texture_lod },
+    { "accurate_blending", handle_accurate_blending },
+
+    { "texture_filter",    handle_texture_filter },
+    { "bloom",             handle_bloom },
+    { "dithering",         handle_dithering },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
+    { "render_pass_stats", handle_render_pass_stats },
+    { "openxr_stats", handle_openxr_stats },
+    { "openxr_views", handle_openxr_views },
+    { "openxr_control", handle_openxr_control },
+    { "openxr_input", handle_openxr_input },
+#ifndef PSX_NO_DEBUG_TOOLS
+    { "openxr_input_override", handle_openxr_input_override },
+#endif
+    { "openxr_hands", handle_openxr_hands },
+#ifndef PSX_NO_DEBUG_TOOLS
+    { "openxr_hands_override", handle_openxr_hands_override },
+#endif
+    { "stereo_stats", handle_stereo_stats },
+    { "stereo_dump", handle_stereo_dump },
+    { "render_pass_dump",  handle_render_pass_dump },
+    { "render_pass_refuse", handle_render_pass_refuse },
     { "gl_wide_fast",      handle_gl_wide_fast },
+    { "gl_texwin_batch",   handle_gl_texwin_batch },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },
     { "gl_vram_diff",      handle_gl_vram_diff },
@@ -13862,6 +16158,9 @@ static const CmdEntry s_commands[] = {
     { "freeze_check",      handle_freeze_check },
     { "d44_ring",          handle_d44_ring },
     { "irqctx_ring",       handle_irqctx_ring },
+    { "irq_exc_stats",     handle_irq_exc_stats },
+    { "dma_hold_stats",    handle_dma_hold_stats },
+    { "dma_hold_ring",     handle_dma_hold_ring },
     { "sp_ring",           handle_sp_ring },
     { "disp_ring",         handle_disp_ring },
     { "cyc_watch",         handle_cyc_watch },
@@ -13886,6 +16185,7 @@ static const CmdEntry s_commands[] = {
     { "set_input",         handle_set_input },
     { "press",             handle_press },
     { "pad_status",        handle_pad_status },
+    { "rewind_status",     handle_rewind_status },
     { "clear_input",       handle_clear_input },
     { "input_route_clear", handle_input_route_clear },
     { "input_route_append",handle_input_route_append },
@@ -13894,6 +16194,7 @@ static const CmdEntry s_commands[] = {
     { "input_route_status",handle_input_route_status },
     { "savestate",         handle_savestate },
     { "savestate_status",  handle_savestate_status },
+    { "snapshot_status",   handle_snapshot_status },
     { "turbo",             handle_turbo },
     { "turbo_state",       handle_turbo_state },
     { "pause",             handle_pause },
@@ -13916,11 +16217,18 @@ static const CmdEntry s_commands[] = {
     { "screenshot_hires",  handle_screenshot_hires },
     { "present_shot",      handle_present_shot },
     { "present_shot_seq",  handle_present_shot_seq },
+    { "host_osd_shot",     handle_host_osd_shot },
     { "display_ring_get",  handle_display_ring_get },
     { "display_ring_aux",  handle_display_ring_aux },
     { "display_ring_stats", handle_display_ring_stats },
     { "dump_buffer",       handle_dump_buffer },
     { "wide_full",         handle_wide_full },
+    { "video_info",        handle_video_info },
+    { "hd_textures",       handle_hd_textures },
+    { "dynres",            handle_dynres },
+    { "dynres_force",      handle_dynres_force },
+    { "dynres_check",      handle_dynres_check },
+    { "screenshot_wide_hires", handle_screenshot_wide_hires },
     { "wide_shot",         handle_wide_shot },
     { "gpu_opcodes",       handle_gpu_opcodes },
     { "gpu_ring_stats",    handle_gpu_ring_stats },
@@ -13929,6 +16237,9 @@ static const CmdEntry s_commands[] = {
     { "c0_history",        handle_c0_history },
     { "capture_quads",     handle_capture_quads },
     { "get_quads",         handle_get_quads },
+#ifndef PSX_NO_DEBUG_TOOLS
+    { "disasm",            handle_disasm },
+#endif
     { "gte_state",         handle_gte_state },
     { "gte_ring_dump",     handle_gte_ring_dump },
     { "gte_intpl_dump",    handle_gte_intpl_dump },
@@ -13936,6 +16247,7 @@ static const CmdEntry s_commands[] = {
     { "gte_latch_dump",    handle_gte_latch_dump },
     { "quit",              handle_quit },
     { "dispatch_stats",    handle_dispatch_stats },
+    { "segment_misses",    handle_segment_misses },
     { "dispatch_check",    handle_dispatch_check },
     { "dispatch_tail",     handle_dispatch_tail },
     { "card_mgr_trace",    handle_card_mgr_trace },
@@ -13953,6 +16265,7 @@ static const CmdEntry s_commands[] = {
     { "cd_reinsert",       handle_cd_reinsert },
     { "overlay_loader_status", handle_overlay_loader_status },
     { "overlay_candidates",   handle_overlay_candidates },
+    { "overlay_static_entries", handle_overlay_static_entries },
     { "overlay_native_ring",  handle_overlay_native_ring },
     { "overlay_irq_suppress_on",  handle_overlay_irq_suppress_on },
     { "overlay_irq_suppress_off", handle_overlay_irq_suppress_off },
@@ -14043,11 +16356,102 @@ void debug_server_set_cpu(CPUState *cpu)
 {
     s_cpu = cpu;
     debug_cpu_ptr = cpu;
+    /* Always-on guest-cycle profile ring (gcp_ring), Release included. */
+    guest_cycle_profile_install();
+}
+
+/* Parse PSX_WTRACE_BOOT_RANGES (see debug_server_init). Returns the number of
+ * ranges applied; on refusal applies none and records the reason. */
+static int wtrace_apply_env_ranges(const char *spec) {
+    uint32_t lo[WTRACE_ENV_MAX_RANGES], hi[WTRACE_ENV_MAX_RANGES];
+    int n = 0;
+    s_wtrace_env_ranges = 0;
+    s_wtrace_env_error[0] = '\0';
+    if (!spec || !*spec) return 0;
+    for (const char *p = spec;;) {
+        char *end = NULL;
+        unsigned long a, b;
+        while (*p == ' ' || *p == '\t') p++;
+        if (n == WTRACE_ENV_MAX_RANGES) {
+            snprintf(s_wtrace_env_error, sizeof(s_wtrace_env_error),
+                     "more than %d ranges", WTRACE_ENV_MAX_RANGES);
+            break;
+        }
+        a = strtoul(p, &end, 16);
+        if (end == p) goto malformed;
+        p = end;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '-') goto malformed;
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+        b = strtoul(p, &end, 16);
+        if (end == p) goto malformed;
+        p = end;
+        lo[n] = (uint32_t)a & 0x1FFFFFFFu;
+        hi[n] = (uint32_t)b & 0x1FFFFFFFu;
+        if (hi[n] <= lo[n]) {
+            snprintf(s_wtrace_env_error, sizeof(s_wtrace_env_error),
+                     "range %d: hi must exceed lo (physical)", n + 1);
+            break;
+        }
+        n++;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') break;
+        if (*p != ',') goto malformed;
+        p++;
+        continue;
+malformed:
+        snprintf(s_wtrace_env_error, sizeof(s_wtrace_env_error),
+                 "range %d: expected hex lo-hi", n + 1);
+        break;
+    }
+    if (s_wtrace_env_error[0]) {
+        fprintf(stdout, "psxrecomp: PSX_WTRACE_BOOT_RANGES refused (%s); "
+                        "no extra write-ring ranges armed\n", s_wtrace_env_error);
+        fflush(stdout);
+        return 0;
+    }
+    /* The reserved slots hold every accepted spec by construction. */
+    for (int i = 0; i < n; i++) {
+        s_wtrace_boot_ranges[s_wtrace_boot_range_count].lo = lo[i];
+        s_wtrace_boot_ranges[s_wtrace_boot_range_count].hi = hi[i];
+        s_wtrace_boot_range_count++;
+        s_wtrace_trans_ranges[s_wtrace_trans_range_count].lo = lo[i];
+        s_wtrace_trans_ranges[s_wtrace_trans_range_count].hi = hi[i];
+        s_wtrace_trans_range_count++;
+    }
+    s_wtrace_env_ranges = n;
+    return n;
 }
 
 void debug_server_init(int port)
 {
     if (port > 0) s_port = port;
+
+    /* Deterministic cold-boot controller probe. Unlike a TCP set_input command,
+     * which can only arrive after the guest has already started polling, this
+     * debug-only override is active for the very first VBlank/input sample.
+     * It lets runtime tests reproduce a controller attached before power-on.
+     * Example: PSX_DEBUG_INITIAL_PAD_TYPE=2 selects a centered JogCon. */
+    {
+        const char *initial_type = getenv("PSX_DEBUG_INITIAL_PAD_TYPE");
+        if (initial_type && *initial_type) {
+            char *end = NULL;
+            long type = strtol(initial_type, &end, 0);
+            if (end != initial_type && *end == '\0' && type >= 0 && type <= 2) {
+                s_input_override = 0xFFFF;
+                s_input_frames = 0;
+                s_axis_override = 1;
+                s_axis_st[0] = s_axis_st[1] =
+                    s_axis_st[2] = s_axis_st[3] = 0x80;
+                s_pad_type_override = (int)type;
+                fprintf(stdout, "psxrecomp: debug cold-boot pad type=%ld\n", type);
+            } else {
+                fprintf(stderr, "psxrecomp: invalid PSX_DEBUG_INITIAL_PAD_TYPE='%s' (expected 0, 1, or 2)\n",
+                        initial_type);
+            }
+        }
+    }
 
     /* Race-free recorder arming: PSX_RECORD_FRAME=<N> arms the unified ordered
      * access recorder from boot (instruction 0), so it deterministically
@@ -14097,6 +16501,24 @@ void debug_server_init(int port)
                 }
             }
         }
+        /* PSX_CYC_WATCH="<pc>" or "<pc>-<end>" (region mode) arms cyc_watch
+         * before the first guest instruction, with PSX_CYC_WATCH_N hits
+         * (default 16). Boot anchors (reset, the kernel copy, the first
+         * syscalls, the shell) pass before any TCP arm can land. psx-beetle
+         * reads the same variables, so one boot of each backend gives the
+         * same anchor from cycle 0 (tools/cycle_compare.py --no-arm). */
+        {
+            const char *cw = getenv("PSX_CYC_WATCH");
+            if (cw && *cw) {
+                char *e = NULL;
+                uint32_t pc = (uint32_t)strtoul(cw, &e, 0);
+                uint32_t end = (e && *e == '-') ? (uint32_t)strtoul(e + 1, NULL, 0) : 0u;
+                const char *ns = getenv("PSX_CYC_WATCH_N");
+                cyc_watch_arm(pc, end, (ns && *ns) ? (int)strtol(ns, NULL, 0) : 16);
+                fprintf(stdout, "psxrecomp: cyc_watch armed from boot pc=0x%08X end=0x%08X n=%u\n",
+                        pc, end, s_cyc_watch_max_hits);
+            }
+        }
     }
 
 #ifdef _WIN32
@@ -14110,6 +16532,12 @@ void debug_server_init(int port)
         fprintf(stdout, "psxrecomp: debug server socket() FAILED\n");
         return;
     }
+#ifdef _WIN32
+    /* Winsock sockets are inheritable by default: child processes (e.g. the
+     * overlay autocompile's cmd.exe/python) inherit this listener and keep the
+     * debug port bound after the game exits, so the next launch cannot bind. */
+    SetHandleInformation((HANDLE)s_listen, HANDLE_FLAG_INHERIT, 0);
+#endif
 
     int yes = 1;
     setsockopt(s_listen, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
@@ -14134,13 +16562,19 @@ void debug_server_init(int port)
      * 16 leaves room for a few probes to queue while we investigate. This
      * is observability infrastructure, not a freeze fix. */
     listen(s_listen, 16);
+    if (!psx_debug_socket_nonblocking(s_listen, 1)) {
+        s_listen_err = sock_error();
+        sock_close(s_listen);
+        s_listen = SOCK_INVALID;
+        return;
+    }
     fprintf(stdout, "psxrecomp: debug server LISTENING on 127.0.0.1:%d\n",
             s_port);
 
     /* Always-on wall-time phase sampler (phase_profile). Own thread: the
      * server pumps on the main thread, so sampling must not live there. */
     phase_sampler_start();
-    /* Blocking accept — the dedicated I/O thread waits on it (no busy-poll). */
+    /* The I/O worker waits for readiness with bounded cancellation. */
 
     /* Start the TCP I/O thread + its handoff primitives. */
     s_io_mutex   = SDL_CreateMutex();
@@ -14149,9 +16583,9 @@ void debug_server_init(int port)
     s_resp_cap   = 65536;
     s_resp_buf   = (char *)malloc(s_resp_cap);
     if (s_io_mutex && s_io_req_cv && s_io_resp_cv && s_resp_buf) {
-        s_io_running = 1;
+        io_set_running(1);
         s_io_thread = SDL_CreateThread(io_thread_main, "psx-dbg-io", NULL);
-        if (!s_io_thread) s_io_running = 0;
+        if (!s_io_thread) io_set_running(0);
     }
 
     if (!s_frame_history) {
@@ -14217,6 +16651,9 @@ void debug_server_init(int port)
                                                 sizeof(CallFocusEntry));
     }
     s_call_focus_seq = 0;
+
+    /* PGXP rings stamp each record with the store PC and frame. */
+    pgxp_set_trace_sources(&g_debug_last_store_pc, &s_frame_count);
 
     /* EvCB walk ring (~240 KB). */
     if (!s_evcb_ring) s_evcb_ring = (EvCBSnapshot *)calloc(EVCB_RING_CAP, sizeof(EvCBSnapshot));
@@ -14442,6 +16879,16 @@ void debug_server_init(int port)
     s_wtrace_trans_range_count = 10;
 #endif
 
+    /* Launch-time extra ranges for the boot + transition write rings, so any
+     * title can have a physical window recorded from the first guest write
+     * without a per-title rebuild (the always-on catch-all ring can wrap before
+     * a late probe reads it). Format: "lo-hi[,lo-hi...]", hex (0x optional),
+     * masked to physical, hi > lo, at most WTRACE_ENV_MAX_RANGES. Appended after
+     * the built-in defaults into slots reserved for them. The spec is applied
+     * whole or not at all: a malformed item or too many items refuses it, and
+     * wtrace_boot_stats / wtrace_trans_stats report env_ranges and env_error. */
+    wtrace_apply_env_ranges(getenv("PSX_WTRACE_BOOT_RANGES"));
+
     /* Tier 1: heap-allocate MMIO trace ring buffer (2 MB). */
     if (!s_mmio_trace) {
         s_mmio_trace = (MmioTraceEntry *)calloc(MMIO_TRACE_CAP, sizeof(MmioTraceEntry));
@@ -14478,17 +16925,7 @@ void debug_server_init(int port)
  * line length (NUL-terminated, newline stripped), or -1 on close/error. */
 static int recv_line(sock_t c, char *buf, int cap)
 {
-    int len = 0;
-    while (len < cap - 1) {
-        int n = recv(c, buf + len, cap - 1 - len, 0);
-        if (n <= 0) return -1;
-        len += n;
-        buf[len] = '\0';
-        char *nl = strchr(buf, '\n');
-        if (nl) { *nl = '\0'; return (int)(nl - buf); }
-    }
-    buf[cap - 1] = '\0';
-    return cap - 1;   /* over-long line: take what we have */
+    return psx_debug_socket_recv_line(c, buf, cap, io_is_running, NULL);
 }
 
 /* The TCP I/O thread: owns accept/recv/send. Hands each request to the emu
@@ -14498,11 +16935,9 @@ static int recv_line(sock_t c, char *buf, int cap)
 static int io_thread_main(void *arg)
 {
     (void)arg;
-    while (s_io_running) {
-        struct sockaddr_in caddr;
-        int clen = sizeof(caddr);
-        sock_t c = accept(s_listen, (struct sockaddr *)&caddr, &clen);
-        if (c == SOCK_INVALID) { if (!s_io_running) break; SDL_Delay(5); continue; }
+    while (io_is_running(NULL)) {
+        sock_t c = psx_debug_socket_accept(s_listen, io_is_running, NULL);
+        if (c == SOCK_INVALID) { if (!io_is_running(NULL)) break; SDL_Delay(5); continue; }
 
         char req[RECV_BUF_SIZE];
         int rl = recv_line(c, req, sizeof(req));
@@ -14524,7 +16959,7 @@ static int io_thread_main(void *arg)
         s_io_state = IO_REQ;
         SDL_CondSignal(s_io_req_cv);
         int waited = 0;
-        while (s_io_state != IO_RESP && s_io_running) {
+        while (s_io_state != IO_RESP && io_is_running(NULL)) {
             if (SDL_CondWaitTimeout(s_io_resp_cv, s_io_mutex, 1000) == SDL_MUTEX_TIMEDOUT) {
                 waited += 1000;
                 if (waited >= 30000) break;   /* emu wedged: give up on this one */
@@ -14705,17 +17140,17 @@ void debug_server_check_watchpoints(void)
 
 void debug_server_shutdown(void)
 {
-    /* Stop the I/O thread: clear the flag, close the listen socket to break the
-     * blocking accept(), then join. */
-    s_io_running = 0;
-    if (s_listen != SOCK_INVALID) {
-        sock_close(s_listen);
-        s_listen = SOCK_INVALID;
-    }
+    /* Join before closing: the worker keeps sole ownership of its sockets
+     * while its cancellable waits are active. */
+    io_set_running(0);
     if (s_io_thread) {
         if (s_io_mutex) { SDL_LockMutex(s_io_mutex); SDL_CondSignal(s_io_resp_cv); SDL_UnlockMutex(s_io_mutex); }
         SDL_WaitThread(s_io_thread, NULL);
         s_io_thread = NULL;
+    }
+    if (s_listen != SOCK_INVALID) {
+        sock_close(s_listen);
+        s_listen = SOCK_INVALID;
     }
     if (s_client != SOCK_INVALID) {
         sock_close(s_client);
@@ -14733,7 +17168,8 @@ int debug_server_is_connected(void)
 
 int debug_server_get_input_override(void)
 {
-    if (s_input_route_active && s_input_route_index < s_input_route_count) {
+    if (s_input_route_active && s_input_route_index < s_input_route_count &&
+        s_frame_count >= s_input_route_start_frame) {
         int current = (int)s_input_route[s_input_route_index].buttons;
         if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
             s_input_route_index++;
@@ -14754,12 +17190,43 @@ int debug_server_get_input_override(void)
     return current;
 }
 
+int debug_server_get_input_override_port2(void)
+{
+    int current = s_input_override_p2;
+    if (s_input_override_p2 >= 0 && s_input_frames_p2 > 0) {
+        if (--s_input_frames_p2 == 0)
+            s_input_override_p2 = -1;
+    }
+    return current;
+}
+
 int debug_server_get_axis_override(unsigned char st[4])
 {
     if (!s_axis_override) return 0;
     st[0] = s_axis_st[0]; st[1] = s_axis_st[1];
     st[2] = s_axis_st[2]; st[3] = s_axis_st[3];
     return 1;
+}
+
+int debug_server_get_host_pad(uint16_t *buttons, uint8_t st[4], uint8_t *lt,
+                              uint8_t *rt)
+{
+    if (!s_host_layer) return 0;
+    if (buttons) *buttons = s_host_buttons;
+    if (st) memcpy(st, s_host_axes, 4);
+    if (lt) *lt = s_host_lt;
+    if (rt) *rt = s_host_rt;
+    return 1;
+}
+
+int debug_server_get_pad_type_override(void)
+{
+    return s_pad_type_override;
+}
+
+int debug_server_get_pad_connected_override(int slot)
+{
+    return slot >= 0 && slot < 2 ? s_pad_connected_override[slot] : -1;
 }
 
 int debug_server_turbo_enabled(void)

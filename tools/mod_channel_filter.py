@@ -18,7 +18,7 @@ What this does instead:
   * some features developer
         -> emit a manifest without those features, and without the
            [[option]] / [[patch]] / [[overlay]] / [[plugin]] / [[resource]] /
-           [[constraint]] entries that only served them
+           [[constraint]] / [[requirement]] entries that only served them
 
 Emitting is not rewriting someone's archive. A staged catalog is build output
 generated from the title's mods/preloaded/ source (or the framework's
@@ -65,6 +65,7 @@ _ID_KEY = re.compile(r"""^\s*id\s*=\s*["']([^"']*)["']\s*(?:#.*)?$""")
 # Entries that name the feature they serve and are meaningless without it.
 DEPENDENT_TABLES = {
     "option", "patch", "overlay", "plugin", "resource", "constraint",
+    "requirement",
 }
 
 

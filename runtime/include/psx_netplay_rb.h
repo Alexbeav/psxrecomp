@@ -32,7 +32,8 @@ typedef struct PsxNetplayRbBindings {
     int *input_delay;
     void (*publish_sio)(uint32_t tick); /* publish history or sealed rows to SIO */
     void (*apply_frame_slot)(int slot, uint32_t tick, uint16_t buttons,
-                             int8_t sx, int8_t sy, uint8_t analog);
+                             int8_t sx, int8_t sy, uint8_t analog,
+                             uint8_t rx, uint8_t ry);
 } PsxNetplayRbBindings;
 
 void psx_netplay_rb_bind(const PsxNetplayRbBindings *b);
@@ -46,11 +47,15 @@ void psx_netplay_rb_cold_reset(void);
  * without longjmp. Call psx_netplay_rb_flush_resume() afterward from a C BB-edge
  * (or after all C++ RAII in the vblank path has been destroyed). */
 void psx_netplay_rb_poll(struct CPUState *cpu, uint32_t resume_pc);
+/* psx_netplay.c: the one resume-PC rule for Live and Replay tick snaps. */
+uint32_t psx_netplay_snap_resume_hint(const struct CPUState *cpu);
 
 /* If a baseline snap was applied without resume, longjmp to the scheduler
  * (same as savestate_poll). No-op when nothing is pending. Never returns on
  * success. */
 void psx_netplay_rb_flush_resume(void);
+/* psx_netplay.c: admit the Live tick a realign resumes into (1 = admitted). */
+int psx_netplay_live_realign_admit(void);
 
 /* 1 after flush_resume longjmp until finish_frame / abort — top-level
  * dispatch has no native call chain under the resume PC. */
@@ -152,6 +157,11 @@ void psx_netplay_rb_pump(void);
  * dig0 not received. Latches open once both digests match (sticky latches —
  * HC ring may age tick-0 out; must not re-stall after sync). */
 int  psx_netplay_rb_boot_dig0_gate(void);
+/* psx_host_mono_ms() since when the peers' boot digests have been known and
+ * different (the same pair throughout), or 0. The watchdog ends the match once
+ * that has lasted NETPLAY_BOOT_MISMATCH_GRACE_MS: the peers booted different
+ * BIOS images or boot settings, and waiting cannot fix it. */
+uint32_t psx_netplay_rb_boot_dig0_mismatch_since_ms(void);
 /* Record dig0 cores outside the HC ring (emit / peer FC drain). */
 void psx_netplay_rb_boot_dig0_note_local(uint32_t core);
 void psx_netplay_rb_boot_dig0_note_peer(uint32_t core);

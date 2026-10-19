@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""generate_ci.py -- write the setup-host release workflow into an EXISTING
-PSX project. Nothing else: no commit, no push, no migration plan.
+"""generate_ci.py -- write the bundled release workflow into an EXISTING PSX
+project. Nothing else: no commit, no push, no migration plan.
+
+The workflow builds the title's COMMITTED generated/ game C and ships the
+compiled game (docs/ci/BUNDLED_RELEASES.md).
 
     python3 psxrecomp/tools/generate_ci.py                 # cwd is the project
     python3 psxrecomp/tools/generate_ci.py ~/src/MyGameRecomp
@@ -10,14 +13,14 @@ PSX project. Nothing else: no commit, no push, no migration plan.
 This is the thin, single-purpose face of Project Studio's emit_ci_workflow
 operation (tools/new_project_layout/project_studio/ops.py), which is also
 what `migrate_project.py apply` and `git install-ci` run. The template is
-docs/ci/templates/setup-release.yml from the project's own psxrecomp
+docs/ci/templates/game-release.yml from the project's own psxrecomp
 submodule when it has one, so the workflow matches the framework the project
 pins; this checkout is the fallback.
 
 Where the values come from:
-  ZIP_PREFIX   scripts/package_setup_release.sh --zip-prefix <x> (the
-               packager's prefix, so the zips CI uploads are the zips it
-               built), else derived from the project name, else --zip-prefix
+  ZIP_PREFIX   scripts/package_release.sh --zip-prefix <x> (the packager's
+               prefix, so the zips CI uploads are the zips it built), else
+               derived from the project name, else --zip-prefix
   GAME_TITLE   CMakeLists.txt / game.toml window_title, else --title
 
 An existing, filled release.yml is not overwritten silently: its step names
@@ -40,13 +43,17 @@ WORKFLOW_REL = pathlib.Path(".github") / "workflows" / "release.yml"
 
 
 def zip_prefix_from_packager(root: pathlib.Path) -> str:
-    try:
-        text = (root / "scripts" / "package_setup_release.sh").read_text(
-            encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    m = re.search(r"--zip-prefix\s+([^\s\\'\"]+)", text)
-    return m.group(1) if m else ""
+    # package_setup_release.sh is the retired setup-host wrapper; its prefix is
+    # still the right one for a title that has not re-emitted the packager.
+    for name in ("package_release.sh", "package_setup_release.sh"):
+        try:
+            text = (root / "scripts" / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = re.search(r"--zip-prefix\s+([^\s\\'\"]+)", text)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def main() -> int:
@@ -70,16 +77,17 @@ def main() -> int:
     try:
         from project_studio.models import MigrateOptions
         from project_studio.ops import op_emit_ci_workflow, _ci_steps_missing_from
-        from project_studio.paths import ci_setup_release_template
+        from project_studio.paths import ci_release_template
     except ImportError as exc:
         print(f"generate_ci: cannot import Project Studio from {HERE / 'new_project_layout'}: {exc}",
               file=sys.stderr)
         return 2
 
-    template = ci_setup_release_template(root)
+    template = ci_release_template(root)
     if template is None:
-        print("generate_ci: no docs/ci/templates/setup-release.yml found (neither the "
-              "project's psxrecomp submodule nor this checkout)", file=sys.stderr)
+        print("generate_ci: no docs/ci/templates/game-release.yml found (neither the "
+              "project's psxrecomp submodule nor this checkout -- a submodule pinned "
+              "before bundled releases must be bumped first)", file=sys.stderr)
         return 2
 
     dst = root / WORKFLOW_REL

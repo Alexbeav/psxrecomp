@@ -1463,7 +1463,7 @@ def install_and_push_release_ci(
     push_remote: bool = True,
     dry_run: bool = False,
 ) -> CmdResult:
-    """Write psxrecomp setup-release.yml (+ packager), commit, and push.
+    """Write psxrecomp game-release.yml (+ packager), commit, and push.
 
     Uses the same template as ``setup_project --enable-ci`` /
     ``op_emit_ci_workflow``. After push, best-effort checks that Actions has
@@ -1493,7 +1493,7 @@ def install_and_push_release_ci(
     if not paths and not dry_run:
         # Already present — still allow push of any uncommitted workflow edits.
         wf = root / ".github" / "workflows" / "release.yml"
-        pkg = root / "scripts" / "package_setup_release.sh"
+        pkg = root / "scripts" / "package_release.sh"
         for p in (wf, pkg):
             if p.is_file():
                 rel = str(p.relative_to(root)).replace("\\", "/")
@@ -1538,7 +1538,7 @@ def install_and_push_release_ci(
         root,
         "commit",
         "-m",
-        "ci: add setup-host release.yml (psxrecomp template)",
+        "ci: add bundled release.yml (psxrecomp template)",
     )
     if code != 0:
         return CmdResult(False, "git commit failed", err or out)
