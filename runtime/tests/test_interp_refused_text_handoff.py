@@ -7,11 +7,12 @@ from source_fixture_link import build_and_run
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cc', default='gcc')
+    parser.add_argument('--module', default='dirty_ram_interp.c')
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
-    with tempfile.TemporaryDirectory() as root:
+    with tempfile.TemporaryDirectory(prefix="PS1G-89-") as root:
         for opt in ('-O0', '-O2'):
             build_and_run(args.cc, here, here.parent, opt, Path(root),
-                          ['dirty_ram_interp.c'], 'test_interp_refused_text_handoff.c',
+                          [args.module], 'test_interp_refused_text_handoff.c',
                           defines=('PSX_HAS_GAME_DISPATCH', 'PSX_NO_DEBUG_TOOLS'))
     print('PASS: interpretation runs through refused game text (O0/O2)')

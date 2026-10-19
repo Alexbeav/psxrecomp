@@ -14,6 +14,16 @@ __attribute__((always_inline)) inline int psx_syscall(CPUState *cpu, uint32_t co
 int psx_get_in_exception(void) { return 0; }
 int source_gpu_runtime_active(void) { return 0; }
 
+/* With no memory callbacks, a critical call must not reach a TCB save.
+ * Keep these production dependencies as rejecting spies, never success stubs. */
+void psx_fatal_halt(const char *reason) { (void)reason; abort(); }
+void debug_server_log_thread_event(uint32_t kind, CPUState *cpu,
+    uint32_t from, uint32_t to, uint32_t pc)
+{
+    (void)kind; (void)cpu; (void)from; (void)to; (void)pc;
+    abort();
+}
+
 int main(void) {
     const uint32_t results[] = {0u, 1u, 0x80010000u, UINT32_MAX};
     const uint32_t statuses[] = {0u, 1u, 0x40000400u, 0x40000401u};

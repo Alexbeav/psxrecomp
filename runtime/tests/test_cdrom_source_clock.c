@@ -69,9 +69,12 @@ int main(int argc,char **argv) {
 
     clock_boot();cdrom_write(0x1f801802,0x20);command(0x19);advance(13452);
     unsigned length=cdrom_snapshot_bytes();uint8_t *wire=malloc(length),*before=malloc(length),*after=malloc(length);
+    /* Controller deadlines are absolute; the outer snapshot owns the clock. */
+    uint64_t saved_cycle = psx_cycle_count;
     cdrom_snapshot_write(wire);
     receive_command();ack();command(1);receive_command();
     CHECK(s_source_clock_tape.cursor==4,"second command advances entropy before restore");
+    psx_cycle_count = saved_cycle;
     CHECK(cdrom_snapshot_read(wire,length) && s_source_clock_tape.cursor==3 && s_source_command_phase==0,"controller snapshot restores cursor and reception stage");
     CHECK(s_source_command_due-psx_cycle_count==1815,"restored stage uses remaining delay");
     receive_command();ack();command(1);receive_command();

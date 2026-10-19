@@ -75,7 +75,10 @@ int main(int argc,char **argv) {
 
     begin_reset();ack();advance(485399);
     unsigned n=cdrom_snapshot_bytes();uint8_t *wire=malloc(n),*before=malloc(n),*after=malloc(n);
+    /* Controller deadlines are absolute; the outer snapshot owns the clock. */
+    uint64_t saved_cycle = psx_cycle_count;
     cdrom_snapshot_write(wire);advance(650601);check_reset_state();ack();
+    psx_cycle_count = saved_cycle;
     CHECK(cdrom_snapshot_read(wire,n),"active reset snapshot round trip");
     CHECK(mode_reg==0x80 && read_sect==10,"snapshot restores pre-completion state");
     advance(650600);CHECK(!irq_flag && mode_reg==0x80,"snapshot preserves remaining reset delay");

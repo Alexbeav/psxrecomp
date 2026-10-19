@@ -5,8 +5,8 @@ import subprocess
 from pathlib import Path
 
 SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-MULTIPLE = re.compile(r"multiple definition of [`']([^`']+)[`']")
-UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
+MULTIPLE = re.compile(r"(?:multiple definition of [`']|duplicate symbol: )([A-Za-z_][A-Za-z0-9_]*)")
+UNDEFINED = re.compile(r"(?:undefined reference to [`']|undefined symbol: )([A-Za-z_][A-Za-z0-9_]*)")
 
 # A definition in our stub object would silently override a symbol that the C
 # library would otherwise satisfy from an archive/shared object, so anything
@@ -29,14 +29,15 @@ ISO_C_FALLBACK = {
 }
 
 
+# Explicit encoding selects text mode for all captured subprocess output.
 def library_symbols(cc):
     provided = set(ISO_C_FALLBACK)
     for name in LIBRARY_CANDIDATES:
         out = subprocess.run([cc, "-print-file-name=" + name],
-                             capture_output=True, text=True).stdout.strip()
+                             capture_output=True, encoding="utf-8", errors="replace").stdout.strip()
         if not out or not os.path.exists(out):
             continue
-        listing = subprocess.run(["nm", out], capture_output=True, text=True).stdout
+        listing = subprocess.run([os.environ.get("NM", "nm"), out], capture_output=True, encoding="utf-8", errors="replace").stdout
         for line in listing.splitlines():
             parts = line.split()
             if len(parts) >= 2 and parts[-2] != "U" and SYMBOL.match(parts[-1]):
@@ -48,7 +49,7 @@ def library_symbols(cc):
 def nm_symbols(objs):
     defined, undefined = set(), set()
     for obj in objs:
-        out = subprocess.run(["nm", str(obj)], capture_output=True, text=True)
+        out = subprocess.run([os.environ.get("NM", "nm"), str(obj)], capture_output=True, encoding="utf-8", errors="replace")
         for line in out.stdout.splitlines():
             parts = line.split()
             if len(parts) < 2:
@@ -61,8 +62,8 @@ def nm_symbols(objs):
 
 
 def write_stubs(path, symbols):
-    lines = ["#include <stdlib.h>", "/* Unrelated link seams must not execute. */"]
-    lines += ["void %s(void) { abort(); }" % s for s in sorted(symbols)]
+    lines = ["#include <stdlib.h>", "#include <stdio.h>", "/* Unrelated link seams must not execute. */"]
+    lines += ['void %s(void) { fputs("unmodeled fixture seam: %s\\n", stderr); fflush(stderr); _Exit(100); }' % (s, s) for s in sorted(symbols)]
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -72,7 +73,7 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
     objs = []
     for src in modules:
         obj = work / (Path(src).stem + tag + ".o")
-        subprocess.run([cc, "-std=c++17" if Path(src).suffix == ".cpp" else "-std=c11", opt, "-w", "-I", include,
+        subprocess.run([cc, "-std=c++17" if Path(src).suffix == ".cpp" else "-std=c11", opt, "-g", "-w", "-I", include,
                         *["-D" + d for d in defines],
                         "-c", str(src_root / "src" / src), "-o", str(obj)],
                        check=True)
@@ -89,6 +90,8 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
     subprocess.run([cc, "-std=c11", opt, "-Wall", "-Wextra", "-Werror",
                     "-I", include, "-c", str(test_c), "-o", str(test_o)],
                    check=True)
+    test_defined, _ = nm_symbols([test_o])
+    stubs.difference_update(test_defined)
     exe = work / ("sectionwire" + tag + (".exe" if os.name == "nt" else ""))
 
     for _ in range(40):
@@ -98,7 +101,7 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
         result = subprocess.run(
             [cc, str(test_o)] + [str(o) for o in objs] + [str(stub_o),
              "-o", str(exe)],
-            capture_output=True, text=True)
+            capture_output=True, encoding="utf-8", errors="replace")
         if result.returncode == 0:
             break
         errors = result.stderr
@@ -117,8 +120,10 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
         raise SystemExit("link did not converge for %s" % opt)
 
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PSX_")}
-    run = subprocess.run([str(exe)], env=env, capture_output=True, text=True,
+    run = subprocess.run([str(exe)], env=env, capture_output=True, encoding="utf-8", errors="replace",
                          timeout=60)
+    if run.returncode == 0 and run.stdout:
+        print(run.stdout, end="", flush=True)
     if run.returncode != 0:
         raise SystemExit("%s: runtime fixture failed (rc=%d)\n%s%s"
                          % (opt, run.returncode, run.stdout, run.stderr))

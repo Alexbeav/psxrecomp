@@ -443,6 +443,9 @@ if(BUILD_TESTING)
     add_executable(cdrom_implicit_seek_test tests/test_cdrom_implicit_seek.c src/psx_sha256.c)
     target_include_directories(cdrom_implicit_seek_test PRIVATE include)
     add_test(NAME cdrom_implicit_seek_test COMMAND cdrom_implicit_seek_test)
+    add_executable(cdrom_int1_fifo_test tests/test_cdrom_int1_fifo.c src/psx_sha256.c)
+    target_include_directories(cdrom_int1_fifo_test PRIVATE include)
+    add_test(NAME cdrom_int1_fifo_test COMMAND cdrom_int1_fifo_test)
     # PS1B-189: CD status bit 7 (BUSYSTS), cited to PSX-SPX.
     add_executable(cdrom_busysts_test tests/test_cdrom_busysts.c src/psx_sha256.c)
     target_include_directories(cdrom_busysts_test PRIVATE include src)
@@ -969,11 +972,23 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         target_compile_options(exit_critical_section_test PRIVATE -O3 -flto -ffunction-sections)
         target_link_options(exit_critical_section_test PRIVATE -flto -Wl,--gc-sections)
         add_test(NAME exit_critical_section_test COMMAND exit_critical_section_test)
+        add_executable(critical_tcb_state_test tests/test_critical_tcb_state.c)
+        target_include_directories(critical_tcb_state_test PRIVATE include)
+        target_compile_definitions(critical_tcb_state_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
+        target_compile_options(critical_tcb_state_test PRIVATE
+            -O3 -flto=1 -fwhole-program -ffunction-sections -fdata-sections)
+        target_link_options(critical_tcb_state_test PRIVATE -flto=1 -Wl,--gc-sections)
+        add_test(NAME critical_tcb_state_test COMMAND critical_tcb_state_test)
     else()
         add_test(NAME exit_critical_section_test
             COMMAND "${CMAKE_COMMAND}" -E echo
                 "SKIP: real-handler LTO fixture is verified only on Windows x64 MinGW GCC 16.1.0; current compiler is ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
         set_tests_properties(exit_critical_section_test PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:")
+        add_test(NAME critical_tcb_state_test
+            COMMAND "${CMAKE_COMMAND}" -E echo
+                "SKIP: real-handler LTO fixture is verified only on Windows x64 MinGW GCC 16.1.0; current compiler is ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
+        set_tests_properties(critical_tcb_state_test PROPERTIES
             SKIP_REGULAR_EXPRESSION "^SKIP:")
     endif()
 

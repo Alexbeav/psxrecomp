@@ -174,15 +174,28 @@ static int response_count;
  * presentation moves the read pointer to exactly that slot -- never to
  * "newest". */
 #define CDROM_NUM_SECTOR_BUFFERS 8
+#define CDROM_REQUEST_BFRD 0x80u
 typedef struct { uint8_t data[SECTOR_BUFFER_SIZE]; int size; int pos; } CdSectorBuf;
 static CdSectorBuf s_sector_ring[CDROM_NUM_SECTOR_BUFFERS];
+/* The host transfer FIFO is latched by BFRD, independently of read-ahead. */
+static CdSectorBuf s_data_fifo;
 static int s_ring_read;      /* slot the guest is draining */
 static int s_ring_write;     /* slot most recently filled */
-static uint64_t s_ring_dropped;   /* unread slot overwritten: guest a ring behind */
+/* Producer slots overwritten while their recorded pos is below size.
+ * Guest reads advance the copied transfer FIFO, not the producer slot, so
+ * this counter does not measure unread guest-sector loss. */
+static uint64_t s_ring_dropped;
 
 
-#define RB_ (s_sector_ring[s_ring_read])
+#define RB_ (*(request_reg & CDROM_REQUEST_BFRD ? &s_data_fifo : &s_sector_ring[s_ring_read]))
 static int rb_available(void) { return RB_.size > 0 && RB_.pos < RB_.size; }
+/* A continuous DMA may wait across sector boundaries without another BFRD
+ * edge. It can accept a new sector only after its previous FIFO is empty. */
+static void cdrom_fifo_refill_for_dma(int slot) {
+    if ((request_reg & CDROM_REQUEST_BFRD) && dma_cdrom_transfer_active() &&
+        !rb_available())
+        s_data_fifo = s_sector_ring[slot];
+}
 
 /* Regression tripwire. The ring once stranded a sector in a slot nothing
  * could reach, starving over a million drains; this stays as an O(1) check
@@ -309,7 +322,6 @@ static uint8_t cd_muted;
 
 #define CDROM_SKIP_NONE 0
 #define CDROM_SKIP_XA_AUDIO_REALTIME 1
-#define CDROM_REQUEST_BFRD 0x80u
 
 typedef struct CDROMSectorDelivery {
     uint8_t raw_mode;
@@ -1661,6 +1673,7 @@ static void clear_sector_buffer(void) {
     }
     s_ring_read = 0;
     s_ring_write = 0;
+    memset(&s_data_fifo, 0, sizeof(s_data_fifo));
     request_reg &= (uint8_t)~CDROM_REQUEST_BFRD;
 }
 
@@ -1672,7 +1685,7 @@ static int pending_dataready_slot;
 static uint64_t pending_present_due;
 static uint64_t s_int1_pended;
 static uint64_t s_int1_lost;
-#define CDROM_PEND_PRESENT_DELAY 500
+#define CDROM_PEND_PRESENT_DELAY 2000
 
 static void cdrom_clear_pending_dataready(void)
 {
@@ -2343,6 +2356,7 @@ static int deliver_read_sector(uint64_t timing_seq)
     response_clear();
     response_push(stat_reg);
     s_ring_read = s_ring_write;
+    cdrom_fifo_refill_for_dma(s_ring_write);
     set_irq(CDIRQ_DATA_READY);
     cd_timing_arm_irq(timing_seq);
     fire_cdrom_irq();
@@ -2355,7 +2369,7 @@ static int deliver_read_sector_without_irq(void)
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
     if (delivered)
-        s_ring_read = s_ring_write;
+        cdrom_fifo_refill_for_dma(s_ring_write);
     return delivered;
 }
 /* T172 end CD delivery delivery-helpers. */
@@ -3414,6 +3428,7 @@ static void process_pending(uint32_t cycles) {
             if (delivered) {
                 response_push(stat_reg);
                 s_ring_read = s_ring_write;
+                cdrom_fifo_refill_for_dma(s_ring_write);
                 set_irq(CDIRQ_DATA_READY);
                 fire_cdrom_irq();
             }
@@ -3668,6 +3683,7 @@ static void present_pending_dataready(void)
     response_clear();
     response_push(pending_dataready_stat);
     s_ring_read = pending_dataready_slot;
+    cdrom_fifo_refill_for_dma(pending_dataready_slot);
     set_irq(CDIRQ_DATA_READY);
     cd_timing_arm_irq(sequence);
     fire_cdrom_irq();
@@ -4018,6 +4034,8 @@ void cdrom_write(uint32_t addr, uint32_t value) {
                 memcpy(cd_decode_vol, cd_pending_vol, sizeof(cd_decode_vol));
             }
         } else if (index_reg == 0) {
+            if ((val & CDROM_REQUEST_BFRD) && !(request_reg & CDROM_REQUEST_BFRD))
+                s_data_fifo = s_sector_ring[s_ring_read];
             request_reg = val;
             if (!(request_reg & CDROM_REQUEST_BFRD)) {
                 RB_.pos = 0;
@@ -4444,7 +4462,7 @@ static int cdrom_snap_emit(PstW *w) {
      * The other slots hold sectors the drive has read ahead; dropping them
      * costs a re-read the game already knows how to ask for, which is what
      * the single-buffer version effectively did across a load anyway. */
-    WB(s_sector_ring[s_ring_read].data);
+    WB(RB_.data);
     WI(RB_.pos);
     WI(rb_available());
     WI(RB_.size);
@@ -4553,6 +4571,9 @@ static int cdrom_snap_parse(PstR *r) {
         s_sector_ring[0].size = 0;
     if (s_sector_ring[0].pos < 0 || s_sector_ring[0].pos > s_sector_ring[0].size)
         s_sector_ring[0].pos = 0;
+    /* The legacy leading payload is the FIFO the guest was draining. The
+     * full source-clock ring, when present, follows later on the wire. */
+    s_data_fifo = s_sector_ring[0];
 
     RB(last_sector_buffer); RI(last_sector_lba); RI(last_sector_size);
     RB(last_valid_subq); RI(last_valid_subq_available);

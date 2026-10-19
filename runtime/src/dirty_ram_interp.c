@@ -900,7 +900,12 @@ static inline int phys_is_overlay_flow_region(uint32_t phys) {
 
 static int is_local_dirty_target(uint32_t target) {
     uint32_t phys = target & 0x1FFFFFFFu;
-    return phys_is_overlay_flow_region(phys) && dirty_ram_is_dirty(phys);
+    /* CPU-written game text is intentionally not admitted to the dirty/capture
+     * window. If native dispatch already refuses its live bytes, calls and
+     * branches must share the same local interpreter flow as straight-line
+     * execution. This changes no page bits or native-entry validation. */
+    return phys_is_overlay_flow_region(phys) &&
+           (dirty_ram_is_dirty(phys) || interp_refused_game_text(target));
 }
 
 /* Target the last interp run handed back to the dispatch loop (chained
@@ -3801,8 +3806,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             }
             if (allow_local_dirty_flow && target != 0 &&
                 target != stop_addr &&
-                phys_is_overlay_flow_region(target_phys) &&
-                dirty_ram_is_dirty(target_phys)) {
+                is_local_dirty_target(target)) {
 #ifdef PSX_HAS_OVERLAY_DISPATCH
                 /* A save restore or an uncompiled continuation can enter the
                  * interpreter in an otherwise static overlay. Surface an exact
@@ -3874,7 +3878,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 }
                 pc = target;
                 current_page = target_phys >> 12;
-                current_page_dirty = 1; /* is_local_dirty_target proved it */
+                current_page_dirty = dirty_ram_is_dirty(target_phys);
                 if ((insns_executed & 0xFFF) == 0) {
                     debug_server_poll();
                     debug_server_wait_if_paused();

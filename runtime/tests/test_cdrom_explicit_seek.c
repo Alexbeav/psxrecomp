@@ -71,7 +71,11 @@ static void exercise_explicit(uint8_t read, uint8_t seek, int delivered) {
     /* Authored pending producer state, independent of guest response FIFO. */
     pending_dataready=1; pending_dataready_stat=CDSTAT_READ|CDSTAT_MOTOR;
     pending_present_due=psx_cycle_count+500; s_cd_timing_pending_seq=123;
-    RB_.size=2048;RB_.pos=4;RB_.data[4]=0x73;request_reg=CDROM_REQUEST_BFRD;
+    cdrom_write(0x1f801800,0);
+    cdrom_write(0x1f801803,0);
+    RB_.size=2048;RB_.pos=0;RB_.data[4]=0x73;
+    cdrom_write(0x1f801803,CDROM_REQUEST_BFRD);
+    for(int i=0;i<4;i++) (void)cdrom_read(0x1f801802);
     int before_reads=reads; uint8_t before_status=stat_reg;
     int delay=seek_complete_delay_cycles();
     command(seek);

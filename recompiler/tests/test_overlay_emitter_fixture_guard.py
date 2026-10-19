@@ -224,6 +224,8 @@ def run_fixture(recompiler, name, image, seeds, config, tmp):
     work = Path(tmp) / name
     out = work / "out"
     out.mkdir(parents=True)
+    # Keep relative EXE/seeds local even when TEMP is inside another checkout.
+    (work / ".gitignore").write_text("# authored overlay project\n", encoding="utf-8")
     exe_name = "overlay.psx"
     (work / exe_name).write_bytes(image())
     (work / "seeds.txt").write_text(seeds(), encoding="utf-8", newline="\n")
