@@ -231,7 +231,7 @@ def main() -> int:
         host_exe = tmp / ("setup-host" + suffix)
         product_exe = tmp / ("product" + suffix)
         for what, argv in (
-            ("the setup host", [cc, "-std=c11", "-o", str(host_exe), str(tmp / "host.c"), str(HOST_C),
+            ("the setup host", [cc, "-std=gnu11", "-o", str(host_exe), str(tmp / "host.c"), str(HOST_C),
                                 '-DPSX_SETUP_BIOS_STEMS="SCPH5552"', f'-DPSX_SETUP_FRAMEWORK_REL="{framework}"',
                                 "-I", str(ROOT / "host"), "-I", str(ROOT / "runtime" / "include"),
                                 "-I", str(ui / "src"), "-I", str(ui / "src" / "common")]),
