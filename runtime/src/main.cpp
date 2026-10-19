@@ -7785,7 +7785,8 @@ static void savestate_menu_replay_action(int action) {
             const char *base = strrchr(path, '/');
             const char *base2 = strrchr(path, '\\');
             if (!base || (base2 && base2 > base)) base = base2;
-            snprintf(msg, sizeof(msg), "Exported to replays/%s", base ? base + 1 : path);
+            snprintf(msg, sizeof(msg), "Exported to replays/%.*s",
+                     (int)(sizeof(msg) - sizeof("Exported to replays/")), base ? base + 1 : path);
             savestate_menu_notice(msg, 3000);
         } else {
             savestate_menu_notice("Replay export failed", 2000);
@@ -10615,6 +10616,7 @@ namespace {
     uint32_t g_lnch_lan_session_id = 1;
 
     static constexpr int kAeLanMaxSlots = RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS;
+    static constexpr size_t kAeLanUdpMessageCap = 2560;
     struct AeLanLobbyState {
         std::string name;
         std::string game;
@@ -10899,18 +10901,18 @@ namespace {
         if (!lines[0] || !lines[1] || !lines[2]) return -1;
 
         AeLanDiscovered d{};
-        std::snprintf(d.name, sizeof(d.name), "%s", lines[0]);
-        std::snprintf(d.game, sizeof(d.game), "%s", lines[1]);
+        std::snprintf(d.name, sizeof(d.name), "%.*s", (int)sizeof(d.name) - 1, lines[0]);
+        std::snprintf(d.game, sizeof(d.game), "%.*s", (int)sizeof(d.game) - 1, lines[1]);
         const int adv_port = ae_np_lan_endpoint_port(lines[2]);
         int port = adv_port > 0 ? adv_port : 7777;
         if (from) {
-            char ip[64];
+            char ip[INET_ADDRSTRLEN];
             if (inet_ntop(AF_INET, &from->sin_addr, ip, sizeof(ip)))
                 std::snprintf(d.endpoint, sizeof(d.endpoint), "%s:%d", ip, port);
             else
-                std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", lines[2]);
+                std::snprintf(d.endpoint, sizeof(d.endpoint), "%.*s", (int)sizeof(d.endpoint) - 1, lines[2]);
         } else {
-            std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", lines[2]);
+            std::snprintf(d.endpoint, sizeof(d.endpoint), "%.*s", (int)sizeof(d.endpoint) - 1, lines[2]);
         }
         d.player_count = lines[3] ? std::atoi(lines[3]) : 0;
         d.max_slots = lines[4] ? std::atoi(lines[4]) : 2;
@@ -11900,7 +11902,7 @@ namespace {
 
         const uint32_t deadline = SDL_GetTicks() + 1000u;
         while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
-            char buf[2560]; /* MOTK5 UPDATE: 8 seats x (id, name, 7 ints) */
+            char buf[kAeLanUdpMessageCap]; /* MOTK5 UPDATE: 8 seats x (id, name, 7 ints) */
             sockaddr_in from{};
 #ifdef _WIN32
             int fromlen = (int)sizeof(from);
@@ -12158,12 +12160,18 @@ namespace {
 
     static void ae_np_lan_send_chat_to_peers(const char* player_id, const char* from,
                                             const char* text) {
-        char msg[448];
-        std::snprintf(msg, sizeof(msg), "MOTK5 CHAT\n%s\n%s\n%s\n",
-                      player_id ? player_id : "", from ? from : "", text);
+        /* Preserve every field and its terminating delimiter. Never send a
+         * snprintf prefix as if it were a complete protocol packet. */
+        const std::string msg = std::string("MOTK5 CHAT\n")
+            + (player_id ? player_id : "") + "\n"
+            + (from ? from : "") + "\n" + text + "\n";
+        if (msg.size() >= kAeLanUdpMessageCap) {
+            std::fprintf(stderr, "[LAN] CHAT exceeds receive capacity; not sent\n");
+            return;
+        }
         for (int i = 0; i < kAeLanMaxSlots; ++i) {
             if (!g_lnch_lan_peer_ok[i]) continue;
-            ae_np_lan_udp_sendto(g_lnch_lan_peers[i], msg);
+            ae_np_lan_udp_sendto(g_lnch_lan_peers[i], msg.c_str());
         }
     }
 
@@ -12257,6 +12265,8 @@ namespace {
         if (!ae_np_read_lan_state(&st)) return;
         const int from = ae_np_lan_find_slot_by_id(st, asker_id);
         if (from < 0 || to < 0 || to >= st.max_slots || to == from) return;
+        const size_t asker_len = std::strlen(asker_id);
+        if (asker_len >= sizeof(g_lnch_lan_swap.asker_id)) return;
         if (st.slot_name[to].empty()) {
             (void)ae_np_lan_swap_seats(from, to);
             return;
@@ -12264,8 +12274,7 @@ namespace {
         if (to == st.host_slot) {
             /* Asking the host: the host's own prompt. */
             g_lnch_lan_swap.incoming = true;
-            std::snprintf(g_lnch_lan_swap.asker_id, sizeof(g_lnch_lan_swap.asker_id),
-                          "%s", asker_id);
+            std::memcpy(g_lnch_lan_swap.asker_id, asker_id, asker_len + 1);
             std::snprintf(g_lnch_lan_swap.asker_name,
                           sizeof(g_lnch_lan_swap.asker_name), "%s",
                           st.slot_name[from].c_str());
@@ -12273,10 +12282,13 @@ namespace {
             return;
         }
         if (to < kAeLanMaxSlots && g_lnch_lan_peer_ok[to]) {
-            char msg[224];
-            std::snprintf(msg, sizeof(msg), "MOTK5 SWAPASK\n%s\n%s\n%d\n", asker_id,
-                          st.slot_name[from].c_str(), from);
-            ae_np_lan_udp_sendto(g_lnch_lan_peers[to], msg);
+            const std::string msg = std::string("MOTK5 SWAPASK\n") + asker_id
+                + "\n" + st.slot_name[from] + "\n" + std::to_string(from) + "\n";
+            if (msg.size() >= kAeLanUdpMessageCap) {
+                std::fprintf(stderr, "[LAN] SWAPASK exceeds receive capacity; not sent\n");
+                return;
+            }
+            ae_np_lan_udp_sendto(g_lnch_lan_peers[to], msg.c_str());
         }
     }
 
@@ -12638,11 +12650,14 @@ namespace {
                 return -1;
             if (g_lnch_lan_swap.outgoing == 1) return -1;
             if (target_slot >= kAeLanMaxSlots || !g_lnch_lan_peer_ok[target_slot]) return -1;
-            char msg[224];
-            std::snprintf(msg, sizeof(msg), "MOTK5 SWAPASK\n%s\n%s\n%d\n",
-                          ae_np_lan_local_player_id(),
-                          st.slot_name[st.host_slot].c_str(), st.host_slot);
-            ae_np_lan_udp_sendto(g_lnch_lan_peers[target_slot], msg);
+            const std::string msg = std::string("MOTK5 SWAPASK\n")
+                + ae_np_lan_local_player_id() + "\n" + st.slot_name[st.host_slot]
+                + "\n" + std::to_string(st.host_slot) + "\n";
+            if (msg.size() >= kAeLanUdpMessageCap) {
+                std::fprintf(stderr, "[LAN] SWAPASK exceeds receive capacity; not sent\n");
+                return -1;
+            }
+            ae_np_lan_udp_sendto(g_lnch_lan_peers[target_slot], msg.c_str());
             g_lnch_lan_swap.outgoing = 1;
             return 0;
         }
@@ -13196,7 +13211,7 @@ namespace {
         if (g_lnch_lan_udp == kAeLanSockInvalid) return;
 
         for (;;) {
-            char buf[2560]; /* MOTK5 UPDATE: 8 seats x (id, name, 7 ints) */
+            char buf[kAeLanUdpMessageCap]; /* MOTK5 UPDATE: 8 seats x (id, name, 7 ints) */
             sockaddr_in from{};
 #ifdef _WIN32
             int fromlen = (int)sizeof(from);
@@ -13474,9 +13489,10 @@ namespace {
                     p = nl + 1;
                 }
                 if (!lines[0] || !lines[1] || !lines[2]) continue;
+                const size_t asker_len = std::strlen(lines[0]);
+                if (asker_len >= sizeof(g_lnch_lan_swap.asker_id)) continue;
                 g_lnch_lan_swap.incoming = true;
-                std::snprintf(g_lnch_lan_swap.asker_id, sizeof(g_lnch_lan_swap.asker_id),
-                              "%s", lines[0]);
+                std::memcpy(g_lnch_lan_swap.asker_id, lines[0], asker_len + 1);
                 std::snprintf(g_lnch_lan_swap.asker_name,
                               sizeof(g_lnch_lan_swap.asker_name), "%s", lines[1]);
                 g_lnch_lan_swap.from_slot = std::atoi(lines[2]);
