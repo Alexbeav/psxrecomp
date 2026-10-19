@@ -399,11 +399,16 @@ void gr_wide_set_view(int active, int shift, int pad_left, int pad_right)
 { (void)active; (void)shift; (void)pad_left; (void)pad_right; }
 void gr_wide_clear_margins(int base, int y, int h, uint16_t color, int mode)
 { (void)base; (void)y; (void)h; (void)color; (void)mode; }
+void gr_wide_feedback_rect(int sb, int sx, int sy, int dx, int dy, int w, int h,
+                           int r, int g, int b, int raw, int semi)
+{ (void)sb; (void)sx; (void)sy; (void)dx; (void)dy; (void)w; (void)h;
+  (void)r; (void)g; (void)b; (void)raw; (void)semi; }
 void gr_set_draw_area(int l, int t, int r, int b) { (void)l; (void)t; (void)r; (void)b; }
 void gr_set_draw_offset(int x, int y) { (void)x; (void)y; }
 void gr_set_mask_bits(int set, int check) { (void)set; (void)check; }
 void gr_set_texture_window(uint32_t value) { (void)value; }
 void gr_set_semi_transparency(int enabled, int mode) { (void)enabled; (void)mode; }
+void gr_set_dither(int enabled) { (void)enabled; }
 void gr_set_color_modulation(int r, int g, int b, int raw)
 { (void)r; (void)g; (void)b; (void)raw; }
 void gr_set_perspective_triangle(int enabled, float a, float b, float c)

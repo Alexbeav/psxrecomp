@@ -14,6 +14,7 @@ namespace fs = std::filesystem;
 using namespace PSXRecompV4;
 
 static int failures;
+static int session_resets;
 
 static void check(bool value, const char* message) {
     if (!value) {
@@ -321,6 +322,16 @@ int main() {
     check(mod_register_vblank_plugin(
               "test.vblank", +[]() {}),
           "test plugin must register");
+    check(mod_register_session_reset_plugin(
+              "test.vblank", +[]() { ++session_resets; }),
+          "session cleanup must register independently of active features");
+    check(!mod_register_session_reset_plugin("test.vblank", +[]() {}),
+          "duplicate session cleanup must be rejected");
+    // No manifest or active plan exists yet: deselected plugins still clean
+    // up the host state left by the previous session.
+    mod_reset_plugin_sessions();
+    mod_reset_plugin_sessions();
+    check(session_resets == 2, "each session boundary must invoke registered cleanup");
     write_text(root / "packages/plugin.mod/1.0.0/manifest.toml",
                "format_version = 5\n"
                "id = \"plugin.mod\"\n"
@@ -1798,6 +1809,21 @@ int main() {
               "both absent packages must be reported as dormant selections");
         check(std::find(dormant.begin(), dormant.end(), "kept.mod") == dormant.end(),
               "a present package is never dormant");
+        // Strong title policy also suppresses stale bundles and installed
+        // copies. Preserve the user's choice and files for a later re-enable.
+        write_text(stale_root / "installed/kept.mod/1.0.0/manifest.toml", kept);
+        stale.set_disabled_packages({"kept.mod"});
+        check(stale.scan(&error), error.c_str());
+        const auto disabled = stale.resolve("SLUS-TEST");
+        check(disabled.ok && disabled.ordered.empty() && disabled.writes.empty(),
+              "a title-disabled package must not resolve from either catalog");
+        check(stale.packages().count("kept.mod") == 0 && stale.dormant_selections().size() == 3,
+              "title-disabled packages must be hidden and their saved choices dormant");
+        check(fs::exists(stale_root / "bundled/kept.mod/1.0.0/manifest.toml") &&
+              fs::exists(stale_root / "installed/kept.mod/1.0.0/manifest.toml"),
+              "disabling never deletes catalog files");
+        stale.set_disabled_packages({});
+        check(stale.scan(&error), error.c_str());
 
         /* Saving (every launch commit does) must keep the dormant choices. */
         check(stale.save_state(&error), error.c_str());
@@ -2320,6 +2346,8 @@ int main() {
         }
         ModPackageManager manager(folder);
         check(manager.scan(&error) && manager.scan_errors().empty(), "source/preparation catalog parses");
+        check(!manager.set_generated_feature_resource_default("cars", "content", "source", "generated/source", &error),
+              "generated defaults cannot appoint shared user sources");
         check(manager.set_feature_resource_path("cars", "content", "source", source, &error), error.c_str());
         check(manager.feature_resource_path("music", "content", "source") == source, "source picker prefills sibling package");
         check(manager.set_feature_resource_path("music", "content", "source", replacement, &error), error.c_str());
@@ -2346,11 +2374,59 @@ int main() {
         auto prepared = reload.resolve("SLUS-TEST");
         check(prepared.ok && prepared.resources.size()==1 && prepared.resources[0].id=="asset", "only derived assets enter runtime plan");
         const auto before = reload.feature_resource_path("cars", "content", "asset");
+        int progress_calls=0;
+        check(!reload.prepare_resources("SLUS-TEST",source,folder/"cache",&error,false,
+            [&](float,const std::string&){return ++progress_calls<2;}),"cancel after provider prevents selection publication");
+        check(reload.feature_resource_path("cars","content","asset")==before,"cancel retains prior derived binding");
         fail=true;check(!reload.prepare_resources("SLUS-TEST", source, folder/"cache", &error), "failed preparation refuses launch");
         check(reload.feature_resource_path("cars", "content", "asset")==before, "failed preparation preserves prior bindings");
         write_bytes(asset, {4,3,2,1});check(!reload.resolve("SLUS-TEST").ok, "corrupt derived output fails engine verification");
     }
 
+    {
+        const auto folder=root/"resource-overlays";
+        const auto asset=folder/"local"/"derived.dat";
+        const auto manifest_path=folder/"bundled/prepared.overlay/1.0.0/manifest.toml";
+        const std::vector<uint8_t> bytes={1,2,3,4,5,6};
+        const std::vector<uint8_t> slice={3,4,5};
+        const std::string disc_hash(64,'a');
+        auto make_manifest=[&](const std::string& source_fields,const std::string& feature="active") {
+            return "format_version = 10\nid = \"prepared.overlay\"\nversion = \"1.0.0\"\nname = \"Prepared overlay\"\nprepare = \"test.overlay\"\n"
+                "[[target]]\ngame_id = \"SLUS-TEST\"\ndisc_sha256 = \""+disc_hash+"\"\n"
+                "[[feature]]\nid = \"active\"\nname = \"Active\"\ndefault_enabled = true\n"
+                "[[feature]]\nid = \"other\"\nname = \"Other\"\n"
+                "[[resource]]\nfeature = \""+feature+"\"\nid = \"asset\"\nlabel = \"Derived asset\"\nformat = \"file\"\nrequired = true\nhidden = true\nsize = 6\nsha256 = \""+sha256_hex(bytes)+"\"\n"
+                "[[overlay]]\nfeature = \"active\"\ntarget = \"disc_raw\"\noffset = 2340\n"+source_fields+
+                "sha256 = \""+sha256_hex(slice)+"\"\nexpected_sha256 = \""+sha256_hex({0,0,0})+"\"\n";
+        };
+        const std::string fields="resource = \"asset\"\nresource_offset = 2\nsize = 3\n";
+        write_text(manifest_path,make_manifest(fields));
+        ModPackageManager manager(folder);
+        check(manager.scan(&error) && manager.scan_errors().empty(),"resource overlay scans before generated file exists");
+        check(manager.resolve("SLUS-TEST",{},disc_hash,true).ok,"preview defers prepared resource overlay");
+        check(!manager.resolve("SLUS-TEST",{},disc_hash).ok,"runtime refuses missing overlay source");
+        write_bytes(asset,bytes);
+        check(manager.set_feature_resource_path("prepared.overlay","active","asset",asset,&error),error.c_str());
+        const auto plan=manager.resolve("SLUS-TEST",{},disc_hash);
+        check(plan.ok && plan.overlays.size()==1 && plan.resources.size()==1,"verified resource overlay resolves");
+        if(plan.overlays.size()==1) {
+            check(plan.overlays[0].payload==slice && plan.overlays[0].location==2340,"overlay selects exact declared slice and target offset");
+        }
+        write_bytes(asset,{1,2,3,4,5,7});
+        check(!manager.resolve("SLUS-TEST",{},disc_hash).ok,"mutated resource rejected even when selected slice did not change");
+        write_text(manifest_path,make_manifest("resource = \"asset\"\nresource_offset = 4\nsize = 3\n"));
+        ModPackageManager bounds(folder);bounds.scan(&error);
+        check(!bounds.scan_errors().empty(),"resource slice beyond declared extent rejected");
+        write_text(manifest_path,make_manifest(fields+"file = \"payload.dat\"\n"));
+        ModPackageManager both(folder);both.scan(&error);
+        check(!both.scan_errors().empty(),"ambiguous file and resource sources rejected");
+        write_text(manifest_path,make_manifest(fields,"other"));
+        ModPackageManager ownership(folder);ownership.scan(&error);
+        check(!ownership.scan_errors().empty(),"cross-feature overlay source rejected");
+        write_text(manifest_path,make_manifest("resource = \"asset\"\nresource_offset = -1\nsize = 3\n"));
+        ModPackageManager negative(folder);negative.scan(&error);
+        check(!negative.scan_errors().empty(),"negative resource slice rejected");
+    }
     fs::remove_all(root, ec);
     if (failures) {
         std::cerr << failures << " mod package test(s) failed\n";

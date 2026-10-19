@@ -53,6 +53,8 @@ void gpu_hd_textures_begin_copy(int sx,int sy,int dx,int dy,int w,int h){
     (void)sx;(void)sy;(void)dx;(void)dy;(void)w;(void)h;}
 void gpu_hd_textures_end_copy(void){}
 uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t n,uint32_t a){(void)n;(void)a;return 0;}
+/* mod_texture_banks.c refuses inside a netplay host-output hook (mod_runtime.cpp); none here. */
+int psx_mod_host_output_scope(void){return 0;}
 uint32_t psx_mod_read_word(uint32_t a){(void)a;return 0;}
 int g_psx_vram_dirty_tracking=0;
 uint64_t s_frame_count=0;

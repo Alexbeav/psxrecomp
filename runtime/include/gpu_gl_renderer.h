@@ -136,6 +136,7 @@ uint32_t gl_renderer_stereo_unavailable(void);
 int gl_renderer_stereo_begin(int x, int y, int w, int h, int reuse_backup);
 int gl_renderer_stereo_end(uint32_t eye, int keep);
 void gl_renderer_stereo_stage_reset(void);
+int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t width,uint32_t height,uint8_t *rgba);
 int gl_renderer_stereo_publish(uint64_t pair_id, uint64_t guest_cycle,
                                 const int32_t eye_view[2][3]);
 void gl_renderer_stereo_reset(void);
@@ -184,6 +185,28 @@ int  gl_renderer_has_bezel(void);
  * filtered and guest VRAM is never touched. Takes effect at the next present;
  * safe to call from any thread. */
 enum { GL_POST_AA_OFF = 0, GL_POST_AA_FXAA = 1, GL_POST_AA_FXAA_HQ = 2 };
+/* Post-effect pipeline (gl_postfx.inc, docs/POST_EFFECTS.md). All elective,
+ * off by default; safe from any thread, effective at the next present.
+ * Bloom ([video] bloom, 0 = off .. 2; PSX_BLOOM overrides) is the built-in
+ * "bloom" chain: glow from 3D and additive primitives only, never the HUD. */
+void  gl_renderer_set_bloom(float strength);
+float gl_renderer_get_bloom(void);
+/* [video] post_shader: a .pfx chain file run after bloom and before AA
+ * ("" = none; PSX_POST_SHADER overrides). A preset that fails to load or
+ * compile is logged and skipped. */
+void  gl_renderer_set_post_shader(const char *path);
+int   gl_renderer_post_shader_loaded(void);
+typedef struct {
+    float strength, threshold;
+    uint64_t passes, us_n;
+    double us_mean;     /* glFinish-bracketed pass cost on real frames while timing, then reset */
+    double gen_us_mean; /* the same on Smooth motion generated frames */
+    uint64_t gen_us_n;
+    uint64_t reused;    /* passes generated frames took from the last real frame */
+} GlBloomInfo;
+/* Debug: negative arguments keep the current value. */
+void  gl_renderer_bloom_debug(float strength, float threshold, int time,
+                              GlBloomInfo *out);
 int  gl_renderer_set_post_aa(int mode);
 int  gl_renderer_post_aa(void);
 uint64_t gl_renderer_post_aa_passes(void);
@@ -306,6 +329,12 @@ int  gl_renderer_anisotropy(void);
  * uploads and untextured primitives already are). On by default. */
 void gl_renderer_set_accurate_blending(int on);
 int  gl_renderer_accurate_blending(void);
+/* [video] dithering: 1 (default) PS1 dither pattern on the native VRAM grid
+ * (guest VRAM identical at every internal scale), 2 elective pattern per
+ * internal-resolution pixel, 0 off (true colour). Applies to eligible
+ * primitives (Gouraud, texture-modulated polygons) while GP0(E1h) bit 9 is set. */
+void gl_renderer_set_dithering(int mode);
+int  gl_renderer_dithering(void);
 int  gl_renderer_get_pgxp_depth(void);
 void gl_renderer_set_pgxp_color_perspective(int on);
 int  gl_renderer_get_pgxp_color_perspective(void);

@@ -44,6 +44,7 @@
 #include "ws_prepass_guard.h"
 #include "ws_hud_anchor.h"
 #include "ws_repeat_rect.h"
+#include "ws_feedback_rect.h"
 #include "ws_screen_mask.h"
 #include "ws_radial_screen_mask.h"
 #include <stdint.h>
@@ -243,6 +244,7 @@ static WsHudAnchorTag ws_reveal_clear_tags[WS_HUD_ANCHOR_TABLE_SIZE];
 static WsHudAnchorTag ws_screen_mask_tags[WS_HUD_ANCHOR_TABLE_SIZE];
 static WsRadialScreenMaskTag ws_radial_screen_mask_tags[WS_RADIAL_MASK_TAG_COUNT];
 static WsRepeatRectTag ws_repeat_rect_tags[WS_REPEAT_RECT_TAG_TABLE_SIZE];
+static WsRepeatRectTag ws_feedback_rect_tags[WS_REPEAT_RECT_TAG_TABLE_SIZE];
 static uint32_t ws_last_tag_stamp = (uint32_t)-1000; /* frame of newest tag */
 static uint32_t ws_last_3d_stamp  = (uint32_t)-1000; /* frame of newest shaded prim (diagnostic) */
 extern uint64_t s_frame_count;               /* defined in debug_server.c */
@@ -2003,6 +2005,23 @@ int psx_ws_cull_sltiu(uint32_t sx, uint32_t imm) {
             < (uint32_t)((int32_t)imm + 2 * m)) ? 1 : 0;
 }
 
+/* [widescreen.cull] screen_x_sites on `sltu rd, SX, W` with W in a register:
+ * SX is a 16-bit screen X (typically `andi SX, sxy, 0xffff`), W the width the
+ * guest loaded (pair with clip_edge_x_load_sites so W already carries the right
+ * margin). The unsigned compare rejects negative X; while widened the verdict is
+ * -k*m <= (int16)SX < W, so the left band passes too. Identity at margin 0.
+ * These tests check single vertices, so a large near polygon whose corners all
+ * lie past the reveal would still drop: k = 4 margins keeps them (Kula World's
+ * level quads), while an unbounded left side lets every off-screen polygon
+ * through and overflows renderers with fixed primitive lists. */
+#define WS_SLTU_BAND_LEFT_REACH 4
+int psx_ws_cull_sltu_band(uint32_t sx, uint32_t bound) {
+    int m = psx_ws_x_margin();
+    if (m <= 0) return sx < bound ? 1 : 0;
+    int32_t x = (int32_t)(int16_t)(uint16_t)sx;
+    return (x >= -WS_SLTU_BAND_LEFT_REACH * m && x < (int32_t)bound) ? 1 : 0;
+}
+
 /* Signed right-edge widen for the min/max funnel idiom (`slti v, minSX, W`):
  * the paired LEFT edge is a separate bltz (psx_ws_cull_bltz below), so this
  * bound moves out by ONE margin only. Operand is an already sign-extended /
@@ -2522,7 +2541,8 @@ void gpu_ws_tag_background_prim(uint32_t prim) {
         return;
     }
     uint32_t op = words[0] >> 24;
-    if (op < 0x20u || op > 0x3Fu || (op & 2u)) {
+    if (!((op >= 0x20u && op <= 0x3Fu && !(op & 2u)) ||
+          op == 0x64u || op == 0x65u)) {
         ws_background_tag_stats.tag_rejected++;
         return;
     }
@@ -2590,6 +2610,18 @@ void gpu_ws_tag_repeat_rect(uint32_t prim, int32_t period) {
     WsPrepassPacketGuard guard = ws_prepass_packet_guard(words, count);
     ws_repeat_rect_tag_insert(ws_repeat_rect_tags, GPU_RAM_KEY((prim + 4u)),
                               period, &guard, (uint32_t)s_frame_count);
+}
+
+void gpu_ws_tag_feedback_rect(uint32_t prim) {
+    if (!ws_native_wide_configured() || (prim & 3u) || prim > UINT32_MAX - 4u)
+        return;
+    uint32_t words[12], count = 0;
+    if (!ws_hud_command_words(prim + 4u, words, &count)) return;
+    if ((words[0] >> 24) < 0x64u || (words[0] >> 24) > 0x67u) return;
+    WsPrepassPacketGuard guard = ws_prepass_packet_guard(words, count);
+    /* The table only marks the packet; period 1 is the "present" value. */
+    ws_repeat_rect_tag_insert(ws_feedback_rect_tags, GPU_RAM_KEY((prim + 4u)),
+                              1, &guard, (uint32_t)s_frame_count);
 }
 
 void gpu_ws_tag_screen_mask_quad(uint32_t prim) {
@@ -3408,6 +3440,14 @@ static uint16_t vram_write_pixels[1024 * 512];
  * gpu_depth24_rgb_limit — declared early so gpu_reset_state can clear it. */
 static uint32_t s_d24_upload_x1 = 0;
 static int      s_d24_present_hold = 0; /* vblanks to skip Swap after GP1(07h) */
+/* Whether the latest guest VBlank was held: presents after it skip their
+ * Swap. Both the count and this flag are guest state, set only at guest
+ * VBlank and carried in the GPU snap (packed into the hold word), and a
+ * present only reads them, so a windowed, headless or frame-skipping run and
+ * a rollback replay hold the same span and restore the same output (#636: a
+ * present-ticked hold stuck at 3 in headless live play and was zeroed by a
+ * rollback load, so replay != live). */
+static int      s_d24_present_skip = 0;
 static uint32_t s_d24_prev_disp_h = 0;  /* last GP1(07h) band height */
 static void depth24_note_upload(uint32_t x, uint32_t w);
 
@@ -3811,6 +3851,7 @@ static void gpu_reset_state(int clear_vram) {
     ws_hud_anchor_clear(ws_screen_mask_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_radial_mask_clear(ws_radial_screen_mask_tags);
     ws_repeat_rect_tag_clear(ws_repeat_rect_tags);
+    ws_repeat_rect_tag_clear(ws_feedback_rect_tags);
     polyline_color = 0;
     polyline_prev_x = polyline_prev_y = 0;
     polyline_prev_c = 0;
@@ -3831,6 +3872,7 @@ static void gpu_reset_state(int clear_vram) {
     semi_transparency = 0;
     texpage_colors = 0;
     dither_enabled = 0;
+    gr_set_dither(0);
     draw_to_display = 0;
     set_mask_bit = 0;
     check_mask_bit = 0;
@@ -3879,6 +3921,7 @@ static void gpu_reset_state(int clear_vram) {
     ws_scene_hold_reset(&s_ws_scene_hold);
     s_d24_upload_x1 = 0;
     s_d24_present_hold = 0;
+    s_d24_present_skip = 0;
     s_d24_prev_disp_h = 0;
 }
 
@@ -4144,6 +4187,9 @@ void gpu_vblank_tick(void) {
      * poll first became reachable in this runtime. */
     if (vertical_interlace)
         interlace_field = (lcf ^ 1) & 1;
+    s_d24_present_skip = s_d24_present_hold > 0;
+    if (s_d24_present_hold > 0)
+        s_d24_present_hold--;
     /* snapshot per-frame draw-offset-Y range for the strobe instrumentation */
     if (g_doff_cnt_this) {
         g_doff_min_last = g_doff_min_this;
@@ -4198,11 +4244,6 @@ const uint16_t* gpu_get_vram(void) {
     return vram;
 }
 
-static uint8_t gpu_vram_byte(uint32_t byte_x, uint32_t y) {
-    uint16_t hw = vram[((y & 511u) * 1024u) + ((byte_x >> 1) & 1023u)];
-    return (byte_x & 1u) ? (uint8_t)(hw >> 8) : (uint8_t)hw;
-}
-
 /* Depth24: note/query/reset the CPU→VRAM upload span tracked above. Used to
  * hide trailing RGB columns when a movie blit doesn't fill the full CRTC
  * width — MotK's Star Wars crawl leaves ~8px of stale VRAM on the right.
@@ -4236,15 +4277,14 @@ void gpu_depth24_upload_span_reset(void) {
 }
 
 int gpu_depth24_present_hold_tick(void) {
-    if (s_d24_present_hold <= 0) return 0;
-    s_d24_present_hold--;
-    return 1;
+    return s_d24_present_skip;
 }
 
 void gpu_depth24_on_savestate_loaded(void) {
     /* Hold skips Swap — after restore we want the restored VRAM visible now.
      * Upload span / prev_h were restored from the GPU snap. */
     s_d24_present_hold = 0;
+    s_d24_present_skip = 0;
 }
 
 /* ---- Present-time screen-colour LUT (verified-enhancement, opt-in) -------
@@ -4308,8 +4348,9 @@ static void gpu_rgb555_to_rgb888(uint16_t c, uint8_t* r, uint8_t* g, uint8_t* b)
     *b = (uint8_t)(((c >> 10) & 0x1Fu) << 3);
 }
 
-void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
-                           uint8_t* r, uint8_t* g, uint8_t* b) {
+void gpu_display_pixel_rgb_in(const uint16_t* image, const GpuDisplayInfo* di,
+                              uint32_t x, uint32_t y,
+                              uint8_t* r, uint8_t* g, uint8_t* b) {
     if (di->depth24) {
         uint32_t byte_x = ((di->display_x & 1023u) * 2u) + x * 3u;
         uint32_t vy = (di->display_y + y) & 511u;
@@ -4320,15 +4361,24 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
             *r = *g = *b = 0;
             return;
         }
-        *r = gpu_vram_byte(byte_x + 0u, vy);
-        *g = gpu_vram_byte(byte_x + 1u, vy);
-        *b = gpu_vram_byte(byte_x + 2u, vy);
+        const uint16_t* row = image + (size_t)vy * 1024u;
+        uint8_t px[3];
+        for (uint32_t i = 0; i < 3u; i++) {
+            uint16_t hw = row[((byte_x + i) >> 1) & 1023u];
+            px[i] = ((byte_x + i) & 1u) ? (uint8_t)(hw >> 8) : (uint8_t)hw;
+        }
+        *r = px[0]; *g = px[1]; *b = px[2];
         return;
     }
 
     uint32_t vx = (di->display_x + x) & 1023u;
     uint32_t vy = (di->display_y + y) & 511u;
-    gpu_rgb555_to_rgb888(vram[vy * 1024u + vx], r, g, b);
+    gpu_rgb555_to_rgb888(image[vy * 1024u + vx], r, g, b);
+}
+
+void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
+                           uint8_t* r, uint8_t* g, uint8_t* b) {
+    gpu_display_pixel_rgb_in(vram, di, x, y, r, g, b);
 }
 
 uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y) {
@@ -4342,11 +4392,11 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
  * output, including the black-fill past the 2048-byte VRAM row), but hoists
  * the per-row invariants (vy, base_byte_x, the "how many pixels are past the
  * row edge" test) out of the per-pixel path instead of recomputing them
- * `count` times and paying three gpu_vram_byte() calls per pixel. The
+ * `count` times and paying three byte extractions per pixel. The
  * per-pixel path was the dominant present-side cost of FMV frames (3x the
  * VRAM touches of the 16-bit path, done as a function-call chain instead of
  * a straight-line loop). Still scalar C — no host-endianness assumptions,
- * same byte-order shifts as gpu_vram_byte. */
+ * same byte-order shifts as gpu_display_pixel_rgb_in. */
 void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
                              uint32_t count) {
     uint32_t vy = (di->display_y + y) & 511u;
@@ -4374,6 +4424,42 @@ void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out
     }
     for (; x < count; x++)
         out[x] = 0xFF000000u;
+}
+
+/* Depth24 present staging, shared by every CPU present path: compose the
+ * GP1(07h) intersection with active video into the PAL/NTSC canvas (rows
+ * off-screen are clipping, not a shift), then black-fill the trailing RGB
+ * columns no CPU->VRAM upload has covered since the last span reset, so stale
+ * VRAM from a prior movie never shows past the new blit. With no span yet
+ * (lim == 0) only the last `margin` columns are blanked: blanking [0..w) left
+ * MotK's FMV permanently black after the GP1(07h) hold reset the span.
+ * Returns the source rows staged. */
+uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
+                                   uint32_t w, uint32_t margin) {
+    if (!di || !buf || w == 0u || di->screen_height == 0u)
+        return 0u;
+    const size_t count = (size_t)w * di->screen_height;
+    for (size_t i = 0; i < count; i++)
+        buf[i] = 0xFF000000u;
+    if (di->screen_origin_y >= di->screen_height)
+        return 0u;
+    uint32_t rows = di->height;
+    if (rows > di->screen_height - di->screen_origin_y)
+        rows = di->screen_height - di->screen_origin_y;
+    uint32_t *source = buf + (size_t)di->screen_origin_y * w;
+    for (uint32_t y = 0; y < rows; y++)
+        gpu_depth24_present_row(di, di->screen_source_skip_y + y,
+                                source + (size_t)y * w, w);
+    if (rows == 0u || w < 8u || margin == 0u || margin >= w)
+        return rows;
+    uint32_t start = w - margin;
+    uint32_t lim = gpu_depth24_rgb_limit(di->display_x, w);
+    if (lim > 0u && lim < w && lim < start)
+        start = lim;
+    for (uint32_t y = 0; y < rows; y++)
+        for (uint32_t x = start; x < w; x++)
+            source[(size_t)y * w + x] = 0xFF000000u;
+    return rows;
 }
 
 int gpu_display_is_depth24(void) {
@@ -5678,6 +5764,46 @@ static void ws_repeat_textured_rect_reveal(int x, int y, int w, int h,
     }
 }
 
+/* The framebuffer whose canonical columns hold VRAM x, or -1. */
+static int ws_fb_base_holding(int32_t vram_x, int width) {
+    for (int i = 0; i < ws_fb_n; i++)
+        if (vram_x >= (int32_t)ws_fb_base[i] && vram_x < (int32_t)ws_fb_base[i] + width)
+            return (int)ws_fb_base[i];
+    return -1;
+}
+
+/* A tagged 15-bit sprite copying another framebuffer continues into the
+ * bands from that buffer's wide surface (it has no band columns in VRAM). */
+static void ws_feedback_rect_reveal(int x, int y, int w, int h, int u, int v,
+                                    uint32_t color24, int semi_trans,
+                                    int raw_texture) {
+    int margin = draw_area_wide_x_margin();
+    int width = (int)ws_disp_w();
+    if (margin <= 0 || gp0_cmd_source_addr == UINT32_MAX ||
+        draw_area_right < draw_area_left ||
+        draw_area_right - draw_area_left + 1u != (uint32_t)width)
+        return;
+    uint32_t address = gp0_cmd_source_addr & 0x1FFFFFFFu;
+    if (address >= psx_ram_live_bytes() || (address & 3u)) return;
+    if (!ws_repeat_rect_tag_lookup(ws_feedback_rect_tags, address, gp0_cmd_buf,
+                                   (uint32_t)gp0_words_needed, (uint32_t)s_frame_count))
+        return;
+    uint16_t tp = current_texpage();
+    if (((tp >> 7) & 3) != 2) return;
+    int32_t src_x0 = (int32_t)(tp & 0xF) * 64 + u;
+    int src_base = ws_fb_base_holding(src_x0, width);
+    if (src_base < 0) return;
+    int32_t src_y = (int32_t)((tp >> 4) & 1) * 256 + v;
+    WsFeedbackSpan spans[2];
+    int count = ws_feedback_rect_spans(x, w, src_x0, (int32_t)draw_area_left,
+                                       width, margin, spans);
+    for (int i = 0; i < count; ++i)
+        gr_wide_feedback_rect(src_base, spans[i].src_x, src_y, spans[i].dst_x, y,
+                              spans[i].w, h, (int)(color24 & 0xFF),
+                              (int)((color24 >> 8) & 0xFF), (int)((color24 >> 16) & 0xFF),
+                              raw_texture, semi_trans ? (int)semi_transparency : -1);
+}
+
 /* Execute textured rectangle (GP0 0x64-0x67) */
 static void gp0_exec_textured_rect(void) {
     uint32_t color24 = gp0_cmd_buf[0] & 0xFFFFFFu;
@@ -5765,6 +5891,7 @@ static void gp0_exec_textured_rect(void) {
     else
         gr_draw_textured_rect(x0, y0, w, h, u0, v0, clut_x, clut_y, current_texpage());
     ws_repeat_textured_rect_reveal(x0, y0, w, h, u0, v0, clut_x, clut_y);
+    ws_feedback_rect_reveal(x0, y0, w, h, u0, v0, color24, semi_trans, raw_texture);
 }
 
 /* Execute 1x1 dot (GP0 0x68-0x6B) */
@@ -5941,6 +6068,7 @@ static void gp0_exec_draw_mode(void) {
     semi_transparency = (param >> 5) & 3;
     texpage_colors    = (param >> 7) & 3;
     dither_enabled    = (param >> 9) & 1;
+    gr_set_dither((int)dither_enabled);
     draw_to_display   = (param >> 10) & 1;
     texture_disable   = (param >> 11) & 1;
     /* Sync semi-transparency to SW renderer — actual blending is per-primitive */
@@ -7805,7 +7933,8 @@ static int gpu_snap_emit(PstW *w) {
     WI(vram_read_active); WH(vram_read_x); WH(vram_read_y); WH(vram_read_w); WH(vram_read_h);
     WH(vram_read_col); WH(vram_read_row);
     /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
-    WU(s_d24_upload_x1); WI(s_d24_present_hold); WU(s_d24_prev_disp_h);
+    WU(s_d24_upload_x1); WI(s_d24_present_hold | 0x200 | (s_d24_present_skip ? 0x100 : 0));
+    WU(s_d24_prev_disp_h);
 #undef WU
 #undef WI
 #undef WH
@@ -7839,6 +7968,13 @@ static int gpu_snap_parse(PstR *r) {
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
     RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
+    /* Bit 9 marks an explicit skip flag (bit 8). GP1 can arm a positive
+     * count before VBlank, when skip is still false: that state must round
+     * trip exactly. Older snaps without the marker infer skip from count. */
+    s_d24_present_skip = (s_d24_present_hold & 0x200)
+        ? (s_d24_present_hold & 0x100) != 0
+        : (s_d24_present_hold & 0x100) || (s_d24_present_hold & 0xFF) > 0;
+    s_d24_present_hold &= 0xFF;
 #undef RU
 #undef RI
 #undef RH
@@ -7911,10 +8047,15 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     ws_hud_anchor_clear(ws_screen_mask_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_radial_mask_clear(ws_radial_screen_mask_tags);
     ws_repeat_rect_tag_clear(ws_repeat_rect_tags);
+    ws_repeat_rect_tag_clear(ws_feedback_rect_tags);
     /* Sync renderer clip/scissor to restored GP0(E3/E4); vars alone leave GL
      * on a stale draw area after savestate load. */
     gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
                      (int)draw_area_right, (int)draw_area_bottom);
+    /* GP0(E1h) bit 9 is restored with the registers; the renderer only
+     * learns it from E1, so push it now (else dithering keeps the pre-load
+     * setting until the game's next E1). */
+    gr_set_dither((int)dither_enabled);
     /* A state saved mid-A0 resumes streaming its payload into the array. */
     gr_vram_upload_set_open(gp0_state == GP0_VRAM_WRITE);
     ws_nw_sync_target();
@@ -7935,6 +8076,7 @@ typedef struct {
     WsHudAnchorTag ws_screen_mask_tags[WS_HUD_ANCHOR_TABLE_SIZE];
     WsRadialScreenMaskTag ws_radial_screen_mask_tags[WS_RADIAL_MASK_TAG_COUNT];
     WsRepeatRectTag ws_repeat_rect_tags[WS_REPEAT_RECT_TAG_TABLE_SIZE];
+    WsRepeatRectTag ws_feedback_rect_tags[WS_REPEAT_RECT_TAG_TABLE_SIZE];
     WsPrimitiveRole ws_primitive_roles[WS_ROLE_BUCKETS];
     WsUiPrepassItem ws_ui_prepass[WS_UI_PREPASS_MAX];
     WsUiPrepassNode ws_ui_prepass_nodes[WS_UI_PREPASS_NODE_MAX];
@@ -7978,6 +8120,7 @@ static void gpu_pass_provenance_transfer(int restore) {
     PASS_ARRAY(ws_screen_mask_tags);
     PASS_ARRAY(ws_radial_screen_mask_tags);
     PASS_ARRAY(ws_repeat_rect_tags);
+    PASS_ARRAY(ws_feedback_rect_tags);
     PASS_ARRAY(ws_primitive_roles);
     PASS_VALUE(ws_ui_prepass_count);
     PASS_VALUE(ws_ui_prepass_node_count);
@@ -8069,6 +8212,7 @@ void gpu_pass_checkpoint_restore(void) {
                      (int)draw_area_right, (int)draw_area_bottom);
     gr_set_draw_offset(draw_offset_x, draw_offset_y);
     gr_set_mask_bits((int)set_mask_bit, (int)check_mask_bit);
+    gr_set_dither((int)dither_enabled);
     ws_nw_sync_target();
     /* Target sync may classify the scene before render_pass.c restores RAM.
      * Do not retain history learned from the synthetic draw or that query. */
