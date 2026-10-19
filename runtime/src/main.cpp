@@ -1955,6 +1955,7 @@ static PSXModSessionBaseline g_mod_owned_baseline;
 
 static void reset_mod_owned_presentation(void) {
     psx_mod_internal_resolution_reset();
+    memcard_set_extension_codec(nullptr, nullptr);
     psx_local_mouse_clear();
     psx_keybinds_clear_session_players();
     PSXModSessionScalars live;
@@ -19859,6 +19860,7 @@ int main(int argc, char** argv) {
      * precedes them either way. A netplay clear leaves no plan, so nothing
      * activates and the session stays vanilla. */
     auto start_mod_session = [&](bool netplay) -> bool {
+        mod_runtime_set_progress_hook(starvation_watchdog_heartbeat);
         std::string save_scope, save_error;
         if (!PSXRecompV4::mod_runtime_savestate_scope(save_scope, &save_error) ||
             !savestate_set_content_scope(save_scope.c_str())) {
@@ -19900,6 +19902,11 @@ int main(int argc, char** argv) {
         gpu_ws_set_local_view_only(
             netplay && PSXRecompV4::mod_runtime_netplay_view_active() ? 1 : 0);
         mod_runtime_activate_plugins();
+        if (netplay && memcard_extension_codec_active()) {
+            std::fprintf(stderr,
+                "psxrecomp: selected mod uses extended memory cards, which are unsupported in netplay\n");
+            return false;
+        }
         const PSXModNetplayProfile* profile = psx_mod_netplay_profile();
         if (netplay && profile && profile->fixed_aspect_mask) {
             const int index = psx_mod_netplay_aspect();
