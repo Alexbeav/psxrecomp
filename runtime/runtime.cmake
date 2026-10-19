@@ -2462,7 +2462,7 @@ function(psxrecomp_add_runtime_target target)
             endif()
         endif()
         if(NOT PSX_PYTHON)
-            find_program(PSX_PYTHON NAMES python python3)
+            find_program(PSX_PYTHON NAMES python3 python)
         endif()
         if(NOT PSX_PYTHON)
             message(FATAL_ERROR
