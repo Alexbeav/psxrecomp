@@ -49,6 +49,9 @@ if(BUILD_TESTING)
     add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
     target_include_directories(video_texture_filter_test PRIVATE include)
     add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
+    add_executable(overlay_memory_address_test tests/test_overlay_memory_address.c)
+    target_include_directories(overlay_memory_address_test PRIVATE include)
+    add_test(NAME overlay_memory_address_test COMMAND overlay_memory_address_test)
     add_executable(mod_netplay_test tests/test_mod_netplay.c
         src/mod_netplay.c src/netplay_state_digest.c src/crc32.c src/psx_sha256.c)
     target_include_directories(mod_netplay_test PRIVATE include)
@@ -1656,6 +1659,13 @@ if(BUILD_TESTING)
         src/mod_internal_resolution.c)
     target_include_directories(mod_internal_resolution_test PRIVATE include)
     add_test(NAME mod_internal_resolution_test COMMAND mod_internal_resolution_test)
+
+    add_executable(memcard_extensions_test
+        tests/test_memcard_extensions.c src/memcard.c)
+    target_include_directories(memcard_extensions_test PRIVATE include)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/memcard_extensions_scratch)
+    add_test(NAME memcard_extensions_test COMMAND memcard_extensions_test
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/memcard_extensions_scratch)
 
     # Motion kit and per-frame driver for render-pass plugins: blending,
     # identity matching, limits and the crossfade fallback, on mock RAM.

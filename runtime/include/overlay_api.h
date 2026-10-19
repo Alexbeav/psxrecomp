@@ -124,8 +124,10 @@
  *      entry hooks, guarded pre-instruction callback.
  * v30: the two lines merged. OverlayCallbacks keeps the master layout, which
  *      already holds every release-line callback; shards built against either
- *      v28 or v29 are rejected and recompiled. */
-#define PSX_OVERLAY_ABI_VERSION 30
+ *      v28 or v29 are rejected and recompiled.
+ * v31/v32: reserved for the experimental selector/adapter stack.
+ * v33: guarded load/store effective-address adapter on the master layout. */
+#define PSX_OVERLAY_ABI_VERSION 33
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -387,6 +389,8 @@ typedef struct OverlayCallbacks {
     int32_t (*nclip_exact_sign)(int32_t native_mac0, uint32_t pc);
     /* Guarded pre-instruction mod callback (ABI v27). */
     void (*mod_instruction)(CPUState*, uint32_t, uint32_t);
+    /* Guarded load/store effective-address adapters (ABI v33). */
+    uint32_t (*mod_memory_address)(const CPUState*, uint32_t, uint32_t, uint32_t);
 } OverlayCallbacks;
 
 #ifdef __cplusplus
