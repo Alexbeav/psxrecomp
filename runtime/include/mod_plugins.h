@@ -647,6 +647,14 @@ typedef struct PSXModStereoFrame {
 typedef int (*PSXModStereoFn)(struct CPUState*, void*, uint32_t eye);
 int psx_mod_render_stereo(struct CPUState *cpu, const PSXModStereoFrame *frame,
                           PSXModStereoFn fn, void *user);
+/* Offline local multiplayer: draw views0/1 from one checkpoint, using the
+ * reversible local-view sandbox. Both must succeed before publication.
+ * Callbacks run with psx_mod_local_view_scope()==1. This never advances the
+ * world or enables stereo/VR. Presentation uses two native4:3 views (8:3).
+ * Unsupported backends refuse and leave ordinary presentation available. */
+int psx_mod_render_local_pair(struct CPUState *cpu, const PSXModStereoFrame *frame,
+                              PSXModStereoFn fn, void *user);
+int psx_mod_set_local_pair_presentation(int enabled);
 uint32_t psx_mod_render_stereo_status(void);
 /* 0 disables stereo output; 1 shows a complete pair side by side. Capture
  * itself does not enable presentation. Default 0; applies to this session. */
