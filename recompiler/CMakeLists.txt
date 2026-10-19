@@ -399,6 +399,14 @@ if(BUILD_TESTING)
     target_include_directories(guest_tty_test PRIVATE ../runtime/include)
     add_test(NAME guest_tty_test COMMAND guest_tty_test)
 
+    # MDEC status bit 29 stays set until a decode's output is down to the last
+    # 32-word OutFIFO load (Beetle InCommand); libpress DecDCTin spins on it.
+    add_executable(mdec_busy_drain_test
+        ../runtime/tests/test_mdec_busy_drain.c
+        ../runtime/src/mdec.c)
+    target_include_directories(mdec_busy_drain_test PRIVATE ../runtime/include)
+    add_test(NAME mdec_busy_drain_test COMMAND mdec_busy_drain_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
