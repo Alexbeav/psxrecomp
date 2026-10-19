@@ -2336,6 +2336,20 @@ function(psxrecomp_add_runtime_target target)
         # the lobby client all use pthread on Unix.
         find_package(Threads REQUIRED)
         target_link_libraries(${target} PRIVATE Threads::Threads)
+        # musl declares getcontext/makecontext/swapcontext (psx_fiber.c) but
+        # does not implement them; libucontext does.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            include(CheckSymbolExists)
+            check_symbol_exists(getcontext "ucontext.h" PSX_HAVE_GETCONTEXT)
+            if(NOT PSX_HAVE_GETCONTEXT)
+                find_library(PSX_UCONTEXT_LIBRARY ucontext)
+                if(NOT PSX_UCONTEXT_LIBRARY)
+                    message(FATAL_ERROR
+                        "getcontext is missing (musl?): install libucontext")
+                endif()
+                target_link_libraries(${target} PRIVATE "${PSX_UCONTEXT_LIBRARY}")
+            endif()
+        endif()
     endif()
 
     # ---- Vulkan backend (gpu_vk_renderer.c) --------------------------------
