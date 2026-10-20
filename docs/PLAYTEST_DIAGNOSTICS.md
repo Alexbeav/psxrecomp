@@ -26,7 +26,8 @@ psxrecomp_add_playtest_diagnostics(psx-runtime
 
 Create a title mod package with a recording feature whose plugin is
 `game.diagnostics`, and a separate input-display feature whose plugin is
-`game.diagnostics.osd`. The package controls their defaults. The helper also
+`game.diagnostics.osd`. Both features are always player-selectable mods (never
+`channel = "developer"`); the build decides their default (below). The helper also
 covers an existing `psx-runtime-pgxp` sibling and stages `replay-diagnostics.py`
 beside both executables. The bundled-release packager includes this script when
 present, as does the setup-host kit packager; AppImage wrapping preserves it in
@@ -34,6 +35,32 @@ the payload. Input Display also works with Recording disabled, with no RAM
 digest or file capture. Session changes and netplay suspension clear the display.
 No texture feature,
 texture package or other enhancement is enabled or exposed by this helper.
+
+### Default state: public releases off, everything else on
+
+Owner policy (2026-10-19): Recording and Input Display are off by default only
+in public production releases. Dev builds and playtest/pre-release packages
+default them on.
+
+- The source manifest carries the production default:
+  `default_enabled = false` on both the `recording` and `osd` features.
+- `PSX_PUBLIC_RELEASE` (CMake option, default `OFF`) is the one build-level
+  notion of a public release. Release packagers configure with
+  `-DPSX_PUBLIC_RELEASE=ON`; nothing else should.
+- After the framework stages the catalog into `<exe-dir>/mods/bundled`,
+  `runtime/psx_playtest_diagnostics_defaults.cmake` edits only the staged copy:
+  with `PSX_PUBLIC_RELEASE=OFF` it sets both features to `default_enabled =
+  true`; with `ON` it fails the build unless the source says `false`.
+- `psxrecomp_add_playtest_diagnostics` applies this to its `MOD_ID`. A title
+  with its own diagnostics package and recorder opts in with
+  `psxrecomp_playtest_diagnostics_defaults(psx-runtime MOD_ID game.diagnostics)`
+  (after `psxrecomp_add_game_runtime`; it also covers the `-pgxp` sibling).
+- `tools/ci/audit_playtest_diagnostics_package.py --mode public|playtest`
+  checks a finished ZIP: the staged `mods/bundled` copy must be `false` in
+  `public` mode and `true` in `playtest` mode, and any shipped source copy
+  must stay `false`. `--mode` is required.
+
+A player's own choice in `mods/state.toml` always overrides the default.
 
 The implementation reads no title-specific addresses. `telemetry.csv` stores
 host intervals, incident markers, CD activity, ordinary GP0 draw commands,

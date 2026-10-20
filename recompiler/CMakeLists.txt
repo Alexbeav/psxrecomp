@@ -1236,6 +1236,14 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+        # Drives runtime/psx_playtest_diagnostics_defaults.cmake (a cmake -P
+        # script), so it needs this configure's cmake.
+        add_test(
+            NAME playtest_diagnostics_defaults
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_playtest_diagnostics_defaults.py
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME compile_overlays_static_split
             COMMAND ${Python3_EXECUTABLE}
