@@ -28,7 +28,10 @@ PERSONAL_NAMES = {
 }
 
 
-def audit(path, game_id, diagnostics_id):
+def audit(path, game_id, diagnostics_id, public):
+    """public=True: a public production release (Playtest Diagnostics ship off).
+    public=False: a playtest/pre-release package (they ship on). Either way the
+    source manifests keep the production default, off."""
     with zipfile.ZipFile(path) as archive:
         files = {}
         for entry in archive.infolist():
@@ -108,24 +111,31 @@ def audit(path, game_id, diagnostics_id):
                     raise ValueError("HD texture surface in title/runtime catalog: " + name)
                 if leaf == "manifest.toml":
                     manifest = tomllib.loads(text)
-                    if lower.startswith("mods/bundled/" + diagnostics_id.lower() + "/") and manifest.get("id") == diagnostics_id:
+                    staged = lower.startswith("mods/bundled/" + diagnostics_id.lower() + "/")
+                    if staged and manifest.get("id") == diagnostics_id:
                         runtime.append((name, manifest))
                     if manifest.get("id") == diagnostics_id:
-                        validate_diagnostics(manifest, name, game_id, diagnostics_id)
+                        # Only the build-staged runtime copy follows the mode.
+                        validate_diagnostics(manifest, name, game_id, diagnostics_id,
+                                             default_enabled=staged and not public)
         if not runtime:
             raise ValueError("runtime mods/bundled catalog is missing " + diagnostics_id)
         return len(runtime)
 
 
-def validate_diagnostics(manifest, name, game_id, diagnostics_id):
+def validate_diagnostics(manifest, name, game_id, diagnostics_id, default_enabled):
     if not any(target.get("game_id") == game_id for target in manifest.get("target", [])):
         raise ValueError("diagnostics manifest has the wrong game target: " + name)
     features = {feature.get("id"): feature for feature in manifest.get("feature", [])}
     for feature_id, plugin_id in (("recording", diagnostics_id), ("osd", diagnostics_id + ".osd")):
         feature = features.get(feature_id, {})
-        # Player-selectable in Mods, but production packages never record by default.
-        if feature.get("default_enabled") is not False or feature.get("channel") == "developer":
-            raise ValueError("diagnostics " + feature_id + " must ship disabled by default: " + name)
+        # Player-selectable in Mods in every build. Public releases ship them
+        # off; playtest packages (PSX_PUBLIC_RELEASE=OFF) ship them on.
+        if feature.get("channel") == "developer":
+            raise ValueError("diagnostics " + feature_id + " cannot be developer-only: " + name)
+        if feature.get("default_enabled") is not default_enabled:
+            raise ValueError("diagnostics {} must ship {} by default: {}".format(
+                feature_id, "enabled" if default_enabled else "disabled", name))
         if not any(plugin.get("feature") == feature_id and plugin.get("id") == plugin_id
                    for plugin in manifest.get("plugin", [])):
             raise ValueError("diagnostics " + feature_id + " plugin is missing: " + name)
@@ -138,12 +148,16 @@ def main():
     parser.add_argument("zip")
     parser.add_argument("--game-id", required=True)
     parser.add_argument("--diagnostics-id", required=True)
+    parser.add_argument("--mode", required=True, choices=("public", "playtest"),
+                        help="public: production release, diagnostics default off; "
+                             "playtest: non-public package, diagnostics default on")
     args = parser.parse_args()
     try:
-        count = audit(args.zip, args.game_id, args.diagnostics_id)
+        count = audit(args.zip, args.game_id, args.diagnostics_id, args.mode == "public")
     except (ValueError, OSError, zipfile.BadZipFile, KeyError, UnicodeError) as error:
         sys.exit("diagnostics package audit failed: " + str(error))
-    print("Diagnostics package audit passed: {} ({} runtime manifest(s))".format(args.diagnostics_id, count))
+    print("Diagnostics package audit passed: {} ({} runtime manifest(s), {} mode)".format(
+        args.diagnostics_id, count, args.mode))
 
 
 if __name__ == "__main__":
