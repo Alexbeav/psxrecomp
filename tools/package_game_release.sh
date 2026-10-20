@@ -39,6 +39,14 @@
 # the same deliberately unwieldy switch release_stage.py exposes, because a
 # packager that quietly staged nothing once looked like a good release twice.
 #
+# RELEASE CHANNEL. The build tree must have been configured with
+# -DPSX_RELEASE_CHANNEL=public|playtest (runtime/psx_release_channel.cmake);
+# a tree without one is a dev build and is refused. playtest packages are
+# named <prefix>-<version>-playtest-<artifact>.zip, public packages always
+# drop developer-channel mods, and the staged Playtest Diagnostics defaults
+# must match the channel. Local title releases use
+# tools/package_title_release.py instead (docs/RELEASING_A_TITLE.md).
+#
 # DEVELOPER CHANNEL. mods with channel = "developer" are pruned from public
 # releases (EXCLUDE_DEV_MODS=1, which CI sets via $CI) and kept in local
 # exports; --include-dev-mods / --exclude-dev-mods override. Pruning is by
@@ -198,6 +206,18 @@ if ! grep -qs 'PSX_HAS_GAME_DISPATCH' "${BUILD_DIR}/build.ninja" "${BUILD_DIR}/c
   exit 1
 fi
 
+# --- Release channel: from the build, never defaulted -------------------------
+CHANNEL="$(sed -n 's/^PSX_RELEASE_CHANNEL:[A-Z]*=//p' "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null | head -n1 || true)"
+case "${CHANNEL}" in
+  public) CHANNEL_SUFFIX=""; EXCLUDE_DEV_MODS=1 ;;
+  playtest) CHANNEL_SUFFIX="-playtest" ;;
+  *)
+    echo "error: ${BUILD_DIR} has no release channel (PSX_RELEASE_CHANNEL='${CHANNEL}')." >&2
+    echo "  Configure the release build with -DPSX_RELEASE_CHANNEL=public or =playtest." >&2
+    exit 1 ;;
+esac
+echo "release channel: ${CHANNEL}"
+
 normalize_ver() { local v; v="$(printf '%s' "${1:-}" | tr -d '[:space:]')"; printf '%s' "${v#v}"; }
 BUILT=""
 for stamp in "${EXE_DIR}/psx_game_version.txt" "${BUILD_DIR}/psx_game_version.txt" "${BUILD_DIR}/Release/psx_game_version.txt"; do
@@ -222,7 +242,7 @@ printf '%s\n' "${VERSION}" >"${ROOT}/VERSION"
 
 DIST="${ROOT:?}/dist"
 STAGE="${DIST:?}/stage-game-${ARTIFACT:?}"
-ZIP_NAME="${ZIP_PREFIX:?}-${VERSION:?}-${ARTIFACT:?}.zip"
+ZIP_NAME="${ZIP_PREFIX:?}-${VERSION:?}${CHANNEL_SUFFIX}-${ARTIFACT:?}.zip"
 rm -rf "${STAGE:?}"
 mkdir -p "${STAGE}" "${DIST}"
 if [[ "${STAGE_ONLY}" != 1 ]]; then rm -f "${DIST:?}/${ZIP_NAME:?}"; fi
@@ -336,6 +356,11 @@ else
   n=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
       "${STAGE}/mods" --include=manifest.toml 2>/dev/null || true; } | wc -l)
   [[ "${n}" -eq 0 ]] || echo "note: package includes ${n} developer-channel manifest(s); pass --exclude-dev-mods for a public release"
+fi
+
+if ! "${PY}" "${SCRIPT_DIR}/package_title_release.py" check-diagnostics      --channel "${CHANNEL}" "${STAGE}/mods/bundled"; then
+  echo "error: Playtest Diagnostics defaults do not match the ${CHANNEL} channel" >&2
+  exit 1
 fi
 
 # --- Overlay shard cache (developer-local only) and toolchain -----------------

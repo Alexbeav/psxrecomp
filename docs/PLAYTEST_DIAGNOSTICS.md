@@ -44,9 +44,12 @@ default them on.
 
 - The source manifest carries the production default:
   `default_enabled = false` on both the `recording` and `osd` features.
-- `PSX_PUBLIC_RELEASE` (CMake option, default `OFF`) is the one build-level
-  notion of a public release. Release packagers configure with
-  `-DPSX_PUBLIC_RELEASE=ON`; nothing else should.
+- `PSX_PUBLIC_RELEASE` is the one build-level notion of a public release. It
+  is derived from `PSX_RELEASE_CHANNEL` (`public` => ON; `playtest` or unset
+  => OFF; `runtime/psx_release_channel.cmake`). Releases are cut only by
+  `tools/package_title_release.py --channel public|playtest`
+  ([RELEASING_A_TITLE.md](RELEASING_A_TITLE.md)); `-DPSX_PUBLIC_RELEASE=ON`
+  without a channel fails configure.
 - After the framework stages the catalog into `<exe-dir>/mods/bundled`,
   `runtime/psx_playtest_diagnostics_defaults.cmake` edits only the staged copy:
   with `PSX_PUBLIC_RELEASE=OFF` it sets both features to `default_enabled =

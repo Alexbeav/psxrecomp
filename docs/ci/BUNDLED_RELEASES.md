@@ -1,5 +1,10 @@
 # Bundled releases
 
+> Local title releases (Windows ZIP + Linux AppImage, public or playtest) are
+> cut with one framework command, `tools/package_title_release.py`, from a
+> title's `packaging/release.toml`: see [../RELEASING_A_TITLE.md](../RELEASING_A_TITLE.md).
+> This page describes the CI template built on `package_game_release.sh`.
+
 Public CI builds and ships the **compiled game**. The title commits its
 recompiled game C under `generated/`; CI links it, packages the executable with
 its runtime data, and attaches one zip per platform. Players download, point

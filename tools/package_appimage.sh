@@ -5,13 +5,17 @@
 # and usr/share/<payload-name>, preserving user settings/cards in writable data.
 # Usage: package_appimage.sh --payload DIR --exe-name NAME --payload-name NAME
 #   --app-run FILE --desktop-file FILE.desktop --icon FILE.png --output FILE.AppImage
-#   [--framework DIR] [--tool-cache DIR] [--jobs N]
+#   [--framework DIR] [--tool-cache DIR] [--jobs N] [--prune-unreferenced-libs]
+# --prune-unreferenced-libs drops usr/lib entries the executable does not load
+# (keeps a host file picker's LD_LIBRARY_PATH clean). Every run fails if the
+# deployed executable has an unresolved library.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FRAMEWORK="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PAYLOAD=""; EXE_NAME=""; PAYLOAD_NAME=""; APP_RUN=""; DESKTOP=""; ICON=""; OUTPUT=""
 TOOLS="${XDG_CACHE_HOME:-${HOME:?}/.cache}/recomp-appimage-tools"
 JOBS=2
+PRUNE_LIBS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --payload) PAYLOAD="${2:?}"; shift 2;;
@@ -24,7 +28,8 @@ while [[ $# -gt 0 ]]; do
     --framework) FRAMEWORK="${2:?}"; shift 2;;
     --tool-cache) TOOLS="${2:?}"; shift 2;;
     --jobs) JOBS="${2:?}"; shift 2;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0;;
+    --prune-unreferenced-libs) PRUNE_LIBS=1; shift;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0;;
     *) echo "unknown argument: $1" >&2; exit 2;;
   esac
 done
@@ -102,6 +107,20 @@ export NO_STRIP=1
 "$LINUXDEPLOY" --appimage-extract-and-run --appdir "$APPDIR" \
   --executable "$APPDIR/usr/bin/$EXE_NAME" --desktop-file "$APPDIR/$DESKTOP_ID.desktop" \
   --icon-file "$APPDIR/$DESKTOP_ID.png"
+if [[ "$PRUNE_LIBS" == 1 ]]; then
+  KEEP="$(mktemp "${TMPDIR:-/tmp}/psx-appimage-keep.XXXXXXXX")"
+  env -u LD_LIBRARY_PATH ldd "$APPDIR/usr/bin/$EXE_NAME" |
+    awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^\//) print $i }' |
+    while read -r lib; do readlink -f "$lib"; done | sort -u > "$KEEP"
+  for lib in "$APPDIR"/usr/lib/*; do
+    [[ -e "$lib" ]] || continue
+    grep -qxF "$(readlink -f "$lib")" "$KEEP" || { echo "pruned unreferenced $(basename "$lib")"; rm -f -- "$lib"; }
+  done
+  rm -f -- "$KEEP"
+fi
+if env -u LD_LIBRARY_PATH ldd "$APPDIR/usr/bin/$EXE_NAME" | grep 'not found'; then
+  echo "unresolved libraries in the deployed executable" >&2; exit 1
+fi
 # Deployment may rewrite RPATH. The original sidecar supplies the contract,
 # while the helper verifies its embedded identity and hashes the FINAL ELF;
 # a prior payload binary_sha256 is never accepted as the final-byte receipt.

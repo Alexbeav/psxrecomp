@@ -186,6 +186,34 @@ class ArchiveTests(unittest.TestCase):
                     self.check()
                 self.files[name] = content
 
+    def test_title_recorder_without_replay_helper(self):
+        # A title with its own recorder ships no replay-diagnostics.py.
+        del self.files["replay-diagnostics.py"]
+        self.write()
+        with self.assertRaises(ValueError):
+            audit.audit(self.zip, GAME, DIAG, True)
+        self.assertEqual(audit.audit(self.zip, GAME, DIAG, True, replay_helper=False), 1)
+        del self.files["Game.exe"]
+        self.write()
+        with self.assertRaisesRegex(ValueError, "no executable at the package root"):
+            audit.audit(self.zip, GAME, DIAG, True, replay_helper=False)
+
+    def test_staged_directory_is_audited_like_a_zip(self):
+        stage = Path(self.tmp.name) / "stage"
+        for name, content in self.files.items():
+            path = stage / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, str):
+                content = content.encode()
+            path.write_bytes(content)
+        self.assertEqual(audit.audit(stage, GAME, DIAG, True), 1)
+        with self.assertRaises(ValueError):
+            audit.audit(stage, GAME, DIAG, False)
+        (stage / "saves").mkdir()
+        (stage / "saves/card1.mcd").write_bytes(b"card")
+        with self.assertRaisesRegex(ValueError, "personal state"):
+            audit.audit(stage, GAME, DIAG, True)
+
     def test_wrong_game_recipe_and_manifest_target(self):
         self.files["game.toml"] = '[game]\nid="WRONG"\n'
         with self.assertRaisesRegex(ValueError, "game ID"):
