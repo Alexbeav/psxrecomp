@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-"""Audit a flat game/setup ZIP without extracting or launching its contents."""
+"""Audit a flat game/setup ZIP (or its staged directory) without launching it.
+
+The argument is a release ZIP or a staged payload directory. A directory is
+read through the same checks, so a Linux payload is audited before it is
+wrapped into an AppImage (an AppImage has no ZIP to audit).
+"""
 import argparse
-from pathlib import PurePosixPath
+import os
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import zipfile
@@ -28,11 +34,56 @@ PERSONAL_NAMES = {
 }
 
 
-def audit(path, game_id, diagnostics_id, public):
+class _DirEntry:
+    def __init__(self, root, name):
+        self.filename = name
+        self._path = os.path.join(root, *name.split("/"))
+        self.file_size = os.path.getsize(self._path)
+
+    def is_dir(self):
+        return False
+
+
+class _DirArchive:
+    """The read-only subset of zipfile.ZipFile the audit uses, over a directory."""
+
+    def __init__(self, root):
+        self._root = str(root)
+        self._entries = []
+        for base, dirs, files in os.walk(self._root):
+            dirs.sort()
+            for leaf in sorted(files):
+                rel = os.path.relpath(os.path.join(base, leaf), self._root)
+                self._entries.append(_DirEntry(self._root, rel.replace(os.sep, "/")))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def infolist(self):
+        return list(self._entries)
+
+    def read(self, entry):
+        with open(entry._path, "rb") as stream:
+            return stream.read()
+
+    def open(self, entry):
+        return open(entry._path, "rb")
+
+
+def _open_package(path):
+    if os.path.isdir(path):
+        return _DirArchive(path)
+    return zipfile.ZipFile(path)
+
+
+def audit(path, game_id, diagnostics_id, public, replay_helper=True):
     """public=True: a public production release (Playtest Diagnostics ship off).
     public=False: a playtest/pre-release package (they ship on). Either way the
     source manifests keep the production default, off."""
-    with zipfile.ZipFile(path) as archive:
+    with _open_package(path) as archive:
         files = {}
         for entry in archive.infolist():
             name = entry.filename.replace("\\", "/")
@@ -79,9 +130,13 @@ def audit(path, game_id, diagnostics_id, public):
         recipe = tomllib.loads(read("game.toml").decode("utf-8-sig"))
         if recipe.get("game", {}).get("id") != game_id:
             raise ValueError("game.toml game ID does not match " + game_id)
-        read("replay-diagnostics.py")
+        # Titles on psxrecomp_add_playtest_diagnostics ship the shared replay
+        # launcher beside the executable; a title with its own recorder does not.
+        if replay_helper:
+            read("replay-diagnostics.py")
         if not any(executable(name, entry) for name, entry in files.items()):
-            raise ValueError("no executable adjacent to replay-diagnostics.py")
+            raise ValueError("no executable adjacent to replay-diagnostics.py" if replay_helper
+                             else "no executable at the package root")
 
         runtime = []
         for name in sorted(files):
@@ -145,15 +200,19 @@ def validate_diagnostics(manifest, name, game_id, diagnostics_id, default_enable
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("zip")
+    parser.add_argument("zip", help="release ZIP or staged payload directory")
     parser.add_argument("--game-id", required=True)
     parser.add_argument("--diagnostics-id", required=True)
     parser.add_argument("--mode", required=True, choices=("public", "playtest"),
                         help="public: production release, diagnostics default off; "
                              "playtest: non-public package, diagnostics default on")
+    parser.add_argument("--no-replay-helper", action="store_true",
+                        help="the title records with its own diagnostics package and ships "
+                             "no replay-diagnostics.py")
     args = parser.parse_args()
     try:
-        count = audit(args.zip, args.game_id, args.diagnostics_id, args.mode == "public")
+        count = audit(args.zip, args.game_id, args.diagnostics_id, args.mode == "public",
+                      replay_helper=not args.no_replay_helper)
     except (ValueError, OSError, zipfile.BadZipFile, KeyError, UnicodeError) as error:
         sys.exit("diagnostics package audit failed: " + str(error))
     print("Diagnostics package audit passed: {} ({} runtime manifest(s), {} mode)".format(

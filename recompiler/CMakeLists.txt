@@ -1214,6 +1214,7 @@ if(BUILD_TESTING)
                 aligned_lzss_banks
                 bpe_container
                 audit_playtest_diagnostics_package
+                package_title_release
                 bundled_release_layout
                 collect_game_misses
                 cursor_writers
@@ -1242,6 +1243,14 @@ if(BUILD_TESTING)
             NAME playtest_diagnostics_defaults
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_playtest_diagnostics_defaults.py
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Configures throwaway projects against runtime/psx_release_channel.cmake:
+        # a release-package build must name its channel.
+        add_test(
+            NAME release_channel_cmake
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_release_channel_cmake.py
                     --cmake ${CMAKE_COMMAND}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
