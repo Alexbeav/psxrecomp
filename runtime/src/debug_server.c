@@ -9422,6 +9422,8 @@ static void handle_host_key(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":%s}", id, ok ? "true" : "false");
 }
 
+#ifndef PSX_NO_DEBUG_TOOLS
+/* main.cpp defines the restart hook only with debug tools; so does the table. */
 extern int psx_debug_restart_session(int disc);
 static void handle_session_restart(int id, const char *json)
 {
@@ -9431,6 +9433,7 @@ static void handle_session_restart(int id, const char *json)
     }
     send_ok(id);
 }
+#endif
 
 /* host_button name=<SDL gamepad button> down=<1|0>, both when omitted. */
 extern int psx_debug_push_host_button(const char *name, int down);
@@ -16182,7 +16185,9 @@ static const CmdEntry s_commands[] = {
     { "debug_key",         handle_debug_key },
     { "host_pause",        handle_host_pause },
     { "host_key",          handle_host_key },
+#ifndef PSX_NO_DEBUG_TOOLS
     { "session_restart",   handle_session_restart },
+#endif
     { "host_button",       handle_host_button },
     { "menu_host",         handle_menu_host },
     { "host_mouse",        handle_host_mouse },
