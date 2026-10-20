@@ -1194,6 +1194,9 @@ if(BUILD_TESTING)
     # Bug B: the pacing decision must take ONE counter sample, so the unsigned
     # subtraction cannot underflow into a ~24.7-day SDL_Delay.
     add_executable(frame_pacing_test tests/test_frame_pacing.c)
+    add_executable(present_sync_test tests/test_present_sync.c)
+    target_include_directories(present_sync_test PRIVATE include)
+    add_test(NAME present_sync_test COMMAND present_sync_test)
     target_include_directories(frame_pacing_test PRIVATE include)
     add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
     # Render thread core ([video] render_thread, docs/RENDER_THREAD.md):
