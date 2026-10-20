@@ -73,6 +73,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "../third_party/stb_image.h"
 #include "gpu_vk_renderer.h"
 #include "frame_pacing.h"
+#include "present_sync.h"
 #include "latency_ring.h"
 #include "sio.h"
 #include "psx_host_rumble.h"
@@ -1543,10 +1544,10 @@ static int           g_fmv_skip_no_xa_hold  = 4;
  * (1=vsync/tear-free, 0=immediate/lowest display latency+tearing, -1=adaptive);
  * it trims the display-side scanout latency the CPU-side ring can't see.
  *
- * Driver vsync and the wall-clock pacer are XOR. Waiting on both (pacer then
- * FIFO SwapBuffers) double-blocks on Linux compositors: ~16.7 ms + ~16.7 ms
- * = 30 Hz / 0.50x with the CPU idle. ~60 Hz panels may use vsync as the clock;
- * otherwise the pacer holds 59.94 Hz and present must not wait on the swap. */
+ * A deadline pacer caps guest speed even if the driver ignores swap blocking.
+ * A matching panel can supply the guest clock; a faster panel synchronizes
+ * scanout while the pacer retains the guest cadence. Do not equate clock
+ * ownership with the swap interval or high-refresh fullscreen can tear. */
 static int           g_low_latency_input = 1;
 /* [video] render_thread (docs/RENDER_THREAD.md): the GL backend runs on its
  * own thread. Started at the first vblank once the context and every startup
@@ -3924,15 +3925,12 @@ extern "C" int psx_present_vsync_owns_cadence(void) {
 }
 
 static int present_effective_swap_interval(void) {
-    if (g_netplay_vsync_forced_off || psx_netplay_active())
-        return 0;
-    if (g_frame_interpolation)
-        return 0;
-    if (g_frame_period_ms <= 0.0)
-        return 0;
-    if (present_vsync_owns_cadence())
-        return g_video_vsync;
-    return 0;
+    const int blocked = g_netplay_vsync_forced_off || psx_netplay_active() ||
+        g_frame_interpolation || g_present_vsync_disabled ||
+        host_driver_vsync_unreliable();
+    return psx_present_sync_interval(g_video_vsync, blocked,
+        g_frame_period_ms > 0.0 ? 1000.0 / g_frame_period_ms : 0.0,
+        g_host_refresh_hz);
 }
 
 static int present_should_wall_pace(void) {
@@ -3991,6 +3989,10 @@ static void log_present_cadence(void) {
                 std::printf("psxrecomp: present cadence: wall-clock pacer "
                             "(%.4f ms/frame); driver vsync off under WSL\n",
                             g_frame_period_ms);
+            } else if (present_effective_swap_interval() != 0) {
+                std::printf("psxrecomp: present cadence: wall-clock pacer "
+                            "(%.4f ms/frame); synchronized swaps on %.0f Hz panel\n",
+                            g_frame_period_ms, g_host_refresh_hz);
             } else if (g_host_refresh_hz > 0.0) {
                 std::printf("psxrecomp: present cadence: wall-clock pacer "
                             "(%.4f ms/frame); driver vsync off on %.0f Hz panel\n",
