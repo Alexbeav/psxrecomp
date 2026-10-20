@@ -27,10 +27,10 @@ TEXT = '''id = "fixture.diagnostics"
 game_id = "SLUS-00000"
 [[feature]]
 id = "recording"
-default_enabled = true
+default_enabled = false
 [[feature]]
 id = "osd"
-default_enabled = true
+default_enabled = false
 [[plugin]]
 feature = "recording"
 id = "fixture.diagnostics"
@@ -124,8 +124,8 @@ class ArchiveTests(unittest.TestCase):
                 self.assertIs(namespace["tomllib"], audit.tomllib)
 
     def test_each_default_and_plugin_is_required(self):
-        for bad in (TEXT.replace("default_enabled = true", "default_enabled = false", 1),
-                    TEXT.replace('id = "osd"\ndefault_enabled = true', 'id = "osd"\ndefault_enabled = false'),
+        for bad in (TEXT.replace("default_enabled = false", "default_enabled = true", 1),
+                    TEXT.replace('id = "osd"\ndefault_enabled = false', 'id = "osd"\ndefault_enabled = true'),
                     TEXT.replace('id = "fixture.diagnostics.osd"', 'id = "wrong.osd"'),
                     'channel="developer"\n' + TEXT):
             with self.subTest(manifest=bad):
@@ -134,8 +134,8 @@ class ArchiveTests(unittest.TestCase):
                     self.check()
 
     def test_source_catalog_defaults_also_required(self):
-        self.files[SOURCE] = TEXT.replace("default_enabled = true", "default_enabled = false")
-        with self.assertRaisesRegex(ValueError, "enabled by default"):
+        self.files[SOURCE] = TEXT.replace("default_enabled = false", "default_enabled = true")
+        with self.assertRaisesRegex(ValueError, "disabled by default"):
             self.check()
 
     def test_missing_helper_executable_or_runtime_catalog(self):

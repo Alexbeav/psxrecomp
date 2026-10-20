@@ -123,8 +123,9 @@ def validate_diagnostics(manifest, name, game_id, diagnostics_id):
     features = {feature.get("id"): feature for feature in manifest.get("feature", [])}
     for feature_id, plugin_id in (("recording", diagnostics_id), ("osd", diagnostics_id + ".osd")):
         feature = features.get(feature_id, {})
-        if feature.get("default_enabled") is not True or feature.get("channel") == "developer":
-            raise ValueError("diagnostics " + feature_id + " must ship enabled by default: " + name)
+        # Player-selectable in Mods, but production packages never record by default.
+        if feature.get("default_enabled") is not False or feature.get("channel") == "developer":
+            raise ValueError("diagnostics " + feature_id + " must ship disabled by default: " + name)
         if not any(plugin.get("feature") == feature_id and plugin.get("id") == plugin_id
                    for plugin in manifest.get("plugin", [])):
             raise ValueError("diagnostics " + feature_id + " plugin is missing: " + name)
