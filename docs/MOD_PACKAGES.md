@@ -1,12 +1,16 @@
 # PSXRecomp mod packages and features
 
+For a hands-on guide to making mods with ordinary tools, start with
+[`../psxmod.md`](../psxmod.md).
+
 A `.psxmod` is a versioned installation, provenance, and trust boundary. A
 package may contribute any number of independently configurable **features**.
 The launcher presents those features as the primary Mods list; package
 installation, version selection, and removal are a secondary management view.
 
-Feature identity is always `(package_id, feature_id)`. Enabling one feature
-never enables, disables, or reconfigures another feature.
+Feature identity is always `(package_id, feature_id)`. Player selections are
+independent. Explicit `[[requirement]]` declarations can additionally activate
+required features for a session without changing saved player selections.
 
 The player selects a verified stock BIN/CUE. Resolution produces guarded native
 operations and sparse disc overlays without rewriting or replacing that stock
@@ -173,12 +177,12 @@ stale the moment either side gains a mod.
 
 ## Feature manifest
 
-Write new manifests at the current format version, which is **7**. Older
+Write new manifests at the current format version, which is **10**. Older
 versions stay readable so installed packages survive an update, and each
 section below notes the version a field first required.
 
 ```toml
-format_version = 7
+format_version = 10
 id = "example.localization"
 version = "1.2.0"
 name = "Example Localization Pack"

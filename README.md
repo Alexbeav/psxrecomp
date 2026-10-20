@@ -233,7 +233,8 @@ These are the 3 most important folders to be aware of:
 | **Netplay** (rollback, SFU/ICE, dual-raster, disc gates) | [`docs/NETPLAY.md`](docs/NETPLAY.md) |
 | Bundled-release CI template | [`docs/ci/templates/game-release.yml`](docs/ci/templates/game-release.yml) |
 | Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
-| Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
+| Make mods by hand | [`psxmod.md`](psxmod.md) |
+| Mod schema and integration | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
 | Widescreen / native-wide | [`docs/WIDESCREEN.md`](docs/WIDESCREEN.md) |
 | Enhancement tier (PGXP, renderers, load accel) | [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md) |
 | TCP debug command reference | [`docs/TCP_COMMANDS.md`](docs/TCP_COMMANDS.md) |
@@ -300,6 +301,10 @@ have to be widened in step with the renderer.
 See [`docs/WIDESCREEN.md`](docs/WIDESCREEN.md) for the per-game configuration.
 
 ## Mods
+
+To make a package yourself, start with [`psxmod.md`](psxmod.md): a complete
+first package, guarded patches, asset overlays, packing, and testing with
+ordinary tools. No AI tools are required.
 
 Mods are **versioned packages**, not patched discs. A `.psxmod` is an
 installation, provenance and trust boundary; each package contributes any number
