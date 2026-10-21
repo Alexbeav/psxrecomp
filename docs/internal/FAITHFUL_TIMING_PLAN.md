@@ -215,10 +215,13 @@ on a fixed region -> next.
 
 - **2026-10-21 (Windows continuation, `feat/render-60fps`):** Added cumulative
   render-transaction wall-time buckets, separating checkpoint copying from
-  verification hashing. R4 same-state headless/turbo off/on: 601 guest
-  fingerprints match (no temporal passes in headless). Windowed race: 1,288
-  normal passes average 5.911 ms; 794 verification passes average 9.907 ms,
-  zero restoration mismatches. Windows build, nine R4 CTests, sandbox and
+  verification hashing. After the owner's moving-course correction, R4
+  same-state headless/turbo off/on: 2,701 guest fingerprints match (no temporal
+  passes in headless). Recorded driving route, 30-second 60 Hz windows: 51
+  normal passes average 11.060 ms (max 16.202); 17 verification passes average
+  18.227 ms, zero restoration mismatches. Earlier straight-acceleration timing
+  is excluded. Pass admission remains sparse; sustained 60 fps is unproven.
+  Windows build, nine R4 CTests, sandbox and
   watchdog/abort tests pass. No faithful timing behavior changed.
 
 - **2026-10-21 (`feat/render-60fps`):** Admit opt-in render passes with HD
