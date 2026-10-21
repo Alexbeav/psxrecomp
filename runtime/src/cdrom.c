@@ -874,6 +874,7 @@ static void trace_cdrom(uint8_t kind, uint32_t addr, uint32_t val, uint8_t width
 #include "cdrom_random_tape.h"
 static CdRandomTape s_source_clock_tape;
 static int s_source_clock;
+static uint64_t s_cd_retry_dither_count; /* PS1G-140 */
 /* Independent drive operation, not a command second response. */
 static uint64_t s_source_reset_due;
 static uint64_t s_source_command_due, s_source_ready_due;
@@ -1846,11 +1847,39 @@ static int source_explicit_seek_cycles(uint8_t cmd)
 }
 /* T172 end CD explicit seek. */
 
+/* PS1G-140: a read re-issued at or just behind the last delivered sector
+ * (a game's retry) gets a deterministic first-sector delay of 0..1 sector
+ * period, hashed from the cycle count. The default profile's latencies are
+ * otherwise constant, so a retry lands at the same phase against vblank each
+ * time; a game that loses a race at that phase (RE3 Europe, RPD stairwell:
+ * INT1 acknowledged in its VSync handler before the DataReady callback runs)
+ * retries for minutes. Off in the source-clock profile (it has its own
+ * jitter), for XA streams, and with PSX_CD_RETRY_DITHER=0. Saved state:
+ * last_sector_lba and the cycle count are already in the save state. */
+static int retry_dither_cycles(int target)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_CD_RETRY_DITHER");
+        enabled = !(e && e[0] == '0');
+    }
+    if (!enabled || s_source_clock || (mode_reg & 0x40u)) return 0;
+    if (last_sector_lba < 0 || target > last_sector_lba || target < last_sector_lba - 8)
+        return 0;
+    uint32_t h = (uint32_t)psx_cycle_count * 0x9E3779B1u ^ (uint32_t)(psx_cycle_count >> 32);
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    s_cd_retry_dither_count++;
+    return (int)(h % (uint32_t)source_drive_sector_period());
+}
+
 static void start_read_stream(uint8_t cmd) {
     last_sector_have_raw = GETLOCL_NO_HEADER;   /* until the first data sector */
     int source_target = setloc_pending ? s_setloc_lba :
         msf_to_lba(read_min, read_sec, read_sect);
     int seek_cycles = implicit_read_seek_cycles();
+    int retry_dither = retry_dither_cycles(source_target);
     source_cdda.position_valid=0;source_cdda.async_type=source_cdda.async_count=0;source_cdda.seeking=0;
     cdda_playing = 0;
     cdda_track = 0;
@@ -1877,7 +1906,7 @@ static void start_read_stream(uint8_t cmd) {
      * read that only continues the stream never gets here. */
     if (s_nymashock_drive) source_drive_hold_logical = 1;
     read_cmd = cmd;
-    read_delay = seek_cycles + initial_read_delay_cycles();
+    read_delay = seek_cycles + initial_read_delay_cycles() + retry_dither;
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
