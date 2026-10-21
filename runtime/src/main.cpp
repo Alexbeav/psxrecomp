@@ -5065,6 +5065,32 @@ static void input_replay_frontend_tick(uint64_t frame) {
                              s.dur_us, s.frame, host_span_kind_name(s.kind), s.emu, s.arg);
         }
         if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay span report");
+        if (g_gl_active) {
+            char thread_json[8192];
+            int length = gl_renderer_render_thread_json(thread_json, sizeof thread_json);
+            if (length < 0 || length >= (int)sizeof thread_json)
+                throw std::runtime_error("render thread report exceeds its buffer");
+            std::string thread_path = std::string(report) + ".rth.json";
+            f = std::fopen(thread_path.c_str(), "w");
+            if (!f) throw std::runtime_error("cannot write input replay render thread report");
+            std::fprintf(f, "{%.*s}\n", length, thread_json);
+            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay render thread report");
+            GlRenderWorkStats stats{};
+            gl_renderer_work_stats(&stats);
+            std::string path = std::string(report) + ".render.csv";
+            f = std::fopen(path.c_str(), "w");
+            if (!f) throw std::runtime_error("cannot write input replay render report");
+            std::fputs("stat,count,total_us,max_us\n", f);
+            const char *counts[5] = {"queue_uploads", "replay_draws", "bloom_fused", "coverage_depth", "centre_pruned"};
+            for (int i=0; i<5; ++i) std::fprintf(f, "%s,%llu,0,0\n", counts[i], (unsigned long long)stats.counts[i]);
+            const char *spans[6] = {"depth_restore", "queue_replay", "vram_copy", "interp_capture", "interp_interval", "centre_copy"};
+            double us = stats.frequency ? 1e6 / stats.frequency : 0;
+            for (int i=0; i<6; ++i) std::fprintf(f, "%s,%llu,%.3f,%.3f\n", spans[i],
+                (unsigned long long)stats.calls[i], stats.ticks[i]*us, stats.max_ticks[i]*us);
+            for (int i=0; i<6; ++i) std::fprintf(f, "%s_prior_drain,%llu,%.3f,%.3f\n", spans[i],
+                (unsigned long long)stats.calls[i], stats.prior_ticks[i]*us, stats.prior_max_ticks[i]*us);
+            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay render report");
+        }
         double gpu[18];
         if (g_gl_active && gl_renderer_perf_aggregate(-1, gpu) > 0) {
             std::string path = std::string(report) + ".gpu.csv";

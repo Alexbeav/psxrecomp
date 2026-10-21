@@ -213,6 +213,15 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-21 (queued vertex uploads):** Pack replay vertices at offsets
+  aligned to each layout and upload once per used VBO per flush, reusing the
+  data across canonical tiles and wide mirrors. Native/readback/hires/wide
+  and stencil hashes match the per-batch upload control, 1x/4x, both allocation
+  modes and renderer thread off/on. R4's 30-second Ultra probe improves to
+  55.684 guest Hz / p99 busy 63.3%, still below the owner's acceptance bar.
+  Broader bloom fusion passes the same matrix for mask-set and translucent
+  sources; production timing is pending.
+
 - **2026-10-21 (render coverage and driver waits):** Enabled temporal
   presentation on the existing renderer context/thread. Queued wide mirrors
   retain bloom classification; eligible opaque marking is fused with colour,

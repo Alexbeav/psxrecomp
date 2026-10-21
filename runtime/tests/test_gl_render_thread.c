@@ -462,6 +462,11 @@ int main(int argc, char **argv) {
         check(s_hq_center_pruned > 0, "queued centre shading was elided");
         printf("pruned_cmds=%llu\n", (unsigned long long)s_hq_center_pruned);
     }
+    if (wide_present && hiw_upload_fast()) {
+        check(s_hq_saved_uploads > s_hq_uploads, "queue uploaded once for multiple replay draws");
+        printf("queue_uploads=%llu replay_draws=%llu\n", (unsigned long long)s_hq_uploads,
+               (unsigned long long)s_hq_saved_uploads);
+    }
     if (quality_scene && coverage_fast_enabled()) {
         check(s_bcls_fused_draws > 0, "bloom stencil fused with colour draws");
         printf("fused_draws=%llu\n", (unsigned long long)s_bcls_fused_draws);

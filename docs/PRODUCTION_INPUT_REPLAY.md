@@ -23,6 +23,18 @@ Optional bounded benchmark controls:
   `PSX_RUNTIME_PERF_DIAG=1` for guest/pacer counters. Times use microseconds;
   differences between adjacent rows describe the intervening guest interval.
   A companion `.spans.csv` exports the bounded host attribution ring.
+  `.render.csv` exports GL work counts. With `PSX_GL_CPU_PERF=1` it also
+  reports inclusive CPU wall spans (calls, total and maximum) for depth
+  restoration, queue replay, VRAM copies, interpolation captures/intervals and
+  centre splices. These spans overlap; do not sum them as exclusive costs.
+  Collection is off by default and its queue drain/export happens after the
+  measured route window. Use separate profiling and acceptance runs.
+  `PSX_GL_CPU_PERF=2` additionally finishes queued GPU work before and after
+  queue replay, VRAM copies, captures and centre splices. These spans include
+  GPU completion; `_prior_drain` rows measure earlier queued work separately.
+  This serializes the pipeline and is attribution only. Totals cover the
+  whole replay, including warmup. `.rth.json` records queue waits and recent
+  context-acquisition reasons before the report's own drain.
   `PSX_GL_PERF=1` additionally enables GPU queries in production and exports
   rolling GPU aggregates to `.gpu.csv`; use this for separate attribution
   trials, since queries can perturb the measured workload.

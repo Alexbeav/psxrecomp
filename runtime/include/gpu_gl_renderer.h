@@ -568,6 +568,14 @@ int gl_renderer_pres_get(uint64_t seq, GlPresEvent *out);
  * sets/frame avg, [17]=wide FBO creations/frame avg. GPU phases are true
  * GL_TIME_ELAPSED times (CPU-overhead independent). Returns the count. */
 int gl_renderer_perf_aggregate(int wide_filter, double out[18]);
+/* Bounded benchmark attribution. CPU spans require PSX_GL_CPU_PERF=1;
+ * reading drains the render queue, so read outside the measured interval. */
+typedef struct {
+    uint64_t counts[5];
+    uint64_t calls[6], ticks[6], max_ticks[6], frequency;
+    uint64_t prior_ticks[6], prior_max_ticks[6];
+} GlRenderWorkStats;
+void gl_renderer_work_stats(GlRenderWorkStats *out);
 
 /* Native-wide mirror ablation (perf attribution, debug cmd gl_ws_ablate):
  * 0 = normal, 1 = skip the whole mirror pass (incl. wide_clear), 2 = full mirror
