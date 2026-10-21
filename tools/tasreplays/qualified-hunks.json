@@ -2331,8 +2331,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v15 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 15u"
+            " * runtime's blob to a new loader. v16 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 16u"
           ]
         },
         {
@@ -5096,6 +5096,16 @@
           "dropped_lines": 1,
           "from_blocks": 167,
           "to_blocks": 167
+        },
+        {
+          "as_of": "worktree on bc7d68abbfc4",
+          "issue": "PS1G-140",
+          "reason": "The CD section gains the retry-dither run (s_retry_target, s_retry_run: two i32 before the seek byte), so a state saved inside a CD retry loop resumes the loop's count after a load (review 7-9347, change 1). The section grows by 8 bytes in every profile, so the snapshot boundary rises v15 -> v16 (BOOT_STATE_VERSION and BOOT_STATE_VERSION_MIN_READ) and the version-history comment says so; only this entry's two version lines change. No state-capture, resume or checkpoint behaviour is removed. Evidence: the cdrom_retry_snapshot_test unit row and the RE3 save/load round trip at frame 123016 recorded on PS1G-140.",
+          "detail": "runtime/include/boot_state.h: 'v15 therefore rejects every earlier state. */' -> v16; '#define BOOT_STATE_VERSION_MIN_READ 15u' -> 16u. Two pinned lines changed, none removed.",
+          "dropped_lines": 2,
+          "added_lines": 2,
+          "from_blocks": 167,
+          "to_blocks": 167
         }
       ],
       "contract_amendments": [
@@ -6409,7 +6419,7 @@
         {
           "file": "runtime/include/source_tas_stateio.h",
           "lines": [
-            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v14-t172-test-b2\""
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v16-t172-ps1g140\""
           ]
         },
         {
@@ -6602,6 +6612,16 @@
           "replacement_commits": [
             "66dbdb71043c"
           ]
+        },
+        {
+          "as_of": "worktree on bc7d68abbfc4",
+          "issue": "PS1G-140",
+          "reason": "Boot state v15 -> v16 (the CD section carries the retry-dither run), so the stateio id that gates --resume-compatible-build moves psx-tas-v14-t172-test-b2 -> psx-tas-v16-t172-ps1g140: a v14/v15 state must not be offered to this build as compatible. The pad DTR session lines are unchanged.",
+          "detail": "runtime/include/source_tas_stateio.h: the PSX_TAS_STATEIO_COMPATIBILITY line. One pinned line changed, none removed.",
+          "dropped_lines": 1,
+          "added_lines": 1,
+          "from_blocks": 14,
+          "to_blocks": 14
         }
       ]
     },
