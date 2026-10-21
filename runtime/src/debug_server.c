@@ -10273,6 +10273,15 @@ static void handle_dynres_check(int id, const char *json)
              "\"restored\":%d,\"steps\":%s}", id, (unsigned long long)h0, bad, start, out);
 }
 
+static void handle_display_timing(int id, const char *json)
+{
+    (void)json;
+    extern void psx_display_timing_json(char *out, int cap);
+    char timing[4096];
+    psx_display_timing_json(timing, sizeof(timing));
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, timing);
+}
+
 static void handle_video_info(int id, const char *json)
 {
     (void)json;
@@ -15882,6 +15891,7 @@ static const CmdEntry s_commands[] = {
     { "dump_buffer",       handle_dump_buffer },
     { "wide_full",         handle_wide_full },
     { "video_info",        handle_video_info },
+    { "display_timing",    handle_display_timing },
     { "hd_textures",       handle_hd_textures },
     { "dynres",            handle_dynres },
     { "dynres_force",      handle_dynres_force },

@@ -375,6 +375,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/present_thread.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_gen.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
+    ${PSXRECOMP_ROOT}/runtime/src/texture_pack_install.cpp
     ${PSXRECOMP_ROOT}/runtime/src/gpu_hd_textures.cpp
     ${PSXRECOMP_ROOT}/runtime/src/hd_texture_pack.cpp
     ${PSXRECOMP_ROOT}/runtime/src/duckstation_texture_pack.cpp
