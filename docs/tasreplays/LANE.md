@@ -206,8 +206,9 @@ Two places still differ, and both were found by divergence, not by reading:
 - **Init draw order.** CD Init takes two random draws: a floor draw (0-3,250,000) and a
   seek-jitter draw (0-25,000). The 2.7 and 2.10 Octoshock oracle takes the seek-jitter draw
   first; the Nymashock oracle takes the floor draw first. Found at Crash 7798S return 709.
-  `--cd-drive-model octoshock-2.7` selects the Octoshock order. Check any new source of
-  randomness the same way.
+  `--cd-drive-model octoshock-2.7` selects the Octoshock order. BizHawk 2.8's Nymashock also
+  takes the seek-jitter draw first (Spyro 2 5278M, PS1G-125: Init write at 400982724), so its
+  route selects `octoshock-2.7` too. Check any new source of randomness the same way.
 - **BizHawk's wrapper.** The CD shell bit clears only on GetStat
   (`--cd-cold-status-model octoshock-2.2.2`). The DualShock takes stick bytes unscaled and checks
   MODE only when DTR drops; `dualshock_route.read_movie_octoshock27` accepts only records where

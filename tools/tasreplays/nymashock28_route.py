@@ -19,6 +19,7 @@ values are recorded in the receipt so the caller can check them against its sour
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import zipfile
@@ -34,13 +35,25 @@ TABLE_BYTES = 1 << 16
 ALLOWED_MEDNAFEN_KEYS = tuple('psx.input.port%d.memcard' % port for port in range(1, 9))
 
 
-def load_axis_table(path):
-    data = Path(path).read_bytes()
+def check_axis_table(data):
     if len(data) != TABLE_BYTES:
         raise ValueError('axis table must be 65,536 bytes')
     if data[0] != 0 or data[0x8000] != 128 or data[0xFFFF] != 255:
         raise ValueError('axis table endpoints differ from the pad conversion')
-    return data
+    return bytes(data)
+
+
+def load_axis_table(path):
+    return check_axis_table(Path(path).read_bytes())
+
+
+def default_axis_table():
+    """The table external/source_dualshock_axis.py exports, the same data its CLI writes."""
+    path = Path(__file__).resolve().parent / 'external' / 'source_dualshock_axis.py'
+    spec = importlib.util.spec_from_file_location('source_dualshock_axis', path)
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    return check_axis_table(tool.table())
 
 
 def load_movie(movie_bytes):
@@ -62,7 +75,8 @@ def load_movie(movie_bytes):
     if not isinstance(options, dict) or options.get('PortDevices') != {}:
         raise ValueError('Non-default Nymashock port devices are unsupported')
     declared = options.get('MednafenValues')
-    if not isinstance(declared, dict) or any(key not in ALLOWED_MEDNAFEN_KEYS for key in declared):
+    if (not isinstance(declared, dict) or any(key not in ALLOWED_MEDNAFEN_KEYS for key in declared) or
+            any(value not in ('0', '1') for value in declared.values())):
         raise ValueError('Unsupported Nymashock sync settings')
     lines = parts['Input Log.txt'].decode().splitlines()
     if len(lines) < 4 or lines[:2] != ['[Input]', route.LOGKEY_28] or lines[-1] != '[/Input]':
@@ -113,6 +127,44 @@ def convert(movie_bytes, table):
     }
 
 
+def read_movie_nymashock28(movie, table=None, mednafen_values=None):
+    """Return (rows, facts) from a cold BizHawk 2.8 Nymashock movie with a DualShock on P1.
+
+    movie: a path or file object that zipfile opens (convert's parameter, despite its name).
+
+    rows are dualshock_route.read_movie rows: (active-low buttons, LY, LX, RY, RX, physical Analog).
+    The four axis bytes are the bytes the pad itself reports, taken from the Mednafen conversion
+    table (default: external/source_dualshock_axis.py), so a runtime must deliver them unscaled:
+    run_native --axis-model octoshock-byte, whose name is the Octoshock case of the same rule
+    (the route byte is the protocol byte), not a claim about the source core. The Nymashock
+    default would rescale them a second time.
+
+    The physical Analog button is retained in its own field, never interpreted here; a route that
+    presses it is refused downstream until a runtime models the pad's mode toggle.
+
+    table:           the 65,536-byte pad table; None loads the exported one.
+    mednafen_values: the sync settings the title's source declares, e.g. {'psx.input.port1.memcard':
+                     '0'}; None accepts any value convert() accepts, a dict must match exactly (a
+                     movie the caller's source reference was not built for is refused).
+    Every refusal of load_movie stays: console events, other ports, anchored movies, a log layout or
+    sync setting this encoder does not model."""
+    table = default_axis_table() if table is None else check_axis_table(table)
+    rows, receipt = convert(movie, table)
+    declared = receipt['declared_mednafen_values']
+    if mednafen_values is not None and declared != mednafen_values:
+        raise ValueError('Movie sync settings differ from the title: %r' % (declared,))
+    return rows, {
+        'declared_emu_version': EMU_VERSION, 'declared_mednafen_values': declared,
+        'port1_memcard': declared.get('psx.input.port1.memcard', 'default'),
+        'stick_frames': sum(any(value != 128 for value in row[1:5]) for row in rows),
+        'mode_press_frames': sum(row[5] for row in rows),
+        'stick_bytes': 'pad bytes from the Nymashock axis table; deliver unscaled',
+        'axis_order': AXIS_ORDER, 'axis_table_sha256': receipt['axis_table_sha256'],
+        'raw_axis_sha256': receipt['raw_axis_sha256'],
+        'runtime_requirement': ('a MODE press needs the pad model that toggles analog mode on the '
+                                'button rising edge while DTR is low' if any(row[5] for row in rows) else None)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('movie', type=Path)
@@ -124,7 +176,7 @@ def main():
     if args.output.exists() or args.receipt.exists():
         parser.error('choose new output and receipt paths')
     table = load_axis_table(args.axis_table)
-    rows, receipt = convert(args.movie.read_bytes(), table)
+    rows, receipt = convert(args.movie, table)
     written = route.write_route(rows, args.output)
     receipt.update({'movie_sha256': hashlib.sha256(args.movie.read_bytes()).hexdigest(),
                     'axis_table': str(args.axis_table), 'route': written})

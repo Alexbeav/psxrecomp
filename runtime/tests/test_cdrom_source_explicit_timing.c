@@ -195,7 +195,7 @@ int main(void) {
     stat_reg=CDSTAT_MOTOR|CDSTAT_SEEK;response_clear();irq_flag=0;exec_command(0x11);
     CHECK(response_count==8 && response_fifo[4]==0x29 && response_fifo[7]==0x29,"source read pipeline GetlocP while seeking names the delivery cursor");
     set_model("PSX_CD_READ_START_MODEL","");
-    cd_tape_free(&s_source_clock_tape);s_source_clock=0;s_nymashock_drive=0;
+    cd_tape_free(&s_source_clock_tape);s_source_clock=0;s_nymashock_drive=0;s_source_read_pipeline=0;
 
     free(wire);free(default_a);free(default_b);
     if(failures){fprintf(stderr,"FAILED (%d)\n",failures);return 1;}
