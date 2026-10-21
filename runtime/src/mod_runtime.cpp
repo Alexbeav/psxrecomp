@@ -45,6 +45,7 @@ extern "C" const char* host_launch_timing_stage_name(uint32_t stage) {
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <fstream>
 #include <iomanip>
@@ -3310,6 +3311,40 @@ ModCounter g_mod_counters[kModCounterCap];
 size_t g_mod_counter_count = 0;
 uint64_t g_mod_counter_overflow = 0;
 }  // namespace
+
+namespace {
+struct ModCommand { char name[64]; PSXModCommandFn fn; };
+std::mutex g_mod_commands_lock;
+ModCommand g_mod_commands[16];
+int g_mod_command_count = 0;
+}  // namespace
+
+extern "C" int psx_mod_register_command(const char* name, PSXModCommandFn fn) {
+    if (!name || !name[0] || std::strlen(name) >= sizeof(g_mod_commands[0].name) || !fn) return 0;
+    std::lock_guard<std::mutex> lock(g_mod_commands_lock);
+    for (int i = 0; i < g_mod_command_count; ++i)
+        if (std::strcmp(g_mod_commands[i].name, name) == 0) { g_mod_commands[i].fn = fn; return 1; }
+    if (g_mod_command_count >= 16) return 0;
+    auto& entry = g_mod_commands[g_mod_command_count++];
+    std::memcpy(entry.name, name, std::strlen(name) + 1);
+    entry.fn = fn;
+    return 1;
+}
+
+extern "C" int psx_mod_run_command(const char* name, const char* args, char* reply, int cap) {
+    if (!reply || cap <= 0) return -1;
+    PSXModCommandFn fn = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mod_commands_lock);
+        for (int i = 0; i < g_mod_command_count; ++i)
+            if (name && std::strcmp(g_mod_commands[i].name, name) == 0) fn = g_mod_commands[i].fn;
+    }
+    if (cap > 0) reply[0] = '\0';
+    if (!fn) return -1;
+    const int result = fn(args ? args : "", reply, cap);
+    reply[cap - 1] = '\0';
+    return result;
+}
 
 extern "C" void psx_mod_counter_add(const char* name, uint32_t delta) {
     if (!name || !name[0]) return;
