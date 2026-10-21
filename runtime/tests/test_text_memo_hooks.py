@@ -75,6 +75,14 @@ def check(src: str) -> list:
                      "memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), len)"):
         if fragment not in guard:
             failures.append(f"range guard lost: {fragment}")
+    # The memo is consulted before the page-clean scan: a range that reaches the
+    # guard is almost always on a flagged page, where the scan is pure cost.
+    memo_at = guard.find("slot->phys == phys && slot->len == len")
+    scan_at = guard.find("dirty_ram_is_dirty(")
+    if memo_at < 0 or scan_at < 0 or memo_at > scan_at:
+        failures.append("range guard runs the page-clean scan before the memo lookup")
+    elif "if (!memo_ok)" not in guard[memo_at:scan_at]:
+        failures.append("range guard runs the page-clean scan after a memo hit")
     return failures
 
 

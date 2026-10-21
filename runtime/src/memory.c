@@ -1001,29 +1001,14 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
                 }
             }
         }
-        /* Page-clean fast path: every page this range touches is neither
-         * guard-modified nor runtime-dirty, so its bytes still equal the
-         * reference image — skip the memcmp. This keeps the emitted
-         * stale-static guards on inter-piece host transfers near-free on
-         * the (overwhelmingly common) pristine pages. */
-        {
-            uint32_t p0 = phys >> DIRTY_RAM_PAGE_SHIFT;
-            uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
-            uint32_t p;
-            int clean = 1;
-            for (p = p0; p <= p1; p++) {
-                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||
-                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {
-                    clean = 0;
-                    break;
-                }
-            }
-            if (clean) continue;
-        }
-        g_text_memo_flagged++;
+        /* Memo first: the range compared equal and no page of it was written
+         * since, so its bytes still equal the reference image. Checked before
+         * the page-clean scan below because a range that reaches this guard
+         * is almost always on a flagged page (Tekken 3 TAS route: every one),
+         * where that scan only costs a dirty_ram_is_dirty per page. */
+        int memo_ok = 0;
 #if PS1B530_TEXT_MEMO
         TextMemoSlot *slot = &text_memo[((phys >> 2) ^ (len * 2654435761u)) & (TEXT_MEMO_SLOTS - 1u)];
-        int memo_ok = 0;
         if (slot->phys == phys && slot->len == len && slot->stamp >= text_memo_floor) {
             uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
             memo_ok = 1;
@@ -1037,6 +1022,27 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
 #endif
         }
 #endif
+        /* Page-clean fast path: every page this range touches is neither
+         * guard-modified nor runtime-dirty, so its bytes still equal the
+         * reference image — skip the memcmp. This keeps the emitted
+         * stale-static guards on inter-piece host transfers near-free on
+         * the (overwhelmingly common) pristine pages. The check build skips
+         * it after a memo hit so that every hit is compared. */
+        if (!memo_ok) {
+            uint32_t p0 = phys >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t p;
+            int clean = 1;
+            for (p = p0; p <= p1; p++) {
+                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||
+                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {
+                    clean = 0;
+                    break;
+                }
+            }
+            if (clean) continue;
+            g_text_memo_flagged++;
+        }
         g_text_memo_memcmps++;
         if (memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), len) != 0) {
 #if PS1B530_TEXT_MEMO
