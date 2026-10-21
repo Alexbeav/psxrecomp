@@ -14,6 +14,16 @@ int psx_get_in_exception(void) { return nested; }
 /* The source-GPU model is disarmed, as in every shipping configuration. */
 int source_gpu_runtime_active(void) { return 0; }
 
+/* With no memory callbacks, a critical call must not reach a TCB save.
+ * Keep these production dependencies as rejecting spies, never success stubs. */
+void psx_fatal_halt(const char *reason) { (void)reason; abort(); }
+void debug_server_log_thread_event(uint32_t kind, CPUState *cpu,
+    uint32_t from, uint32_t to, uint32_t pc)
+{
+    (void)kind; (void)cpu; (void)from; (void)to; (void)pc;
+    abort();
+}
+
 static inline __attribute__((always_inline)) void check(unsigned func, unsigned sr, int enabled) {
     CPUState cpu = {0}, expected;
     for (unsigned i = 1; i < 32; ++i) cpu.gpr[i] = 0x12340000u + i;
