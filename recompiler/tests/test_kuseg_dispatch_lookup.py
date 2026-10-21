@@ -130,7 +130,10 @@ def main():
 typedef struct { uint32_t pc; } CPUState;
 static int allowed = 1, calls = 0, irqs = 0;
 static uint32_t resumed;
-static void dummy(CPUState* cpu) { calls++; resumed = cpu->pc; }
+/* The runtime's execution-segment XOR (cpu_state.h, PSX_EXEC_PC). */
+uint32_t g_psx_exec_seg_xor = 0;
+static uint32_t seen_seg;
+static void dummy(CPUState* cpu) { calls++; resumed = cpu->pc; seen_seg = g_psx_exec_seg_xor; }
 static int dirty_ram_text_native_ok_ranges_from(const uint32_t* r, uint32_t n, uint32_t a) {
     (void)r; (void)n; (void)a; return allowed;
 }
@@ -163,9 +166,14 @@ int main(void) {
             assert(!psx_dispatch_game_compiled(&cpu, addr));
             assert(calls == old_calls && irqs == old_irqs && cpu.pc == 0xDEADBEEFu);
             allowed = 1;
+            // The compiled body runs with the segment of the entered address
+            // (KUSEG/KSEG1 against KSEG0 keys), and the caller's is restored.
+            g_psx_exec_seg_xor = 0x40000000u;
             assert(psx_dispatch_game_compiled(&cpu, addr));
             assert(calls == old_calls + 1 && irqs == old_irqs + 1);
             assert(resumed == expected->resume_pc);
+            assert(seen_seg == ((addr ^ expected->addr) & 0xE0000000u));
+            assert(g_psx_exec_seg_xor == 0x40000000u);
         }
     }
     assert(!psx_game_find_entry(0xFFFFFFFFu));

@@ -1228,6 +1228,9 @@ int main(int argc, char** argv) {
     codegen_config.emit_line_numbers = true;
     codegen_config.split_mid_function_targets = !overlay_mode;
     codegen_config.overlay_mode = overlay_mode;
+    // The main image runs at the segment its dispatcher was entered at (a
+    // PS-X EXE may load and run at KUSEG). Overlays keep KSEG0 constants.
+    codegen_config.exec_seg_relative = !overlay_mode;
     codegen_config.ws_signed_x_bound_sites = ws_signed_x_bound_sites;
     codegen_config.ws_sprite_tag_funcs = ws_tag_funcs;
     codegen_config.data_shard_funcs = ds_funcs;
@@ -1740,7 +1743,17 @@ int main(int argc, char** argv) {
         ds << "        extern int psx_vsync_query_hle_try(CPUState* cpu, uint32_t addr);\n";
         ds << "        if (psx_vsync_query_hle_try(cpu, addr)) return 1;\n";
         ds << "    }\n";
-        ds << "    entry->fn(cpu);\n";
+        // The entry table holds KSEG0 keys; the guest may run this image at
+        // another segment (KUSEG for an EXE loaded at 0x0001xxxx, KSEG1).
+        // Generated code emits PC-valued constants as PSX_EXEC_PC(k), so set
+        // the segment bits of the entered address for the call and restore
+        // the caller's on return.
+        ds << "    {\n";
+        ds << "        const uint32_t saved_seg = g_psx_exec_seg_xor;\n";
+        ds << "        g_psx_exec_seg_xor = (addr ^ entry->addr) & 0xE0000000u;\n";
+        ds << "        entry->fn(cpu);\n";
+        ds << "        g_psx_exec_seg_xor = saved_seg;\n";
+        ds << "    }\n";
         ds << "    return 1;\n";
         ds << "}\n";
 

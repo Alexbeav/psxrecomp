@@ -112,22 +112,26 @@ CodeGenerator::CodeGenerator(const PS1Executable& exe, const CodeGenConfig& conf
  * The guard revalidates the target entry's emitted ranges; on mismatch it
  * publishes the PC and unwinds to the trampoline, whose dispatch takes the
  * sanctioned dirty-RAM-interpreter fallback over the live bytes. */
-static std::string emit_stale_static_guard(uint32_t target, const std::string& indent) {
+static std::string emit_stale_static_guard(uint32_t target, const std::string& indent,
+                                           bool exec_seg_relative = false) {
+    const std::string pc = exec_seg_relative
+        ? fmt::format("PSX_EXEC_PC(0x{:08X}u)", target) : fmt::format("0x{:08X}u", target);
     return fmt::format(
-        "{0}if (!psx_game_text_native_ok(0x{1:08X}u)) {{ cpu->pc = 0x{1:08X}u; return; }}  /* stale-static guard */\n",
-        indent, target);
+        "{0}if (!psx_game_text_native_ok(0x{1:08X}u)) {{ cpu->pc = {2}; return; }}  /* stale-static guard */\n",
+        indent, target, pc);
 }
 
 /* Same guard when only the emitted function NAME is at hand (the
  * fallthrough-to-next-function edges). Game functions are named func_%08X;
  * anything else gets no guard (identical to the pre-guard emission). */
 static std::string emit_stale_static_guard_named(const std::string& name,
-                                                 const std::string& indent) {
+                                                 const std::string& indent,
+                                                 bool exec_seg_relative = false) {
     if (name.rfind("func_", 0) != 0) return "";
     char* end = nullptr;
     unsigned long v = strtoul(name.c_str() + 5, &end, 16);
     if (!end || *end != '\0' || v == 0) return "";
-    return emit_stale_static_guard((uint32_t)v, indent);
+    return emit_stale_static_guard((uint32_t)v, indent, exec_seg_relative);
 }
 
 uint32_t CodeGenerator::partial_block_cycle_count(uint32_t addr,
@@ -169,11 +173,16 @@ std::string CodeGenerator::emit_mid_block_cycle_charge(uint32_t addr,
     return ss.str();
 }
 
+std::string CodeGenerator::pc_const(uint32_t pc) const {
+    return config_.exec_seg_relative ? fmt::format("PSX_EXEC_PC(0x{:08X}u)", pc)
+                                     : fmt::format("0x{:08X}u", pc);
+}
+
 std::string CodeGenerator::emit_interrupt_check(uint32_t resume_pc,
                                                 const std::string& indent) const {
     return std::string("#ifdef PSX_ENABLE_BLOCK_CYCLES\n") + indent +
            "psx_cyc_bb_defer_flush();\n#endif\n" + indent +
-           fmt::format("psx_check_interrupts_at(cpu, 0x{:08X}u);\n", resume_pc);
+           fmt::format("psx_check_interrupts_at(cpu, {});\n", pc_const(resume_pc));
 }
 
 std::string CodeGenerator::emit_interrupt_check_expr(const std::string& resume_pc_expr,
@@ -1473,16 +1482,16 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                 {
                     uint32_t rs = get_rs(instr);
                     uint32_t rd = get_rd(instr);
-                    code = fmt::format("{{ uint32_t _jt_{0:08X} = {1};  {2} = 0x{3:08X};  "
+                    code = fmt::format("{{ uint32_t _jt_{0:08X} = {1};  {2} = {3};  "
                                        "cpu->pc = _jt_{0:08X}; }}  /* jalr */",
-                                       addr, reg_name(rs), reg_name(rd), addr + 8);
+                                       addr, reg_name(rs), reg_name(rd), pc_const(addr + 8));
                 }
                 break;
             case 0x0C:                                          // syscall
                 {
                     uint32_t syscall_code = (instr >> 6) & 0xFFFFF;
-                    code = fmt::format("cpu->pc = 0x{:08X}u; if (psx_syscall(cpu, {})) return;  /* syscall {} */",
-                                       addr, syscall_code, syscall_code);
+                    code = fmt::format("cpu->pc = {}; if (psx_syscall(cpu, {})) return;  /* syscall {} */",
+                                       pc_const(addr), syscall_code, syscall_code);
                 }
                 break;
             case 0x0D:                                          // break
@@ -1791,8 +1800,8 @@ std::string CodeGenerator::translate_basic_block(
         }
         ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
         ss << config_.indent
-           << fmt::format("if (psx_slice_block(cpu, 0x{:08X}u, {}u, {})) return;\n",
-                          block.start_addr, slice_bcyc, slice_side_effects);
+           << fmt::format("if (psx_slice_block(cpu, {}, {}u, {})) return;\n",
+                          pc_const(block.start_addr), slice_bcyc, slice_side_effects);
         ss << "#endif\n";
     }
 
@@ -1822,18 +1831,24 @@ std::string CodeGenerator::translate_basic_block(
     // followers reached by fall-through are hits only at cached virtual addresses;
     // uncached instructions each require a fetch, including delay slots. Extra fetch points are
     // harmless (a hit is +0); only UNDER-counting a cold entry would diverge, which the
-    // leader set prevents. The game runs at its KSEG0 load address, so `insn_addr` is
-    // already the runtime guest PC (matching the dirty-RAM interp's cpu->pc and Beetle).
+    // leader set prevents. `insn_addr` is the KSEG0 compile address; game code runs at the
+    // segment it was entered at (a PS-X EXE may run at KUSEG), so with exec_seg_relative
+    // the fetch address is PSX_EXEC_PC(insn_addr), the runtime guest PC that the
+    // dirty-RAM interp's cpu->pc and the reference use as the cache tag.
     auto emit_pre_icache = [&](uint32_t insn_addr, const std::string& indent) {
         if (!(insn_addr >= 0xA0000000u || insn_addr == block.start_addr || (insn_addr & 0xCu) == 0 ||
               extra_labels_.count(insn_addr))) {
             ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
-            ss << indent << fmt::format("psx_cpu_step_boundary(cpu, 0x{:08X}u);\n", insn_addr);
+            // With a run-time segment the follower may be uncached (KSEG1).
+            if (config_.exec_seg_relative)
+                ss << indent << fmt::format("psx_icache_follow(cpu, {});\n", pc_const(insn_addr));
+            else
+                ss << indent << fmt::format("psx_cpu_step_boundary(cpu, 0x{:08X}u);\n", insn_addr);
             ss << "#endif\n";
             return;
         }
         ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
-        ss << indent << fmt::format("psx_icache_fetch(cpu, 0x{:08X}u);\n", insn_addr);
+        ss << indent << fmt::format("psx_icache_fetch(cpu, {});\n", pc_const(insn_addr));
         ss << "#endif\n";
     };
     auto emit_cosim_instr = [&](uint32_t insn_addr, const std::string& indent) {
@@ -1982,7 +1997,14 @@ std::string CodeGenerator::translate_basic_block(
         ss << in << in << fmt::format("uint32_t {};\n", var);
         ss << in << in << fmt::format(
             "for ({0} = 0x{1:08X}u; {0} != 0x{2:08X}u; {0} += 4u) {{\n", var, first, end);
-        if (cycle_per_insn) {
+        if (cycle_per_insn && config_.exec_seg_relative) {
+            ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
+            ss << in << in << in << fmt::format(
+                "if (({0} & 0xCu) == 0u) psx_icache_fetch(cpu, PSX_EXEC_PC({0})); "
+                "else psx_icache_follow(cpu, PSX_EXEC_PC({0}));\n", var);
+            ss << in << in << in << fmt::format("psx_cyc_step(cpu, 0x{:X}u);\n", zero_nop_mask);
+            ss << "#endif\n";
+        } else if (cycle_per_insn) {
             ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
             if (first >= 0xA0000000u) {
                 ss << in << in << in << fmt::format("psx_icache_fetch(cpu, {});\n", var);
@@ -2078,7 +2100,7 @@ std::string CodeGenerator::translate_basic_block(
                     ss << "    psx_load_value_commit(cpu);\n";
                     ss << config_.indent << "  uint32_t psx_ri_sr = cpu->cop0[12];\n";
                     ss << config_.indent
-                       << fmt::format("  cpu->cop0[14] = 0x{:08X}u;  /* EPC = faulting PC, BD=0 */\n", addr);
+                       << fmt::format("  cpu->cop0[14] = {};  /* EPC = faulting PC, BD=0 */\n", pc_const(addr));
                     ss << config_.indent
                        << "  cpu->cop0[13] = (cpu->cop0[13] & ~0x8000007Cu) | (10u << 2);  /* Cause: RI */\n";
                     ss << config_.indent
@@ -2123,14 +2145,14 @@ std::string CodeGenerator::translate_basic_block(
                             }
                 if (block.exit_instr.type == ControlFlowType::JumpLink) {
                     ss << config_.indent
-                       << fmt::format("cpu->gpr[31] = 0x{:08X}u;  /* jal link before delay slot */\n",
-                                      addr + 8);
+                       << fmt::format("cpu->gpr[31] = {};  /* jal link before delay slot */\n",
+                                      pc_const(addr + 8));
                 } else if (block.exit_instr.type == ControlFlowType::JumpLinkReg) {
                     uint32_t rd = get_rd(block.exit_instr.instruction);
                     if (rd != 0) {
                         ss << config_.indent
-                           << fmt::format("{} = 0x{:08X}u;  /* jalr link before delay slot */\n",
-                                          reg_name(rd), addr + 8);
+                           << fmt::format("{} = {};  /* jalr link before delay slot */\n",
+                                          reg_name(rd), pc_const(addr + 8));
                     }
                 } else if (block.exit_instr.type == ControlFlowType::Branch) {
                     uint32_t branch_instr = block.exit_instr.instruction;
@@ -2138,8 +2160,8 @@ std::string CodeGenerator::translate_basic_block(
                     uint32_t regimm_op = (branch_instr >> 16) & 0x1F;
                     if (b_opcode == 0x01 && (regimm_op == 0x10 || regimm_op == 0x11)) {
                         ss << config_.indent
-                           << fmt::format("cpu->gpr[31] = 0x{:08X}u;  /* branch-and-link before delay slot */\n",
-                                          addr + 8);
+                           << fmt::format("cpu->gpr[31] = {};  /* branch-and-link before delay slot */\n",
+                                          pc_const(addr + 8));
                     }
                 }
 
@@ -2225,16 +2247,16 @@ std::string CodeGenerator::translate_basic_block(
                         } else if (cps_enabled_) {
                             ss << emit_interrupt_check(branch_target, config_.indent + config_.indent);
                             ss << config_.indent << config_.indent
-                               << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS taken: split */\n", branch_target);
+                               << fmt::format("cpu->pc = {}; return;  /* CPS taken: split */\n", pc_const(branch_target));
                         } else if (known_functions_.count(branch_target)) {
                             ss << emit_interrupt_check(branch_target, config_.indent + config_.indent);
-                            ss << emit_stale_static_guard(branch_target, config_.indent + config_.indent);
+                            ss << emit_stale_static_guard(branch_target, config_.indent + config_.indent, config_.exec_seg_relative);
                             ss << config_.indent << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* taken: split piece */\n", branch_target);
                         } else {
                             ss << emit_interrupt_check(branch_target, config_.indent + config_.indent);
                             ss << config_.indent << config_.indent
-                               << fmt::format("call_by_address(cpu, 0x{:08X}u); return;  /* taken: split (mid-func) */\n", branch_target);
+                               << fmt::format("call_by_address(cpu, {}); return;  /* taken: split (mid-func) */\n", pc_const(branch_target));
                         }
                         ss << config_.indent << "} else {\n";
                         if (fallthru_in) {
@@ -2244,16 +2266,16 @@ std::string CodeGenerator::translate_basic_block(
                         } else if (cps_enabled_) {
                             ss << emit_interrupt_check(fall_through_addr, config_.indent + config_.indent);
                             ss << config_.indent << config_.indent
-                               << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS not taken: split */\n", fall_through_addr);
+                               << fmt::format("cpu->pc = {}; return;  /* CPS not taken: split */\n", pc_const(fall_through_addr));
                         } else if (known_functions_.count(fall_through_addr)) {
                             ss << emit_interrupt_check(fall_through_addr, config_.indent + config_.indent);
-                            ss << emit_stale_static_guard(fall_through_addr, config_.indent + config_.indent);
+                            ss << emit_stale_static_guard(fall_through_addr, config_.indent + config_.indent, config_.exec_seg_relative);
                             ss << config_.indent << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* not taken: split piece */\n", fall_through_addr);
                         } else {
                             ss << emit_interrupt_check(fall_through_addr, config_.indent + config_.indent);
                             ss << config_.indent << config_.indent
-                               << fmt::format("call_by_address(cpu, 0x{:08X}u); return;  /* not taken: split (mid-func) */\n", fall_through_addr);
+                               << fmt::format("call_by_address(cpu, {}); return;  /* not taken: split (mid-func) */\n", pc_const(fall_through_addr));
                         }
                         ss << config_.indent << "}\n";
                     }
@@ -2268,12 +2290,12 @@ std::string CodeGenerator::translate_basic_block(
                         // flat trampoline dispatches the split piece / mid-func).
                         ss << emit_interrupt_check(block.exit_instr.target, config_.indent);
                         ss << config_.indent
-                           << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS j: split */\n",
-                                          block.exit_instr.target);
+                           << fmt::format("cpu->pc = {}; return;  /* CPS j: split */\n",
+                                          pc_const(block.exit_instr.target));
                     } else if (block.exit_instr.target != 0 && known_functions_.count(block.exit_instr.target)) {
                         // Jump target is out-of-function and is a known function start
                         ss << emit_interrupt_check(block.exit_instr.target, config_.indent);
-                        ss << emit_stale_static_guard(block.exit_instr.target, config_.indent);
+                        ss << emit_stale_static_guard(block.exit_instr.target, config_.indent, config_.exec_seg_relative);
                         ss << config_.indent
                            << fmt::format("func_{:08X}(cpu); return;  /* j to split piece */\n",
                                           block.exit_instr.target);
@@ -2281,8 +2303,8 @@ std::string CodeGenerator::translate_basic_block(
                         // Jump target is a mid-function address — dispatch dynamically
                         ss << emit_interrupt_check(block.exit_instr.target, config_.indent);
                         ss << config_.indent
-                           << fmt::format("call_by_address(cpu, 0x{:08X}u); return;  /* j to split (mid-func) */\n",
-                                          block.exit_instr.target);
+                           << fmt::format("call_by_address(cpu, {}); return;  /* j to split (mid-func) */\n",
+                                          pc_const(block.exit_instr.target));
                     }
                 } else if (block.exit_instr.type == ControlFlowType::Return) {
                     /* Return instruction.
@@ -2436,8 +2458,8 @@ std::string CodeGenerator::translate_basic_block(
                         }
                         ss << emit_interrupt_check(target, config_.indent);
                         ss << config_.indent
-                           << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS jal -> 0x{:08X} */\n",
-                                          target, target);
+                           << fmt::format("cpu->pc = {}; return;  /* CPS jal -> 0x{:08X} */\n",
+                                          pc_const(target), target);
                     } else {
                     // Function call (jal).  The call contract (Bug D family)
                     // guards the continuation: it may only run if the guest
@@ -2450,10 +2472,10 @@ std::string CodeGenerator::translate_basic_block(
                         ss << config_.indent << fmt::format(
                             "if (psx_call_contract(cpu, 0x{:08X}u, _csp)) return;\n", addr + 8);
                         ss << config_.indent << fmt::format(
-                            "}} else {{ call_by_address(cpu, 0x{:08X}u);  /* jal: stale-static guard */\n", target);
+                            "}} else {{ call_by_address(cpu, {});  /* jal: stale-static guard */\n", pc_const(target));
                         ss << config_.indent << "if (g_psx_call_bail) return; (void)_csp; } }\n";
                     } else {
-                        ss << config_.indent << fmt::format("call_by_address(cpu, 0x{:08X}u);  /* external jal */\n", target);
+                        ss << config_.indent << fmt::format("call_by_address(cpu, {});  /* external jal */\n", pc_const(target));
                         /* psx_dispatch_call validated the (ra, sp) contract;
                          * only propagate an active bail unwind here. */
                         ss << config_.indent << "if (g_psx_call_bail) return; (void)_csp; }\n";
@@ -2465,12 +2487,12 @@ std::string CodeGenerator::translate_basic_block(
                         // Split-function: JAL continuation is outside this function piece.
                         // Tail-call to the continuation piece (at exit_addr + 8, past delay slot).
                         if (known_functions_.count(cont_addr)) {
-                            ss << emit_stale_static_guard(cont_addr, config_.indent);
+                            ss << emit_stale_static_guard(cont_addr, config_.indent, config_.exec_seg_relative);
                             ss << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* jal cont: split piece */\n", cont_addr);
                         } else {
                             ss << config_.indent
-                               << fmt::format("call_by_address(cpu, 0x{:08X}u); return;  /* jal cont: split */\n", cont_addr);
+                               << fmt::format("call_by_address(cpu, {}); return;  /* jal cont: split */\n", pc_const(cont_addr));
                         }
                     }
                     }
@@ -2507,12 +2529,12 @@ std::string CodeGenerator::translate_basic_block(
                     } else {
                         // Split-function: JALR continuation is outside this function piece.
                         if (known_functions_.count(cont_addr)) {
-                            ss << emit_stale_static_guard(cont_addr, config_.indent);
+                            ss << emit_stale_static_guard(cont_addr, config_.indent, config_.exec_seg_relative);
                             ss << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* jalr cont: split piece */\n", cont_addr);
                         } else {
                             ss << config_.indent
-                               << fmt::format("call_by_address(cpu, 0x{:08X}u); return;  /* jalr cont: split */\n", cont_addr);
+                               << fmt::format("call_by_address(cpu, {}); return;  /* jalr cont: split */\n", pc_const(cont_addr));
                         }
                     }
                     }
@@ -2542,7 +2564,7 @@ std::string CodeGenerator::translate_basic_block(
     } else if (block.exit_instr.type == ControlFlowType::None) {
         uint32_t next_addr = block.end_addr + 4;
         if (known_functions_.count(next_addr) > 0) {
-            ss << emit_stale_static_guard(next_addr, config_.indent);
+            ss << emit_stale_static_guard(next_addr, config_.indent, config_.exec_seg_relative);
             ss << config_.indent
                << fmt::format("func_{:08X}(cpu); return;  /* fallthrough to split piece */\n",
                               next_addr);
@@ -2554,8 +2576,8 @@ std::string CodeGenerator::translate_basic_block(
             // Publish the PC so dispatch can route it instead.
             ss << emit_interrupt_check(next_addr, config_.indent);
             ss << config_.indent
-               << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS fallthrough past unit edge */\n",
-                              next_addr);
+               << fmt::format("cpu->pc = {}; return;  /* CPS fallthrough past unit edge */\n",
+                              pc_const(next_addr));
         } else {
             ss << emit_interrupt_check(next_addr, config_.indent);
         }
@@ -2882,7 +2904,7 @@ GeneratedFunction CodeGenerator::generate_function(
             const BasicBlock& last = cfg.blocks.at(cfg.block_order.back());
             bool is_reachable = last.is_entry || last.is_reachable;
             if (is_reachable) {
-                body_ss << emit_stale_static_guard_named(fallthrough_name, "    ");
+                body_ss << emit_stale_static_guard_named(fallthrough_name, "    ", config_.exec_seg_relative);
                 body_ss << fmt::format("    {}(cpu);  /* fallthrough to next function */\n",
                                        fallthrough_name);
             }
@@ -2902,8 +2924,8 @@ GeneratedFunction CodeGenerator::generate_function(
         bool is_reachable = last_block.is_entry || last_block.is_reachable;
         if (runs_off_end && is_reachable) {
             body_ss << fmt::format(
-                "    cpu->pc = 0x{:08X}u; return;  /* image-edge fallthrough: tail-transfer */\n",
-                last_block.end_addr + 4u);
+                "    cpu->pc = {}; return;  /* image-edge fallthrough: tail-transfer */\n",
+                pc_const(last_block.end_addr + 4u));
         }
     }
     body_ss << "    ;  /* label compatibility: C requires a statement after the last label */\n";
@@ -3131,7 +3153,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
               last_block.exit_instr.type == ControlFlowType::Jump) &&
              last_block.successors.empty());
         if (needs_fallthrough) {
-            body << emit_stale_static_guard_named(fallthrough_name, "    ");
+            body << emit_stale_static_guard_named(fallthrough_name, "    ", config_.exec_seg_relative);
             body << fmt::format("    {}(cpu);  /* fallthrough to next function */\n",
                                 fallthrough_name);
         }
@@ -3149,8 +3171,8 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
              last_block.successors.empty());
         if (runs_off_end) {
             body << fmt::format(
-                "    cpu->pc = 0x{:08X}u; return;  /* image-edge fallthrough: tail-transfer */\n",
-                last_block.end_addr + 4u);
+                "    cpu->pc = {}; return;  /* image-edge fallthrough: tail-transfer */\n",
+                pc_const(last_block.end_addr + 4u));
         }
     }
     body << "    ;  /* label compatibility */\n";

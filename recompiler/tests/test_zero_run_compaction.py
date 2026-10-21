@@ -97,7 +97,8 @@ def word_chunk(src, addr):
     """Expanded text of the zero word at addr: fetch/boundary through cosim."""
     a = "0x%08X" % addr
     m = re.search(
-        r"#ifdef PSX_ENABLE_BLOCK_CYCLES\n[ ]*psx_(?:icache_fetch|cpu_step_boundary)\(cpu, %su\);\n"
+        r"#ifdef PSX_ENABLE_BLOCK_CYCLES\n[ ]*psx_(?:icache_fetch|cpu_step_boundary|icache_follow)"
+        r"\(cpu, (?:PSX_EXEC_PC\()?%su\)?\);\n"
         r"(?:.*\n)*?[ ]*cosim_instr\(%su\);\n#endif\n" % (a, a), src)
     return m.group(0) if m else None
 
@@ -121,6 +122,14 @@ def main():
         src = generate(args.recompiler, tmp)
 
     failures = []
+    # Game code emits fetch addresses in the run-time segment (PSX_EXEC_PC);
+    # a follower there is psx_icache_follow, which fetches when uncached.
+    seg = "PSX_EXEC_PC(" in src
+    follow = "psx_icache_follow" if seg else "psx_cpu_step_boundary"
+    def pc(a):
+        return ("PSX_EXEC_PC(0x%08Xu)" if seg else "0x%08Xu") % a
+    def loop_pc(var):
+        return "PSX_EXEC_PC(%s" % var if seg else var
     loops = list(LOOP.finditer(src))
     got = [(int(m.group("first"), 16), int(m.group("last"), 16), int(m.group("n"))) for m in loops]
     want = [
@@ -164,7 +173,8 @@ def main():
             text = m.group(0)
             # The loop must make exactly the calls the template makes.
             for needle in ("psx_cyc_step(cpu, 0x1u);", "cosim_instr(_zr_",
-                           "psx_icache_fetch(cpu, _zr_", "psx_cpu_step_boundary(cpu, _zr_",
+                           "psx_icache_fetch(cpu, %s" % loop_pc("_zr_"),
+                           "%s(cpu, %s" % (follow, loop_pc("_zr_")),
                            "(_zr_%s & 0xCu) == 0u" % m.group("first")):
                 if needle not in text:
                     failures.append("loop at 0x%s lacks %r" % (m.group("first"), needle))
@@ -173,13 +183,13 @@ def main():
             for k in range(int(m.group("n"))):
                 a = int(m.group("first"), 16) + 4 * k
                 fetch = (a & 0xC) == 0
-                call = "psx_icache_fetch" if fetch else "psx_cpu_step_boundary"
-                if "%s(cpu, 0x%08Xu);" % (call, a) not in expanded:
+                call = "psx_icache_fetch" if fetch else follow
+                if "%s(cpu, %s);" % (call, pc(a)) not in expanded:
                     failures.append("re-expanded word 0x%08X does not use %s" % (a, call))
                     break
         for cls, (base, chunk) in templates.items():
             fetch = (base & 0xC) == 0
-            if ("psx_icache_fetch(cpu, 0x%08Xu);" % base in chunk) != fetch:
+            if ("psx_icache_fetch(cpu, %s);" % pc(base) in chunk) != fetch:
                 failures.append("expanded emitter fetch rule disagrees at 0x%08X" % base)
     elif not failures:
         failures.append("run B did not provide all four address classes")

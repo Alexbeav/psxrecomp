@@ -35,6 +35,15 @@ static inline void psx_cpu_step_boundary(CPUState *cpu, uint32_t address)
 }
 #endif
 
+/* An intra-line follower reached by fall-through hits at a cached address and
+ * fetches at an uncached one. Game code emits it with PSX_EXEC_PC, whose
+ * segment is known only at run time. */
+static inline void psx_icache_follow(CPUState *cpu, uint32_t address)
+{
+    if (address >= 0xA0000000u) psx_icache_fetch(cpu, address);
+    else psx_cpu_step_boundary(cpu, address);
+}
+
 static inline void psx_icache_fetch_interp_after_boundary(CPUState *cpu, uint32_t address)
 {
     if (g_input_instruction_histogram_active)

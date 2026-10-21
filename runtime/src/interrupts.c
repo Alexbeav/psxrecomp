@@ -2229,6 +2229,9 @@ irq_deliver_eval:
      * ("execution completed" abnormal exit). */
     int saved_dispatch_depth = g_psx_dispatch_depth;
     g_psx_dispatch_depth = 0;
+    /* Same for the execution segment (PSX_EXEC_PC): a ReturnFromException
+     * longjmp skips the restore of any game dispatch nested in the handler. */
+    const uint32_t saved_exec_seg_xor = g_psx_exec_seg_xor;
     /* Nested delivery clobber guard: exception_jmpbuf is a single global, so a
      * nested exception's setjmp overwrites the OUTER frame's context. The outer
      * handler's later RFE would then longjmp into the dead inner frame (host
@@ -2281,6 +2284,7 @@ irq_deliver_eval:
      * handler's frames were unwound by longjmp without decrementing, so the
      * live counter is meaningless here — overwrite, don't decrement. */
     g_psx_dispatch_depth = saved_dispatch_depth;
+    g_psx_exec_seg_xor = saved_exec_seg_xor;
 
     /* Restore the interrupted code's registers.
      *

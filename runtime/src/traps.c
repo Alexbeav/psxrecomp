@@ -122,6 +122,7 @@ int psx_is_dispatchable(uint32_t pc)
 
 /* Dispatch call contract state (see cpu_state.h for the model). */
 int      g_psx_call_bail      = 0;
+uint32_t g_psx_exec_seg_xor   = 0;  /* see cpu_state.h, PSX_EXEC_PC */
 uint64_t g_psx_bail_first     = 0;
 uint64_t g_psx_bail_resolved  = 0;
 uint64_t g_psx_bail_flattened = 0;
@@ -918,6 +919,9 @@ void psx_scheduler_run(CPUState* cpu)
             overlay_loader_shadow_scheduler_escape_fixup();
             g_psx_dispatch_depth = 0;
             g_psx_call_bail      = 0;
+            /* The skipped game-dispatch frames owned the segment restore; the
+             * next dispatch sets it again from its entry address. */
+            g_psx_exec_seg_xor   = 0;
             /* A longjmp abandons the precise interpreter frame and its mode restore. */
             { extern int g_precise_mode; g_precise_mode = 0; }
             /* Soft-exit / yield longjmps out of vblank inside
