@@ -213,6 +213,14 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-21 (production R4 follow-up):** Removed debug-only PGXP receipt
+  writes from no-debug-tools builds; numeric PGXP and word-shadow suites pass.
+  Added disk-state-anchored applied-input replay and bounded frame/work/span
+  exports for production measurements. Five focused framework CTests and 26
+  R4 checks pass on Windows. The owner's stricter default-Ultra acceptance bar
+  remains open; evidence is in R4 `analysis/render-60fps/SLOWDOWNS.md`. No guest
+  timing or projection arithmetic changed.
+
 - **2026-10-21 (Windows continuation, `feat/render-60fps`):** Added cumulative
   render-transaction wall-time buckets, separating checkpoint copying from
   verification hashing. After the owner's moving-course correction, R4
