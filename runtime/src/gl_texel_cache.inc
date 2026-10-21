@@ -181,7 +181,6 @@ static int texel_cache_get(GLuint source, GLuint palette, int x, int y, int dept
          * GPU readers were already submitted, so command ordering protects
          * them. Never split a mask-checked batch to make cache space. */
         s_tc_evictions++;
-
     }
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_tc_fbo);
     s_tc_attach(PSXGL_FRAMEBUFFER, PSXGL_COLOR_ATTACHMENT0, s_tc_array, 0, slot);

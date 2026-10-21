@@ -2966,6 +2966,15 @@ static void hiw_mirror_uploads(const DirtyRect *rects, int nrects) {
  * at the shared scratch origin, upscaled nearest. Two passes by source bit15,
  * so each tile's stencil tracks the mask. */
 static int s_hiw_scratch_refused_logged = 0;
+static uint64_t s_hiw_copy_blits;
+static int hiw_copy_fast(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_GL_HIW_COPY_FAST");
+        enabled = !(e && e[0] == '0');
+    }
+    return enabled;
+}
 static void hiw_mirror_copy_chunk(int a, int b, int shift, int sy, int dx, int dy,
                                   int h) {
     static uint8_t hi_src[VRAM_W];
@@ -3006,6 +3015,28 @@ static void hiw_mirror_copy_chunk(int a, int b, int shift, int sy, int dx, int d
                 int e = c + 1;
                 while (e < d1 && hi_src[e] == hi_src[c]) e++;
                 if (hi_src[c] == from_hi) {
+                    if (hiw_copy_fast() && !s_mask_set && !s_mask_check) {
+                        /* The staged source already has exact RGBA8 colour and
+                         * native bit15 alpha. Copy it once; as for ordinary
+                         * textured draws, materialize mask bit0 only before
+                         * destination masking next reads it. Bloom bit1 and
+                         * depth stay untouched, matching the shader copy. */
+                        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,
+                            from_hi ? s_hiw_scratch_fbo : s_scratch_fbo);
+                        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, T->fbo);
+                        glDisable(GL_SCISSOR_TEST);
+                        int scale = from_hi ? S : 1, origin = from_hi ? a : dx;
+                        p_glBlitFramebuffer((c-origin)*scale, 0, (e-origin)*scale, h*scale,
+                            (c-T->x0)*S, dy*S, (e-T->x0)*S, (dy+h)*S,
+                            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+                        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
+                        rect_add(&s_stencil_stale, c, dy, e-1, dy+h-1);
+                        s_stencil_valid = 0;
+                        s_hiw_copy_blits++;
+                        c = e;
+                        continue;
+                    }
                     if (!began) {
                         if (from_hi)   /* texel = frag - chunk origin in the tile */
                             hiw_blit_begin(T, s_hiw_scratch_tex, 1, -(a - T->x0) * S,
@@ -5381,6 +5412,16 @@ static void gpu_fill(int x,int y,int w,int h,uint16_t c) {
  * mask set/check and the stencil mirror apply, exactly like sw_copy_rect. */
 static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h) {
     if (w <= 0 || h <= 0) return;
+    if (gl_cpu_mode()) {
+        static int seen[32][6], used;
+        int key[6] = {sx,sy,dx,dy,w,h}, i;
+        for (i=0; i<used; ++i) if (!memcmp(seen[i],key,sizeof key)) break;
+        if (i==used && used<32) {
+            memcpy(seen[used++],key,sizeof key);
+            fprintf(stdout,"psxrecomp: copy shape %d,%d -> %d,%d %dx%d mask=%d/%d\n",
+                sx,sy,dx,dy,w,h,s_mask_set,s_mask_check);
+        }
+    }
     flush_flat_batch();
     flush_tex_batch();
     flush_cpu_upload();
@@ -6861,6 +6902,7 @@ void gl_renderer_work_stats(GlRenderWorkStats *out) {
     out->counts[2] = s_bcls_fused_draws; out->counts[3] = s_coverage_depth_draws;
     out->counts[4] = s_hq_center_pruned;
     out->counts[5] = s_tc_hits; out->counts[6] = s_tc_misses; out->counts[7] = s_tc_evictions;
+    out->counts[8] = s_hiw_copy_blits;
 }
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */

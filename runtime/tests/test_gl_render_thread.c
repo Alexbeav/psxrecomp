@@ -247,6 +247,12 @@ static void frame(int f, int buf_x) {
     gr_draw_flat_rect(576, 64, 32, 32, (uint16_t)(0x03e0 + f));
     gr_draw_textured_rect(buf_x + 100, 200, 32, 32, 0, 64, 512, 256, 0x0009);
     gr_copy_rect(buf_x + 10, 10, buf_x + 14, 13, 80, 50);
+    if (quality_scene && f % 3 == 1) {
+        /* Consume the copied bit15 mask before any later framebuffer clear. */
+        mask_bits(0, 1);
+        gr_draw_flat_rect(buf_x + 14, 13, 80, 50, (uint16_t)(0x7c00 + f));
+        mask_bits(0, 0);
+    }
     /* A half-VRAM upload every frame pushes the ring past its end. */
     {
         static uint16_t big[1024 * 256];
@@ -448,6 +454,10 @@ int main(int argc, char **argv) {
             unsigned char *bits = malloc(bytes);
             check(bits != NULL, "stencil readback allocation");
             if (!bits) continue;
+            /* Bit0 can remain deferred under disabled mask checking. Compare
+             * alpha-derived semantic masks, preserving bloom bit1, rather
+             * than comparing the unused deferred storage representation. */
+            rebuild_target_stencil(fbos[t], widths[t], heights[t]);
             p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, fbos[t]);
             glPixelStorei(GL_PACK_ALIGNMENT, 1);
             glReadPixels(0, 0, widths[t], heights[t], GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, bits);
