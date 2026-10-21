@@ -3307,6 +3307,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
+            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
+            "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
+            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
             "        if (cd_tape_le32(c)>1 || cd_tape_le32(c+4)>1 ||",
@@ -5104,6 +5109,16 @@
           "detail": "runtime/include/boot_state.h: 'v15 therefore rejects every earlier state. */' -> v16; '#define BOOT_STATE_VERSION_MIN_READ 15u' -> 16u. Two pinned lines changed, none removed.",
           "dropped_lines": 2,
           "added_lines": 2,
+          "from_blocks": 167,
+          "to_blocks": 167
+        },
+        {
+          "as_of": "worktree on bc7d68abbfc4",
+          "issue": "PS1G-140",
+          "reason": "cdrom_snapshot_validate gains the range check of the two CD section fields PS1G-140 adds (the retry-dither target, -1 or 0..450000, and its count, not negative), placed after the seek-byte check; the review asked for the check in this function so boot_state's atomic admission refuses a bad section before any section is applied. Every pinned line of the block is kept, in order; five lines are inserted between the seek-byte check and the CD-DA check, so the block is no longer contiguous in the old form. No accepted section is refused that this build writes; a section with an out-of-range retry field is refused. Evidence: cdrom_retry_snapshot_test row R4.",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
+          "dropped_lines": 0,
+          "added_lines": 5,
           "from_blocks": 167,
           "to_blocks": 167
         }
@@ -6974,6 +6989,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
+            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
+            "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
+            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
             "        if (cd_tape_le32(c)>1 || cd_tape_le32(c+4)>1 ||",
@@ -7122,6 +7142,16 @@
             "6d2f8b9f74fa173f87ad648e4fee02402f4dc585"
           ],
           "signature": "signed: Claude MANAGER 2026-09-28 — see PIN-F-QUALIFIED-HUNK-REPIN-20260928.md"
+        },
+        {
+          "as_of": "worktree on bc7d68abbfc4",
+          "issue": "PS1G-140",
+          "reason": "cdrom_snapshot_validate gains the range check of the two CD section fields PS1G-140 adds (the retry-dither target, -1 or 0..450000, and its count, not negative), placed after the seek-byte check; the review asked for the check in this function so boot_state's atomic admission refuses a bad section before any section is applied. Every pinned line of the block is kept, in order; five lines are inserted between the seek-byte check and the CD-DA check, so the block is no longer contiguous in the old form. No accepted section is refused that this build writes; a section with an out-of-range retry field is refused. Evidence: cdrom_retry_snapshot_test row R4.",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
+          "dropped_lines": 0,
+          "added_lines": 5,
+          "from_blocks": 12,
+          "to_blocks": 12
         }
       ]
     },
@@ -7711,6 +7741,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
+            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
+            "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
+            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
             "        if (cd_tape_le32(c)>1 || cd_tape_le32(c+4)>1 ||",
@@ -7898,6 +7933,18 @@
             "}",
             ""
           ]
+        }
+      ],
+      "repins": [
+        {
+          "as_of": "worktree on bc7d68abbfc4",
+          "issue": "PS1G-140",
+          "reason": "cdrom_snapshot_validate gains the range check of the two CD section fields PS1G-140 adds (the retry-dither target, -1 or 0..450000, and its count, not negative), placed after the seek-byte check; the review asked for the check in this function so boot_state's atomic admission refuses a bad section before any section is applied. Every pinned line of the block is kept, in order; five lines are inserted between the seek-byte check and the CD-DA check, so the block is no longer contiguous in the old form. No accepted section is refused that this build writes; a section with an out-of-range retry field is refused. Evidence: cdrom_retry_snapshot_test row R4.",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
+          "dropped_lines": 0,
+          "added_lines": 5,
+          "from_blocks": 23,
+          "to_blocks": 23
         }
       ]
     },
@@ -8103,6 +8150,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
+            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
+            "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
+            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
             "        if (cd_tape_le32(c)>1 || cd_tape_le32(c+4)>1 ||",
@@ -8218,6 +8270,18 @@
             "        for (uint32_t j = 0; j < tail; j++)",
             "            if (p[len - tail + j] > 1) return 0;"
           ]
+        }
+      ],
+      "repins": [
+        {
+          "as_of": "worktree on bc7d68abbfc4",
+          "issue": "PS1G-140",
+          "reason": "cdrom_snapshot_validate gains the range check of the two CD section fields PS1G-140 adds (the retry-dither target, -1 or 0..450000, and its count, not negative), placed after the seek-byte check; the review asked for the check in this function so boot_state's atomic admission refuses a bad section before any section is applied. Every pinned line of the block is kept, in order; five lines are inserted between the seek-byte check and the CD-DA check, so the block is no longer contiguous in the old form. No accepted section is refused that this build writes; a section with an out-of-range retry field is refused. Evidence: cdrom_retry_snapshot_test row R4.",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
+          "dropped_lines": 0,
+          "added_lines": 5,
+          "from_blocks": 22,
+          "to_blocks": 22
         }
       ]
     }
