@@ -875,6 +875,9 @@ static void trace_cdrom(uint8_t kind, uint32_t addr, uint32_t val, uint8_t width
 static CdRandomTape s_source_clock_tape;
 static int s_source_clock;
 static uint64_t s_cd_retry_dither_count; /* PS1G-140 */
+#define CD_RETRY_DITHER_LOG 32
+typedef struct { uint32_t frame; int target, run, cycles; } CdRetryDitherFire;
+static CdRetryDitherFire s_cd_retry_dither_log[CD_RETRY_DITHER_LOG];
 /* Independent drive operation, not a command second response. */
 static uint64_t s_source_reset_due;
 static uint64_t s_source_command_due, s_source_ready_due;
@@ -1883,7 +1886,28 @@ static int retry_dither_cycles(int target)
     h *= 0x2C1B3C6Du;
     h ^= h >> 12;
     s_cd_retry_dither_count++;
-    return (int)(h % (uint32_t)source_drive_sector_period());
+    int dither = (int)(h % (uint32_t)source_drive_sector_period());
+    if (s_cd_retry_dither_count <= CD_RETRY_DITHER_LOG) {
+        CdRetryDitherFire *f = &s_cd_retry_dither_log[s_cd_retry_dither_count - 1];
+        f->frame = (uint32_t)s_frame_count;
+        f->target = target;
+        f->run = s_retry_run;
+        f->cycles = dither;
+    }
+    return dither;
+}
+
+/* PS1G-140 review: how often the dither fired, and the first fires, for the
+ * run report. */
+uint64_t cdrom_retry_dither_count(void) { return s_cd_retry_dither_count; }
+int cdrom_retry_dither_fire(int i, uint32_t *frame, int *target, int *run, int *cycles)
+{
+    if (i < 0 || (uint64_t)i >= s_cd_retry_dither_count || i >= CD_RETRY_DITHER_LOG) return 0;
+    *frame = s_cd_retry_dither_log[i].frame;
+    *target = s_cd_retry_dither_log[i].target;
+    *run = s_cd_retry_dither_log[i].run;
+    *cycles = s_cd_retry_dither_log[i].cycles;
+    return 1;
 }
 
 static void start_read_stream(uint8_t cmd) {
