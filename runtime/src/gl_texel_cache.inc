@@ -10,7 +10,8 @@ typedef void (APIENTRY *TcAttachLayer)(GLenum, GLenum, GLuint, GLint, GLint);
 typedef struct {
     GLuint source, palette;
     int x, y, depth, cx, cy, valid, pinned;
-    uint64_t stamp, used;
+    uint64_t stamp, used, checked_epoch;
+    int next;
 } TexelCacheEntry;
 static TexelCacheEntry s_tc[TC_CAP];
 static uint64_t s_tc_tiles[32][64], s_tc_epoch, s_tc_clock;
@@ -20,6 +21,27 @@ static GLint s_tc_page, s_tc_clut, s_tc_depth;
 static int s_tc_ready = -1, s_tc_capacity = TC_CAP;
 static TcAttachLayer s_tc_attach;
 static int s_tc_pins[TC_CAP], s_tc_pin_n;
+static int s_tc_heads[1024], s_tc_last = -1;
+static int texel_cache_lookup_fast(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_GL_TEXEL_LOOKUP_FAST");
+        enabled = !(e && e[0] == '0');
+    }
+    return enabled;
+}
+static unsigned texel_cache_hash(GLuint source, GLuint palette, int x, int y, int depth, int cx, int cy) {
+    uint32_t h = source * 0x9e3779b9u ^ palette * 0x85ebca6bu;
+    h ^= (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u;
+    h ^= (uint32_t)cx * 83492791u ^ (uint32_t)cy * 2654435761u ^ (uint32_t)depth;
+    h ^= h >> 16;
+    return h & 1023u;
+}
+static int texel_cache_matches(const TexelCacheEntry *c, GLuint source, GLuint palette,
+                              int x, int y, int depth, int cx, int cy) {
+    return c->valid && c->source==source && c->palette==palette && c->x==x && c->y==y &&
+           c->depth==depth && c->cx==cx && c->cy==cy;
+}
 static void texel_cache_pin(int slot) {
     if (!s_tc[slot].pinned) { s_tc[slot].pinned=1; s_tc_pins[s_tc_pin_n++]=slot; }
 }
@@ -48,6 +70,8 @@ static uint64_t texel_cache_region(int x, int y, int w, int h) {
 }
 static void texel_cache_reset(void) {
     memset(s_tc, 0, sizeof s_tc);
+    memset(s_tc_heads, 0, sizeof s_tc_heads);
+    s_tc_last = -1;
     memset(s_tc_tiles, 0, sizeof s_tc_tiles);
     s_tc_epoch = s_tc_clock = s_tc_hits = s_tc_misses = s_tc_evictions = 0;
     s_tc_array = s_tc_fbo = s_tc_prog = 0;
@@ -115,6 +139,28 @@ static void texel_cache_bind(void) {
 }
 static int texel_cache_get(GLuint source, GLuint palette, int x, int y, int depth, int cx, int cy) {
     if (depth >= 2 || !texel_cache_init()) return -1;
+    const int fast = texel_cache_lookup_fast();
+    const unsigned bucket = texel_cache_hash(source,palette,x,y,depth,cx,cy);
+    if (fast) {
+        int hit = s_tc_last;
+        if (hit < 0 || !texel_cache_matches(&s_tc[hit],source,palette,x,y,depth,cx,cy)) {
+            hit = s_tc_heads[bucket] - 1;
+            while (hit >= 0 && !texel_cache_matches(&s_tc[hit],source,palette,x,y,depth,cx,cy))
+                hit = s_tc[hit].next - 1;
+        }
+        if (hit >= 0) {
+            TexelCacheEntry *c = &s_tc[hit];
+            if (c->checked_epoch != s_tc_epoch) {
+                uint64_t stamp = source == s_raw_tex ? texel_cache_region(x,y,depth ? 128 : 64,256) : 0;
+                uint64_t ps = palette == s_raw_tex ? texel_cache_region(cx,cy,depth ? 256 : 16,1) : 0;
+                if (ps > stamp) stamp = ps;
+                if (c->stamp == stamp) c->checked_epoch = s_tc_epoch;
+            }
+            if (c->checked_epoch == s_tc_epoch) {
+                c->used=++s_tc_clock; texel_cache_pin(hit); s_tc_last=hit; s_tc_hits++; return hit;
+            }
+        }
+    }
     uint64_t stamp = source == s_raw_tex ? texel_cache_region(x,y,depth ? 128 : 64,256) : 0;
     uint64_t ps = palette == s_raw_tex ? texel_cache_region(cx,cy,depth ? 256 : 16,1) : 0;
     if (ps > stamp) stamp = ps;
@@ -122,8 +168,7 @@ static int texel_cache_get(GLuint source, GLuint palette, int x, int y, int dept
     uint64_t oldest = UINT64_MAX;
     for (int i=0; i<s_tc_capacity; ++i) {
         TexelCacheEntry *c = &s_tc[i];
-        if (c->valid && c->source==source && c->palette==palette && c->x==x && c->y==y &&
-            c->depth==depth && c->cx==cx && c->cy==cy) {
+        if (!fast && texel_cache_matches(c,source,palette,x,y,depth,cx,cy)) {
             if (c->stamp == stamp) { c->used=++s_tc_clock; texel_cache_pin(i); s_tc_hits++; return i; }
         }
         if (!c->valid) { if (oldest != 0) { slot=i; oldest=0; } }
@@ -136,6 +181,7 @@ static int texel_cache_get(GLuint source, GLuint palette, int x, int y, int dept
          * GPU readers were already submitted, so command ordering protects
          * them. Never split a mask-checked batch to make cache space. */
         s_tc_evictions++;
+
     }
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_tc_fbo);
     s_tc_attach(PSXGL_FRAMEBUFFER, PSXGL_COLOR_ATTACHMENT0, s_tc_array, 0, slot);
@@ -151,8 +197,18 @@ static int texel_cache_get(GLuint source, GLuint palette, int x, int y, int dept
     p_glBindVertexArray(s_empty_vao); glDrawArrays(GL_TRIANGLES,0,3);
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER,s_hr_fbo);
     p_glActiveTexture(PSXGL_TEXTURE0);
+    if (s_tc[slot].valid) {
+        TexelCacheEntry *c = &s_tc[slot];
+        unsigned old = texel_cache_hash(c->source,c->palette,c->x,c->y,c->depth,c->cx,c->cy);
+        int *link = &s_tc_heads[old];
+        while (*link && *link != slot+1) link = &s_tc[*link-1].next;
+        if (*link) *link = c->next;
+    }
     s_tc[slot]=(TexelCacheEntry){.source=source,.palette=palette,.x=x,.y=y,.depth=depth,
-        .cx=cx,.cy=cy,.valid=1,.stamp=stamp,.used=++s_tc_clock};
+        .cx=cx,.cy=cy,.valid=1,.stamp=stamp,.used=++s_tc_clock,
+        .checked_epoch=s_tc_epoch,.next=s_tc_heads[bucket]};
+    s_tc_heads[bucket]=slot+1;
+    s_tc_last=slot;
     texel_cache_pin(slot);
     return slot;
 }
