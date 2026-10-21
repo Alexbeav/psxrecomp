@@ -18063,6 +18063,32 @@ session_reboot:
 
   if (g_headless) {
     std::fprintf(stdout, "psxrecomp: headless frontend enabled\n");
+    /* Opt-in hidden OpenGL context for headless replays (PSX_HEADLESS_GL=1
+     * with renderer opengl). The window is created hidden and never shown:
+     * no focus, no taskbar entry, no present. Only the video subsystem is
+     * started; audio and controllers stay closed. */
+    const char *headless_gl = std::getenv("PSX_HEADLESS_GL");
+    if (g_video_renderer == 1 && headless_gl && headless_gl[0] == '1') {
+      if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+        std::fprintf(stdout, "psxrecomp: headless GL: video init failed: %s\n", SDL_GetError());
+      } else {
+        configure_core_gl_context_attributes();
+        sdl_window = SDL_CreateWindow(window_title.c_str(), 0, 0, 640, 480,
+                                      SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+        if (!sdl_window) {
+          std::fprintf(stdout, "psxrecomp: headless GL: hidden window failed: %s\n", SDL_GetError());
+        } else {
+          gl_renderer_set_swap_interval(0);
+          g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
+        }
+      }
+    }
+    /* Without a context the OpenGL facade only falls back to software for
+     * some draws; say and use what really renders. */
+    if (g_video_renderer == 1 && !g_gl_active) gr_set_backend(GR_BACKEND_SOFTWARE);
+    if (g_gl_active && !netplay_cpu_auth_gpu()) g_video_scale = gr_scale();
+    std::fprintf(stdout, "psxrecomp: headless renderer active: %s\n",
+                 g_gl_active ? "opengl (hidden window)" : "software");
   } else {
     /* ---- SDL init ---- */
     /* Scale quality governs SDL's logical-size -> window scaling. Linear when
