@@ -43,6 +43,7 @@ std::map<std::string, MediaPreparer>& media_preparers() {
 struct RegisteredPlugin {
     void (*savestate)(void) = nullptr;
     PSXModActivationCallback activation = nullptr;
+    PSXModActivationCallback session_reset = nullptr;
     PSXModVBlankCallback vblank = nullptr;
     /* Generated-function entry hooks, keyed by guest address. One id may
      * observe several functions. */
@@ -1489,6 +1490,18 @@ bool mod_register_activation_plugin(const std::string& id, void (*callback)(void
     if (plugin.activation) return false;
     plugin.activation = callback;
     return true;
+}
+
+bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void)) {
+    if (!valid_id(id) || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    if (plugin.session_reset) return false;
+    plugin.session_reset = callback;
+    return true;
+}
+void mod_reset_plugin_sessions() {
+    for (const auto& entry : registered_plugins())
+        if (entry.second.session_reset) entry.second.session_reset();
 }
 
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
@@ -4197,6 +4210,11 @@ extern "C" int psx_mod_register_activation_plugin(
     const char* id, PSXModActivationCallback callback) {
     return id &&
         PSXRecompV4::mod_register_activation_plugin(id, callback) ? 1 : 0;
+}
+
+extern "C" int psx_mod_register_session_reset_plugin(
+    const char* id, PSXModActivationCallback callback) {
+    return id && PSXRecompV4::mod_register_session_reset_plugin(id, callback) ? 1 : 0;
 }
 
 extern "C" int psx_mod_register_savestate_plugin(

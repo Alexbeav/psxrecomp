@@ -25,6 +25,10 @@ typedef int (*PSXModFunctionFilterCallback)(struct CPUState* cpu,
  */
 int psx_mod_register_activation_plugin(const char* id,
                                        PSXModActivationCallback callback);
+/* Host-only cleanup before a new plan, including when it omits this plugin.
+ * Runs with emulation stopped and no current resource context. */
+int psx_mod_register_session_reset_plugin(const char* id,
+                                          PSXModActivationCallback callback);
 int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
 /* Runs after successful guest-state restore, before the restored PC resumes.
