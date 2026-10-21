@@ -157,6 +157,8 @@ void gl_renderer_stereo_diag(GLRenderStereoDiag *out);
 uint64_t gl_renderer_perf_ticks(void);
 uint64_t gl_renderer_perf_frequency(void);
 int gl_renderer_interpolation_owns_cadence(void);
+/* Nonblocking, atomically published readiness for bounded queued pacing. */
+int gl_renderer_interpolation_async_cadence(void);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,
                                     double *host_hz, double *target_hz,
@@ -576,6 +578,12 @@ typedef struct {
     uint64_t prior_ticks[8], prior_max_ticks[8];
 } GlRenderWorkStats;
 void gl_renderer_work_stats(GlRenderWorkStats *out);
+/* Opt-in replay receipt: actual SwapWindow return times, process-clock us.
+ * Query outside measurement: drains the render/present queues. */
+#define GL_SWAP_TIMING_CAP 65536
+typedef uint64_t (*GlSwapClockFn)(void);
+void gl_renderer_swap_timing_start(GlSwapClockFn clock);
+int gl_renderer_swap_timestamps(uint64_t *out, int cap);
 
 /* Native-wide mirror ablation (perf attribution, debug cmd gl_ws_ablate):
  * 0 = normal, 1 = skip the whole mirror pass (incl. wide_clear), 2 = full mirror

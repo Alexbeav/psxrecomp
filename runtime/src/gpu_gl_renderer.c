@@ -746,6 +746,8 @@ static double        s_interp_host_hz = 0.0;
 static double        s_interp_target_hz = 0.0;
 static double        s_interp_source_hz = 0.0;
 static FrameInterpolationSchedule s_interp_schedule;
+static uint64_t s_interp_pending_deadline;
+static _Atomic int s_interp_async_cadence;
 /* Blend source (psx_mod_set_frame_interpolation_source). VBLANK (0, the
  * default) treats every guest VBlank present as a new frame, exactly as
  * before. FLIP (1) rotates history only on a real flip -- the display origin
@@ -8063,6 +8065,7 @@ void gl_renderer_set_ws_ablate(int mode) {
 int  gl_renderer_get_ws_ablate(void)     { return s_ws_ablate; }
 
 static void interp_reset_history_unlocked(void) {
+    atomic_store_explicit(&s_interp_async_cadence, 0, memory_order_release);
     s_interp_valid = 0;
     s_interp_w = s_interp_h = 0;
     s_interp_src_w = s_interp_src_h = 0;
@@ -8156,6 +8159,10 @@ static int interp_suspended_now(void) {
 
 int gl_renderer_interpolation_owns_cadence(void) {
     return s_ctx && s_interp_enabled && !interp_suspended_now();
+}
+
+int gl_renderer_interpolation_async_cadence(void) {
+    return atomic_load_explicit(&s_interp_async_cadence, memory_order_acquire);
 }
 
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
@@ -8332,7 +8339,7 @@ static int interp_present(float alpha) {
                                s_interp_blend_mode);
 }
 
-static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
+static void interp_wait_until_ex(uint64_t deadline, uint64_t frequency, int render_idle) {
     uint64_t now, start;
     if (!deadline || !frequency) return;
     start = SDL_GetPerformanceCounter();
@@ -8340,8 +8347,10 @@ static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
         now = SDL_GetPerformanceCounter();
         if (now >= deadline) {
             /* Idle host time feeds the render-pass budget. */
-            (void)s_idle_ticks_accum_fwd(now - start);
-            if (s_dyn_on) s_dyn_ledger.idle_ticks += now - start;
+            if (render_idle) {
+                (void)s_idle_ticks_accum_fwd(now - start);
+                if (s_dyn_on) s_dyn_ledger.idle_ticks += now - start;
+            }
             return;
         }
         uint64_t remain = deadline - now;
@@ -8354,8 +8363,28 @@ static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
     }
 }
 
+static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
+    interp_wait_until_ex(deadline, frequency, 1);
+}
+static int hiw_async_pacing(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_GL_HIW_ASYNC_PACE");
+        enabled = !(e && e[0] == '0');
+    }
+    /* HiW refuses temporal render transactions already. Hold at guest rate
+     * needs one composed output per VBlank, with its wait on the presenter so
+     * the renderer can prepare the next scene. Other modes retain their render
+     * pass/idle-credit schedule unchanged. */
+    return enabled && s_hiw && s_interp_hold && s_pt_on && s_rth_on &&
+           rt_on_render_thread() && s_interp_target_hz <= s_interp_source_hz + 1e-6;
+}
+
 static void interp_present_source_interval_timed_impl(void) {
     static uint64_t diag_start, diag_swaps, diag_captures;
+    const int asynchronous = hiw_async_pacing();
+    s_interp_schedule.queued = asynchronous;
+    atomic_store_explicit(&s_interp_async_cadence, asynchronous, memory_order_release);
     uint64_t frequency = SDL_GetPerformanceFrequency();
     uint64_t now = SDL_GetPerformanceCounter();
     uint64_t deadline;
@@ -8371,14 +8400,16 @@ static void interp_present_source_interval_timed_impl(void) {
     while (frame_interpolation_schedule_next(
                &s_interp_schedule, SDL_GetPerformanceCounter(),
                &deadline, &alpha)) {
-        interp_wait_until(deadline, frequency);
+        if (!asynchronous) interp_wait_until(deadline, frequency);
+        s_interp_pending_deadline = asynchronous ? deadline : 0;
         latency_ring_mark(LAT_SWAP_BEGIN);
         if (!pass_gen_present(deadline))
             (void)interp_present(alpha);
         latency_ring_mark(LAT_SWAP_END);
+        s_interp_pending_deadline = 0;
     }
-    interp_wait_until(frame_interpolation_schedule_end(&s_interp_schedule),
-                      frequency);
+    if (!asynchronous)
+        interp_wait_until(frame_interpolation_schedule_end(&s_interp_schedule), frequency);
 
     now = SDL_GetPerformanceCounter();
     if (!diag_start) {
@@ -10113,6 +10144,7 @@ static int           s_pt_want = 0, s_pt_slots = 3;
 static GLenum        s_pt_format = GL_RGBA8;   /* the window's: no alpha -> GL_RGB8 */
 static SDL_GLContext s_pt_ctx = NULL;
 static GLuint        s_pts_tex[PT_MAX_SLOTS], s_pts_rb[PT_MAX_SLOTS], s_pts_fbo[PT_MAX_SLOTS];
+static uint64_t      s_pts_deadline[PT_MAX_SLOTS];
 static int           s_pts_w[PT_MAX_SLOTS], s_pts_h[PT_MAX_SLOTS];
 static unsigned      s_pts_gen[PT_MAX_SLOTS];
 /* present thread's own objects (FBOs are per-context) */
@@ -10181,6 +10213,8 @@ static int pt_cb_ctx(void *user, int current) {
 
 /* The one owned swap call: the composing thread's (direct) or the present
  * thread's. */
+static uint64_t s_swap_times[GL_SWAP_TIMING_CAP], s_swap_times_n;
+static _Atomic(GlSwapClockFn) s_swap_clock;
 static void gl_window_swap(void) {
 #if defined(PSX_SDL3)
     psx_video_telemetry_present(SDL_GL_SwapWindow(s_win) ? 1 : 0);
@@ -10188,6 +10222,27 @@ static void gl_window_swap(void) {
     SDL_GL_SwapWindow(s_win);
     psx_video_telemetry_present(-1); // SDL2 exposes no swap result.
 #endif
+    GlSwapClockFn clock = atomic_load_explicit(&s_swap_clock, memory_order_acquire);
+    if (clock) s_swap_times[s_swap_times_n++ % GL_SWAP_TIMING_CAP] = clock();
+}
+
+void gl_renderer_swap_timing_start(GlSwapClockFn clock) {
+    GL_RT_SYNC("swap_timing_start");
+    if (s_pt_on) pt_drain();
+    s_swap_times_n = 0;
+    atomic_store_explicit(&s_swap_clock, clock, memory_order_release);
+}
+
+int gl_renderer_swap_timestamps(uint64_t *out, int cap) {
+    if (!out || cap <= 0) return 0;
+    GL_RT_SYNC("swap_timestamps");
+    if (s_pt_on) pt_drain();
+    /* Context handoff plus presenter drain leave the single swap writer idle. */
+    uint64_t n = s_swap_times_n < GL_SWAP_TIMING_CAP ? s_swap_times_n : GL_SWAP_TIMING_CAP;
+    if (n > (uint64_t)cap) n = (uint64_t)cap;
+    uint64_t first = s_swap_times_n - n;
+    for (uint64_t i=0; i<n; ++i) out[i] = s_swap_times[(first+i) % GL_SWAP_TIMING_CAP];
+    return (int)n;
 }
 
 static void *pt_cb_present(void *user, int slot, void *ready) {
@@ -10224,6 +10279,9 @@ static void *pt_cb_present(void *user, int slot, void *ready) {
     GL_PRESENT_THREAD_TEST_HOOK(slot);
 #endif
     void *done = p_glFenceSync(PT_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    /* Submission publishes this slot's deadline under the presenter queue
+     * mutex. This wait grants no renderer idle credit: it overlaps rendering. */
+    interp_wait_until_ex(s_pts_deadline[slot], SDL_GetPerformanceFrequency(), 0);
     gl_window_swap();
     return done;
 }
@@ -10303,6 +10361,7 @@ static void pt_end(void) {
 static void gl_present_swap(void) {
     if (!s_pt_on) { gl_window_swap(); return; }
     (void)pt_target_fbo();   /* a frame that never bound 0 still has its slot */
+    s_pts_deadline[pt_current()] = s_interp_pending_deadline;
     void *ready = p_glFenceSync(PT_SYNC_GPU_COMMANDS_COMPLETE, 0);
     glFlush();
     void *done = NULL;

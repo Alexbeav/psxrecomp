@@ -2055,3 +2055,19 @@ R4 recorded-route production probe improves 53.371 to 57.472 guest Hz;
 zero-gap acceptance remains open. Matched GPU completion probes also reject
 a separate depth shader (no improvement); that experiment was removed.
 See title analysis/render-60fps/SLOWDOWNS.md for receipts and limitations.
+
+
+### 2026-10-21: Bounded asynchronous presentation pacing
+
+Publish drawable sizes from SDL3 pixel-size events instead of querying window
+properties per frame. Batch SPSC queue consumption/accounting on separated
+producer/consumer cache lines. For HiW hold output at guest rate, move deadline
+waits to the existing presenter; its bounded queue paces the guest without a
+second independent timer. Queued scheduling preserves early producer anchors.
+Guest device timing and quality settings are unchanged. Hardware image/mask,
+resize and scheduling controls pass. R4 Release default Ultra recorded drives
+cover 60 seconds at 60.000 guest Hz, p99 emulation busy 52.3% idle / 56.4% with
+23.61% total host CPU background load; zero presented gaps >25 ms, maxima
+17.286/17.567 ms. Internal callback/completion gaps are separately reported and
+are not claimed to pass that limit. See title SLOWDOWNS.md for attribution,
+receipts, and clock definitions. No release or main-branch landing.

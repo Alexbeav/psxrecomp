@@ -4070,6 +4070,17 @@ static int present_effective_swap_interval(void) {
 }
 
 static int present_should_wall_pace(void) {
+    static const bool queued_pace = [] {
+        const char *e = std::getenv("PSX_GL_ASYNC_GUEST_PACE");
+        return !(e && e[0] == '0');
+    }();
+    /* The presenter explicitly waits for each guest-rate deadline. Bounded
+     * render/present queues carry that clock back to the guest, independently
+     * of driver vsync; a second guest timer only serializes the pipeline. */
+    if (queued_pace && g_frame_interpolation && g_gl_active &&
+        gl_renderer_render_thread_active() && !rt_held() &&
+        gl_renderer_interpolation_async_cadence())
+        return 0;
     /* While this thread owns the GL context, temporal presentation subdivides
      * this same interval. When rendering is asynchronous, cap the guest here:
      * the renderer's presentation deadline belongs to its own thread. */
@@ -4993,14 +5004,20 @@ static void openxr_ready_report_tick(uint64_t frames) {
 /* Explicit, file-driven production benchmark. No debug server, sampler or
  * per-instruction tracing is needed. Capture outside the measured interval;
  * export the existing frame ring before requesting the normal quit path. */
+struct ReplayWorkSample { uint64_t frame, guest, pacer, queue, completed; };
+static std::vector<ReplayWorkSample> g_replay_work;
+static void input_replay_frame_completed(uint64_t frame) {
+    if (g_replay_work.empty()) return;
+    auto &sample = g_replay_work[frame % HOST_FRAME_STAMP_CAP];
+    if (sample.frame == frame) sample.completed = host_clock_us();
+}
 static void input_replay_frontend_tick(uint64_t frame) {
     uint64_t relative = input_replay_frame(frame);
     if (relative == UINT64_MAX) return;
     static uint64_t stop = 0, seconds = 0, deadline_us = 0;
     static const char *report = nullptr, *shots = nullptr;
     static bool initialized = false, finished = false;
-    struct WorkSample { uint64_t frame, guest, pacer, queue; };
-    static std::vector<WorkSample> work;
+    auto &work = g_replay_work;
     if (!initialized) {
         if (const char *e = std::getenv("PSX_INPUT_REPLAY_STOP")) stop = std::strtoull(e, nullptr, 10);
         if (const char *e = std::getenv("PSX_INPUT_REPLAY_SECONDS")) {
@@ -5011,7 +5028,10 @@ static void input_replay_frontend_tick(uint64_t frame) {
         }
         report = std::getenv("PSX_INPUT_REPLAY_REPORT");
         shots = std::getenv("PSX_INPUT_REPLAY_SHOTS");
-        if (report && *report) work.resize(HOST_FRAME_STAMP_CAP);
+        if (report && *report) {
+            work.resize(HOST_FRAME_STAMP_CAP);
+            if (g_gl_active) gl_renderer_swap_timing_start(host_clock_us);
+        }
         initialized = true;
     }
     if (finished) return;
@@ -5024,7 +5044,7 @@ static void input_replay_frontend_tick(uint64_t frame) {
         const uint64_t hz = SDL_GetPerformanceFrequency();
         work[frame % HOST_FRAME_STAMP_CAP] = {frame, g_runtime_perf.guest_work_ticks * 1000000 / hz,
                         g_runtime_perf.pacer_ticks * 1000000 / hz,
-                        (rs.backpressure_ns + rs.ring_full_ns + rs.acquire_ns) / 1000};
+                        (rs.backpressure_ns + rs.ring_full_ns + rs.acquire_ns) / 1000, 0};
     }
     if (shots && (relative == 800 || (stop > 0 && relative == stop+2))) {
         char path[512];
@@ -5036,7 +5056,7 @@ static void input_replay_frontend_tick(uint64_t frame) {
     if (report && *report) {
         FILE *f = std::fopen(report, "w");
         if (!f) throw std::runtime_error("cannot write input replay frame report");
-        std::fputs("frame,relative,us,interp,checks,faults,io_kb,guest_us,pacer_us,queue_us\n", f);
+        std::fputs("frame,relative,us,interp,checks,faults,io_kb,guest_us,pacer_us,queue_us,completed_us\n", f);
         uint64_t total = host_frame_stamp_total();
         uint64_t first = total > HOST_FRAME_STAMP_CAP ? total-HOST_FRAME_STAMP_CAP : 0;
         for (uint64_t i=first; i<total; i++) {
@@ -5046,10 +5066,10 @@ static void input_replay_frontend_tick(uint64_t frame) {
             if (rel == UINT64_MAX) continue;
             const auto &w = work[fr % HOST_FRAME_STAMP_CAP];
             if (w.frame != fr) continue;
-            std::fprintf(f, "%u,%llu,%llu,%u,%u,%u,%u,%llu,%llu,%llu\n", fr,
+            std::fprintf(f, "%u,%llu,%llu,%u,%u,%u,%u,%llu,%llu,%llu,%llu\n", fr,
                          (unsigned long long)rel, (unsigned long long)us, ii, ck, pf, io,
                          (unsigned long long)w.guest, (unsigned long long)w.pacer,
-                         (unsigned long long)w.queue);
+                         (unsigned long long)w.queue, (unsigned long long)w.completed);
         }
         if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay frame report");
         std::string span_path = std::string(report) + ".spans.csv";
@@ -5077,6 +5097,14 @@ static void input_replay_frontend_tick(uint64_t frame) {
             if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay render thread report");
             GlRenderWorkStats stats{};
             gl_renderer_work_stats(&stats);
+            std::vector<uint64_t> swaps(GL_SWAP_TIMING_CAP);
+            const int swap_count = gl_renderer_swap_timestamps(swaps.data(), (int)swaps.size());
+            std::string swap_path = std::string(report) + ".present.csv";
+            f = std::fopen(swap_path.c_str(), "w");
+            if (!f) throw std::runtime_error("cannot write input replay presentation report");
+            std::fputs("us\n", f);
+            for (int i=0; i<swap_count; ++i) std::fprintf(f,"%llu\n",(unsigned long long)swaps[i]);
+            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay presentation report");
             std::string path = std::string(report) + ".render.csv";
             f = std::fopen(path.c_str(), "w");
             if (!f) throw std::runtime_error("cannot write input replay render report");
@@ -11251,6 +11279,13 @@ extern "C" int psx_dynres_status_json(char *out, int cap) {
 
 
 static void sdl_vblank_present(void) {
+    extern uint64_t s_frame_count;
+    struct ReplayCompletion {
+        ~ReplayCompletion() {
+            extern uint64_t s_frame_count;
+            input_replay_frame_completed(s_frame_count);
+        }
+    } completion;
     sync_guest_cadence_to_video_standard();
     NetplayVblankEpilogue ep = sdl_vblank_present_body();
     render_thread_vblank();

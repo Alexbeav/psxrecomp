@@ -365,7 +365,7 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-render-thread-results")
         set_tests_properties(gl_render_thread_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
-        foreach(_interp_mode normal hiw wide_quality hiw_wide_quality)
+        foreach(_interp_mode normal hiw wide_quality hiw_wide_quality hiw_wide_quality_present)
             set(_interp_args --interpolation)
             if(_interp_mode MATCHES "wide_quality")
                 list(APPEND _interp_args --wide-present --quality)
@@ -383,6 +383,10 @@ if(BUILD_TESTING)
             if(_interp_mode MATCHES "hiw")
                 set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
                     PROPERTIES ENVIRONMENT "PSX_GL_HIRES_WINDOW=1")
+            endif()
+            if(_interp_mode MATCHES "_present$")
+                set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
+                    PROPERTIES ENVIRONMENT "PSX_GL_HIRES_WINDOW=1;PSX_GL_TEST_PRESENT_THREAD=1")
             endif()
         endforeach()
         # Frame generation ([video] frame_generation): the real presented

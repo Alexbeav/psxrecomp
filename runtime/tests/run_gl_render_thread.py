@@ -162,7 +162,8 @@ def main():
                     "PSX_GL_STATE_QUERY_FAST", "PSX_GL_QUEUE_UPLOAD_FAST",
                     "PSX_GL_BLOOM_FUSE_EXTEND", "PSX_GL_TEXEL_CACHE",
                     "PSX_GL_HIW_COPY_FAST", "PSX_GL_IDENTITY_COPY_FAST",
-                    "PSX_GL_DRAWABLE_EVENTS", "PSX_RENDER_QUEUE_BATCH")
+                    "PSX_GL_DRAWABLE_EVENTS", "PSX_RENDER_QUEUE_BATCH",
+                    "PSX_GL_HIW_ASYNC_PACE")
                 controls = [{flag: "0" for flag in flags}]
                 controls += [{flag: "0"} for flag in flags]
                 controls += [{"PSX_GL_TEXEL_CACHE_LAYERS": "4"}]

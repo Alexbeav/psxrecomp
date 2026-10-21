@@ -132,6 +132,10 @@ static void test_live_resolution(int original_scale) {
     check(gl_renderer_set_internal_scale_live(original_scale) == original_scale,
           "live resolution recovers after refusal");
 }
+static uint64_t fixture_clock_us(void) {
+    const uint64_t now = SDL_GetPerformanceCounter(), hz = SDL_GetPerformanceFrequency();
+    return now / hz * 1000000u + now % hz * 1000000u / hz;
+}
 static int drawable_worker(void *data) {
     int *size = data;
     gl_drawable_size(&size[0], &size[1]);
@@ -346,6 +350,7 @@ int main(int argc, char **argv) {
     gr_set_scale(scale);
     if (dynres) gl_renderer_set_dynamic_resolution(1);
     gl_renderer_set_swap_interval(0);
+    if (getenv("PSX_GL_TEST_PRESENT_THREAD")) gl_renderer_set_present_thread(1, 3);
     if (!gl_renderer_init_context(win)) { fprintf(stderr, "FAIL context\n"); return 2; }
     check(gr_backend() == GR_BACKEND_OPENGL, "OpenGL backend");
     textures();
@@ -353,6 +358,7 @@ int main(int argc, char **argv) {
         check(hiw_ensure(0, FRAME_W) != NULL, "first hires buffer");
         check(hiw_ensure(512, 512+FRAME_W) != NULL, "second hires buffer");
     }
+    gl_renderer_swap_timing_start(fixture_clock_us);
     gr_wide_configure(426, 53);
     if (quality_scene) {
         gl_renderer_set_bloom(1.0f);
@@ -507,6 +513,16 @@ int main(int argc, char **argv) {
          * final readbacks; never more than one per frame plus the tail. */
         check(st.acquires >= 2 && st.acquires <= (uint64_t)frames + 4, "acquires bounded");
         check(st.bytes > ((uint64_t)32 << 20), "ring wrapped (more than its size recorded)");
+    }
+    {
+        uint64_t times[256], tail[2];
+        int count = gl_renderer_swap_timestamps(times, 256);
+        check(count > 2, "swap completion timestamps captured");
+        for (int i=1; i<count; ++i)
+            check(times[i] >= times[i-1], "swap clock is monotonic");
+        check(gl_renderer_swap_timestamps(tail, 2) == 2 &&
+              tail[0] == times[count-2] && tail[1] == times[count-1],
+              "bounded swap query returns newest entries");
     }
     if (drawable_events_enabled())
         check(s_drawable_queries == drawable_queries_before, "no per-frame drawable queries");
