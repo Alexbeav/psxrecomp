@@ -120,14 +120,18 @@ static uint64_t s_fg_flips;   /* frame generation (below): game frames seen */
 static GlRenderWorkStats s_cpu_work;
 static int s_cpu_perf_mode = -1;
 static int gl_cpu_probe_gpu(int kind) {
-    return s_cpu_perf_mode == 2 && kind != 0 && kind != 4;
+    return s_cpu_perf_mode == 2 && kind > 0 && kind < 6 && kind != 4;
 }
-static uint64_t gl_cpu_begin(int kind) {
+static int gl_cpu_mode(void) {
     if (s_cpu_perf_mode < 0) {
         const char *e = getenv("PSX_GL_CPU_PERF");
-        s_cpu_perf_mode = e && (e[0] == '1' || e[0] == '2') ? e[0] - '0' : 0;
+        s_cpu_perf_mode = e && e[0] >= '1' && e[0] <= '3' ? e[0] - '0' : 0;
     }
-    if (!s_cpu_perf_mode) return 0;
+    return s_cpu_perf_mode;
+}
+
+static uint64_t gl_cpu_begin(int kind) {
+    if (!gl_cpu_mode()) return 0;
     if (gl_cpu_probe_gpu(kind)) {
         uint64_t start = SDL_GetPerformanceCounter();
         glFinish();
@@ -797,6 +801,10 @@ static GLuint        s_hr_tex = 0, s_hr_fbo = 0, s_hr_rb = 0;
 static int           s_hr_alloc = 0;
 /* Native raw-1555 sampling mirror + readback source. */
 static GLuint        s_raw_tex = 0, s_raw_fbo = 0;
+static void texel_cache_dirty(int x0, int y0, int x1, int y1);
+static void texel_cache_reset(void);
+static void texel_cache_bind(void);
+static void texel_cache_unpin(void);
 /* CPU->VRAM upload staging (native RGBA8). */
 static GLuint        s_up_tex = 0;
 /* copy_rect staging (hr-sized RGBA8). */
@@ -1421,6 +1429,8 @@ static void present_target_quad(GLuint tex, float tex_w, float tex_h,
                                 int apply_gamma, int src_scale);
 
 static void coh_record(int kind, int x0, int y0, int x1, int y1) {
+    if (kind == GL_COH_PACK || kind == GL_COH_FLUSH || kind == GL_COH_UPLOAD)
+        texel_cache_dirty(x0,y0,x1,y1);
     GlCohEvent *e = &s_coh_ring[s_coh_seq % GL_COH_RING_CAP];
     e->frame = (uint32_t)s_frame_count;
     e->kind  = (uint8_t)kind;
@@ -2004,6 +2014,7 @@ static const char *TEX_FS =
     "uniform sampler2D u_hd_texture;\n"
     "uniform usampler2D u_vram;\n"
     "uniform usampler2D u_palette;\n"
+    "uniform usampler2DArray u_decoded;\n"
     "uniform int u_semipass;  /* 0=all texels, 1=STP=0 only, 2=STP=1 only */\n"
     "uniform int u_semimode;  /* PS1 blend mode; drives dual-source factors */\n"
     "uniform int u_maskset;   /* GP0(E6h) set-mask: OR bit15 into output */\n"
@@ -2031,6 +2042,7 @@ static const char *TEX_FS =
     "    u = clamp(u, v_limits.x, v_limits.z);\n"
     "    v = clamp(v, v_limits.y, v_limits.w);\n"
     "  }\n"
+    "  if (v_depth >= 4) return int(texelFetch(u_decoded,ivec3(u,v,v_depth-4),0).r);\n"
     "  if (v_depth == 0) {\n"
     "    int px = vram_at(v_tpage.x + (u >> 2), v_tpage.y + v);\n"
     "    return palette_at(v_clut.x + ((px >> ((u & 3) * 4)) & 0xF), v_clut.y);\n"
@@ -2457,6 +2469,8 @@ static void hr_end(void) {
  * calls depth_restore after its draw (tex: textured program bound). */
 static GLint s_geo_uZbias = -1, s_tex_uZbias = -1;
 static GLint s_tex_uBcls = -1, s_geo_uBcls = -1, s_geo_uBadd = -1;
+static uint64_t s_depth_probe_ordinal;
+static int s_depth_probe_current, s_hq_replay_active;
 static uint64_t s_coverage_depth_draws;
 static int coverage_fast_enabled(void) {
     static int enabled = -1;
@@ -2534,7 +2548,11 @@ static void depth_restore_ex_timed_impl(int mode, int tex, int n, int semi, int 
 
 static void depth_restore_ex(int mode, int tex, int n, int semi, int mask, int first) {
     uint64_t start = gl_cpu_begin(0);
+    uint64_t sample = 0;
+    if (s_depth_probe_current && tex && mode == 1) { glFinish(); sample = SDL_GetPerformanceCounter(); }
     depth_restore_ex_timed_impl(mode, tex, n, semi, mask, first);
+    if (sample) { glFinish(); gl_cpu_end(6, sample); }
+    s_depth_probe_current = 0;
     gl_cpu_end(0, start);
 }
 
@@ -3688,7 +3706,9 @@ static void bind_textured_resources(GLuint source, GLuint palette, GLuint hd) {
     p_glActiveTexture(PSXGL_TEXTURE0 + 2);
     glBindTexture(GL_TEXTURE_2D, hd ? hd : s_up_tex); p_glUniform1i(s_uHdTexture, 2);
     p_glActiveTexture(PSXGL_TEXTURE0);
+    texel_cache_bind();
 }
+#include "gl_texel_cache.inc"
 static int   s_tb_twin[4] = {0, 0, 0, 0};
 static uint64_t s_batch_total = 0, s_batch_reason[8];
 
@@ -3838,7 +3858,7 @@ static int bcls_fuse_begin(int semi, int dmode, int mask, int check, int b3d, in
 /* tb_mask / check are the batch's set-mask and the mask-check state it was
  * drawn under; track_stencil lets the canonical pass record deferred stencil
  * (a replay into the high-resolution window must not touch that flag). */
-static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
+static void tex_draw_passes_impl(int nverts, int semi, int tb_mask, int check,
                                int track_stencil, int b3d, int dmode, int first) {
     int fused = 0;
     p_glUniform1i(s_uSemimode, semi < 0 ? 0 : semi);
@@ -3913,6 +3933,16 @@ static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
         }
     }
 }
+static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
+                               int track_stencil, int b3d, int dmode, int first) {
+    s_depth_probe_current = gl_cpu_mode() == 3 && dmode == 1 &&
+        (s_hr_scale > 1 || (s_hiw && s_hq_replay_active)) && (++s_depth_probe_ordinal % 128u) == 0;
+    uint64_t sample = 0;
+    if (s_depth_probe_current) { glFinish(); sample = SDL_GetPerformanceCounter(); }
+    tex_draw_passes_impl(nverts, semi, tb_mask, check, track_stencil, b3d, dmode, first);
+    if (sample) { glFinish(); gl_cpu_end(7, sample); }
+}
+
 static void tex_batch_draw_passes(int nverts, int semi) {
     tex_draw_passes_ex(nverts, semi, s_tb_mask, s_mask_check, 1, s_tb_b3d, s_tb_depth, 0);
 }
@@ -4323,7 +4353,11 @@ static void hiw_flush_queue_timed_impl(void) {
 
 static void hiw_flush_queue(void) {
     uint64_t start = gl_cpu_begin(1);
+    int previous = s_hq_replay_active;
+    s_hq_replay_active = 1;
     hiw_flush_queue_timed_impl();
+    s_hq_replay_active = previous;
+    if (!s_tb_n && !s_hq_n) texel_cache_unpin();
     gl_cpu_end(1, start);
 }
 
@@ -4403,6 +4437,7 @@ static void flush_tex_batch_impl(void) {
     }
     hr_end();
     if (--s_cw_flush_depth == 0) s_cw_flush_ms += cw_ms() - cw_t0;
+    if (!s_tb_n && !s_hq_n) texel_cache_unpin();
 }
 
 /* Flat / gouraud GEO batch — MotK title/char-select starfields issue ~30k/s
@@ -5112,6 +5147,13 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             flush_tex_batch();
         }
         if (s_tb_n + 3 > TEXBATCH_MAXV) { s_batch_reason[6]++; flush_tex_batch(); }
+        const int cache_bounds = (twx | twy) ||
+            (lim[0] >= 0 && lim[1] >= 0 && lim[2] <= 255 && lim[3] <= 255 &&
+             lim[0] <= lim[2] && lim[1] <= lim[3]);
+        int decoded = hd_tex || !cache_bounds ? -1 : texel_cache_get(
+            s_selected_bank_tex ? s_selected_bank_tex : s_raw_tex,
+            s_selected_bank_tex && !s_selected_bank_live_clut ? s_selected_bank_tex : s_raw_tex,
+            base_x,base_y,depth,clut_x,clut_y);
         if (s_tb_n == 0) {            /* opening a batch: capture its keyed state */
             s_tb_semi = batch_semi; s_tb_mask = s_mask_set; s_tb_filter = filter; s_tb_gate = gate;
             s_tb_depth = tdmode;
@@ -5132,7 +5174,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[4] = col[i*3+0];     vp[5] = col[i*3+1];     vp[6] = col[i*3+2];   vp[7] = 1.0f;
             vp[8]  = (float)base_x;  vp[9]  = (float)base_y;        /* a_tpage  */
             vp[10] = (float)clut_x;  vp[11] = (float)clut_y;        /* a_clut   */
-            vp[12] = (float)depth;   vp[13] = (float)rawtex;        /* a_depth, a_raw */
+            vp[12] = (float)(decoded < 0 ? depth : decoded + 4);
+            vp[13] = (float)rawtex;        /* a_depth, a_raw */
             vp[14] = (float)lim[0];  vp[15] = (float)lim[1];        /* a_limits */
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
             vp[18] = (semi >= 0 ? (float)(semi + 1) : 0.0f)          /* a_semi code */
@@ -5866,6 +5909,7 @@ static void depth24_clear_skipped_fb(void) {
         glViewport(0, 0, VRAM_W, VRAM_H);
         glScissor(x0, y0, rw, rh);
         glClear(GL_COLOR_BUFFER_BIT);
+        texel_cache_dirty(x0,y0,x1,y1);
     }
     glDisable(GL_SCISSOR_TEST);
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
@@ -6362,6 +6406,7 @@ static int init_gpu_raster(void) {
     s_tex_uBcls = p_glGetUniformLocation(s_tex_prog, "u_bcls");
     p_glUseProgram(s_tex_prog);
     p_glUniform1i(p_glGetUniformLocation(s_tex_prog, "u_coverage_fast"), coverage_fast_enabled());
+    p_glUniform1i(p_glGetUniformLocation(s_tex_prog, "u_decoded"), 3);
     s_geo_uBcls = p_glGetUniformLocation(s_geo_prog, "u_bcls");
     s_geo_uBadd = p_glGetUniformLocation(s_geo_prog, "u_badd");
     s_uBlitSrc     = p_glGetUniformLocation(s_blit_prog, "u_src");
@@ -6683,6 +6728,7 @@ int gl_renderer_select_texture_bank_live_clut(uint16_t id) {
 
 int gl_renderer_init_context(SDL_Window *win) {
     s_win = win;
+    texel_cache_reset();
     s_window_owner = window_thread_id();
     gl_drawable_refresh();
     s_present_w = 0;
@@ -6814,6 +6860,7 @@ void gl_renderer_work_stats(GlRenderWorkStats *out) {
     out->counts[0] = s_hq_uploads; out->counts[1] = s_hq_saved_uploads;
     out->counts[2] = s_bcls_fused_draws; out->counts[3] = s_coverage_depth_draws;
     out->counts[4] = s_hq_center_pruned;
+    out->counts[5] = s_tc_hits; out->counts[6] = s_tc_misses; out->counts[7] = s_tc_evictions;
 }
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
@@ -8813,6 +8860,7 @@ static void pass_journal_rollback(void) {
         pass_blit(j->hr_fbo, s_hr_fbo, 0, 0, x * S, y * S, w * S, h * S,
                   GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         pass_blit(j->raw_fbo, s_raw_fbo, 0, 0, x, y, w, h, GL_COLOR_BUFFER_BIT);
+        texel_cache_dirty(x,y,x+w-1,y+h-1);
     }
     render_pass_journal_rollback(&s_pj_cpu, s_vram, VRAM_W);
 }
@@ -8989,6 +9037,7 @@ static void transaction_restore_ex(int keep_color) {
               s_pass_w * S, s_pass_h * S, hr_bits);
     pass_blit(s_pb_raw_fbo, s_raw_fbo, 0, 0, s_pass_x, s_pass_y, s_pass_w,
               s_pass_h, GL_COLOR_BUFFER_BIT);
+    texel_cache_dirty(s_pass_x,s_pass_y,s_pass_x+s_pass_w-1,s_pass_y+s_pass_h-1);
     if (s_pb_wide_src && s_pb_wide_src == pass_wide_fbo_for(s_pass_x)) {
         pass_blit(s_pb_wide_fbo, s_pb_wide_src, 0, 0, 0, s_pass_y * S,
                   g_wide_w * S, s_pass_h * S, hr_bits);

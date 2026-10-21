@@ -571,9 +571,9 @@ int gl_renderer_perf_aggregate(int wide_filter, double out[18]);
 /* Bounded benchmark attribution. CPU spans require PSX_GL_CPU_PERF=1;
  * reading drains the render queue, so read outside the measured interval. */
 typedef struct {
-    uint64_t counts[5];
-    uint64_t calls[6], ticks[6], max_ticks[6], frequency;
-    uint64_t prior_ticks[6], prior_max_ticks[6];
+    uint64_t counts[8];
+    uint64_t calls[8], ticks[8], max_ticks[8], frequency;
+    uint64_t prior_ticks[8], prior_max_ticks[8];
 } GlRenderWorkStats;
 void gl_renderer_work_stats(GlRenderWorkStats *out);
 

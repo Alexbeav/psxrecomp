@@ -35,6 +35,10 @@ Optional bounded benchmark controls:
   This serializes the pipeline and is attribution only. Totals cover the
   whole replay, including warmup. `.rth.json` records queue waits and recent
   context-acquisition reasons before the report's own drain.
+  `PSX_GL_CPU_PERF=3` instead samples one in 128 high-resolution textured
+  depth batches: `colour_gpu_sample` and `depth_gpu_sample` finish GPU work
+  around the same batch's colour and depth draws. Sampling perturbs cadence;
+  these completion spans are not acceptance frame times.
   `PSX_GL_PERF=1` additionally enables GPU queries in production and exports
   rolling GPU aggregates to `.gpu.csv`; use this for separate attribution
   trials, since queries can perturb the measured workload.

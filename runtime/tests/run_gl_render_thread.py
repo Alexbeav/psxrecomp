@@ -157,13 +157,15 @@ def main():
                 ok = False
             runs[threaded] = p
             if args.wide_present:
-                for margin, coverage, state, upload, bloom in ((0, 0, 0, 0, 0), (0, 0, 1, 1, 1), (0, 1, 1, 1, 1), (1, 0, 1, 1, 1), (1, 1, 1, 0, 1), (1, 1, 1, 1, 0)):
+                for margin, coverage, state, upload, bloom, cache, layers in ((0,0,0,0,0,0,256), (0,0,1,1,1,1,256), (0,1,1,1,1,1,256), (1,0,1,1,1,1,256), (1,1,1,0,1,1,256), (1,1,1,1,0,1,256), (1,1,1,1,1,0,256), (1,1,1,1,1,1,4)):
                     reference = run([probe, s, threaded, args.frames, *mode],
                                     {"PSX_GL_WIDE_MARGIN_SCISSOR": str(margin),
                                      "PSX_GL_COVERAGE_FAST": str(coverage),
                                      "PSX_GL_STATE_QUERY_FAST": str(state),
                                      "PSX_GL_QUEUE_UPLOAD_FAST": str(upload),
-                                     "PSX_GL_BLOOM_FUSE_EXTEND": str(bloom)})
+                                     "PSX_GL_BLOOM_FUSE_EXTEND": str(bloom),
+                                     "PSX_GL_TEXEL_CACHE": str(cache),
+                                     "PSX_GL_TEXEL_CACHE_LAYERS": str(layers)})
                     baseline = parse(reference.stdout)
                     if reference.returncode or baseline["failures"] != 0 or any(baseline[k] != p[k] for k in KEYS):
                         print(f"FAIL scale {s}: margin={margin} coverage={coverage} changed rendered output", baseline, p)

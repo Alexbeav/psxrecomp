@@ -468,10 +468,17 @@ int main(int argc, char **argv) {
                (unsigned long long)s_hq_saved_uploads);
     }
     if (quality_scene && coverage_fast_enabled()) {
+
         check(s_bcls_fused_draws > 0, "bloom stencil fused with colour draws");
         printf("fused_draws=%llu\n", (unsigned long long)s_bcls_fused_draws);
         check(s_coverage_depth_draws > 0, "coverage-only depth passes ran");
         printf("coverage_draws=%llu\n", (unsigned long long)s_coverage_depth_draws);
+    }
+    if (!getenv("PSX_GL_TEXEL_CACHE") || getenv("PSX_GL_TEXEL_CACHE")[0] != '0') {
+        check(s_tc_ready == 1 && s_tc_hits > 0 && s_tc_misses > 0, "decoded indexed texels reused");
+        printf("texel_cache_hits=%llu misses=%llu evictions=%llu\n",
+               (unsigned long long)s_tc_hits, (unsigned long long)s_tc_misses,
+               (unsigned long long)s_tc_evictions);
     }
     if (threaded) {
         RtStats st;

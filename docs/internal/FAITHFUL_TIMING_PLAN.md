@@ -2044,3 +2044,14 @@ Guest-frame lookup merged multiple extra presentations and could not verify
 HUD stability. Added duplicate-frame/freeze/eviction regression coverage and
 retained legacy frame lookup. Six focused framework checks and all 21 title
 checks pass on Windows and Linux, and both runtime builds link successfully.
+
+### 2026-10-21: Production indexed texture decode reuse
+
+Cache native 1555 indexed-page/CLUT decode results with raw-VRAM tile
+generations and deferred-draw layer pinning. No filtering or guest behavior
+changes. Hardware fixtures compare five hashes with cache off and forced
+eviction, normal/HiW allocation, 1x/4x, render thread off/on; all pass.
+R4 recorded-route production probe improves 53.371 to 57.472 guest Hz;
+zero-gap acceptance remains open. Matched GPU completion probes also reject
+a separate depth shader (no improvement); that experiment was removed.
+See title analysis/render-60fps/SLOWDOWNS.md for receipts and limitations.
