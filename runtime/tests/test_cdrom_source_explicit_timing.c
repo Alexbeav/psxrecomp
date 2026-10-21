@@ -182,6 +182,19 @@ int main(void) {
     CHECK(response_count==8 && !memcmp(response_fifo,physical_q,8),"Nymashock GetlocP reports the last physical read before the data pipeline");
     s_nymashock_drive=0;response_clear();irq_flag=0;exec_command(0x11);
     CHECK(response_fifo[4]==0x34 && response_fifo[7]==0x34,"older GetlocP position remains unchanged");
+    /* Spec 6.7 G2b without a drive profile, on the source read pipeline. The
+     * Octoshock 2.3 oracle fixture C6-getlocp-reading delivers sectors 10000 to
+     * 10003 and then answers 02:13:30 / 02:15:30, sector 10005. */
+    set_model("PSX_CD_READ_START_MODEL","octoshock-2.2.2-pipeline");
+    cdrom_init("synthetic");
+    reading=1;stat_reg=CDSTAT_MOTOR|CDSTAT_READ;
+    lba_to_msf(10004,150,&read_min,&read_sec,&read_sect);
+    response_clear();irq_flag=0;exec_command(0x11);
+    const uint8_t pipeline_q[8]={1,1,2,0x13,0x30,2,0x15,0x30};
+    CHECK(response_count==8 && !memcmp(response_fifo,pipeline_q,8),"source read pipeline GetlocP names the delivery cursor + 1");
+    stat_reg=CDSTAT_MOTOR|CDSTAT_SEEK;response_clear();irq_flag=0;exec_command(0x11);
+    CHECK(response_count==8 && response_fifo[4]==0x29 && response_fifo[7]==0x29,"source read pipeline GetlocP while seeking names the delivery cursor");
+    set_model("PSX_CD_READ_START_MODEL","");
     cd_tape_free(&s_source_clock_tape);s_source_clock=0;s_nymashock_drive=0;
 
     free(wire);free(default_a);free(default_b);

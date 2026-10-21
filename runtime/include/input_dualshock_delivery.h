@@ -1,15 +1,33 @@
 #ifndef PSX_INPUT_DUALSHOCK_DELIVERY_H
 #define PSX_INPUT_DUALSHOCK_DELIVERY_H
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include "sio.h"
 
+/* Which source wrote the route's axis bytes. The default is Nymashock, which
+ * hands the pad a 16-bit value per axis; PSX_INPUT_ROUTE_AXIS_MODEL=
+ * octoshock-byte selects Octoshock, whose wrapper hands the pad the logged
+ * byte unscaled [ORACLE FIXTURE P1, Octoshock 2.3; corpus PSX-TAS-001]. */
+static inline int input_dualshock_raw_axes(void)
+{
+    const char *model = getenv("PSX_INPUT_ROUTE_AXIS_MODEL");
+    return model && !strcmp(model, "octoshock-byte");
+}
+static inline const char *input_dualshock_controller_profile(void)
+{
+    return input_dualshock_raw_axes() ? "octoshock-byte-dualshock-neutral-analog"
+                                      : "nymashock-2.9.1-dualshock-neutral-analog";
+}
 /* Host-side conversion of a route axis byte through a 16-bit input value
  * onto the protocol byte range. [NOT OBSERVED: sub-byte host input] The pad
  * reports the axis bytes it is given exactly, in the order RX, RY, LX, LY
  * [ORACLE FIXTURE P1, Octoshock 2.3]; that fixture takes whole bytes, so it
- * cannot observe this rounding. This is a source bridge, not a deadzone. */
+ * cannot observe this rounding. This is a source bridge, not a deadzone.
+ * An Octoshock route's byte is already the protocol byte. */
 static inline uint8_t input_dualshock_protocol_axis(uint8_t source)
 {
+    if (input_dualshock_raw_axes()) return source;
     return (uint8_t)(((uint32_t)source * 256u * 255u + 32767u) / 65535u);
 }
 static inline void input_dualshock_protocol_sticks(const uint8_t source_ly_lx_ry_rx[4],
