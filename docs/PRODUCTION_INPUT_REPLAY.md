@@ -15,10 +15,17 @@ Optional bounded benchmark controls:
 
 - `PSX_INPUT_REPLAY_STOP=2700`: request normal shutdown ten frames after this
   zero-based route offset.
+- `PSX_INPUT_REPLAY_SECONDS=60`: instead of STOP, run a wall-time window of
+  1..60 seconds beginning at route offset 900. Stop at the first guest frame
+  after its deadline, then request shutdown ten frames later.
 - `PSX_INPUT_REPLAY_REPORT=/absolute/path/frames.csv`: export frame stamps and
   cumulative guest, pacer and render-queue times at shutdown. Enable existing
   `PSX_RUNTIME_PERF_DIAG=1` for guest/pacer counters. Times use microseconds;
   differences between adjacent rows describe the intervening guest interval.
+  A companion `.spans.csv` exports the bounded host attribution ring.
+  `PSX_GL_PERF=1` additionally enables GPU queries in production and exports
+  rolling GPU aggregates to `.gpu.csv`; use this for separate attribution
+  trials, since queries can perturb the measured workload.
 - `PSX_INPUT_REPLAY_SHOTS=/absolute/path/prefix`: request screenshots at route
   offsets 800 and STOP+2, outside the usual measured interval 900..2700.
 

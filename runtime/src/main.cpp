@@ -4070,9 +4070,11 @@ static int present_effective_swap_interval(void) {
 }
 
 static int present_should_wall_pace(void) {
-    /* The single-context temporal-blend path subdivides this same stock frame
-     * interval. Do not run the outer pacer as well or guest timing doubles. */
+    /* While this thread owns the GL context, temporal presentation subdivides
+     * this same interval. When rendering is asynchronous, cap the guest here:
+     * the renderer's presentation deadline belongs to its own thread. */
     if (g_frame_interpolation && g_gl_active &&
+        (!gl_renderer_render_thread_active() || rt_held()) &&
         gl_renderer_interpolation_owns_cadence())
         return 0;
     /* Run the pacer even when driver vsync is SUPPOSED to own the cadence.
@@ -4994,19 +4996,28 @@ static void openxr_ready_report_tick(uint64_t frames) {
 static void input_replay_frontend_tick(uint64_t frame) {
     uint64_t relative = input_replay_frame(frame);
     if (relative == UINT64_MAX) return;
-    static uint64_t stop = 0;
+    static uint64_t stop = 0, seconds = 0, deadline_us = 0;
     static const char *report = nullptr, *shots = nullptr;
     static bool initialized = false, finished = false;
     struct WorkSample { uint64_t frame, guest, pacer, queue; };
     static std::vector<WorkSample> work;
     if (!initialized) {
         if (const char *e = std::getenv("PSX_INPUT_REPLAY_STOP")) stop = std::strtoull(e, nullptr, 10);
+        if (const char *e = std::getenv("PSX_INPUT_REPLAY_SECONDS")) {
+            char *end = nullptr;
+            seconds = std::strtoull(e, &end, 10);
+            if (!seconds || seconds > 60 || !end || *end || stop)
+                throw std::runtime_error("replay seconds must be 1..60, without replay stop");
+        }
         report = std::getenv("PSX_INPUT_REPLAY_REPORT");
         shots = std::getenv("PSX_INPUT_REPLAY_SHOTS");
         if (report && *report) work.resize(HOST_FRAME_STAMP_CAP);
         initialized = true;
     }
     if (finished) return;
+    if (seconds && relative >= 900 && !deadline_us)
+        deadline_us = host_clock_us() + seconds * 1000000;
+    if (deadline_us && !stop && host_clock_us() >= deadline_us) stop = relative;
     if (report && *report) {
         RtStats rs{};
         rt_get_stats(&rs);
@@ -5054,6 +5065,19 @@ static void input_replay_frontend_tick(uint64_t frame) {
                              s.dur_us, s.frame, host_span_kind_name(s.kind), s.emu, s.arg);
         }
         if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay span report");
+        double gpu[18];
+        if (g_gl_active && gl_renderer_perf_aggregate(-1, gpu) > 0) {
+            std::string path = std::string(report) + ".gpu.csv";
+            f = std::fopen(path.c_str(), "w");
+            if (!f) throw std::runtime_error("cannot write input replay GPU report");
+            const char *names[18] = {"samples", "total_ms", "total_max_ms", "cpu_ms",
+                "present_wall_ms", "scene_gpu_ms", "scene_gpu_max_ms", "present_gpu_ms",
+                "present_gpu_max_ms", "primitives", "mirror_gpu_ms", "mirror_gpu_max_ms",
+                "mirror_passes", "cpu_flush_ms", "cpu_wide_ms", "batches", "wide_sets", "fbo_creations"};
+            std::fputs("stat,value\n", f);
+            for (int i=0; i<18; ++i) std::fprintf(f, "%s,%.6f\n", names[i], gpu[i]);
+            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay GPU report");
+        }
     }
     SDL_Event event{}; event.type = SDL_QUIT; SDL_PushEvent(&event);
 }
@@ -10446,8 +10470,7 @@ static void render_thread_vblank(void) {
             }
         } else {
             std::fprintf(stdout, "psxrecomp: render thread requested but not started "
-                         "(needs the OpenGL backend without netplay, frame interpolation "
-                         "or a 24-bit display)\n");
+                         "(needs the OpenGL backend without netplay or a 24-bit display)\n");
             if (g_frame_generation)
                 std::fprintf(stdout, "psxrecomp: Smooth motion (frame generation) needs the render thread; off\n");
         }

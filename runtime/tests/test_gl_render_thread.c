@@ -132,12 +132,19 @@ static void test_live_resolution(int original_scale) {
     check(gl_renderer_set_internal_scale_live(original_scale) == original_scale,
           "live resolution recovers after refusal");
 }
+static int drawable_worker(void *data) {
+    int *size = data;
+    gl_drawable_size(&size[0], &size[1]);
+    return 0;
+}
 static uint64_t fnv(const void *pp, size_t n, uint64_t h) {
     const uint8_t *p = (const uint8_t *)pp;
     for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
     return h;
 }
 static uint64_t rb_digest = 0xcbf29ce484222325ull;
+static int wide_present;
+static int quality_scene;
 static uint32_t rng = 0x2468ace1u;
 static uint32_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
 
@@ -256,7 +263,36 @@ static void frame(int f, int buf_x) {
         gr_vram_transfer_out(buf_x + 50, 50, 64, 32, out);
         rb_digest = fnv(out, sizeof out, rb_digest);
     }
-    gl_renderer_present_vram(buf_x, 0, FRAME_W, FRAME_H, 0, 0);
+    if (wide_present) {
+        /* Reach both reveal margins after the last upload/readback, leaving
+         * real queued work for the final present flush. Alternate the full
+         * background gate so the pruning fallback is exercised too. */
+        g_bg_full = f % 3 == 0;
+        gr_wide_set_view(0, 0, 0, 0);
+        g_prim_id = 1;
+        gr_set_semi_transparency(f % 2, f % 4);
+        if (quality_scene) {
+            gr_set_precise_triangle(1, (buf_x-40)*65536, 20*65536,
+                (buf_x+360)*65536, 20*65536, (buf_x+160)*65536, 220*65536);
+            gr_set_depth_triangle(1, 2000.0f, 2200.0f, 2400.0f);
+        }
+        gr_draw_textured_triangle(buf_x-40, 20, 0, 0, buf_x+360, 20, 63, 0,
+                                  buf_x+160, 220, 32, 63, 512, 256, 0x0008);
+        if (quality_scene) {
+            /* Minification, transparent/STP texels, and a later occluded draw
+             * make depth coverage observable in the final colour image. */
+            gr_set_semi_transparency(0, 0);
+            gr_set_precise_triangle(1, (buf_x+80)*65536, 60*65536,
+                (buf_x+100)*65536, 60*65536, (buf_x+90)*65536, 80*65536);
+            gr_set_depth_triangle(1, 3000.0f, 3000.0f, 3000.0f);
+            gr_draw_textured_triangle(buf_x+80, 60, 0, 0, buf_x+100, 60, 255, 0,
+                                      buf_x+90, 80, 127, 255, 512, 256, 0x0008);
+            gr_set_precise_triangle(0, 0, 0, 0, 0, 0, 0);
+            gr_set_depth_triangle(0, 0, 0, 0);
+        }
+        check(gl_renderer_present_wide_fbo(buf_x, 0, FRAME_H, 0), "wide present");
+    } else
+        gl_renderer_present_vram(buf_x, 0, FRAME_W, FRAME_H, 0, 0);
     gl_renderer_render_thread_frame_boundary();
 }
 
@@ -265,6 +301,9 @@ int main(int argc, char **argv) {
     int threaded = argc > 2 && argv[2][0] == '1';
     int frames = argc > 3 ? atoi(argv[3]) : 80;
     int dynres = argc > 4 && !strcmp(argv[4], "dynres");
+    wide_present = argc > 4 && !strcmp(argv[4], "interp-wide");
+    int interp = wide_present || (argc > 4 && !strcmp(argv[4], "interp"));
+    quality_scene = argc > 5 && !strcmp(argv[5], "quality");
     /* No video device, window or GL context (headless, Windows over SSH):
      * exit 77, which the harness reports as a CTest skip. */
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -300,7 +339,20 @@ int main(int argc, char **argv) {
     if (!gl_renderer_init_context(win)) { fprintf(stderr, "FAIL context\n"); return 2; }
     check(gr_backend() == GR_BACKEND_OPENGL, "OpenGL backend");
     textures();
+    if (wide_present && s_hiw) {
+        check(hiw_ensure(0, FRAME_W) != NULL, "first hires buffer");
+        check(hiw_ensure(512, 512+FRAME_W) != NULL, "second hires buffer");
+    }
     gr_wide_configure(426, 53);
+    if (quality_scene) {
+        gl_renderer_set_bloom(1.0f);
+        gl_renderer_set_pgxp_depth(1);
+        gl_renderer_set_texture_lod(1, 16);
+    }
+    if (interp) {
+        gl_renderer_set_interpolation_source(1);
+        gl_renderer_set_interpolation(1, 60.0, 60.0, 60.0, 2);
+    }
     if (threaded) {
         check(gl_renderer_render_thread_start(2) == 1, "render thread started");
         check(gl_renderer_render_thread_active(), "render thread active");
@@ -368,6 +420,54 @@ int main(int argc, char **argv) {
         if (got) wide = fnv(wb, (size_t)ww * wh * 4, 0xcbf29ce484222325ull);
         free(wb);
     }
+    if (interp) {
+        check(s_interp_captures > 0 && s_interp_swaps > 0, "temporal frames presented");
+    }
+    /* Colour hashes alone do not verify the bloom-source stencil. Read its
+     * bit on every canonical/window/wide target while the context is held. */
+    uint64_t stencil = 0xcbf29ce484222325ull;
+    if (quality_scene) {
+        gl_renderer_render_thread_sync("test_stencil");
+        GLuint fbos[1 + HIW_MAX_TILES + 8];
+        int widths[1 + HIW_MAX_TILES + 8], heights[1 + HIW_MAX_TILES + 8], nf = 0;
+        fbos[nf] = s_hr_fbo; widths[nf] = VRAM_W * s_hr_scale;
+        heights[nf++] = VRAM_H * s_hr_scale;
+        for (int t = 0; t < s_hiw_n; ++t) {
+            fbos[nf] = s_hiw_t[t].fbo;
+            widths[nf] = (s_hiw_t[t].x1 - s_hiw_t[t].x0) * scale;
+            heights[nf++] = VRAM_H * scale;
+        }
+        /* The displayed wide surface is sufficient for the centre splice
+         * and clipped mirror; canonical targets cover both buffer origins. */
+        if (g_wide_cur) {
+            fbos[nf] = g_wide_cur; widths[nf] = g_wide_w * scale;
+            heights[nf++] = VRAM_H * scale;
+        }
+        for (int t = 0; t < nf; ++t) {
+            size_t bytes = (size_t)widths[t] * heights[t];
+            unsigned char *bits = malloc(bytes);
+            check(bits != NULL, "stencil readback allocation");
+            if (!bits) continue;
+            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, fbos[t]);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, widths[t], heights[t], GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, bits);
+            for (size_t p = 0; p < bytes; ++p) bits[p] &= 3;
+            stencil = fnv(bits, bytes, stencil);
+            free(bits);
+        }
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+    }
+    if (wide_present && wide_margin_scissor()) {
+        check(s_hq_center_pruned > 0, "queued centre shading was elided");
+        printf("pruned_cmds=%llu\n", (unsigned long long)s_hq_center_pruned);
+    }
+    if (quality_scene && coverage_fast_enabled()) {
+        check(s_bcls_fused_draws > 0, "bloom stencil fused with colour draws");
+        printf("fused_draws=%llu\n", (unsigned long long)s_bcls_fused_draws);
+        check(s_coverage_depth_draws > 0, "coverage-only depth passes ran");
+        printf("coverage_draws=%llu\n", (unsigned long long)s_coverage_depth_draws);
+    }
     if (threaded) {
         RtStats st;
         rt_get_stats(&st);
@@ -381,11 +481,26 @@ int main(int argc, char **argv) {
         check(st.acquires >= 2 && st.acquires <= (uint64_t)frames + 4, "acquires bounded");
         check(st.bytes > ((uint64_t)32 << 20), "ring wrapped (more than its size recorded)");
     }
+    /* A resize is published at the main-thread handoff and is visible to a
+     * worker without calling SDL's main-thread-only pixel-size query. */
+    for (int k = 0; k < 2; ++k) {
+        SDL_SetWindowSize(win, 400 + k * 80, 300 + k * 60);
+        SDL_PumpEvents();
+        gl_renderer_render_thread_frame_boundary();
+        int expected[2] = {0}, seen[2] = {0};
+        SDL_GL_GetDrawableSize(win, &expected[0], &expected[1]);
+        SDL_Thread *worker = SDL_CreateThread(drawable_worker, "drawable-test", seen);
+        check(worker != NULL, "drawable reader thread created");
+        if (worker) SDL_WaitThread(worker, NULL);
+        check(seen[0] == expected[0] && seen[1] == expected[1], "worker sees resized drawable");
+    }
+    gl_renderer_render_thread_sync("test_done");
     check(glGetError() == GL_NO_ERROR, "GL error");
     printf("rb=%016llx\n", (unsigned long long)rb_digest);
     printf("digest=%016llx\n", (unsigned long long)digest);
     printf("hires=%016llx\n", (unsigned long long)hires);
     printf("wide=%016llx\n", (unsigned long long)wide);
+    printf("stencil=%016llx\n", (unsigned long long)stencil);
     printf("checks=%d failures=%d\n", checks, failures);
     gl_renderer_shutdown();
     check(!gl_renderer_render_thread_active(), "stopped by shutdown");

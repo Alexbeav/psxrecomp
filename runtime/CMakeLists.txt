@@ -365,6 +365,26 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-render-thread-results")
         set_tests_properties(gl_render_thread_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
+        foreach(_interp_mode normal hiw wide_quality hiw_wide_quality)
+            set(_interp_args --interpolation)
+            if(_interp_mode MATCHES "wide_quality")
+                list(APPEND _interp_args --wide-present --quality)
+            endif()
+            add_test(NAME gl_render_thread_interpolation_${_interp_mode}_test
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py"
+                    --cc "${CMAKE_C_COMPILER}"
+                    --sdl-include "${_gl_scale_sdl_inc}"
+                    --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                    ${_interp_args}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/gl-rth-interp-${_interp_mode}")
+            set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
+                PROPERTIES LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
+            if(_interp_mode MATCHES "hiw")
+                set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
+                    PROPERTIES ENVIRONMENT "PSX_GL_HIRES_WINDOW=1")
+            endif()
+        endforeach()
         # Frame generation ([video] frame_generation): the real presented
         # images are identical with it off and on (VRAM and native-wide
         # presents), generated frames are presented, and an in-between frame

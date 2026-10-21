@@ -213,6 +213,17 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-21 (render coverage and driver waits):** Enabled temporal
+  presentation on the existing renderer context/thread. Queued wide mirrors
+  retain bloom classification; eligible opaque marking is fused with colour,
+  colourless passes omit RGB-only filtering, and depth restoration derives
+  the preceding draw's enable state instead of querying the threaded driver.
+  Final-flush centre shading is elided only before the authoritative splice.
+  Native/readback/hires/wide and both stencil-bit hashes match all independent
+  controls at 1x/4x with threads off/on, native and forced-window hires.
+  Default-Ultra production acceptance remains open; R4's slowdown report
+  records failed route trials and profiling limitations. No guest time changes.
+
 - **2026-10-21 (Windows sleep concurrency):** Concurrent guest/render pacers
   exposed a shared auto-reset waitable timer: one caller cancels/consumes the
   other's wake. Replaced it with FLS-owned timers and synchronized QPC setup.
