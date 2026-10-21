@@ -23,6 +23,7 @@ namespace fs = std::filesystem;
 
 static std::array<uint8_t, 2u * 1024u * 1024u> g_ram{};
 static std::vector<uint32_t> g_noted;   /* one entry per reported byte */
+static std::vector<uint32_t> g_memo;    /* same, for the text memo (PS1B-530) */
 
 extern "C" {
 uint64_t s_frame_count;
@@ -34,10 +35,17 @@ void dirty_ram_text_bless(uint32_t, const uint8_t*, uint32_t) {}
 void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
     for (uint32_t i = 0; i < len; ++i) g_noted.push_back(phys + i);
 }
+void dirty_ram_text_memo_note_write(uint32_t phys, uint32_t len) {
+    for (uint32_t i = 0; i < len; ++i) g_memo.push_back(phys + i);
+}
 }
 
 static bool noted(uint32_t phys) {
     for (uint32_t p : g_noted) if (p == phys) return true;
+    return false;
+}
+static bool memo_noted(uint32_t phys) {
+    for (uint32_t p : g_memo) if (p == phys) return true;
     return false;
 }
 
@@ -92,6 +100,12 @@ int main(void) {
     if (!noted(0x0E10u) || !noted(0x0E11u) || !noted(0x12340u) || !noted(0x12341u)) {
         std::cerr << "FAIL: a translation patch wrote RAM without "
                      "psx_kernel_bless_note_range (" << g_noted.size() << " bytes reported)\n";
+        return 1;
+    }
+    if (!memo_noted(0x0E10u) || !memo_noted(0x0E11u) ||
+        !memo_noted(0x12340u) || !memo_noted(0x12341u)) {
+        std::cerr << "FAIL: a translation patch wrote RAM without "
+                     "dirty_ram_text_memo_note_write (" << g_memo.size() << " bytes reported)\n";
         return 1;
     }
     std::cout << "PASS: translation patches report their RAM writes ("

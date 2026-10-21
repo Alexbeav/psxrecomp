@@ -204,6 +204,11 @@ void     dirty_ram_reset_for_boot(void);
  * text_diverged/modified bitmaps (host-only — restored RAM may match ref). */
 void     overlay_watch_invalidate_after_ram_restore(void);
 void     dirty_ram_text_guard_resync_after_restore(void);
+/* PS1B-530: a RAM writer that bypasses psx_write_* reaches the range-compare
+ * memo of dirty_ram_text_native_ok_ranges_from: a direct byte write stamps its
+ * pages (note_write); a bulk copy over RAM drops every memo (invalidate). */
+void     dirty_ram_text_memo_note_write(uint32_t phys, uint32_t len);
+void     dirty_ram_text_memo_invalidate(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);

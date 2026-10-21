@@ -157,6 +157,8 @@ uint64_t cosim_state_hash(CosimSubHashes *sub) {
     if (s_inj_ram_phys >= 0 && (uint32_t)s_inj_ram_phys < RAM_SIZE) {
         ram[s_inj_ram_phys] ^= s_inj_ram_xor; cosim_note_ram_write((uint32_t)s_inj_ram_phys, 1);
         psx_kernel_bless_note_range((uint32_t)s_inj_ram_phys, 1u);   /* raw RAM write */
+        { extern void dirty_ram_text_memo_note_write(uint32_t phys, uint32_t len);
+          dirty_ram_text_memo_note_write((uint32_t)s_inj_ram_phys, 1u); }
         s_inj_ram_phys = -1;
     }
     if (s_inj_reg >= 0 && cpu) {

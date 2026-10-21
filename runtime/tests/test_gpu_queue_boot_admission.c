@@ -40,6 +40,7 @@ int gpu_vram_dirty_tracking(void){return 0;}
 void gpu_vram_dirty_clear(void){mutations++;}
 void gte_precision_timeline_invalidate(void){mutations++;}
 void psx_kernel_bless_note_range(uint32_t a,uint32_t n){(void)a;(void)n;mutations++;}
+void dirty_ram_text_memo_invalidate(void){mutations++;}
 int interrupts_timing_wire_read(const uint8_t*p,uint32_t n){(void)p;(void)n;mutations++;return 1;}
 #define INACTIVE_READER(f) int f(const uint8_t*p,uint32_t n){(void)p;(void)n;abort();}
 INACTIVE_READER(interrupts_raster_wire_read)

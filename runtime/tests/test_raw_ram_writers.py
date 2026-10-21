@@ -13,6 +13,12 @@ and must not reset the table: the generated BIOS dispatch does it on every
 RAM-alias dispatch of an exception-handler key, and resetting there re-verified
 the whole table about a million times in a two-minute start.
 
+The same writers must reach the text guard's range-compare memo (PS1B-530):
+the store path stamps through text_guard_note_write, memory_init drops every
+memo, and every other writer calls dirty_ram_text_memo_note_write or
+dirty_ram_text_memo_invalidate next to the write. A writer the memo does not
+see would let a stale equal compare skip a byte change in game text.
+
 This test reads the runtime sources and lists every statement that writes
 through a guest-RAM pointer without psx_write_*. Each one must be a known
 writer below and must sit next to its notification. A new raw writer fails the
@@ -73,6 +79,17 @@ def raw_writes(path):
     return hits, lines
 
 
+def memo_holds(rule, lines, number):
+    if rule == "hook":
+        return any("text_guard_note_write(phys," in l for l in lines[max(0, number - 12):number])
+    if rule == "note":
+        return any("dirty_ram_text_memo_note_write(" in l or "dirty_ram_text_memo_invalidate(" in l
+                   for l in lines[number:number + 7])
+    if rule == "reset":
+        return any("text_memo_invalidate_all();" in l for l in lines[number:number + 3])
+    raise ValueError(rule)
+
+
 def rule_holds(rule, lines, number):
     if rule == "hook":
         return any("dirty_ram_mark_kernel_write(phys)" in l for l in lines[max(0, number - 12):number])
@@ -106,6 +123,9 @@ def main():
             if not rule_holds(entry[2], lines, number):
                 failures.append(f"{where}: {entry[3]}: missing its kernel-bless "
                                 f"notification (rule '{entry[2]}')")
+            if not memo_holds(entry[2], lines, number):
+                failures.append(f"{where}: {entry[3]}: missing its text-memo "
+                                f"notification (rule '{entry[2]}')")
     for entry in WRITERS:
         if entry not in seen:
             failures.append(f"{entry[0]}: listed writer not found: {entry[1]} ({entry[3]})")
@@ -127,7 +147,7 @@ def main():
         for failure in failures:
             print("FAIL:", failure)
         return 1
-    print("PASS: every raw guest-RAM writer notifies the kernel-bless table")
+    print("PASS: every raw guest-RAM writer notifies the kernel-bless table and the text memo")
     return 0
 
 

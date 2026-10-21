@@ -529,6 +529,11 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_raw_ram_writers.py"
         --src "${CMAKE_CURRENT_SOURCE_DIR}/src"
         --include "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    # PS1B-530: every write that can change compared text bytes reaches the
+    # range-compare memo of the text guard (memory.c).
+    add_test(NAME text_memo_hooks_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_text_memo_hooks.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/memory.c")
     # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
     # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)

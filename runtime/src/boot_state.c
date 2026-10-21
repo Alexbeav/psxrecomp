@@ -637,6 +637,7 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         {
             extern void psx_kernel_bless_note_range(uint32_t phys, uint32_t l);
             psx_kernel_bless_note_range(0, RAM_SIZE);
+            dirty_ram_text_memo_invalidate();   /* restored RAM bypassed the store path */
         }
         return 1;
     case BS_SEC_RASTER: {

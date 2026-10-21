@@ -60,6 +60,8 @@ uint32_t dirty_ram_text_modified_bitmap_word(uint32_t word) { (void)word; return
 void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
     (void)phys; (void)len;
 }
+/* ... and drop the text guard's range-compare memo (PS1B-530). */
+void dirty_ram_text_memo_invalidate(void) {}
 int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
     (void)cpu; (void)addr; (void)stop; return 0;
 }

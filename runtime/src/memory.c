@@ -781,6 +781,65 @@ static uint32_t g_text_exact_last_mismatch = 0;
 static uint32_t g_text_exact_last_live = 0;
 static uint32_t g_text_exact_last_ref = 0;
 
+/* PS1B-530: memo for the exact compare in dirty_ram_text_native_ok_ranges_from.
+ *
+ * A range on a flagged page is compared byte for byte on every call, and a
+ * flag never clears, so the same equal compare repeats forever. The memo
+ * keeps, per {phys, len}, the write clock at the last equal compare. Every
+ * write that can change the bytes of the reference range stamps its page with
+ * a new clock value; writes that bypass the store path (memset/memcpy of RAM,
+ * savestate restore, a new or blessed reference) invalidate every memo. If no
+ * page of the range has a stamp newer than the memo, the bytes are the ones
+ * that already compared equal and the compare is skipped. The clock is 64-bit
+ * and only grows, so a stale memo can never look current.
+ *
+ * PS1B530_TEXT_MEMO_CHECK=1 still runs the compare after a memo hit and counts
+ * a disagreement when it fails (a writer the memo does not see). The result
+ * of the function is then the old one in every case. */
+#ifndef PS1B530_TEXT_MEMO
+#define PS1B530_TEXT_MEMO 1
+#endif
+#ifndef PS1B530_TEXT_MEMO_CHECK
+#define PS1B530_TEXT_MEMO_CHECK 0
+#endif
+#define TEXT_MEMO_SLOTS 16384u
+typedef struct { uint32_t phys, len; uint64_t stamp; } TextMemoSlot;
+static uint64_t text_write_clock = 1;
+static uint64_t text_memo_floor = 1;
+static uint64_t text_page_stamp[DIRTY_RAM_PAGE_COUNT];
+static TextMemoSlot text_memo[TEXT_MEMO_SLOTS];
+static uint64_t g_text_memo_calls, g_text_memo_flagged, g_text_memo_hits;
+static uint64_t g_text_memo_memcmps, g_text_memo_disagree;
+static uint32_t g_text_memo_first_disagree_phys, g_text_memo_first_disagree_len;
+
+static void text_memo_invalidate_all(void) { text_memo_floor = ++text_write_clock; }
+
+/* Stamp the pages of [phys, phys+len) that overlap the reference range. */
+static inline void text_memo_note_range(uint32_t phys, uint32_t len) {
+    if (len == 0 || phys >= text_ref_hi || phys + len <= text_ref_lo) return;
+    uint32_t end = phys + len - 1u;
+    if (end >= RAM_SIZE || end < phys) end = RAM_SIZE - 1u;
+    uint64_t s = ++text_write_clock;
+    for (uint32_t p = phys >> DIRTY_RAM_PAGE_SHIFT; p <= (end >> DIRTY_RAM_PAGE_SHIFT); p++)
+        text_page_stamp[p] = s;
+}
+
+/* For RAM writers outside this file that bypass the store path: a direct byte
+ * write stamps its pages; a bulk copy over RAM invalidates every memo. */
+void dirty_ram_text_memo_note_write(uint32_t phys, uint32_t len) { text_memo_note_range(phys, len); }
+void dirty_ram_text_memo_invalidate(void) { text_memo_invalidate_all(); }
+
+static void text_memo_report(void) {
+    fprintf(stdout, "psxrecomp: [PS1B530 text memo] memo=%d check=%d calls=%llu flagged_ranges=%llu "
+            "memo_hits=%llu memcmps=%llu disagreements=%llu first_disagree=0x%08X/%u\n",
+            PS1B530_TEXT_MEMO, PS1B530_TEXT_MEMO_CHECK,
+            (unsigned long long)g_text_memo_calls, (unsigned long long)g_text_memo_flagged,
+            (unsigned long long)g_text_memo_hits, (unsigned long long)g_text_memo_memcmps,
+            (unsigned long long)g_text_memo_disagree,
+            g_text_memo_first_disagree_phys, g_text_memo_first_disagree_len);
+    fflush(stdout);
+}
+
 /* Pages where the boot executable the console loads differs from the image
  * the static code was generated from (text_source_guard.h). The reference
  * image above cannot show this: an installed product reads it from the mounted
@@ -812,6 +871,7 @@ void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
     g_text_exact_last_mismatch = 0;
     g_text_exact_last_live = 0;
     g_text_exact_last_ref = 0;
+    text_memo_invalidate_all();
 }
 
 int dirty_ram_text_image_registered(void) { return text_ref_image != NULL; }
@@ -843,6 +903,7 @@ static inline int text_page_foreign(uint32_t page) {
 }
 
 static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) {
+    text_memo_note_range(phys, (uint32_t)size);   /* every store, equal or not */
     if (!text_ref_image) return;
     if (phys < text_ref_lo || phys + (uint32_t)size > text_ref_hi) return;
     const uint8_t *ref = text_ref_image + (phys - text_ref_lo);
@@ -910,6 +971,11 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
                                          uint32_t exec_pc) {
     if (!text_ref_image || !lo_len_pairs || count == 0) return 0;
     (void)exec_pc;
+    {
+        static int s_memo_report_armed = 0;
+        if (!s_memo_report_armed) { s_memo_report_armed = 1; atexit(text_memo_report); }
+    }
+    g_text_memo_calls++;
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t phys = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
@@ -954,7 +1020,32 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             }
             if (clean) continue;
         }
+        g_text_memo_flagged++;
+#if PS1B530_TEXT_MEMO
+        TextMemoSlot *slot = &text_memo[((phys >> 2) ^ (len * 2654435761u)) & (TEXT_MEMO_SLOTS - 1u)];
+        int memo_ok = 0;
+        if (slot->phys == phys && slot->len == len && slot->stamp >= text_memo_floor) {
+            uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
+            memo_ok = 1;
+            for (uint32_t p = phys >> DIRTY_RAM_PAGE_SHIFT; p <= p1; p++)
+                if (text_page_stamp[p] > slot->stamp) { memo_ok = 0; break; }
+        }
+        if (memo_ok) {
+            g_text_memo_hits++;
+#if !PS1B530_TEXT_MEMO_CHECK
+            continue;
+#endif
+        }
+#endif
+        g_text_memo_memcmps++;
         if (memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), len) != 0) {
+#if PS1B530_TEXT_MEMO
+            if (memo_ok && g_text_memo_disagree++ == 0) {
+                g_text_memo_first_disagree_phys = phys;
+                g_text_memo_first_disagree_len = len;
+            }
+            slot->len = 0;   /* never matches a real range (len 0 is refused above) */
+#endif
             uint32_t off = 0;
             const uint8_t *live = ram + phys;
             const uint8_t *ref = text_ref_image + (phys - text_ref_lo);
@@ -970,6 +1061,12 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             g_text_native_blocked++;
             return 0;
         }
+#if PS1B530_TEXT_MEMO
+        /* Equal now: every write stamped so far is in the compared bytes. */
+        slot->phys = phys;
+        slot->len = len;
+        slot->stamp = text_write_clock;
+#endif
     }
     if (!any) {
         g_text_native_blocked++;
@@ -1016,6 +1113,7 @@ void dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len) {
     const uint8_t *src = bytes + (lo - phys);
     if (memcmp(ref, src, hi - lo) == 0) return;                     /* already in sync */
     memcpy(ref, src, hi - lo);
+    text_memo_note_range(lo, hi - lo);   /* reference changed: recompare */
     /* Re-open the affected pages: clear the sticky diverged bit so the next
      * dispatch re-runs the compare against the now-updated reference. */
     uint32_t first_page = lo >> DIRTY_RAM_PAGE_SHIFT;
@@ -1060,6 +1158,7 @@ void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len) {
     for (uint32_t page = first_page; page <= last_page; page++) {
         dirty_ram_bitmap[page >> 5] |= (1u << (page & 31u));
     }
+    text_memo_note_range(phys, len);
     g_dirty_ram_code_gen++;
 }
 
@@ -1129,6 +1228,7 @@ void dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count) {
         dirty_ram_bitmap[i] = words[i];
     /* Bitmap replace bypasses clean→dirty transitions; bump so interpreter
      * site caches keyed on g_dirty_ram_code_gen cannot survive a restore. */
+    text_memo_invalidate_all();
     g_dirty_ram_code_gen++;
 }
 
@@ -1160,6 +1260,7 @@ void dirty_ram_reset_for_boot(void) {
     memset(g_dirty_ram_exec_pc_bitmap, 0, sizeof(g_dirty_ram_exec_pc_bitmap));
     memset(g_dirty_ram_dispatch_pc_bitmap, 0,
            sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    text_memo_invalidate_all();
     g_dirty_ram_code_gen++;
 }
 
@@ -1202,6 +1303,7 @@ uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len) {
  * fast path and run native code against restored bytes they were not validated
  * for — hang / freeze after the restored frame presents. */
 void dirty_ram_text_guard_resync_after_restore(void) {
+    text_memo_invalidate_all();   /* restored RAM bypassed the store path */
     /* text_diverged_bitmap is sticky: once a page's entry bytes fail the
      * reference compare, native stays blocked forever. That is correct for
      * forward sim, but after a savestate/RB rewind the restored RAM may
@@ -1464,6 +1566,7 @@ uint32_t memory_get_bios_checksum(void) { return s_bios_checksum; }
 
 void memory_init(const char* bios_path) {
     memset(ram, 0, sizeof(ram));
+    text_memo_invalidate_all();
     memset(s_low_ram_old, 0, sizeof(s_low_ram_old));
     memset(s_low_ram_filtered, 0, sizeof(s_low_ram_filtered));
     s_low_ram_older_dropped = 0;
