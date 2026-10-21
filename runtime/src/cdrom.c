@@ -1860,9 +1860,11 @@ static int source_explicit_seek_cycles(uint8_t cmd)
  * against vblank; a game that loses a race at that phase (there: INT1
  * acknowledged in its VSync handler before the DataReady callback runs)
  * retries for minutes.
- * Untouched: the first two re-issues of a run, a re-issue after an attempt
- * that delivered nothing, and a re-read after an attempt that ran past
- * RETRY_STALL_SECTORS (that restarts the run). A recorded replay that meets
+ * Untouched: the first two re-issues of a run, a re-issue while no sector at
+ * or past the target has been delivered yet, and a re-read after an attempt
+ * that ran past RETRY_STALL_SECTORS (that restarts the run). last_sector_lba
+ * is not cleared per attempt, so once the run has reached the target, an
+ * attempt that delivers nothing still counts. A recorded replay that meets
  * no such loop keeps its timing; one that meets a loop diverges at its third
  * re-issue. Off in the source-clock profile (it has its own jitter), for XA
  * streams, and with PSX_CD_RETRY_DITHER=0.
