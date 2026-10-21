@@ -213,6 +213,12 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-21 (Windows sleep concurrency):** Concurrent guest/render pacers
+  exposed a shared auto-reset waitable timer: one caller cancels/consumes the
+  other's wake. Replaced it with FLS-owned timers and synchronized QPC setup.
+  Eight-sleeper regression fails old source at 10 s and passes the fix in
+  0.49 s, including timer-handle cleanup. No guest time model changed.
+
 - **2026-10-21 (production R4 follow-up):** Removed debug-only PGXP receipt
   writes from no-debug-tools builds; numeric PGXP and word-shadow suites pass.
   Added disk-state-anchored applied-input replay and bounded frame/work/span
