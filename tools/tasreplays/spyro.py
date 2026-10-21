@@ -71,8 +71,10 @@ PROFILE_23 = [
 # The Nymashock 2.8 host. Bio Hazard's set (biohazard.PROFILE: the nymashock-1.29.0 pad, CD drive
 # and MDEC selectors; Mednafen 1.27.1 and 1.29.0 emulate the PS1 identically), without its
 # --card-model because this movie declares port 1 empty, and with the octoshock-byte axis model for
-# the pad bytes the route holds. Which Mednafen BizHawk 2.8's Nymashock carries is not stated by any
-# source read, so this set is unqualified for it until a replay matches.
+# the pad bytes the route holds. One selector differs, found by divergence: this source takes CD
+# Init's seek-jitter draw before its floor draw, so the drive model is octoshock-2.7, the same drive
+# with that order (PS1G-125: with nymashock-1.29.0 the Init write at 400982724 drew 2736 where the
+# source drew 1375; with octoshock-2.7 the replay matches the qualified source on 709 of 709 frames).
 PROFILE_NYMA28 = [
     '--critical-section-model', 'exception', '--syscall-model', 'guest-exception',
     '--field-model', 'octoshock-2.2.2-ntsc-raster',
@@ -81,7 +83,7 @@ PROFILE_NYMA28 = [
     '--cd-firmware-model', 'octoshock-2.2.2', '--cd-cold-status-model', 'octoshock-2.2.2',
     '--cd-toc-seek-model', 'octoshock-2.2.2', '--cd-explicit-seek-model', 'octoshock-2.2.2',
     '--cd-read-start-model', 'octoshock-2.2.2-pipeline', '--cd-dma-model', 'octoshock-2.2.2',
-    '--cd-drive-model', 'nymashock-1.29.0',
+    '--cd-drive-model', 'octoshock-2.7',
     '--cd-cdda-model', 'octoshock-2.3', '--mdec-source-model', 'nymashock-1.29.0',
     '--gpu-status-model', 'octoshock-2.2.2-raster', '--gpu-dma-model', 'octoshock-2.2.2-bounded-quad',
     '--timer1-model', 'octoshock-2.2.2', '--timer2-model', 'octoshock-2.2.2',

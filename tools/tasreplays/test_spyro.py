@@ -119,9 +119,15 @@ assert entry2['reader'] == {'mednafen_values': {'psx.input.port1.memcard': '0'}}
 # The spyro3 title keeps spyro_admission's roles and tail bound.
 assert spec['tool'] is spyro_admission and spec['roles'] == ('stock', 'observer') and spec['max_tail'] == 6000
 # Bio Hazard's Nymashock set, minus its memory card model (this movie declares port 1 empty), plus the
-# raw axis model; everything else is the same selector for selector.
+# raw axis model, with the Octoshock Init draw order (PS1G-125); everything else is the same
+# selector for selector.
 card = biohazard.PROFILE.index('--card-model')
-assert pairs(entry2['profile']) == pairs(biohazard.PROFILE[:card] + biohazard.PROFILE[card + 2:] + ['--axis-model', 'octoshock-byte'])
+expected2 = biohazard.PROFILE[:card] + biohazard.PROFILE[card + 2:] + ['--axis-model', 'octoshock-byte']
+drive = expected2.index('--cd-drive-model')
+assert expected2[drive + 1] == 'nymashock-1.29.0'
+expected2[drive + 1] = 'octoshock-2.7'
+assert pairs(entry2['profile']) == pairs(expected2)
+assert entry2['profile'][entry2['profile'].index('--cd-drive-model') + 1] == 'octoshock-2.7'
 assert '--card-model' not in entry2['profile'] and entry2['profile'] is spyro.PROFILE_NYMA28
 assert native_span(spec2['frames'], spec2['frames'] + 3600, 10000) == (10001, 0)
 assert native_span(spec2['frames'], spec2['frames'] + 3600, spec2['frames'] + 3600) == (spec2['frames'], 3601)
