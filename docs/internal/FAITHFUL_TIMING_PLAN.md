@@ -213,6 +213,13 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-21 (`feat/render-60fps`):** Admit opt-in render passes with HD
+  CPU-authoritative textures and give opted-in netplay temporal passes the
+  restored own-view scope. Sandbox tests and hidden GL pass fixture pass.
+  R4 delay-netplay: 120 common core digests identical with frame-rate on only
+  on one peer; 14 temporal passes, no restore mismatches or dispatch misses.
+  R4 performance/visual acceptance remains open; see its
+  `analysis/render-60fps/REPORT.md`.
 - **2026-10-23 — VR upstream split.** Precise projective replay reconstructed on
   current master; six focused runtime regressions and the GPU-history guard pass.
   Prior fork/headset acceptance remains historical. Other VR features are
