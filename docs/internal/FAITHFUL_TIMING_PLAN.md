@@ -213,6 +213,14 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-21 (Windows continuation, `feat/render-60fps`):** Added cumulative
+  render-transaction wall-time buckets, separating checkpoint copying from
+  verification hashing. R4 same-state headless/turbo off/on: 601 guest
+  fingerprints match (no temporal passes in headless). Windowed race: 1,288
+  normal passes average 5.911 ms; 794 verification passes average 9.907 ms,
+  zero restoration mismatches. Windows build, nine R4 CTests, sandbox and
+  watchdog/abort tests pass. No faithful timing behavior changed.
+
 - **2026-10-21 (`feat/render-60fps`):** Admit opt-in render passes with HD
   CPU-authoritative textures and give opted-in netplay temporal passes the
   restored own-view scope. Sandbox tests and hidden GL pass fixture pass.
