@@ -248,6 +248,7 @@ extern "C" {
     extern uint64_t g_dirty_window_dispatches;
     extern uint32_t g_slice_exit_pc, g_slice_exit_reason, g_slice_exit_iter;
     extern uint32_t g_slice_exit_dispatchable, g_slice_exit_dirty, g_slice_exit_in_text, g_slice_exit_want;
+    void dirty_ram_slice_diag_refresh(void);
     /* memory.c */
     extern uint32_t i_stat, i_mask;
     extern uint64_t g_guest_store_count;
@@ -19178,6 +19179,7 @@ session_reboot:
     { extern uint64_t g_slice_fired, g_slice_irq_taken, g_dirty_ram_insns_run;
       extern uint32_t g_slice_exit_pc, g_slice_exit_reason, g_slice_exit_iter;
       extern uint32_t g_slice_exit_dispatchable, g_slice_exit_dirty, g_slice_exit_in_text, g_slice_exit_want;
+      dirty_ram_slice_diag_refresh();
       std::fprintf(stdout, "psxrecomp runtime: [slice diag] slice_fired=%llu slice_irq_taken=%llu dirty_insns=%llu exit_pc=0x%08X reason=%u iter=%u dispatchable=%u dirty=%u in_text=%u want=%u\n",
                    (unsigned long long)g_slice_fired, (unsigned long long)g_slice_irq_taken,
                    (unsigned long long)g_dirty_ram_insns_run, g_slice_exit_pc, g_slice_exit_reason,

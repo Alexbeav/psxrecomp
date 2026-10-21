@@ -117,6 +117,11 @@ void debug_server_log_thread_event(uint32_t kind, CPUState *cpu, uint32_t cur,
 void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin) {
     (void)site; (void)target; (void)origin;
 }
+void psx_publish_note_dispatchable(uint32_t site, uint32_t target, uint32_t origin,
+                                   uint32_t dispatchable) {
+    (void)dispatchable;
+    psx_publish_note(site, target, origin);
+}
 void ls_note_exception_entry(void) {}
 void psx_idle_note_check(CPUState *cpu, uint32_t pc) { (void)cpu; (void)pc; }
 int psx_idle_skip_is_enabled(void) { return 0; }

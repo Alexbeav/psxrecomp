@@ -50,6 +50,11 @@ void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin) {
     (void)target; (void)origin;
     if (site == PSX_PUB_INTERP_EXIT) ++handbacks;
 }
+void psx_publish_note_dispatchable(uint32_t site, uint32_t target, uint32_t origin,
+                                   uint32_t dispatchable) {
+    (void)dispatchable;
+    psx_publish_note(site, target, origin);
+}
 uint32_t psx_read_word(uint32_t a) { (void)a; return 0; }   /* NOP stream */
 static uint8_t ram[0x200000];                                /* zero = NOP */
 uint8_t *memory_get_ram_ptr(void) { return ram; }

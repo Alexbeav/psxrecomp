@@ -209,6 +209,9 @@ void     dirty_ram_text_guard_resync_after_restore(void);
  * pages (note_write); a bulk copy over RAM drops every memo (invalidate). */
 void     dirty_ram_text_memo_note_write(uint32_t phys, uint32_t len);
 void     dirty_ram_text_memo_invalidate(void);
+/* Fill g_slice_last_first_insn, g_slice_exit_dirty and g_slice_exit_in_text from
+ * the last slice's recorded PCs. Call before reading them (PS1B-530). */
+void     dirty_ram_slice_diag_refresh(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);

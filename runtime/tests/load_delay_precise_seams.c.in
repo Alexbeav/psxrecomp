@@ -10,3 +10,4 @@ uint32_t g_psx_cyc_batch,g_psx_cyc_batch_limit;uint32_t *g_psx_cyc_local_acc;
 uint64_t psx_get_cycle_count(void){return psx_cycle_count;}
 int dirty_ram_is_dirty(uint32_t p){(void)p;return 1;}
 void psx_publish_note(uint32_t k,uint32_t p,uint32_t a){(void)k;(void)p;(void)a;}
+void psx_publish_note_dispatchable(uint32_t k,uint32_t p,uint32_t a,uint32_t d){(void)k;(void)p;(void)a;(void)d;}

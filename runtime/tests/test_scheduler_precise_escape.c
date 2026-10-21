@@ -27,6 +27,11 @@ static uint32_t read_word(uint32_t address) {
 void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin) {
     (void)site; (void)target; (void)origin;
 }
+void psx_publish_note_dispatchable(uint32_t site, uint32_t target, uint32_t origin,
+                                   uint32_t dispatchable) {
+    (void)dispatchable;
+    psx_publish_note(site, target, origin);
+}
 int psx_bios_is_entry(uint32_t addr) {
     /* RAM, not ROM, and no backend is selected in this fixture. */
     assert(addr == 0x80001004u);

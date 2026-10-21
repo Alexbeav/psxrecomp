@@ -11,6 +11,13 @@ static uint64_t s_seq = 0;
 
 void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin)
 {
+    psx_publish_note_dispatchable(site, target, origin,
+                                  psx_is_dispatchable(target) ? 1u : 0u);
+}
+
+void psx_publish_note_dispatchable(uint32_t site, uint32_t target, uint32_t origin,
+                                   uint32_t dispatchable)
+{
     PsxPublishEntry *e = &g_publish_ring[s_seq & (PSX_PUBLISH_RING_CAP - 1u)];
     e->seq          = s_seq;
     e->cycle        = psx_get_cycle_count();
@@ -18,7 +25,7 @@ void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin)
     e->site         = site;
     e->target       = target;
     e->origin       = origin;
-    e->dispatchable = psx_is_dispatchable(target) ? 1u : 0u;
+    e->dispatchable = dispatchable;
     s_seq++;
 }
 

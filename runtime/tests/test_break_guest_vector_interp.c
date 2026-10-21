@@ -69,6 +69,11 @@ int psx_interrupts_checked_at_current_cycle(uint32_t resume_pc) { (void)resume_p
 void psx_pgxp_alu(CPUState *cpu, uint32_t instr, uint32_t result, uint32_t s1, uint32_t s2) {
     (void)cpu; (void)instr; (void)result; (void)s1; (void)s2;
 }
+void psx_publish_note_dispatchable(uint32_t site, uint32_t target, uint32_t origin,
+                                   uint32_t dispatchable) {
+    (void)dispatchable;
+    psx_publish_note(site, target, origin);
+}
 void psx_pgxp_load(CPUState *cpu, uint32_t instr, uint32_t addr, uint32_t value) {
     (void)cpu; (void)instr; (void)addr; (void)value;
 }

@@ -45,6 +45,10 @@ typedef struct {
 #define PSX_PUBLISH_RING_CAP 1024u
 
 void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin);
+/* The same, for a caller that has just established psx_is_dispatchable(target)
+ * (0 or 1): the precise slice's safe exit, once per slice (PS1B-530). */
+void psx_publish_note_dispatchable(uint32_t site, uint32_t target, uint32_t origin,
+                                   uint32_t dispatchable);
 uint64_t psx_publish_seq(void);
 /* idx is an absolute sequence number; returns 0 once it has been overwritten. */
 const PsxPublishEntry *psx_publish_get(uint64_t idx);

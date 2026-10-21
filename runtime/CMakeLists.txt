@@ -534,6 +534,10 @@ if(BUILD_TESTING)
     add_test(NAME text_memo_hooks_test COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_text_memo_hooks.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/memory.c")
+    # PS1B-530: per-slice diagnostics stay off the precise slice's hot path.
+    add_test(NAME precise_slice_hot_path_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_precise_slice_hot_path.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
     # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
     # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)

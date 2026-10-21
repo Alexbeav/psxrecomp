@@ -10350,6 +10350,7 @@ static void handle_freeze_check(int id, const char *json)
     extern uint32_t g_sentinel_reach_async;
     extern uint64_t g_nestgate_depth, g_nestgate_rfepend,
                     g_nestgate_escreason, g_nestgate_iec;
+    dirty_ram_slice_diag_refresh();   /* g_slice_last_first_insn */
 
     /* Top-K fn_entry histogram over the last `window` slots. */
     typedef struct { uint32_t func; uint32_t count; } HistBucket;

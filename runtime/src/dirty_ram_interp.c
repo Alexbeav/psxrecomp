@@ -193,7 +193,7 @@ uint64_t g_slice_irq_taken = 0;    /* diagnostic: IRQs taken inside precise-mode
 /* First-divergence trace for the precise slice (PRECISE_IRQ_SLICE.md Task #4). */
 uint32_t g_slice_last_block     = 0;  /* block_addr the guard fired on            */
 uint32_t g_slice_last_first_pc  = 0;  /* pc of the first interp instruction       */
-uint32_t g_slice_last_first_insn= 0;  /* raw word of that first instruction       */
+uint32_t g_slice_last_first_insn= 0;  /* raw word of that first instruction (refresh) */
 uint32_t g_slice_last_committed = 0;  /* committed PC handed back as resume/EPC   */
 uint32_t g_slice_last_istat     = 0;  /* i_stat at the take                        */
 uint32_t g_slice_last_imask     = 0;  /* i_mask at the take                        */
@@ -203,8 +203,8 @@ uint32_t g_slice_exit_pc        = 0;  /* PC published by the last precise slice 
 uint32_t g_slice_exit_reason    = 0;  /* 1=safe, 2=unsupported, 3=bail, 4=guard    */
 uint32_t g_slice_exit_iter      = 0;  /* loop iteration at exit                    */
 uint32_t g_slice_exit_dispatchable = 0; /* precise_pc_dispatchable(exit_pc)        */
-uint32_t g_slice_exit_dirty     = 0;  /* dirty_ram_is_dirty(exit_pc phys)          */
-uint32_t g_slice_exit_in_text   = 0;  /* psx_game_address_in_text(exit_pc)         */
+uint32_t g_slice_exit_dirty     = 0;  /* dirty_ram_is_dirty(exit_pc phys) (refresh) */
+uint32_t g_slice_exit_in_text   = 0;  /* psx_game_address_in_text(exit_pc) (refresh) */
 uint32_t g_slice_exit_want      = 0;  /* want_exit value at exit                   */
 
 /* Persistent async-RFE resume PC (Tomba 2 frame-1997 fix). psx_check_interrupts latches
@@ -595,10 +595,11 @@ static inline uint32_t fetch_word(uint32_t phys) {
      * instruction fetch does not cross translation units for every guest op. */
     static const uint8_t *ram;
     if (!ram) ram = memory_get_ram_ptr();
-    return  (uint32_t)ram[phys]
-         | ((uint32_t)ram[phys + 1] <<  8)
-         | ((uint32_t)ram[phys + 2] << 16)
-         | ((uint32_t)ram[phys + 3] << 24);
+    /* One little-endian word load, as memory.c reads RAM words; the compiler
+     * kept the four byte loads it replaced (PS1B-530). */
+    uint32_t word;
+    memcpy(&word, ram + phys, sizeof word);
+    return word;
 }
 
 /* Widescreen render-funnel cull detection for the interpreter ([widescreen.cull]
@@ -1490,7 +1491,24 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
 static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
                                     uint32_t *next_pc_out, int in_slot,
                                     uint32_t target, int taken);
-static int precise_irq_deliverable(CPUState *cpu);
+/* The precise loop asks this about once per interpreted instruction, and the
+ * usual answer is "nothing pending" right after the flush. That part is inline;
+ * the rest runs out of line, in the same order as before (PS1B-530). */
+static int precise_irq_deliverable_pending_tail(CPUState *cpu, uint32_t sr,
+                                                uint32_t sw_pending);
+static inline __attribute__((always_inline))
+int precise_irq_deliverable(CPUState *cpu) {
+    /* A caller may own a generated block/local cycle batch. Publish the
+     * completed instruction before inspecting the device IRQ line. */
+    psx_cyc_batch_flush();
+    extern uint32_t i_stat;
+    uint32_t sr = cpu->cop0[12];
+    /* COP0 software interrupts (CAUSE.IP0/IP1 & SR.IM0/IM1): guest-raised via
+     * mtc0 to CAUSE, independent of the INTC line (see psx_check_interrupts). */
+    uint32_t sw_pending = cpu->cop0[13] & sr & 0x0300u;
+    if ((i_stat & i_mask) == 0 && sw_pending == 0) return 0;
+    return precise_irq_deliverable_pending_tail(cpu, sr, sw_pending);
+}
 /* Can an exception taken with EPC = pc be resumed? BIOS ROM exists at compile
  * time, so it is statically recompiled and never interpreted (CLAUDE.md Rule 18):
  * the only ROM PCs that can resume are compiled entries/continuations. An
@@ -2732,16 +2750,10 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
 /* diag: why a pending, unmasked, enabled IRQ was not deliverable / not taken (non-precise dirty path) */
 uint64_t g_sd_nd_in_exception, g_sd_nd_cooldown, g_sd_nd_taken, g_sd_nd_declined_by_check;
 uint32_t g_sd_nd_first_declined_pc, g_sd_nd_first_inexc_pc, g_sd_nd_first_cooldown_pc;
-static int precise_irq_deliverable(CPUState *cpu) {
-    /* A caller may own a generated block/local cycle batch. Publish the
-     * completed instruction before inspecting the device IRQ line. */
-    psx_cyc_batch_flush();
-    extern uint32_t i_stat;
-    uint32_t sr = cpu->cop0[12];
-    /* COP0 software interrupts (CAUSE.IP0/IP1 & SR.IM0/IM1): guest-raised via
-     * mtc0 to CAUSE, independent of the INTC line (see psx_check_interrupts). */
-    uint32_t sw_pending = cpu->cop0[13] & sr & 0x0300u;
-    if ((i_stat & i_mask) == 0 && sw_pending == 0) return 0;
+/* An INTC or software interrupt is pending after the flush: decide whether it
+ * can be delivered now. The inline head above has computed sr and sw_pending. */
+static int precise_irq_deliverable_pending_tail(CPUState *cpu, uint32_t sr,
+                                                uint32_t sw_pending) {
     int armed = (sr & 0x1u) && ((sr & (1u << 10)) || sw_pending);
     if (psx_get_in_exception()) { if (armed && !g_precise_mode) { g_sd_nd_in_exception++; if (!g_sd_nd_first_inexc_pc) g_sd_nd_first_inexc_pc = cpu->pc; } return 0; }
     /* The actual delivery routine can decline during its inherited cooldown.
@@ -2806,19 +2818,17 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     uint32_t pc = cpu->pc;
     g_slice_last_block    = pc;
     g_slice_last_first_pc = pc;
-    g_slice_last_first_insn = fetch_word(pc & 0x1FFFFFFFu);
     g_slice_exit_pc = pc;
     g_slice_exit_reason = 0;
     g_slice_exit_iter = 0;
     g_slice_exit_dispatchable = 0;
-    g_slice_exit_dirty = dirty_ram_is_dirty(pc & 0x1FFFFFFFu) ? 1u : 0u;
-#ifdef PSX_HAS_GAME_DISPATCH
-    g_slice_exit_in_text = psx_game_address_in_text(pc) ? 1u : 0u;
-#else
-    g_slice_exit_in_text = 0;
-#endif
+    /* g_slice_last_first_insn, g_slice_exit_dirty and g_slice_exit_in_text
+     * follow from the two PCs; dirty_ram_slice_diag_refresh fills them when a
+     * reader asks, instead of every slice (PS1B-530). */
     g_slice_exit_want = 0;
     int irq_taken = 0;   /* default profile limits takes; also requests safe exit */
+    /* Set at the two safe exits, which have just found cpu->pc dispatchable. */
+    int safe_exit = 0;
     if(s_checkpoint_resume) {
         uint32_t slot=s_checkpoint.slot,target=s_checkpoint.target,taken=s_checkpoint.taken;
         s_checkpoint_resume=0;
@@ -2866,6 +2876,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
             if (precise_pc_dispatchable(cpu, cpu->pc) &&
                 !(resume_phys >= 0x1FC00000u && resume_phys < 0x1FC80000u)) {
                 g_slice_exit_reason = 1;
+                safe_exit = 1;
                 g_slice_exit_iter = (uint32_t)i;
                 g_slice_exit_want = 1;
                 break;
@@ -2967,6 +2978,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
         if (want_exit && precise_pc_dispatchable(cpu, cpu->pc) &&
             (!rom_resume || (transferred && !slot_irq_taken))) {
             g_slice_exit_reason = 1;
+            safe_exit = 1;
             g_slice_exit_iter = (uint32_t)i;
             g_slice_exit_want = 1;
             break;
@@ -2979,17 +2991,30 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
 
     cpu->pc = pc;
     g_slice_exit_pc = cpu->pc;
-    psx_publish_note(PSX_PUB_PRECISE_EXIT, pc, g_slice_last_block);
-    g_slice_exit_dispatchable = precise_pc_dispatchable(cpu, cpu->pc) ? 1u : 0u;
-    g_slice_exit_dirty = dirty_ram_is_dirty(cpu->pc & 0x1FFFFFFFu) ? 1u : 0u;
-#ifdef PSX_HAS_GAME_DISPATCH
-    g_slice_exit_in_text = psx_game_address_in_text(cpu->pc) ? 1u : 0u;
-#else
-    g_slice_exit_in_text = 0;
-#endif
+    /* A safe exit has just found precise_pc_dispatchable(cpu, cpu->pc), which
+     * requires psx_is_dispatchable(pc); nothing between there and here changes
+     * either answer. Only the other exits ask again. */
+    psx_publish_note_dispatchable(PSX_PUB_PRECISE_EXIT, pc, g_slice_last_block,
+                                  safe_exit ? 1u : (psx_is_dispatchable(pc) ? 1u : 0u));
+    g_slice_exit_dispatchable =
+        safe_exit ? 1u : (precise_pc_dispatchable(cpu, cpu->pc) ? 1u : 0u);
     g_precise_mode = prev_precise;
     g_dirty_interp_active = prev_active;
     g_exec_phase = prev_phase;
+}
+
+/* Fill the slice diagnostics that follow from the recorded PCs. Readers (the
+ * end-of-run [slice diag] line, the debug server) call this before reading;
+ * the values describe the RAM and dirty state at the time of the call. */
+void dirty_ram_slice_diag_refresh(void) {
+    if (!g_slice_last_first_pc) return;   /* no slice yet: keep the zeros */
+    g_slice_last_first_insn = fetch_word(g_slice_last_first_pc & 0x1FFFFFFFu);
+    g_slice_exit_dirty = dirty_ram_is_dirty(g_slice_exit_pc & 0x1FFFFFFFu) ? 1u : 0u;
+#ifdef PSX_HAS_GAME_DISPATCH
+    g_slice_exit_in_text = psx_game_address_in_text(g_slice_exit_pc) ? 1u : 0u;
+#else
+    g_slice_exit_in_text = 0;
+#endif
 }
 
 /* Precise-slice gate (PARKED default OFF). Hot callers use the cpu_state.h
