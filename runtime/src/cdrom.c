@@ -1847,15 +1847,22 @@ static int source_explicit_seek_cycles(uint8_t cmd)
 }
 /* T172 end CD explicit seek. */
 
-/* PS1G-140: a read re-issued at or just behind the last delivered sector
- * (a game's retry) gets a deterministic first-sector delay of 0..1 sector
- * period, hashed from the cycle count. The default profile's latencies are
- * otherwise constant, so a retry lands at the same phase against vblank each
- * time; a game that loses a race at that phase (RE3 Europe, RPD stairwell:
- * INT1 acknowledged in its VSync handler before the DataReady callback runs)
- * retries for minutes. Off in the source-clock profile (it has its own
- * jitter), for XA streams, and with PSX_CD_RETRY_DITHER=0. Saved state:
- * last_sector_lba and the cycle count are already in the save state. */
+/* PS1G-140: a retry loop that re-issues a read at the same target, after the
+ * drive has delivered that sector or later, gets a deterministic first-sector
+ * delay of 0..1 sector period, hashed from the cycle count, from its
+ * RETRY_DITHER_AFTER-th re-issue on. The default profile's latencies are
+ * otherwise constant, so each retry lands at the same phase against vblank;
+ * a game that loses a race at that phase (RE3 Europe, RPD stairwell: INT1
+ * acknowledged in its VSync handler before the DataReady callback runs)
+ * retries for minutes. A single re-read is untouched, so recorded replays
+ * stay in sync up to the first such loop. Off in the source-clock profile
+ * (it has its own jitter), for XA streams, and with PSX_CD_RETRY_DITHER=0.
+ * The run counter is not in the save state (the wire format is fixed); it
+ * restarts at 0 on power-on and after a state load. */
+#define RETRY_DITHER_AFTER 3
+static int s_retry_target = -1;
+static int s_retry_run;
+
 static int retry_dither_cycles(int target)
 {
     static int enabled = -1;
@@ -1864,8 +1871,13 @@ static int retry_dither_cycles(int target)
         enabled = !(e && e[0] == '0');
     }
     if (!enabled || s_source_clock || (mode_reg & 0x40u)) return 0;
-    if (last_sector_lba < 0 || target > last_sector_lba || target < last_sector_lba - 8)
+    if (target != s_retry_target) {
+        s_retry_target = target;
+        s_retry_run = 0;
         return 0;
+    }
+    if (last_sector_lba < target) return 0;      /* nothing delivered yet */
+    if (++s_retry_run < RETRY_DITHER_AFTER) return 0;
     uint32_t h = (uint32_t)psx_cycle_count * 0x9E3779B1u ^ (uint32_t)(psx_cycle_count >> 32);
     h ^= h >> 15;
     h *= 0x2C1B3C6Du;
@@ -3785,6 +3797,7 @@ void cdrom_init(const char* cue_path) {
     response_read = 0;
     response_count = 0;
     last_sector_lba = -1;
+    s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
     last_sector_size = 0;
     last_sector_frame = 0;
     last_sector_mode = 0;
@@ -4714,6 +4727,7 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     /* Absolute host deadlines are not on the wire — rebuild from restored
      * relative read_delay (psx_cycle_count is resynced by the load caller). */
     if (!s_source_clock) cdrom_resync_deadlines_after_restore();
+    s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
     return 1;
 }
 
