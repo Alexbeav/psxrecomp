@@ -784,7 +784,20 @@ WS_EXPLICIT_LIST(bltz);
 WS_EXPLICIT_LIST(bgez);
 WS_EXPLICIT_LIST(branch_keep);
 WS_EXPLICIT_LIST(clip_edge_x_load);
+WS_EXPLICIT_LIST(screen_x);
 static uint32_t ws_clip_edge_width = 320;
+
+/* [widescreen.cull] screen_x_sites for interpreted code: native code compiles
+ * the list in (code_generator.cpp); this keeps a dirty-RAM copy of a listed
+ * site on the same semantics. */
+void gpu_ws_set_cull_screen_x_sites(const uint32_t *sites, int nsites) {
+    ws_explicit_screen_x_n = ws_explicit_store(
+        ws_explicit_screen_x_sites, sites, nsites, "screen_x_sites");
+}
+int psx_ws_is_cull_screen_x_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_screen_x_sites,
+                            ws_explicit_screen_x_n, pc);
+}
 
 void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
                                     const uint32_t *slti, int nslti,

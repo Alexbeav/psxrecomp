@@ -340,8 +340,12 @@ screen_x_sites = [
 ]
 ```
 
-`screen_x_sites` is applied when code is generated: native code and overlay
-shards. The dirty-RAM interpreter does not consult this list. In the main EXE
+`screen_x_sites` is applied when code is generated (native code and overlay
+shards) and, at runtime, by the dirty-RAM interpreter: code that runs from
+RAM through the interpreter (including under `PSX_FORCE_INTERP=1`) widens the
+same four instruction forms at the listed addresses, with the same helpers and
+the same identity at 4:3. A listed `bltz` follows the precedence `bltz_sites`,
+then `screen_x_sites`, then the `auto_screen_x` classifier. In the main EXE
 a listed address holding another non-branch instruction is a hard build error;
 a branch other than `bltz` at a listed address is left as it is.
 

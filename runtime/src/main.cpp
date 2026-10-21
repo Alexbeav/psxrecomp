@@ -18165,6 +18165,9 @@ int main(int argc, char** argv) {
              * must never have its live code scanned and rewritten. */
             gpu_ws_set_auto_hooks(gc.ws_auto_screen_x_cull ? 1 : 0,
                                   gc.ws_auto_backdrop_preload ? 1 : 0);
+            gpu_ws_set_cull_screen_x_sites(
+                gc.ws_cull_screen_x_sites.data(),
+                (int)gc.ws_cull_screen_x_sites.size());
             if (!gc.ws_cull_w_imms.empty() || !gc.ws_cull_h_imms.empty())
                 gpu_ws_set_cull_imms(gc.ws_cull_w_imms.data(), (int)gc.ws_cull_w_imms.size(),
                                      gc.ws_cull_h_imms.data(), (int)gc.ws_cull_h_imms.size());
