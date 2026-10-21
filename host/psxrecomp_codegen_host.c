@@ -3247,10 +3247,72 @@ static int host_download_url_to_file(const char* url, const char* dest,
     return 1;
 }
 
+/* The first executable file called `name` in a folder of PATH, as the shell
+ * would find it. An empty PATH entry (the current folder) is not searched. */
+static int host_find_on_path(const char* name, char* out, size_t cap) {
+    const char* p = getenv("PATH");
+    if (!p)
+        return 0;
+    while (*p) {
+        const char* end = strchr(p, ':');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (n > 0 && n + 1 + strlen(name) < cap) {
+            memcpy(out, p, n);
+            out[n] = '/';
+            strcpy(out + n + 1, name);
+            if (path_is_file(out) && access(out, X_OK) == 0)
+                return 1;
+        }
+        if (!end)
+            break;
+        p = end + 1;
+    }
+    out[0] = '\0';
+    return 0;
+}
+
+/* Runs `exe` with `argv` (no shell), its output thrown away; its exit code,
+ * or -1 when it could not start or did not exit. */
+static int host_run_quiet(const char* exe, const char* const argv[]) {
+    posix_spawn_file_actions_t actions;
+    pid_t pid = 0;
+    int status = 0, rc;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    /* posix_spawn does not change its arguments; its prototype predates const. */
+    rc = posix_spawn(&pid, exe, &actions, NULL, (char* const*)argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (rc != 0)
+        return -1;
+    while (waitpid(pid, &status, 0) < 0)
+        if (errno != EINTR)
+            return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* PS1B-566: the toolchain zip was unpacked with `unzip`, then `tar -xf`.
+ * Many Linux hosts have no unzip, and GNU tar cannot read a zip, so the
+ * player could not install the toolchain. Try, in order, the extractors such
+ * a host is likely to have; each keeps the Unix modes the zip records (the
+ * pack's programs must stay executable). Python's zipfile does not restore
+ * them, so the script does, as tools/toolchain_pack.py unpack_zip_to does. */
+static const char k_zip_extract_py[] =
+    "import os, sys, zipfile\n"
+    "dest = sys.argv[2]\n"
+    "with zipfile.ZipFile(sys.argv[1]) as z:\n"
+    "    z.extractall(dest)\n"
+    "    for i in z.infolist():\n"
+    "        mode = (i.external_attr >> 16) & 0o7777\n"
+    "        target = os.path.join(dest, i.filename)\n"
+    "        if mode and not i.is_dir() and os.path.isfile(target):\n"
+    "            os.chmod(target, mode)\n";
+
 static int host_extract_zip(const char* zip_path, const char* dest_dir,
                             char* err_msg, size_t err_cap) {
-    char cmd[3200];
-    char parent[1400];
+    static const char* const tools[] = {"unzip", "bsdtar", "python3", "cmake"};
+    char parent[1400], zip_abs[1400], exe[1400], tried[512];
+    size_t i;
+    int found = 0;
     if (!path_is_file(zip_path)) {
         snprintf(err_msg, err_cap, "Toolchain zip not found: %s", zip_path);
         return 0;
@@ -3259,17 +3321,52 @@ static int host_extract_zip(const char* zip_path, const char* dest_dir,
         snprintf(err_msg, err_cap, "Bad extract destination.");
         return 0;
     }
+    {   /* cmake extracts into its working folder, so it needs the zip's full path. */
+        char* rp = realpath(zip_path, NULL);
+        snprintf(zip_abs, sizeof(zip_abs), "%s", rp ? rp : zip_path);
+        free(rp);
+    }
     mkdir_p(parent);
     rmtree_path(dest_dir);
     mkdir_p(dest_dir);
-    snprintf(cmd, sizeof(cmd), "unzip -q \"%s\" -d \"%s\"", zip_path, dest_dir);
-    if (system(cmd) != 0) {
-        snprintf(cmd, sizeof(cmd), "tar -xf \"%s\" -C \"%s\"", zip_path,
-                 dest_dir);
-        if (system(cmd) != 0) {
-            snprintf(err_msg, err_cap, "Failed to extract toolchain zip.");
-            return 0;
+    tried[0] = '\0';
+    for (i = 0; i < sizeof(tools) / sizeof(tools[0]); ++i) {
+        const char* argv[10];
+        size_t used = strlen(tried);
+        int code;
+        if (!host_find_on_path(tools[i], exe, sizeof(exe)))
+            continue;
+        found = 1;
+        if (i == 0) {            /* unzip -q -o <zip> -d <dest> */
+            const char* a[] = {exe, "-q", "-o", zip_abs, "-d", dest_dir, NULL};
+            memcpy(argv, a, sizeof(a));
+        } else if (i == 1) {     /* bsdtar -xf <zip> -C <dest> */
+            const char* a[] = {exe, "-xf", zip_abs, "-C", dest_dir, NULL};
+            memcpy(argv, a, sizeof(a));
+        } else if (i == 2) {     /* python3 -I -c <script> <zip> <dest> */
+            const char* a[] = {exe, "-I", "-c", k_zip_extract_py, zip_abs, dest_dir, NULL};
+            memcpy(argv, a, sizeof(a));
+        } else {                 /* cmake -E chdir <dest> cmake -E tar xf <zip> */
+            const char* a[] = {exe, "-E", "chdir", dest_dir, exe, "-E", "tar", "xf", zip_abs, NULL};
+            memcpy(argv, a, sizeof(a));
         }
+        rmtree_path(dest_dir);   /* nothing left over from an extractor that failed */
+        mkdir_p(dest_dir);
+        code = host_run_quiet(exe, argv);
+        if (code == 0)
+            break;
+        snprintf(tried + used, sizeof(tried) - used, "%s%s exit %d", used ? ", " : "",
+                 tools[i], code);
+    }
+    if (!found) {
+        snprintf(err_msg, err_cap,
+                 "Failed to extract toolchain zip: none of unzip, bsdtar, python3 or "
+                 "cmake is on PATH. Install unzip and try again.");
+        return 0;
+    }
+    if (i == sizeof(tools) / sizeof(tools[0])) {
+        snprintf(err_msg, err_cap, "Failed to extract toolchain zip (%s).", tried);
+        return 0;
     }
     if (pack_root_has_cmake(dest_dir))
         return 1;

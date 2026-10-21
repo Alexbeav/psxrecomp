@@ -1706,6 +1706,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_sentences.py
                          --compiler ${CMAKE_C_COMPILER})
         set_tests_properties(toolchain_sentences_test PROPERTIES SKIP_RETURN_CODE 77)
+        # PS1B-566: the POSIX setup host unpacks the toolchain zip on a host
+        # without unzip (GNU tar cannot read a zip). PATH holds one extractor
+        # at a time; a host without one skips that case. Exits 77 on Windows
+        # or without recomp-ui or a C compiler.
+        add_test(NAME toolchain_zip_extract_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_zip_extract.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_zip_extract_test PROPERTIES SKIP_RETURN_CODE 77)
         # Setup-wizard disc probing (multi-disc roster). Never registered
         # before: a .chd set was rejected and nothing ran to notice.
         add_test(NAME probe_disc_test
