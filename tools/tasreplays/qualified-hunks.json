@@ -793,12 +793,14 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "            /* Spec 6.7 G2b: in the drive profile an established read names",
-            "             * the sector after the next delivery (Bio Hazard route;",
-            "             * cdrom_source_explicit_timing_test). G2c: while the read is still",
-            "             * seeking, GetlocP names the seek target, which is the delivery",
-            "             * cursor (PSX-SPX \"GetlocP\": it works during a seek). */",
-            "            if (s_nymashock_drive && !(stat_reg & CDSTAT_SEEK)) lba += 1;"
+            "            /* Spec 6.7 G2b: on the source read pipeline, and so in the drive",
+            "             * profile, an established read names the sector after the next",
+            "             * delivery (Bio Hazard route; Spyro 4083M return 4423; oracle",
+            "             * fixture C6-getlocp-reading; cdrom_source_explicit_timing_test).",
+            "             * G2c: while the read is still seeking, GetlocP names the seek",
+            "             * target, which is the delivery cursor (PSX-SPX \"GetlocP\": it",
+            "             * works during a seek). */",
+            "            if ((s_nymashock_drive || s_source_read_pipeline) && !(stat_reg & CDSTAT_SEEK)) lba += 1;"
           ]
         }
       ],
@@ -820,6 +822,17 @@
           "to_blocks": 1,
           "replacement_blocks_added": 1,
           "note": "Clean-room rewrite (PS1B-311): the stub lines are replaced by lines written from the behaviour spec by an unexposed implementer. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "a85eb25e24338503aac8c480e9419ae974e0f78c",
+          "issue": "PS1G-116",
+          "reason": "GetlocP spec row G2b widened from the drive profile to the source read pipeline; the comment and the condition changed",
+          "dropped_lines": 6,
+          "added_lines": 8,
+          "from_blocks": 1,
+          "to_blocks": 1,
+          "replacement_blocks_added": 1,
+          "note": "G2b widened from the drive profile to the source read pipeline (Octoshock 2.2.2/2.3 SectorPipe_Count 2; oracle fixture C6-getlocp-reading 40 of 40 replies; Spyro 4083M return 4423). The drive profile requires the source clock tape, which requires the pipeline, so a drive-profile run takes the same branch as before: Bio Hazard behaviour is unchanged by construction; its route replay on this tree is the trial's. Tekken 3, Pepsiman and Abe's Oddysee run the pipeline without a drive profile, so their GetlocP during a read changes; the trial replays them, and adds their titles to this entry when they requalify."
         }
       ]
     },
@@ -8197,6 +8210,183 @@
           "lines": [
             "        for (uint32_t j = 0; j < tail; j++)",
             "            if (p[len - tail + j] > 1) return 0;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ps1g116-octoshock-byte-axis",
+      "titles": [
+        "spyro"
+      ],
+      "origin_commit": "2b52eed756f1f5437a2529e2e11030081067f8ce",
+      "subject": "tas: deliver octoshock stick bytes unscaled on request",
+      "qualified_tree": "b936b208639219b2fbee808bbedce3877e6abc2f",
+      "blocks": [
+        {
+          "file": "runtime/include/input_dualshock_delivery.h",
+          "lines": [
+            "#include <stdlib.h>",
+            "#include <string.h>"
+          ]
+        },
+        {
+          "file": "runtime/include/input_dualshock_delivery.h",
+          "lines": [
+            "/* Which source wrote the route's axis bytes. The default is Nymashock, which",
+            " * hands the pad a 16-bit value per axis; PSX_INPUT_ROUTE_AXIS_MODEL=",
+            " * octoshock-byte selects Octoshock, whose wrapper hands the pad the logged",
+            " * byte unscaled [ORACLE FIXTURE P1, Octoshock 2.3; corpus PSX-TAS-001]. */",
+            "static inline int input_dualshock_raw_axes(void)",
+            "{",
+            "    const char *model = getenv(\"PSX_INPUT_ROUTE_AXIS_MODEL\");",
+            "    return model && !strcmp(model, \"octoshock-byte\");",
+            "}",
+            "static inline const char *input_dualshock_controller_profile(void)",
+            "{",
+            "    return input_dualshock_raw_axes() ? \"octoshock-byte-dualshock-neutral-analog\"",
+            "                                      : \"nymashock-2.9.1-dualshock-neutral-analog\";",
+            "}"
+          ]
+        },
+        {
+          "file": "runtime/include/input_dualshock_delivery.h",
+          "lines": [
+            " * cannot observe this rounding. This is a source bridge, not a deadzone.",
+            " * An Octoshock route's byte is already the protocol byte. */"
+          ]
+        },
+        {
+          "file": "runtime/include/input_dualshock_delivery.h",
+          "lines": [
+            "    if (input_dualshock_raw_axes()) return source;"
+          ]
+        },
+        {
+          "file": "runtime/src/input_route_observer.c",
+          "lines": [
+            "        fprintf(f, \",\\\"controller_profile\\\":\\\"%s\\\",\""
+          ]
+        },
+        {
+          "file": "runtime/src/input_route_observer.c",
+          "lines": [
+            "                   \"\\\"guest_analog_mode\\\":%d\", input_dualshock_controller_profile(),",
+            "                   expected, supplied, last_protocol_mode);"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ps1g116-cdda-data-track-play",
+      "titles": [
+        "spyro"
+      ],
+      "origin_commit": "91a4d79a48c9ebe68bbb0a7cb305ea03de9b8150",
+      "subject": "cdrom: accept play on a data track in the source cdda model",
+      "qualified_tree": "b936b208639219b2fbee808bbedce3877e6abc2f",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    /* Play starts on a data track too. The drive then plays without sound: it",
+            "     * walks, reports and pauses as on an audio track (PS1G-116, Spyro: Year of",
+            "     * the Dragon's disc check; cdrom_source_cdda_data_track_fixtures.json). */"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if (!track) exit(2);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        /* The oldest buffered sector reaches the SPU only while the sub-Q of",
+            "         * the sector under the head names audio (control bit 0x40 clear). */"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "            if (!(last_valid_subq[0] & 0x40)) {",
+            "                int16_t stereo[1176];",
+            "                for (unsigned i = 0; i < 1176; ++i) {",
+            "                    int sample = source_cdda.pipe[slot][i * 2] |",
+            "                                 ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);",
+            "                    if (sample >= 32768) sample -= 65536;",
+            "                    stereo[i] = cd_muted ? 0 : (int16_t)sample;",
+            "                }",
+            "                cd_apply_decode_volume(stereo, 588);",
+            "                spu_cd_audio_push(stereo, 588);",
+            "                ++cdda_sectors_played;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ps1g116-scex-counters",
+      "titles": [
+        "spyro"
+      ],
+      "origin_commit": "7e7788624d4f3e53ff087ad26d7a111da7550819",
+      "subject": "cdrom: answer the scex counter test with two zero bytes",
+      "qualified_tree": "b936b208639219b2fbee808bbedce3877e6abc2f",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        } else if (param_count >= 1 && param_fifo[0] == 0x05) {",
+            "            /* Get SCEx counters: INT3(total, success), no status byte (PSX-SPX).",
+            "             * The counters are not modelled; the drive answers as one that",
+            "             * received no SCEx string, as Octoshock and Mednafen do. Anti-modchip",
+            "             * checks read them (PS1G-116, Spyro: Year of the Dragon). */",
+            "            response_push(0x00);",
+            "            response_push(0x00);",
+            "            set_irq(CDIRQ_ACK);"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ps1g116-getlocp-source-pipeline",
+      "titles": [
+        "spyro"
+      ],
+      "origin_commit": "a85eb25e24338503aac8c480e9419ae974e0f78c",
+      "subject": "cdrom: name the head sector in getlocp on the source read pipeline",
+      "qualified_tree": "b936b208639219b2fbee808bbedce3877e6abc2f",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* PSX_CD_READ_START_MODEL=octoshock-2.2.2-pipeline: the source drive keeps two",
+            " * read sectors in flight before it delivers one (Octoshock 2.2.2 and 2.3",
+            " * SectorPipe_Count). The drive profile always runs on it. */",
+            "static int s_source_read_pipeline;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "            /* Spec 6.7 G2b: on the source read pipeline, and so in the drive",
+            "             * profile, an established read names the sector after the next",
+            "             * delivery (Bio Hazard route; Spyro 4083M return 4423; oracle",
+            "             * fixture C6-getlocp-reading; cdrom_source_explicit_timing_test).",
+            "             * G2c: while the read is still seeking, GetlocP names the seek",
+            "             * target, which is the delivery cursor (PSX-SPX \"GetlocP\": it",
+            "             * works during a seek). */",
+            "            if ((s_nymashock_drive || s_source_read_pipeline) && !(stat_reg & CDSTAT_SEEK)) lba += 1;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    {",
+            "        const char *pipeline=getenv(\"PSX_CD_READ_START_MODEL\");",
+            "        s_source_read_pipeline=pipeline && strcmp(pipeline,\"octoshock-2.2.2-pipeline\")==0;",
+            "    }"
           ]
         }
       ]

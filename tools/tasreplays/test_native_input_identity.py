@@ -34,10 +34,27 @@ with tempfile.TemporaryDirectory() as folder:
     for field,value in [('frame',2),('input_frames',1),('neutral_tail_ticks',0),('controller_profile','digital'),('original_controller_sha256','0'*64),('applied_controller_sha256',identity['original_controller_sha256']),('expected_protocol_sha256','0'*64)]:
         changed=dict(done);changed[field]=value
         assert not playback_identity_matches(changed,identity,1),field
+    # Octoshock routes: the pad receives each logged byte unscaled, under its own named profile.
+    raw=route_identity(route,axis_model='octoshock-byte')
+    assert raw['original_controller_sha256']==identity['original_controller_sha256'] and raw['sha256']==identity['sha256']
+    assert raw['expected_protocol_sha256']==hashlib.sha256(b''.join(struct.pack('<H5B',*r) for r in rows)).hexdigest()
+    assert raw['expected_protocol_sha256']!=identity['expected_protocol_sha256']
+    assert raw['axis_model']=='octoshock-byte' and raw['controller_profile']=='octoshock-byte-dualshock-neutral-analog'
+    assert 'controller_profile' not in identity and 'axis_model' not in identity  # recorded Nymashock identities unchanged
+    assert route_identity(route,start=1,axis_model='octoshock-byte')['expected_protocol_sha256']==hashlib.sha256(struct.pack('<H5B',*rows[1])).hexdigest()
+    raw_done=dict(done,controller_profile='octoshock-byte-dualshock-neutral-analog',applied_controller_sha256=raw['expected_protocol_sha256'],expected_protocol_sha256=raw['expected_protocol_sha256'])
+    assert playback_identity_matches(raw_done,raw,1)
+    assert not playback_identity_matches(dict(raw_done,controller_profile='nymashock-2.9.1-dualshock-neutral-analog'),raw,1)
+    assert not playback_identity_matches(dict(done,controller_profile='octoshock-byte-dualshock-neutral-analog'),identity,1)
+    assert not playback_identity_matches(raw_done,identity,1)
+    rejects(lambda:route_identity(route,axis_model='octoshock'))
+    rejects(lambda:route_identity(v1,axis_model='octoshock-byte'))
+    assert route_identity(v1,axis_model='nymashock-u16')==one
     original=route.read_bytes()
     for name,offset,value in [('version',8,1),('sequence',24,2),('physical-analog',34,1),('reserved',35,1)]:
         altered=bytearray(original);altered[offset]=value
         bad=folder/(name+'.route');bad.write_bytes(altered);rejects(lambda:route_identity(bad))
+        rejects(lambda:route_identity(bad,axis_model='octoshock-byte'))  # the Analog refusal is the same for both
     for name,data in [('short',original[:23]),('truncated',original[:-1]),('extra',original+b'\0')]:
         bad=folder/(name+'.route');bad.write_bytes(data);rejects(lambda:route_identity(bad))
     # Axis-only transitions count against the complete-state RLE capacity.
@@ -49,4 +66,4 @@ with tempfile.TemporaryDirectory() as folder:
     assert card_identity(card)['sha256']==hashlib.sha256(bytes(131072)).hexdigest()
     card.write_bytes(bytes(131071));rejects(lambda:card_identity(card))
     card.write_bytes(bytes(131073));rejects(lambda:card_identity(card))
-print('Native input identity: legacy unchanged; original/protocol identities and malformed input/card rejection pass')
+print('Native input identity: legacy unchanged; Nymashock and Octoshock protocol identities and malformed input/card rejection pass')

@@ -48,9 +48,10 @@ int iso_read_sector(void *p, uint32_t lba, uint8_t *b, int n) {
     (void)p; memset(b, (int)(lba & 255u), (size_t)n); reads++; return 1;
 }
 
-int iso_read_raw_sector(void *p,uint32_t lba,uint8_t *b,int n){(void)p;if(n!=2352)return 0;for(unsigned i=0;i<588;i++){uint16_t l=(uint16_t)(lba*17+i*3),r=(uint16_t)(lba*31-i*7);b[i*4]=l;b[i*4+1]=l>>8;b[i*4+2]=r;b[i*4+3]=r>>8;}return 1;}
 static const unsigned starts[]={0,0,240,600,960};
 static void q_msf(unsigned n,uint8_t *b){b[0]=bin_to_bcd(n/4500);b[1]=bin_to_bcd(n/75%60);b[2]=bin_to_bcd(n%75);}
+/* Data-track sectors carry the oracle disc's header (MSF, mode 1) in bytes 12-15; Play on the data track pushes them. */
+int iso_read_raw_sector(void *p,uint32_t lba,uint8_t *b,int n){(void)p;if(n!=2352)return 0;for(unsigned i=0;i<588;i++){uint16_t l=(uint16_t)(lba*17+i*3),r=(uint16_t)(lba*31-i*7);b[i*4]=l;b[i*4+1]=l>>8;b[i*4+2]=r;b[i*4+3]=r>>8;}if(lba<90){q_msf(lba+150,b+12);b[15]=1;}return 1;}
 int iso_read_subq(void *p,uint32_t lba,uint8_t *q,int n,int *v){(void)p;if(n!=12)return 0;int track=lba<90?1:lba<450?2:lba<960?3:100;int index=track==100||lba>=starts[track];memset(q,0,12);q[0]=track==1?0x41:1;q[1]=track==100?0xaa:bin_to_bcd(track);q[2]=index;q_msf(track==100?0:abs((int)lba-(int)starts[track]),q+3);q_msf(lba+150,q+7);unsigned crc=0;for(int i=0;i<10;i++){crc^=(unsigned)q[i]<<8;for(int j=0;j<8;j++)crc=((crc<<1)^((crc&0x8000)?0x1021:0))&65535;}q[10]=(~crc)>>8;q[11]=~crc;*v=1;return 1;}
 int iso_has_subq_replacements(void *p){(void)p;return 0;}
 uint32_t iso_sector_count(void *p){(void)p;return 960;}
@@ -100,18 +101,19 @@ static void scope_report(void) {
 /* One scope case, from the state cdrom_init leaves. Each refused case has an
  * accepted twin that differs in the one condition only. */
 static int scope_case(const char *name) {
-    int play = 0;
+    int play = 0; /* the track Play names: 2 is audio, 1 is the data track */
     uint8_t command = 0;
-    if (!strcmp(name, "single-speed")) play = 1;                           /* accepted */
-    else if (!strcmp(name, "double-speed")) { play = 1; mode_reg = 0x80; } /* refused */
-    else if (!strcmp(name, "active-read")) { play = 1; reading = 1; }      /* refused */
+    if (!strcmp(name, "single-speed")) play = 2;                           /* accepted */
+    else if (!strcmp(name, "data-track")) play = 1;                        /* accepted */
+    else if (!strcmp(name, "double-speed")) { play = 2; mode_reg = 0x80; } /* refused */
+    else if (!strcmp(name, "active-read")) { play = 2; reading = 1; }      /* refused */
     else if (!strcmp(name, "getstat")) command = 0x01;                     /* accepted */
     else if (!strcmp(name, "scan-forward")) command = 0x04;                /* refused */
     else if (!strcmp(name, "scan-backward")) command = 0x05;               /* refused */
     else return 6;
     scope_values(scope_before);
     scope_step = 1;
-    if (play) start_source_cdda(2);
+    if (play) start_source_cdda(play);
     else cdrom_write(0x1f801801, command);
     scope_step = 2;
     return 0;

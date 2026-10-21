@@ -4,6 +4,7 @@ The conversion itself is not asserted here beyond its endpoints; it is data prod
 external/source_dualshock_axis.py, and this checks that the encoder applies it in the right
 axis order and never invents a byte of its own.
 """
+import hashlib
 import io
 import json
 import sys
@@ -97,15 +98,44 @@ with tempfile.TemporaryDirectory() as tmp:
     bad.write_bytes(bytes(n.TABLE_BYTES))
     refuses(lambda: n.load_axis_table(bad), 'endpoints')
 
+# ------------------------------------------------------------------ the reader an adapter calls
+# read_movie_nymashock28 returns the converted rows plus the facts a title adapter checks.
+sticks = [row(), row(rx=0xFFFF, lx=0x8000, ry=0x8001, ly=0x7FFF), row(buttons='.' * 16 + 'A')]
+rows, facts = n.read_movie_nymashock28(io.BytesIO(movie(sticks)))
+assert rows == n.convert(io.BytesIO(movie(sticks)), TABLE)[0]
+assert rows[1][1:5] == (TABLE[0x7FFF], TABLE[0x8000], TABLE[0x8001], TABLE[0xFFFF]) == (127, 128, 128, 255)
+assert facts['stick_frames'] == 1 and facts['mode_press_frames'] == 1 and facts['port1_memcard'] == 'default'
+assert facts['declared_mednafen_values'] == {} and facts['declared_emu_version'] == 'Version 2.8'
+assert facts['axis_table_sha256'] == hashlib.sha256(TABLE).hexdigest() and facts['runtime_requirement']
+assert n.default_axis_table() == TABLE
+# A passed table is checked, not trusted.
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()])), table=bytes(8)), 'table must be')
+rows, facts = n.read_movie_nymashock28(io.BytesIO(movie([row()], sync=card_off)),
+                                       mednafen_values={'psx.input.port1.memcard': '0'})
+assert facts['port1_memcard'] == '0' and facts['mode_press_frames'] == 0 and facts['runtime_requirement'] is None
+# A movie whose declared settings are not the title's is refused.
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()])), mednafen_values={'psx.input.port1.memcard': '0'}),
+        'sync settings differ')
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()], sync=card_off)), mednafen_values={}),
+        'sync settings differ')
+# Every refusal of the encoder holds through the reader, and a memcard value must be 0 or 1.
+bad_card = {'o': dict(SYNC['o'], MednafenValues={'psx.input.port1.memcard': 'off'})}
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()], sync=bad_card))), 'sync settings')
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row(console='P...')]))), 'Console events')
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()], header=HEADER.replace('2.8', '2.9.1')))), '2.8 PSX log layout')
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()], header=HEADER + 'StartsFromSavestate True' + chr(10)))), 'Anchored')
+refuses(lambda: n.read_movie_nymashock28(io.BytesIO(movie([row()], log_key=route.LOGKEY))), 'input layout')
+
 print('synthetic nymashock28_route tests passed')
 
 # ------------------------------------------------------------------ real movies
-MOVIES = Path(r'D:\psxrecomp\validation\tas\movies')
+MOVIE_DIRS = [Path(r'D:\psxrecomp\validation\tas\movies'),
+              Path(r'D:\Projects\Recompilations\PS1\Library\Movies\tas'), HERE / 'movies']
 for name, frames in (('crash41596-medievil-allchalices.bk2', 222294),
                      ('lapogne36-spyro2-moneybags.bk2', 86655)):
-    path = MOVIES / name
-    if not path.is_file():
-        print(f'skipped (absent): {path}')
+    path = next((d / name for d in MOVIE_DIRS if (d / name).is_file()), None)
+    if path is None:
+        print(f'skipped (absent): {name}')
         continue
     rows, receipt = n.convert(io.BytesIO(path.read_bytes()), TABLE)
     assert receipt['frames'] == frames == len(rows), name

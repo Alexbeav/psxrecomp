@@ -45,7 +45,18 @@ def checkpoint_asset_digest(path):
     return hashlib.sha256('\n'.join([value, *tracks]).encode('ascii')).hexdigest()
 
 
-def route_identity(path, start=0):
+# Who wrote a PSXRTI2 route's axis bytes decides what the pad receives. Nymashock hands the pad a
+# 16-bit value per axis (byte<<8), which the device rescales to a byte; Octoshock's wrapper hands
+# it the logged byte unscaled (corpus PSX-TAS-001). The runtime takes the same choice from
+# PSX_INPUT_ROUTE_AXIS_MODEL and names its profile in complete.json.
+AXIS_MODELS = {'nymashock-u16': 'nymashock-2.9.1-dualshock-neutral-analog',
+               'octoshock-byte': 'octoshock-byte-dualshock-neutral-analog'}
+DEFAULT_AXIS_MODEL = 'nymashock-u16'
+
+
+def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL):
+    if axis_model not in AXIS_MODELS:
+        raise ValueError('unknown DualShock axis model')
     if path.stat().st_size > 24 + 12 * 1000000:
         raise ValueError('route exceeds frame capacity')
     data = path.read_bytes()
@@ -66,13 +77,22 @@ def route_identity(path, start=0):
             if steps > dualshock_route.MAX_STEPS:  # the encoder's and runtime's shared cap
                 raise ValueError('DualShock step capacity exceeded')
             if index >= start: original.update(row)
-            # Nyma expands axes to u16 with value<<8; the device rescales to u8.
-            axes = [((value << 8)*255+32767)//65535 for value in (ly,lx,ry,rx)]
+            if axis_model == 'octoshock-byte':
+                axes = (ly, lx, ry, rx)
+            else:
+                # Nyma expands axes to u16 with value<<8; the device rescales to u8.
+                axes = [((value << 8)*255+32767)//65535 for value in (ly,lx,ry,rx)]
             if index >= start: protocol.update(struct.pack('<H5B', buttons, *axes, analog))
-        return {'format':'PSXRTI2', 'frames':count, 'steps':steps,
-                'sha256':hashlib.sha256(data).hexdigest(),
-                'original_controller_sha256':original.hexdigest(),
-                'expected_protocol_sha256':protocol.hexdigest()}
+        identity = {'format':'PSXRTI2', 'frames':count, 'steps':steps,
+                    'sha256':hashlib.sha256(data).hexdigest(),
+                    'original_controller_sha256':original.hexdigest(),
+                    'expected_protocol_sha256':protocol.hexdigest()}
+        if axis_model != DEFAULT_AXIS_MODEL:
+            # Named only when not the default, so every recorded Nymashock identity is unchanged.
+            identity.update(axis_model=axis_model, controller_profile=AXIS_MODELS[axis_model])
+        return identity
+    if axis_model != DEFAULT_AXIS_MODEL:
+        raise ValueError('an axis model applies to a DualShock route only')
     if (magic, version, size, reserved) != (b"PSXRTI1\0", 1, 8, 0):
         raise ValueError("unsupported route header")
     if not 0 < count <= 1000000 or len(data) != 24 + 8 * count:
@@ -153,7 +173,7 @@ def playback_identity_matches(complete, identity, tail):
             complete.get('input_frames') != identity['frames'] or complete.get('neutral_tail_ticks') != tail):
         return False
     if identity.get('format') == 'PSXRTI2':
-        return (complete.get('controller_profile') == 'nymashock-2.9.1-dualshock-neutral-analog' and
+        return (complete.get('controller_profile') == identity.get('controller_profile', AXIS_MODELS[DEFAULT_AXIS_MODEL]) and
                 complete.get('original_controller_sha256') == identity['original_controller_sha256'] and
                 complete.get('applied_controller_sha256') == complete.get('expected_protocol_sha256') == identity['expected_protocol_sha256'])
     return complete.get('applied_words_sha256') == identity['words_sha256']
@@ -320,6 +340,8 @@ def main():
                         help='source GPUSTAT field/line bits only; requires the NTSC raster clock')
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
+    parser.add_argument('--axis-model', choices=tuple(AXIS_MODELS), default=DEFAULT_AXIS_MODEL,
+                        help='who wrote the DualShock route axis bytes: Nymashock u16 (rescaled) or Octoshock (unscaled bytes)')
     parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock"), default="default",
                         help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
@@ -402,7 +424,7 @@ def main():
                                        args.cd_explicit_seek_model, args.cd_read_start_model)
     if clock_tape:
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
-    identity = route_identity(paths["route"])
+    identity = route_identity(paths["route"], axis_model=args.axis_model)
     resume_frame = resume_inputs = 0
     if args.resume_compatible_build and args.resume_from is None:
         raise ValueError('--resume-compatible-build requires --resume-from')
@@ -414,7 +436,7 @@ def main():
             raise ValueError('checkpoint size or SHA256 mismatch')
         if not checkpoint_cards_valid(args.resume_from, resume_manifest):
             raise ValueError('checkpoint card image missing or SHA256 mismatch')
-    completion_identity = route_identity(paths['route'], resume_inputs)
+    completion_identity = route_identity(paths['route'], resume_inputs, args.axis_model)
 
     dualshock = identity.get('format') == 'PSXRTI2'
     if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
@@ -586,6 +608,8 @@ def main():
         selected_env["PSX_APE_CARD_UNSTICK"] = "0"
     if args.pad_ack_model != "default":
         selected_env["PSX_INPUT_ROUTE_PAD_ACK_MODEL"] = args.pad_ack_model
+    if args.axis_model != DEFAULT_AXIS_MODEL:
+        selected_env["PSX_INPUT_ROUTE_AXIS_MODEL"] = args.axis_model
     if initial_card:
         selected_env['PSX_INPUT_ROUTE_CARD_MODEL'] = args.card_model
         selected_env['PSX_INPUT_ROUTE_CARD1_SHA256'] = initial_card['sha256']
