@@ -17793,6 +17793,17 @@ session_reboot:
             return 2;
         }
         source_gpu_runtime_init();
+        /* The source GPU model draws only through the software rasteriser at
+         * 1x (gr_draw_source_* refuse any other backend and gpu.c halts at the
+         * first source primitive). With OpenGL requested, keep the raster in
+         * software at 1x and let OpenGL present that CPU picture. */
+        if (gr_backend() == GR_BACKEND_OPENGL) {
+            gr_set_backend(GR_BACKEND_SOFTWARE);
+            gr_set_scale(1);
+            g_gl_fbo_present = 0;
+            std::fprintf(stdout, "psxrecomp: source GPU model: software raster at 1x; "
+                                 "OpenGL presents the CPU picture\n");
+        }
     }
     /* Seed per-player device routing from the resolved [controller] config.
      * SDL controller handles are opened later (after SDL_Init); here we only
@@ -18088,7 +18099,9 @@ session_reboot:
     if (g_video_renderer == 1 && !g_gl_active) gr_set_backend(GR_BACKEND_SOFTWARE);
     if (g_gl_active && !netplay_cpu_auth_gpu()) g_video_scale = gr_scale();
     std::fprintf(stdout, "psxrecomp: headless renderer active: %s\n",
-                 g_gl_active ? "opengl (hidden window)" : "software");
+                 !g_gl_active ? "software" :
+                 gr_backend() == GR_BACKEND_OPENGL ? "opengl (hidden window)" :
+                 "software raster, OpenGL context in a hidden window");
   } else {
     /* ---- SDL init ---- */
     /* Scale quality governs SDL's logical-size -> window scaling. Linear when
