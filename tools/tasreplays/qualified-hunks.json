@@ -3307,10 +3307,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
-            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "    {   /* PS1G-140 retry run: a read target from the lead-in (-150, 00:00:00) to the",
+            "         * end of a disc (-1 also stands for no run), and a count not negative. */",
             "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
             "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
-            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "        if (target < -150 || target > 450000 || run < 0) return 0;",
             "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
@@ -5119,6 +5120,16 @@
           "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
           "dropped_lines": 0,
           "added_lines": 5,
+          "from_blocks": 167,
+          "to_blocks": 167
+        },
+        {
+          "as_of": "worktree on 0d953fa1272b",
+          "issue": "PS1G-140",
+          "reason": "Review r2 (Pacifica): the retry-run target range in cdrom_snapshot_validate started at -1, but a read target can be any lead-in LBA from -150 (MSF 00:00:00), so a CD section this build wrote after such a read failed its own validate and the state could not load. The range now starts at -150, as for the drive head's LBA in the same function. Evidence: probe_negative_lba (LBA -150 and -2: validate 0 on 0d953fa1, 1 here) and cdrom_retry_snapshot_test row R4 (-150 accepted, -151 refused).",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate, PS1G-140 retry-run check: the comment line becomes two lines and '-1' becomes '-150' in the range test. Two pinned lines changed, one added, none removed.",
+          "dropped_lines": 2,
+          "added_lines": 3,
           "from_blocks": 167,
           "to_blocks": 167
         }
@@ -6989,10 +7000,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
-            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "    {   /* PS1G-140 retry run: a read target from the lead-in (-150, 00:00:00) to the",
+            "         * end of a disc (-1 also stands for no run), and a count not negative. */",
             "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
             "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
-            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "        if (target < -150 || target > 450000 || run < 0) return 0;",
             "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
@@ -7150,6 +7162,16 @@
           "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
           "dropped_lines": 0,
           "added_lines": 5,
+          "from_blocks": 12,
+          "to_blocks": 12
+        },
+        {
+          "as_of": "worktree on 0d953fa1272b",
+          "issue": "PS1G-140",
+          "reason": "Review r2 (Pacifica): the retry-run target range in cdrom_snapshot_validate started at -1, but a read target can be any lead-in LBA from -150 (MSF 00:00:00), so a CD section this build wrote after such a read failed its own validate and the state could not load. The range now starts at -150, as for the drive head's LBA in the same function. Evidence: probe_negative_lba (LBA -150 and -2: validate 0 on 0d953fa1, 1 here) and cdrom_retry_snapshot_test row R4 (-150 accepted, -151 refused).",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate, PS1G-140 retry-run check: the comment line becomes two lines and '-1' becomes '-150' in the range test. Two pinned lines changed, one added, none removed.",
+          "dropped_lines": 2,
+          "added_lines": 3,
           "from_blocks": 12,
           "to_blocks": 12
         }
@@ -7741,10 +7763,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
-            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "    {   /* PS1G-140 retry run: a read target from the lead-in (-150, 00:00:00) to the",
+            "         * end of a disc (-1 also stands for no run), and a count not negative. */",
             "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
             "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
-            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "        if (target < -150 || target > 450000 || run < 0) return 0;",
             "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
@@ -7943,6 +7966,16 @@
           "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
           "dropped_lines": 0,
           "added_lines": 5,
+          "from_blocks": 23,
+          "to_blocks": 23
+        },
+        {
+          "as_of": "worktree on 0d953fa1272b",
+          "issue": "PS1G-140",
+          "reason": "Review r2 (Pacifica): the retry-run target range in cdrom_snapshot_validate started at -1, but a read target can be any lead-in LBA from -150 (MSF 00:00:00), so a CD section this build wrote after such a read failed its own validate and the state could not load. The range now starts at -150, as for the drive head's LBA in the same function. Evidence: probe_negative_lba (LBA -150 and -2: validate 0 on 0d953fa1, 1 here) and cdrom_retry_snapshot_test row R4 (-150 accepted, -151 refused).",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate, PS1G-140 retry-run check: the comment line becomes two lines and '-1' becomes '-150' in the range test. Two pinned lines changed, one added, none removed.",
+          "dropped_lines": 2,
+          "added_lines": 3,
           "from_blocks": 23,
           "to_blocks": 23
         }
@@ -8150,10 +8183,11 @@
             "    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;",
             "    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;",
             "    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;",
-            "    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */",
+            "    {   /* PS1G-140 retry run: a read target from the lead-in (-150, 00:00:00) to the",
+            "         * end of a disc (-1 also stands for no run), and a count not negative. */",
             "        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;",
             "        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);",
-            "        if (target < -1 || target > 450000 || run < 0) return 0;",
+            "        if (target < -150 || target > 450000 || run < 0) return 0;",
             "    }",
             "    if (source_cdda.enabled) {",
             "        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;",
@@ -8280,6 +8314,16 @@
           "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate: five lines inserted after '    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;'. No pinned line changed or removed.",
           "dropped_lines": 0,
           "added_lines": 5,
+          "from_blocks": 22,
+          "to_blocks": 22
+        },
+        {
+          "as_of": "worktree on 0d953fa1272b",
+          "issue": "PS1G-140",
+          "reason": "Review r2 (Pacifica): the retry-run target range in cdrom_snapshot_validate started at -1, but a read target can be any lead-in LBA from -150 (MSF 00:00:00), so a CD section this build wrote after such a read failed its own validate and the state could not load. The range now starts at -150, as for the drive head's LBA in the same function. Evidence: probe_negative_lba (LBA -150 and -2: validate 0 on 0d953fa1, 1 here) and cdrom_retry_snapshot_test row R4 (-150 accepted, -151 refused).",
+          "detail": "runtime/src/cdrom.c, cdrom_snapshot_validate, PS1G-140 retry-run check: the comment line becomes two lines and '-1' becomes '-150' in the range test. Two pinned lines changed, one added, none removed.",
+          "dropped_lines": 2,
+          "added_lines": 3,
           "from_blocks": 22,
           "to_blocks": 22
         }

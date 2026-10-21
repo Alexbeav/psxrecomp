@@ -13,8 +13,9 @@
  *      uninterrupted run's at the end.
  *   R3 Without the run in the state (the count cleared after the load) the
  *      next delay differs: the round trip in R2 is not trivially equal.
- *   R4 The section rejects a target below -1 or past the disc, and a negative
- *      count; it accepts -1 (no run).
+ *   R4 The section rejects a target before the lead-in (-151) or past the
+ *      disc, and a negative count; it accepts -1 (no run) and a lead-in read
+ *      target (-150).
  *   R5 A read that delivered more than RETRY_STALL_SECTORS sectors past its
  *      target before the Pause was progressing, not stalled: its re-issue
  *      restarts the count and gets no dither.
@@ -126,9 +127,9 @@ static void validate_rows(void) {
     uint8_t *retry = p + n - 1 - 8;                /* default path: no tails after the seek byte */
     const uint32_t keep_t = cd_tape_le32(retry), keep_r = cd_tape_le32(retry + 4);
     CHECK((int32_t)keep_t == TARGET_LBA && (int32_t)keep_r == 1, "R4: the run sits before the seek byte");
-    const int32_t targets[] = { -1, -2, 450000, 450001 };
-    const int ok_t[] = { 1, 0, 1, 0 };
-    for (int i = 0; i < 4; ++i) {
+    const int32_t targets[] = { -1, -2, -150, -151, 450000, 450001 };
+    const int ok_t[] = { 1, 1, 1, 0, 1, 0 };
+    for (int i = 0; i < 6; ++i) {
         retry[0] = (uint8_t)targets[i]; retry[1] = (uint8_t)(targets[i] >> 8);
         retry[2] = (uint8_t)(targets[i] >> 16); retry[3] = (uint8_t)(targets[i] >> 24);
         CHECK(cdrom_snapshot_validate(p, n) == ok_t[i], "R4: the target range is checked");

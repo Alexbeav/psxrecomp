@@ -4728,10 +4728,11 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
     uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;
     uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;
     if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;
-    {   /* PS1G-140 retry run: target -1 (none) or a disc LBA, count not negative. */
+    {   /* PS1G-140 retry run: a read target from the lead-in (-150, 00:00:00) to the
+         * end of a disc (-1 also stands for no run), and a count not negative. */
         const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;
         int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);
-        if (target < -1 || target > 450000 || run < 0) return 0;
+        if (target < -150 || target > 450000 || run < 0) return 0;
     }
     if (source_cdda.enabled) {
         const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;
