@@ -429,6 +429,34 @@ static int load_modern_gl(void) {
 static SDL_Window   *s_win = NULL;
 static uint64_t s_window_owner;
 static _Atomic uint64_t s_drawable_extent;
+static uint64_t s_drawable_queries;
+#if defined(PSX_SDL3)
+static _Atomic uint32_t s_drawable_window_id;
+static int s_drawable_watch;
+static bool SDLCALL drawable_event_watch(void *unused, SDL_Event *event) {
+    (void)unused;
+    if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED &&
+        event->window.windowID == atomic_load_explicit(&s_drawable_window_id, memory_order_relaxed) &&
+        event->window.data1 >= 0 && event->window.data2 >= 0)
+        atomic_store_explicit(&s_drawable_extent,
+            ((uint64_t)(uint32_t)event->window.data1 << 32) | (uint32_t)event->window.data2,
+            memory_order_release);
+    return true;
+}
+#endif
+static int drawable_events_enabled(void) {
+#if defined(PSX_SDL3)
+    if (!s_drawable_watch) return 0;
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_GL_DRAWABLE_EVENTS");
+        enabled = !(e && e[0] == '0');
+    }
+    return enabled;
+#else
+    return 0; /* SDL2 resize events are logical, not drawable-pixel extents. */
+#endif
+}
 static uint64_t window_thread_id(void) {
 #if defined(PSX_SDL3)
     return (uint64_t)SDL_GetCurrentThreadID();
@@ -436,17 +464,19 @@ static uint64_t window_thread_id(void) {
     return (uint64_t)SDL_ThreadID();
 #endif
 }
-/* SDL3's pixel-size query is main-thread-only. Publish one consistent pair
- * before each frame handoff; GL workers never enter the window-system query. */
+/* Query only at context creation (or in the legacy control). SDL3 pixel-size
+ * events publish one consistent pair without taking SDL's window-properties
+ * lock, which the swapping thread can hold. No worker queries the window. */
 static void gl_drawable_refresh(void) {
     if (!s_win || window_thread_id() != s_window_owner) return;
     int w = 0, h = 0;
     SDL_GL_GetDrawableSize(s_win, &w, &h);
+    s_drawable_queries++;
     atomic_store_explicit(&s_drawable_extent,
         ((uint64_t)(uint32_t)w << 32) | (uint32_t)h, memory_order_release);
 }
 static void gl_drawable_size(int *w, int *h) {
-    gl_drawable_refresh();
+    if (!drawable_events_enabled()) gl_drawable_refresh();
     uint64_t extent = atomic_load_explicit(&s_drawable_extent, memory_order_acquire);
     if (w) *w = (int)(extent >> 32);
     if (h) *h = (int)(uint32_t)extent;
@@ -6791,6 +6821,11 @@ int gl_renderer_init_context(SDL_Window *win) {
     s_win = win;
     texel_cache_reset();
     s_window_owner = window_thread_id();
+#if defined(PSX_SDL3)
+    if (s_drawable_watch) SDL_RemoveEventWatch(drawable_event_watch, NULL);
+    atomic_store(&s_drawable_window_id, SDL_GetWindowID(win));
+    s_drawable_watch = SDL_AddEventWatch(drawable_event_watch, NULL) ? 1 : 0;
+#endif
     gl_drawable_refresh();
     s_present_w = 0;
     s_present_h = 0;
@@ -6928,6 +6963,11 @@ void gl_renderer_work_stats(GlRenderWorkStats *out) {
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
     psx_host_set_hud_draw_cb(NULL, NULL);
+#if defined(PSX_SDL3)
+    if (s_drawable_watch) SDL_RemoveEventWatch(drawable_event_watch, NULL);
+    s_drawable_watch = 0;
+    atomic_store(&s_drawable_window_id, 0);
+#endif
     const char *perf = getenv("PSX_RUNTIME_PERF_DIAG");
     if (s_ctx && perf && perf[0] && perf[0] != '0')
         fprintf(stdout, "psxrecomp: GL work totals: queue_uploads=%llu replay_draws=%llu "
@@ -14996,7 +15036,7 @@ int gl_renderer_render_thread_active(void) { return s_rth_on; }
  * to the render thread when the frame may run asynchronously, take it when it
  * may not, then close the frame (the in-flight bound applies here). */
 void gl_renderer_render_thread_frame_boundary(void) {
-    gl_drawable_refresh();
+    if (!drawable_events_enabled()) gl_drawable_refresh();
     if (!s_rth_on) return;
     fg_note_guest_frame();
     if (rt_held()) {

@@ -376,6 +376,7 @@ int main(int argc, char **argv) {
     }
     static const int levels[] = { 2, 1, 3, 1, 4, 2 };
     int nsteps = 0, level = scale;
+    const uint64_t drawable_queries_before = s_drawable_queries;
     for (int f = 0; f < frames; f++) {
         frame(f, (f & 1) ? 512 : 0);
         if (dynres && f % 7 == 6) {   /* includes frames held at a sync point */
@@ -507,8 +508,10 @@ int main(int argc, char **argv) {
         check(st.acquires >= 2 && st.acquires <= (uint64_t)frames + 4, "acquires bounded");
         check(st.bytes > ((uint64_t)32 << 20), "ring wrapped (more than its size recorded)");
     }
-    /* A resize is published at the main-thread handoff and is visible to a
-     * worker without calling SDL's main-thread-only pixel-size query. */
+    if (drawable_events_enabled())
+        check(s_drawable_queries == drawable_queries_before, "no per-frame drawable queries");
+    /* Pixel-size events publish resizes without querying the window on a
+     * worker or taking its property lock on every frame boundary. */
     for (int k = 0; k < 2; ++k) {
         SDL_SetWindowSize(win, 400 + k * 80, 300 + k * 60);
         SDL_PumpEvents();

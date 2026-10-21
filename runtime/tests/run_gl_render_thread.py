@@ -157,21 +157,24 @@ def main():
                 ok = False
             runs[threaded] = p
             if args.wide_present:
-                for margin, coverage, state, upload, bloom, cache, layers, copy, identity in ((0,0,0,0,0,0,256,1,1), (0,0,1,1,1,1,256,1,1), (0,1,1,1,1,1,256,1,1), (1,0,1,1,1,1,256,1,1), (1,1,1,0,1,1,256,1,1), (1,1,1,1,0,1,256,1,1), (1,1,1,1,1,0,256,1,1), (1,1,1,1,1,1,4,1,1), (1,1,1,1,1,1,256,0,1), (1,1,1,1,1,1,256,1,0)):
-                    reference = run([probe, s, threaded, args.frames, *mode],
-                                    {"PSX_GL_WIDE_MARGIN_SCISSOR": str(margin),
-                                     "PSX_GL_COVERAGE_FAST": str(coverage),
-                                     "PSX_GL_STATE_QUERY_FAST": str(state),
-                                     "PSX_GL_QUEUE_UPLOAD_FAST": str(upload),
-                                     "PSX_GL_BLOOM_FUSE_EXTEND": str(bloom),
-                                     "PSX_GL_TEXEL_CACHE": str(cache),
-                                     "PSX_GL_TEXEL_CACHE_LAYERS": str(layers),
-                                     "PSX_GL_HIW_COPY_FAST": str(copy),
-                                     "PSX_GL_IDENTITY_COPY_FAST": str(identity)})
+                flags = (
+                    "PSX_GL_WIDE_MARGIN_SCISSOR", "PSX_GL_COVERAGE_FAST",
+                    "PSX_GL_STATE_QUERY_FAST", "PSX_GL_QUEUE_UPLOAD_FAST",
+                    "PSX_GL_BLOOM_FUSE_EXTEND", "PSX_GL_TEXEL_CACHE",
+                    "PSX_GL_HIW_COPY_FAST", "PSX_GL_IDENTITY_COPY_FAST",
+                    "PSX_GL_DRAWABLE_EVENTS", "PSX_RENDER_QUEUE_BATCH")
+                controls = [{flag: "0" for flag in flags}]
+                controls += [{flag: "0"} for flag in flags]
+                controls += [{"PSX_GL_TEXEL_CACHE_LAYERS": "4"}]
+                for control in controls:
+                    overrides = {flag: "1" for flag in flags}
+                    overrides.update(control)
+                    reference = run([probe, s, threaded, args.frames, *mode], overrides)
                     baseline = parse(reference.stdout)
                     if reference.returncode or baseline["failures"] != 0 or any(baseline[k] != p[k] for k in KEYS):
-                        print(f"FAIL scale {s}: margin={margin} coverage={coverage} changed rendered output", baseline, p)
+                        print(f"FAIL scale {s}: controls {control} changed rendered output", baseline, p)
                         ok = False
+
         for k in KEYS:
             if runs[0][k] != runs[1][k]:
                 print(f"FAIL scale {s}: {k} differs with the render thread on "
