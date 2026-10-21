@@ -247,6 +247,10 @@ static void frame(int f, int buf_x) {
     gr_draw_flat_rect(576, 64, 32, 32, (uint16_t)(0x03e0 + f));
     gr_draw_textured_rect(buf_x + 100, 200, 32, 32, 0, 64, 512, 256, 0x0009);
     gr_copy_rect(buf_x + 10, 10, buf_x + 14, 13, 80, 50);
+    /* Identity copies preserve colour/mask unless set-mask adds bit15. */
+    mask_bits(f % 4 == 2, 0);
+    gr_copy_rect(buf_x + 14, 13, buf_x + 14, 13, 80, 50);
+    mask_bits(0, 0);
     if (quality_scene && f % 3 == 1) {
         /* Consume the copied bit15 mask before any later framebuffer clear. */
         mask_bits(0, 1);

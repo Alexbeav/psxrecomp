@@ -157,7 +157,7 @@ def main():
                 ok = False
             runs[threaded] = p
             if args.wide_present:
-                for margin, coverage, state, upload, bloom, cache, layers, copy in ((0,0,0,0,0,0,256,1), (0,0,1,1,1,1,256,1), (0,1,1,1,1,1,256,1), (1,0,1,1,1,1,256,1), (1,1,1,0,1,1,256,1), (1,1,1,1,0,1,256,1), (1,1,1,1,1,0,256,1), (1,1,1,1,1,1,4,1), (1,1,1,1,1,1,256,0)):
+                for margin, coverage, state, upload, bloom, cache, layers, copy, identity in ((0,0,0,0,0,0,256,1,1), (0,0,1,1,1,1,256,1,1), (0,1,1,1,1,1,256,1,1), (1,0,1,1,1,1,256,1,1), (1,1,1,0,1,1,256,1,1), (1,1,1,1,0,1,256,1,1), (1,1,1,1,1,0,256,1,1), (1,1,1,1,1,1,4,1,1), (1,1,1,1,1,1,256,0,1), (1,1,1,1,1,1,256,1,0)):
                     reference = run([probe, s, threaded, args.frames, *mode],
                                     {"PSX_GL_WIDE_MARGIN_SCISSOR": str(margin),
                                      "PSX_GL_COVERAGE_FAST": str(coverage),
@@ -166,7 +166,8 @@ def main():
                                      "PSX_GL_BLOOM_FUSE_EXTEND": str(bloom),
                                      "PSX_GL_TEXEL_CACHE": str(cache),
                                      "PSX_GL_TEXEL_CACHE_LAYERS": str(layers),
-                                     "PSX_GL_HIW_COPY_FAST": str(copy)})
+                                     "PSX_GL_HIW_COPY_FAST": str(copy),
+                                     "PSX_GL_IDENTITY_COPY_FAST": str(identity)})
                     baseline = parse(reference.stdout)
                     if reference.returncode or baseline["failures"] != 0 or any(baseline[k] != p[k] for k in KEYS):
                         print(f"FAIL scale {s}: margin={margin} coverage={coverage} changed rendered output", baseline, p)

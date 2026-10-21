@@ -5081,8 +5081,8 @@ static void input_replay_frontend_tick(uint64_t frame) {
             f = std::fopen(path.c_str(), "w");
             if (!f) throw std::runtime_error("cannot write input replay render report");
             std::fputs("stat,count,total_us,max_us\n", f);
-            const char *counts[9] = {"queue_uploads", "replay_draws", "bloom_fused", "coverage_depth", "centre_pruned", "texel_cache_hits", "texel_cache_misses", "texel_cache_evictions", "hiw_copy_blits"};
-            for (int i=0; i<9; ++i) std::fprintf(f, "%s,%llu,0,0\n", counts[i], (unsigned long long)stats.counts[i]);
+            const char *counts[10] = {"queue_uploads", "replay_draws", "bloom_fused", "coverage_depth", "centre_pruned", "texel_cache_hits", "texel_cache_misses", "texel_cache_evictions", "hiw_copy_blits", "identity_copies"};
+            for (int i=0; i<10; ++i) std::fprintf(f, "%s,%llu,0,0\n", counts[i], (unsigned long long)stats.counts[i]);
             const char *spans[8] = {"depth_restore", "queue_replay", "vram_copy", "interp_capture", "interp_interval", "centre_copy", "depth_gpu_sample", "colour_gpu_sample"};
             double us = stats.frequency ? 1e6 / stats.frequency : 0;
             for (int i=0; i<8; ++i) std::fprintf(f, "%s,%llu,%.3f,%.3f\n", spans[i],

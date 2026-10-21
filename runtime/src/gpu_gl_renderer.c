@@ -5410,8 +5410,28 @@ static void gpu_fill(int x,int y,int w,int h,uint16_t c) {
 /* VRAM->VRAM copy: blit the source region to the scratch texture (resolves
  * overlap), then draw it back at the destination through the BLIT program so
  * mask set/check and the stencil mirror apply, exactly like sw_copy_rect. */
+static uint64_t s_identity_copies;
+static int identity_copy_fast(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_GL_IDENTITY_COPY_FAST");
+        enabled = !(e && e[0] == '0');
+    }
+    return enabled;
+}
 static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h) {
     if (w <= 0 || h <= 0) return;
+    if (identity_copy_fast() && sx == dx && sy == dy && !s_mask_set &&
+        sx >= 0 && sy >= 0 && sx < VRAM_W && sy < VRAM_H) {
+        /* No pixel can change. Retain the existing primitive batch boundary
+         * (PGXP's two-pass depth policy is batch-sensitive), but don't drain
+         * deferred high-resolution scenes or stage identical pixels.
+         * The guest GPU command and its scheduled device timing still run. */
+        flush_flat_batch();
+        flush_tex_batch();
+        s_identity_copies++;
+        return;
+    }
     if (gl_cpu_mode()) {
         static int seen[32][6], used;
         int key[6] = {sx,sy,dx,dy,w,h}, i;
@@ -6903,6 +6923,7 @@ void gl_renderer_work_stats(GlRenderWorkStats *out) {
     out->counts[4] = s_hq_center_pruned;
     out->counts[5] = s_tc_hits; out->counts[6] = s_tc_misses; out->counts[7] = s_tc_evictions;
     out->counts[8] = s_hiw_copy_blits;
+    out->counts[9] = s_identity_copies;
 }
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
