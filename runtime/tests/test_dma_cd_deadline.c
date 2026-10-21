@@ -5,6 +5,7 @@
 #define main cd_fixture_baseline_main
 #include "test_dma_cd_source.c"
 #undef main
+#define PSX_DEVICE_QUERIES_OUT_OF_LINE 1 /* the stubs below replace the device queries */
 #include "../src/psx_cycles.c"
 
 static uint64_t timer_due, timer_fired_cycle, dma_irq_cycle;

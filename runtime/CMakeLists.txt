@@ -538,6 +538,11 @@ if(BUILD_TESTING)
     add_test(NAME precise_slice_hot_path_test COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_precise_slice_hot_path.py"
         "${CMAKE_CURRENT_SOURCE_DIR}")
+    # PS1B-530: the scheduler's cheap device deadline queries stay inline and
+    # single-sourced; DMA walks a mask of active delayed completions.
+    add_test(NAME device_deadline_queries_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_device_deadline_queries.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
     # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
     # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)
@@ -1538,6 +1543,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         tests/test_psx_cycle_event_boundaries.c
         src/psx_cycles.c)
     target_include_directories(psx_cycle_event_boundaries_test PRIVATE include)
+    target_compile_definitions(psx_cycle_event_boundaries_test PRIVATE PSX_DEVICE_QUERIES_OUT_OF_LINE=1)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
 

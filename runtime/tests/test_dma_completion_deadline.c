@@ -71,6 +71,7 @@ uint32_t psx_mod_gpu_dma_resolve_address(uint32_t a) {return a&0x1ffffcu;}
 void spu_dma_write(uint32_t v) {(void)v;abort();}
 uint32_t spu_dma_read(void) {abort();}
 void audio_trace_event(uint16_t k,uint32_t a,uint32_t b) {(void)k;(void)a;(void)b;abort();}
+#define PSX_DEVICE_QUERIES_OUT_OF_LINE 1 /* the stubs below replace the device queries */
 #include "../src/psx_cycles.c"
 
 static uint64_t timer_due, timer_fired_cycle, dma_irq_cycle;

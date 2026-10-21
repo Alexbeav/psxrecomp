@@ -10,7 +10,9 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
-INTERRUPTS = (ROOT / "runtime" / "src" / "interrupts.c").read_text(encoding="utf-8")
+# The per-sample deadline query body lives in device_deadline_queries.h (PS1B-530).
+INTERRUPTS = (ROOT / "runtime" / "src" / "interrupts.c").read_text(encoding="utf-8") + (
+    ROOT / "runtime" / "include" / "device_deadline_queries.h").read_text(encoding="utf-8")
 CYCLES = (ROOT / "runtime" / "src" / "psx_cycles.c").read_text(encoding="utf-8")
 MAIN = (ROOT / "runtime" / "src" / "main.cpp").read_text(encoding="utf-8")
 

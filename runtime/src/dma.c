@@ -150,6 +150,10 @@ typedef struct {
 } DMADelayedComplete;
 
 static DMADelayedComplete delayed_complete[7];
+/* Bit ch is set exactly when delayed_complete[ch].active is nonzero, so the
+ * deadline query and the DMA advance test one word instead of seven flags
+ * (PS1B-530). Every write of .active updates it. */
+static uint32_t delayed_complete_mask;
 
 /* ---- Global registers ---- */
 
@@ -442,6 +446,7 @@ static void cancel_async_transfer(int ch) {
     }
     if (ch >= 0 && ch < 7) {
         delayed_complete[ch].active = 0;
+        delayed_complete_mask &= ~(1u << ch);
         delayed_complete[ch].total_words = 0;
         delayed_complete[ch].cycles_remaining = 0;
     }
@@ -458,6 +463,7 @@ static void schedule_delayed_complete(int ch, uint32_t total_words,
     if (cycles > UINT32_MAX) cycles = UINT32_MAX;
 
     delayed_complete[ch].active = 1;
+    delayed_complete_mask |= 1u << ch;
     delayed_complete[ch].total_words = total_words;
     delayed_complete[ch].cycles_remaining = (uint32_t)cycles;
     event_ring_record_aux(EV_DMA_SCHED, (uint8_t)ch, channels[ch].chcr);
@@ -477,6 +483,7 @@ static void advance_delayed_complete(int ch, uint32_t cycles) {
     }
 
     d->active = 0;
+    delayed_complete_mask &= ~(1u << ch);
     d->total_words = 0;
     d->cycles_remaining = 0;
     complete_transfer(ch);
@@ -1871,9 +1878,8 @@ uint32_t dma_cycles_to_internal_event(void) {
         if (d < best) best = d;
     }
 
-    for (int ch = 0; ch < 7; ch++) {
-        if (delayed_complete[ch].active &&
-            delayed_complete[ch].cycles_remaining < best)
+    for (uint32_t m = delayed_complete_mask, ch = 0; m; m >>= 1, ch++) {
+        if ((m & 1u) && delayed_complete[ch].cycles_remaining < best)
             best = delayed_complete[ch].cycles_remaining;
     }
     return best;
@@ -2005,9 +2011,12 @@ void dma_advance(uint32_t cycles) {
         }
     }
     /* Drive every delayed-complete channel (ch2 GPU + ch4 SPU today; any future
-     * delayed channel is covered automatically — inactive slots no-op). */
-    for (int ch = 0; ch < 7; ch++)
-        advance_delayed_complete(ch, cycles);
+     * delayed channel is covered automatically — inactive slots no-op). With
+     * none active, no slot can become active in this loop: only a completing
+     * slot starts work. */
+    if (delayed_complete_mask)
+        for (int ch = 0; ch < 7; ch++)
+            advance_delayed_complete(ch, cycles);
     g_dma_cur_ch = -1;
     g_dma_exec_depth--;
 }
@@ -2038,6 +2047,7 @@ void dma_init(void) {
     memset(&gpu_block,0,sizeof gpu_block);
     memset(&gpu_linked_list, 0, sizeof(gpu_linked_list));
     memset(delayed_complete, 0, sizeof(delayed_complete));
+    delayed_complete_mask = 0;
     memset(dsm, 0, sizeof dsm);
     dsm_wait_live = 0;
     dsm_mdec_clock = psx_cycle_count;
@@ -2477,8 +2487,12 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
     if (!dma_r_async(&r, &mdec_async[0]) || !dma_r_async(&r, &mdec_async[1]) ||
         !dma_r_async(&r, &cdrom_async) || !dma_r_async(&r, &gpu_block) || !dma_r_gpu_ll(&r, &gpu_linked_list))
         return 0;
-    for (int i = 0; i < 7; i++)
-        if (!dma_r_delay(&r, &delayed_complete[i])) return 0;
+    for (int i = 0; i < 7; i++) {
+        int ok = dma_r_delay(&r, &delayed_complete[i]);
+        delayed_complete_mask &= ~(1u << i);
+        if (delayed_complete[i].active) delayed_complete_mask |= 1u << i;
+        if (!ok) return 0;
+    }
     if (gpu_ll_was_active) gpu_ws_end_linked_list();
     if (gpu_linked_list.active) {
         gpu_ws_begin_linked_list();

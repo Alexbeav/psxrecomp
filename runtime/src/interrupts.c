@@ -49,6 +49,7 @@
 #include "dispatch_publish.h"
 #include "device_trace.h"
 #include "irq_cause_ip2.h"
+#include "device_deadline_queries.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -493,35 +494,22 @@ void psx_set_midframe_audio_pump(void (*fn)(void)) { s_midframe_audio_pump = fn;
  * code also needs to acknowledge and re-arm between sample address hits.
  * Keep an explicit opt-out for bisecting
  * old captures; faithful per-sample scheduling is the production default. */
+static int s_spu_sample_events_enabled = -1;
+int psx_spu_sample_event_mode_init(void) {
+    const char *e = getenv("PSX_SPU_SAMPLE_EVENTS");
+    s_spu_sample_events_enabled = (!e || !*e || strcmp(e, "0") != 0) ? 1 : 0;
+    return s_spu_sample_events_enabled;
+}
 static int spu_sample_event_mode(void) {
-    static int enabled = -1;
-    if (enabled < 0) {
-        const char *e = getenv("PSX_SPU_SAMPLE_EVENTS");
-        enabled = (!e || !*e || strcmp(e, "0") != 0) ? 1 : 0;
-    }
-    return enabled;
+    return s_spu_sample_events_enabled >= 0 ? s_spu_sample_events_enabled : psx_spu_sample_event_mode_init();
 }
 
-uint32_t psx_spu_sample_event_cycles_to_next(void) {
-    g_spu_sample_deadline_queries++;
-    if (!spu_sample_event_mode()) {
-        g_spu_sample_mode_rejects++;
-        return UINT32_MAX;
-    }
-    if (!s_midframe_audio_pump) {
-        g_spu_sample_pump_null_rejects++;
-        return UINT32_MAX;
-    }
-    g_spu_sample_enabled_queries++;
+/* Read-only views for the inline deadline query (device_deadline_queries.h). */
+const int *const g_spu_sample_event_mode_view = &s_spu_sample_events_enabled;
+PsxMidframeAudioPump const *const g_midframe_audio_pump_view = &s_midframe_audio_pump;
 
-    /* The PS1 CPU/SPU ratio is exactly 768 CPU cycles per 44.1-kHz sample.
-     * Cycle zero is the common hardware epoch; a value exactly on a sample
-     * boundary names the following event, not an already-serviced event. */
-    const uint32_t phase = (uint32_t)(psx_get_cycle_count() % 768u);
-    const uint32_t delta = phase ? (768u - phase) : 768u;
-    g_spu_sample_last_query_phase = phase;
-    g_spu_sample_last_query_delta = delta;
-    return delta;
+uint32_t psx_spu_sample_event_cycles_to_next(void) {
+    return psx_spu_sample_event_cycles_to_next_inline();
 }
 
 void psx_spu_sample_event_service(void) {

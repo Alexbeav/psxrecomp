@@ -42,6 +42,7 @@ uint32_t source_gpu_runtime_cycles_to_event(void) { return UINT32_MAX; }
 
 void source_gpu_runtime_dma_write(void) {  }
 
+#define PSX_DEVICE_QUERIES_OUT_OF_LINE 1 /* the stubs below replace the device queries */
 #include "../src/psx_cycles.c"
 uint32_t i_mask;
 int g_ls_mode,g_precise_mode,g_psx_call_bail;

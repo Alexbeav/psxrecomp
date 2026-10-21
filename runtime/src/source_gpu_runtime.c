@@ -16,10 +16,14 @@
 #include "interrupts.h"               /* E survey: IRQ_TIMING transients */
 #include "sio.h"                      /* E survey (Part 3): SIO FSM sizing */
 #include "memcard.h"                  /* TAS checkpoint card images */
+#include "device_deadline_queries.h"
 #include <stdio.h>
 #include <stdlib.h>
 static int enabled;
 static SourceGPUServiceClock clock_state;
+/* Read-only views for the inline deadline query (device_deadline_queries.h). */
+const int *const g_source_gpu_runtime_enabled_view = &enabled;
+const SourceGPUServiceClock *const g_source_gpu_service_clock_view = &clock_state;
 static SourceGPUCommandProjection command_state;
 /* GPU Update consumes queued work before it advances raster state. The
  * event clock also predicts intermediate deadlines; draw parity must instead
@@ -558,10 +562,7 @@ void source_gpu_runtime_advance(void) {
         fail("reversed device time");
 }
 uint32_t source_gpu_runtime_cycles_to_event(void) {
-    if(!enabled)return UINT32_MAX;
-    if(clock_state.frame_pending)return 0;
-    uint64_t next=source_gpu_service_next(&clock_state);
-    return next>psx_cycle_count?(uint32_t)(next-psx_cycle_count):1u;
+    return source_gpu_runtime_cycles_to_event_inline();
 }
 /* Slice deadline for the precise-slice guard (step 2 of the TAS speed task).
  * The service clock's own 128-cycle re-arm is the oracle's service

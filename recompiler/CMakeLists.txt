@@ -1513,7 +1513,7 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gte_deferred.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
         target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
-        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1 PSX_DEVICE_QUERIES_OUT_OF_LINE=1)
         target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
         target_link_options(${_target} PRIVATE -Wl,--gc-sections)
         add_test(NAME ${_target} COMMAND ${_target})
@@ -1524,7 +1524,7 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_latency_fixture.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
     target_include_directories(muldiv_latency_fixture PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
-    target_compile_definitions(muldiv_latency_fixture PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+    target_compile_definitions(muldiv_latency_fixture PRIVATE PSX_ENABLE_BLOCK_CYCLES=1 PSX_DEVICE_QUERIES_OUT_OF_LINE=1)
     target_compile_options(muldiv_latency_fixture PRIVATE -O2 -UNDEBUG -ffunction-sections -fdata-sections)
     target_link_options(muldiv_latency_fixture PRIVATE -Wl,--gc-sections)
     add_test(NAME muldiv_latency_fixture COMMAND muldiv_latency_fixture
@@ -1539,7 +1539,7 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_giveback_fixture.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
         target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
-        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1 PSX_DEVICE_QUERIES_OUT_OF_LINE=1)
         target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
         target_link_options(${_target} PRIVATE -Wl,--gc-sections)
         add_test(NAME ${_target} COMMAND ${_target}

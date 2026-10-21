@@ -7,6 +7,7 @@
 #include "psx_cycles.h"
 #include "timers.h"
 #include "../src/timers.c"
+#define PSX_DEVICE_QUERIES_OUT_OF_LINE 1 /* the stubs below replace the device queries */
 #include "../src/psx_cycles.c"
 uint32_t i_stat,i_mask;
 static unsigned irq_count;static uint64_t last_irq;

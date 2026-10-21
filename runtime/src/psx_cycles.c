@@ -15,6 +15,18 @@
 #include "starvation_ring.h"
 #include "timers.h"
 #include "source_gpu_runtime.h"
+#include "device_deadline_queries.h"
+/* The scheduler inlines the GPU and SPU-sample deadline queries. Unit tests
+ * that link this file against stub devices define
+ * PSX_DEVICE_QUERIES_OUT_OF_LINE and get the exported functions, which
+ * the stubs replace. */
+#if defined(PSX_DEVICE_QUERIES_OUT_OF_LINE)
+#define SCHED_GPU_EVENT() source_gpu_runtime_cycles_to_event()
+#define SCHED_SPU_SAMPLE_EVENT() psx_spu_sample_event_cycles_to_next()
+#else
+#define SCHED_GPU_EVENT() source_gpu_runtime_cycles_to_event_inline()
+#define SCHED_SPU_SAMPLE_EVENT() psx_spu_sample_event_cycles_to_next_inline()
+#endif
 #if defined(PSX_HAS_RECOMP_NET)
 #include "psx_netplay.h"
 #endif
@@ -140,10 +152,10 @@ static uint32_t devices_cycles_to_next_internal_event(void) {
     uint32_t t = timers_cycles_to_irq(0xFFFFFFFFu);  if (t < best) best = t;
     uint32_t c = cdrom_cycles_to_irq(0xFFFFFFFFu);   if (c < best) best = c;
     uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
-    uint32_t g = source_gpu_runtime_cycles_to_event(); if (g < best) best = g;
+    uint32_t g = SCHED_GPU_EVENT();                  if (g < best) best = g;
     uint32_t q = gpu_queue_cycles_to_event(); if (q < best) best = q;
     uint32_t s = sio_cycles_to_irq(0xFFFFFFFFu);     if (s < best) best = s;
-    uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
+    uint32_t a = SCHED_SPU_SAMPLE_EVENT();           if (a < best) best = a;
     if (best == 0) best = 1;    /* due/overdue: process within one cycle */
     return best;
 }
