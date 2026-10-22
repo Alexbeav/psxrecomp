@@ -34,7 +34,7 @@
 
 /* 1 when the two paths name the same file as the player selected it: equal
  * but for the direction of a slash and, on Windows, the case of a letter. */
-static int psx_setup_refusal_same_file(const char* a, const char* b) {
+static inline int psx_setup_refusal_same_file(const char* a, const char* b) {
     if (!a || !b || !a[0] || !b[0]) return 0;
     for (;; ++a, ++b) {
         char x = *a, y = *b;
@@ -55,7 +55,7 @@ static int psx_setup_refusal_same_file(const char* a, const char* b) {
  * that refusal must not mark the selected one. The CLI writes compact JSON
  * with sorted keys (tools/sdk_progress.py). The same words inside a message
  * do not match: a quote inside a JSON string is written with a backslash. */
-static int psx_setup_refusal_line_names_given(const char* line) {
+static inline int psx_setup_refusal_line_names_given(const char* line) {
     if (!line || line[0] != '{') return 0;
     if (!strstr(line, "\"event\":\"error\"")) return 0;
     return strstr(line, "\"refused_given_disc\":true") != NULL;
@@ -63,7 +63,7 @@ static int psx_setup_refusal_line_names_given(const char* line) {
 
 /* A prepare of `path` ended with the CLI's exit code. `given_refused` is 1
  * when the CLI said that the refused file is `path` itself. */
-static void psx_setup_refusal_after_prepare(char* remembered, size_t cap,
+static inline void psx_setup_refusal_after_prepare(char* remembered, size_t cap,
                                             const char* path, long exit_code,
                                             int given_refused) {
     if (!remembered || !cap) return;
@@ -76,7 +76,7 @@ static void psx_setup_refusal_after_prepare(char* remembered, size_t cap,
 
 /* The disc panel checks `path`. Returns 1 when it is the file setup refused.
  * Another file forgets the refusal. */
-static int psx_setup_refusal_at_check(char* remembered, const char* path) {
+static inline int psx_setup_refusal_at_check(char* remembered, const char* path) {
     if (!remembered || !remembered[0]) return 0;
     if (psx_setup_refusal_same_file(remembered, path)) return 1;
     remembered[0] = '\0';
