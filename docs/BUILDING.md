@@ -177,6 +177,7 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 | `PSX_DEPS_OFFLINE` | OFF (env `PSX_DEPS_OFFLINE=1` flips it) | Never download a dependency. A dependency that is not vendored in `third_party/` and has no pre-extracted source tree becomes a hard error naming the missing archive, instead of a fetch that stalls behind a proxy. |
 | `PSX_THIRD_PARTY_DIR` | `<framework>/third_party` | Where vendored dependency archives are looked up (`deps.manifest` lives there). |
 | `PSX_STATIC_RUNTIME` | ON for MinGW Release | Self-contained exe (statically links SDL + libgcc/libstdc++) |
+| `PSX_LAUNCHER_MODULE` | OFF | Load the launcher from the prebuilt recomp-ui module named by `RECOMP_LAUNCHER_MODULE_FILE` (`recomp-launcher-v1.dll` on Windows) instead of compiling it in. Needs SDL3 as one shared library: set `PSX_STATIC_RUNTIME=OFF` and give a shared SDL3 (`SDL3_DIR`, or let `PSX_SDL3_FETCH` build it shared). The module, `SDL3.dll` and the launcher assets are staged beside the exe. |
 | `PSX_RECOMP_UI` | ON | Wire a downstream game's pinned recomp-ui launcher; set OFF for headless/generated builds |
 | `PSX_ENABLE_VULKAN` | **ON** | Build the experimental Vulkan renderer when the SDK tools are present (skipped if not). Pass `OFF` to exclude it outright. |
 | `PSX_NETPLAY` | OFF | Link recomp-net + lobby; advertise full netplay UI (multiplayer titles) |

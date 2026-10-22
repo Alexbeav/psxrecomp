@@ -118,6 +118,9 @@ extern "C" void psx_event_step_conservative_env_init(void);
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+#include "recomp_launcher_module_host.h"
+#endif
 #include "recomp_runtime_ui.h" /* shared renderer-neutral in-game settings */
 #include "launcher_files.h"    /* session-only in-game disc picker */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
@@ -8298,6 +8301,20 @@ static int route_record_live_p1_word(void) {
  *       for PSX_REPLAY_RECORD_FRAMES frames. A power-on replay plays with
  *       --replay FILE, which starts it at vblank 0 of the new process. */
 static const char *g_replay_cli_path = nullptr;
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+/* The launcher module returns its start choice (power-on, save slot or
+ * replay) in caller buffers; it never sets PSX_LOAD_SLOT or
+ * PSX_REPLAY_FILE. Read it after each LAUNCH result. */
+static int32_t g_launcher_start_slot = -1;
+static std::string g_launcher_start_replay;
+static void launcher_module_read_start(void) {
+    char path[512] = {0};
+    int32_t slot = -1;
+    const uint32_t kind = recomp_launcher_module_start_choice(&slot, path, sizeof(path));
+    g_launcher_start_slot = kind == RECOMP_LAUNCHER_V1_SAVE_SLOT ? slot : -1;
+    g_launcher_start_replay = kind == RECOMP_LAUNCHER_V1_REPLAY ? path : "";
+}
+#endif
 static const char *g_replay_cli_verdict = nullptr;
 static bool g_replay_cli_fast = false;
 static std::string s_replay_disc_serial;
@@ -8620,7 +8637,11 @@ extern "C" const char *replay_host_disc_serial(void) {
 /* Vblank 0 of this process, unless a save state was staged for boot. */
 extern "C" int replay_host_at_power_on(void) {
     static const bool load_slot = std::getenv("PSX_LOAD_SLOT") != nullptr;
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+    return s_replay_vblank == 0 && !load_slot && g_launcher_start_slot < 0;
+#else
     return s_replay_vblank == 0 && !load_slot;
+#endif
 }
 extern "C" void replay_host_power_on_begin(void) {
     replay_overlay_pin();
@@ -8828,6 +8849,10 @@ static void replay_frame_boundary(int *override) {
     if (!env_read) {
         env_read = 1;
         play_path = g_replay_cli_path ? g_replay_cli_path : std::getenv("PSX_REPLAY_FILE");
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+        if (!g_replay_cli_path && !g_launcher_start_replay.empty())
+            play_path = g_launcher_start_replay.c_str();
+#endif
         if (play_path && !play_path[0]) play_path = nullptr;
         record_file = std::getenv("PSX_REPLAY_RECORD_FILE");
         if (record_file && !record_file[0]) record_file = nullptr;
@@ -16971,12 +16996,35 @@ int main(int argc, char** argv) {
 #endif
 
             char rui_out_disc[1024] = {0};
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+            {
+                const std::string module_product = exe_dir_from_argv(argv[0]).string();
+                const std::string module_saves = std::filesystem::absolute(memcard_dir).lexically_normal().string();
+                const std::string module_assets = (exe_dir_from_argv(argv[0]) / "assets").string();
+                if (!recomp_launcher_module_set_roots(module_product.c_str(), module_saves.c_str(), module_assets.c_str())) {
+                    std::fprintf(stderr, "psxrecomp: launcher module roots are invalid; startup refused.\n");
+                    if (overlay_init_thread.joinable()) overlay_init_thread.join();
+                    SDL_Quit();
+                    return 1;
+                }
+            }
+#endif
             launcher_boot_timing_mark("host:before_run_window");
             int rui_rc = recomp_launcher_run_window(
                 rui_title.c_str(), &ls, &gi, assets_dir_str.c_str(),
                 rui_initial_disc.c_str(), rui_out_disc, sizeof(rui_out_disc));
             launcher_boot_timing_mark("host:after_run_window");
 
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+            if (rui_rc == RECOMP_LAUNCHER_RESULT_REFUSED) {
+                std::fprintf(stderr, "psxrecomp: %s\n", recomp_launcher_module_diagnostic());
+                psx_crash_trace_set_exit_origin("launcher_module_refused");
+                if (overlay_init_thread.joinable()) overlay_init_thread.join();
+                SDL_Quit();
+                return 1;
+            }
+            if (rui_rc == RECOMP_LAUNCHER_RESULT_LAUNCH) launcher_module_read_start();
+#endif
             lr = rui_rc;
 #if defined(RECOMP_LAUNCHER_HAS_RECORD_REPLAY)
             g_launcher_record_replay = PSXRecompV4::launcher_record_replay_readback(
@@ -18791,8 +18839,12 @@ session_reboot:
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
         /* Headless / agent load: PSX_LOAD_SLOT=N stages slot load (0..11)
          * at the next safe block boundary after boot. */
-        if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {
-            int slot = atoi(ls);
+        {
+            const char *ls = std::getenv("PSX_LOAD_SLOT");
+            int slot = ls ? atoi(ls) : -1;
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+            if (g_launcher_start_slot >= 0) slot = g_launcher_start_slot;
+#endif
             if (slot >= 0 && slot < 12) {
                 if (psx_netplay_active()) {
                     std::fprintf(stdout,
@@ -19460,11 +19512,32 @@ soft_return_lobby:
 #endif
 
         char rui_out_disc[1024] = {0};
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+        {
+            const std::string module_product = exe_dir_from_argv(argv[0]).string();
+            const std::string module_saves = std::filesystem::absolute(memcard_dir).lexically_normal().string();
+            const std::string module_assets = (exe_dir_from_argv(argv[0]) / "assets").string();
+            if (!recomp_launcher_module_set_roots(module_product.c_str(), module_saves.c_str(), module_assets.c_str())) {
+                std::fprintf(stderr, "psxrecomp: launcher module roots are invalid; return/rematch refused.\n");
+                SDL_Quit();
+                return 1;
+            }
+        }
+#endif
         recomp_launcher_set_preserve_sdl(1);
         const int rui_rc = recomp_launcher_run_window(
             rui_title.c_str(), &ls, &gi, assets_dir_str.c_str(),
             rui_initial_disc.c_str(), rui_out_disc, sizeof(rui_out_disc));
 
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+        if (rui_rc == RECOMP_LAUNCHER_RESULT_REFUSED) {
+            std::fprintf(stderr, "psxrecomp: %s\n", recomp_launcher_module_diagnostic());
+            psx_crash_trace_set_exit_origin("launcher_module_refused");
+            SDL_Quit();
+            return 1;
+        }
+        if (rui_rc == RECOMP_LAUNCHER_RESULT_LAUNCH) launcher_module_read_start();
+#endif
         if (rui_rc == 1) {
             /* User closed the launcher — leave the lobby and exit. */
             if (g_lnch_netplay_callbacks.leave)
