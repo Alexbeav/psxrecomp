@@ -324,6 +324,9 @@ def main():
     parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','nymashock-1.32.1','octoshock-2.7'),default='default',
                         help='experimental Nymashock drive head, seek, Pause and Reset timing; octoshock-2.7 is '
                              'the same drive with the MSVC order of the Reset random draws')
+    parser.add_argument('--cd-init-draw-order',choices=('default','jitter-first','floor-first'),default='default',
+                        help='order of the two Init random draws when a route has observed it; default keeps '
+                             "the drive model's own order")
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
@@ -395,6 +398,8 @@ def main():
     if args.cd_drive_model!='default':
         if not args.cd_source_clock_tape:
             raise ValueError('source drive model requires a clock tape')
+    if args.cd_init_draw_order!='default' and args.cd_drive_model=='default':
+        raise ValueError('an Init draw order requires a source drive model')
     if args.cd_cdda_model!='default' and not args.cd_source_clock_tape:
         raise ValueError('source CDDA requires an explicit source clock tape')
     if args.mdec_source_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
@@ -563,6 +568,8 @@ def main():
         selected_env['PSX_CD_SOURCE_CLOCK_TAPE'] = clock_tape['path']
     if args.cd_drive_model!='default':
         selected_env['PSX_CD_DRIVE_MODEL']=args.cd_drive_model
+    if args.cd_init_draw_order!='default':
+        selected_env['PSX_CD_INIT_DRAW_ORDER']=args.cd_init_draw_order
     if args.cd_cdda_model!='default':
         selected_env['PSX_CD_CDDA_MODEL']=args.cd_cdda_model
     if args.mdec_source_model!='default':

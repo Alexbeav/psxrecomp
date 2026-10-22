@@ -489,12 +489,12 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_silent_read_counter_test PRIVATE include)
     add_test(NAME cdrom_silent_read_counter_test COMMAND cdrom_silent_read_counter_test)
     # PS1B-311: rows of the drive-profile behaviour spec that the older tests
-    # do not pin. The four named modes must stop fail-closed with a [CDROM] line.
+    # do not pin. The six named modes must stop fail-closed with a [CDROM] line.
     add_executable(cdrom_drive_profile_rows_test tests/test_cdrom_drive_profile_rows.c src/psx_sha256.c)
     target_include_directories(cdrom_drive_profile_rows_test PRIVATE include)
     add_test(NAME cdrom_drive_profile_rows_test COMMAND cdrom_drive_profile_rows_test
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
-    foreach(_case bad-model no-tape init-cdda init-read-seek)
+    foreach(_case bad-model no-tape init-cdda init-read-seek bad-draw-order draw-order-no-drive)
         add_test(NAME cdrom_drive_profile_rows_${_case}_test COMMAND cdrom_drive_profile_rows_test
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng ${_case})
         set_tests_properties(cdrom_drive_profile_rows_${_case}_test PROPERTIES

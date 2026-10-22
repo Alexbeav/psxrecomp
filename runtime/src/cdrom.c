@@ -3848,6 +3848,27 @@ void cdrom_init(const char* cue_path) {
             s_nymashock_drive = 1;
         }
     }
+    {
+        /* PSX_CD_INIT_DRAW_ORDER=jitter-first or floor-first sets the order of
+         * Init's two draws for a route that has observed it (MediEvil 4875M on
+         * nymashock-1.29.0 takes the jitter draw first, PS1G-126). Unset or empty
+         * keeps the drive model's own order, so no other route changes. */
+        const char *draw_order = getenv("PSX_CD_INIT_DRAW_ORDER");
+        if (draw_order && *draw_order) {
+            if (!s_nymashock_drive) {
+                fprintf(stderr, "[CDROM] PSX_CD_INIT_DRAW_ORDER needs PSX_CD_DRIVE_MODEL\n");
+                exit(2);
+            }
+            if (strcmp(draw_order, "jitter-first") == 0) {
+                s_cd_reset_seek_draw_first = 1;
+            } else if (strcmp(draw_order, "floor-first") == 0) {
+                s_cd_reset_seek_draw_first = 0;
+            } else {
+                fprintf(stderr, "[CDROM] Unsupported PSX_CD_INIT_DRAW_ORDER=%s\n", draw_order);
+                exit(2);
+            }
+        }
+    }
     /* Spec section 4, S5: the drive starts with no idle head, no reset in
      * progress and nothing decoded. */
     source_drive_head_valid = 0;

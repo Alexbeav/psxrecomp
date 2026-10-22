@@ -6,7 +6,8 @@
  * Synthetic controller data only; no BIOS or game data.
  *
  * usage: cdrom_drive_profile_rows_test <tape>
- *        cdrom_drive_profile_rows_test <tape> bad-model|no-tape|init-cdda|init-read-seek
+ *        cdrom_drive_profile_rows_test <tape> bad-model|no-tape|init-cdda|init-read-seek|
+ *                                             bad-draw-order|draw-order-no-drive
  * Each named mode must stop with exit status 2 and a [CDROM] message. */
 #define main source_explicit_baseline_main
 #include "test_cdrom_source_explicit_timing.c"
@@ -32,6 +33,11 @@ static void zero_tape(unsigned words) {
     s_source_clock_tape.count=words;s_source_clock_tape.cursor=0;
 }
 static void cursor_at(int lba) { lba_to_msf(lba,150,&read_min,&read_sec,&read_sect); }
+static void tape_word(unsigned at,uint32_t value) {
+    uint8_t *p=s_source_clock_tape.bytes+(size_t)at*4u;
+    p[0]=(uint8_t)value;p[1]=(uint8_t)(value>>8);
+    p[2]=(uint8_t)(value>>16);p[3]=(uint8_t)(value>>24);
+}
 static int cursor(void) { return msf_to_lba(read_min,read_sec,read_sect); }
 static void run(uint8_t cmd) { irq_flag=0;response_clear();exec_command(cmd); }
 static void setloc(int lba) {
@@ -64,6 +70,26 @@ static void selection_rows(void) {
     CHECK(s_nymashock_drive==1 && s_cd_reset_seek_draw_first==0,"BizHawk 2.10+ selector admits the existing candidate drive");
     select_drive("octoshock-2.7");
     CHECK(s_nymashock_drive==1 && s_cd_reset_seek_draw_first==1,"S3: octoshock-2.7 takes the jitter draw first");
+    /* PSX_CD_INIT_DRAW_ORDER: a route that observed the order names it (PS1G-126,
+     * MediEvil 4875M); unset keeps each drive model's own order. */
+    set_model("PSX_CD_INIT_DRAW_ORDER","jitter-first");
+    select_drive("nymashock-1.29.0");
+    CHECK(s_nymashock_drive==1 && s_cd_reset_seek_draw_first==1,"I6: a named jitter-first order applies to nymashock-1.29.0");
+    zero_tape(4);
+    tape_word(0,0xD1FF8EC6u);tape_word(1,0x2432C764u);tape_word(2,0xB31BBC96u);
+    reading=0;stat_reg=CDSTAT_MOTOR;mode_reg=0x20;s_source_seek_paused=1;
+    source_reset_phase=0;source_drive_head_valid=1;source_drive_head_lba=9;
+    psx_cycle_count=100;run(0x0A);
+    CHECK(s_source_clock_tape.cursor==3 && s_source_reset_due==2499786u,
+          "I6: jitter-first Init consumes the jitter draw, then a rejected and an accepted floor draw");
+    set_model("PSX_CD_INIT_DRAW_ORDER","floor-first");
+    select_drive("octoshock-2.7");
+    CHECK(s_cd_reset_seek_draw_first==0,"I6: a named floor-first order applies to octoshock-2.7");
+    set_model("PSX_CD_INIT_DRAW_ORDER","");
+    select_drive("nymashock-1.29.0");
+    CHECK(s_cd_reset_seek_draw_first==0,"an empty draw order keeps nymashock-1.29.0 floor-first");
+    select_drive("octoshock-2.7");
+    CHECK(s_cd_reset_seek_draw_first==1,"an empty draw order keeps octoshock-2.7 jitter-first");
 }
 
 static void read_and_pause_rows(void) {
@@ -239,6 +265,10 @@ int main(int argc,char **argv) {
         } else if(!strcmp(argv[2],"init-read-seek")) {
             select_drive("nymashock-1.29.0");zero_tape(8);
             reading=1;stat_reg=CDSTAT_MOTOR|CDSTAT_SEEK;run(0x0A);
+        } else if(!strcmp(argv[2],"bad-draw-order")) {
+            set_model("PSX_CD_INIT_DRAW_ORDER","seek-first");select_drive("nymashock-1.29.0");
+        } else if(!strcmp(argv[2],"draw-order-no-drive")) {
+            set_model("PSX_CD_INIT_DRAW_ORDER","jitter-first");select_drive("");
         }
         return 1;
     }
