@@ -197,8 +197,8 @@ sticks. `tools/tasreplays/nymashock28_digital_route.py` exports it to PSXRTI1 an
 version, another port device, a second port, console events, disc changes, anchored movies, non-default Mednafen values and a
 malformed row. It shares nothing with `nymashock28_route.py` but the button-bit table.
 
-`--pad-ack-model nymashock-2.8-gamepad` times the pad ACK at 64 cycles (pulse 32) for a plain digital pad, as the frozen
-2.8 `gamepad.cpp` requests (0x40 after each byte that has a reply byte left). The other Nymashock names time the ACK only
+`--pad-ack-model nymashock-2.8-gamepad` times the pad ACK at 64 cycles (pulse 32) for a plain digital pad, as the frozen BizHawk
+2.8 plain gamepad requests (0x40 after each byte that has a reply byte left). The other Nymashock names time the ACK only
 for a config-capable pad. The profile is refused on a DualShock route (`run_native.py` and the runtime). `--card-model nymashock-2.8`
 uses the existing card profile (256 cycles, as the 2.8 memory card requests 0x100). No 2.8 CD-drive or MDEC model is
 qualified; a caller keeps the 1.29.0 labels and says so. Nothing here shows that 2.8 and the native runtime agree at any frame.
