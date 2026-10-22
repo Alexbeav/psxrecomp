@@ -10310,8 +10310,7 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         if (g_gl_active && g_video_scale_applies) {
             const int applied = gl_renderer_set_internal_scale_live(g_video_scale);
             if (applied) {
-                std::fprintf(stdout, "psxrecomp: internal scale %dx (live)
-", applied);
+                std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
                 dynres_setup();   /* the new scale is the controller's ceiling */
             }
         }
