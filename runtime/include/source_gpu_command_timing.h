@@ -148,15 +148,19 @@ static inline int source_gpu_t_copy(unsigned width, unsigned height, int mask_ch
  * [ORACLE] GPUSTAT.28 while idle: 1 while fewer words are queued than the head
  * command's threshold. MMX5 GPUSTAT runs: NOP 1 (never ready with it queued),
  * 01h/E1h-E2h/E6h 2 (E1h ready at 1, not at 2), rectangles as above, polygons
- * and lines 1 (never ready once queued), fill/copy/transfers their packet
- * length (not ready once complete; shorter counts [NOT OBSERVED]).
+ * and lines 1 (never ready once queued), copy 2 (below), fill/transfers their
+ * packet length (not ready once complete; shorter counts [NOT OBSERVED]).
+ * Copy (80h) 2, ready with only its command word queued [REFERENCE, PS1G-126]:
+ * MediEvil 4875M original route, the GPUSTAT value VSync saves reads 1 at count 1
+ * (return 2352) and 0 at count 3 (returns 3251, 3287); count 2 is not observed.
+ * PSX-SPX names bit 28 "WFEP, GP0 write FIFO empty", as E1h above.
  * Credit is not consulted (MMX5: ready at negative credit with an empty FIFO,
  * 4,472,544 reads). No$PSX: "Write FIFO empty". */
 static inline unsigned source_gpu_t_ready_below(uint32_t head)
 {
     unsigned op = head >> 24;
     if (op == 0x00u) return 1u;
-    if (op == 0x01u || op == 0xE1u || op == 0xE2u || op == 0xE6u) return 2u;
+    if (op == 0x01u || op == 0xE1u || op == 0xE2u || op == 0xE6u || op == 0x80u) return 2u;
     if (source_gpu_sprite_opcode(op)) return SOURCE_GPU_T_RECT_FEEDBACK(op);
     if ((op & 0xE0u) == 0x20u || (op & 0xE0u) == 0x40u) return 1u;
     return source_gpu_command_length(head);

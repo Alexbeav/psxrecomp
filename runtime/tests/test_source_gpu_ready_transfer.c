@@ -50,6 +50,18 @@ int main(void)
     check(source_gpu_command_update(&s, 100000 + 200) && !s.count, "credit drains the word");
     check(source_gpu_command_ready(&s) == 1, "A0h: FIFO empty again, bit 28 = 1");
 
+    /* PS1G-126: a GP0(80h) copy reads ready with only its command word queued and
+     * not ready once a parameter waits (MediEvil 4875M reference: 1 at count 1,
+     * 0 at count 3; count 2 follows the same rule, not observed). */
+    credited(&s);
+    s.budget = -100;   /* hold the packet in the FIFO */
+    check(source_gpu_command_write(&s, 0x80000000u) && s.count == 1, "copy command word queued");
+    check(source_gpu_command_ready(&s) == 1, "copy, command word only: bit 28 = 1");
+    check(source_gpu_command_write(&s, 0x00000000u) && s.count == 2, "copy source queued");
+    check(source_gpu_command_ready(&s) == 0, "copy, a parameter waits: bit 28 = 0");
+    check(source_gpu_command_write(&s, 0x00000000u) && s.count == 3, "copy destination queued");
+    check(source_gpu_command_ready(&s) == 0, "copy, 3 of 4 words: bit 28 = 0");
+
     printf("source_gpu_ready_transfer: %u checks passed\n", checks);
     return 0;
 }
