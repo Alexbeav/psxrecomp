@@ -48,8 +48,16 @@ def find_bash():
 
 
 def shell_env(bash):
-    """PATH that reaches the coreutils shipped beside `bash`."""
+    """PATH that reaches the coreutils shipped beside `bash`.
+
+    Only Windows needs it: Git Bash and MSYS2 keep their tools beside bash.exe,
+    off the PATH a test starts from. On Linux and macOS bash was found on PATH,
+    and putting its folder first (/bin, then /usr/bin) made the packager run
+    /usr/bin/python3 instead of the python3 that PATH names (PS1B-577).
+    """
     env = dict(os.environ)
+    if os.name != "nt":
+        return env
     here = os.path.dirname(bash)
     extra = [here, os.path.join(os.path.dirname(here), "bin"),
              os.path.join(os.path.dirname(here), "usr", "bin")]
@@ -565,6 +573,15 @@ def main() -> int:
     if bash is None:
         print("package setup program set test: text checks PASS; SKIP the runs (no bash on this machine)")
         return 0
+    shell_python = ""
+    if os.name != "nt" and shutil.which("python3"):
+        # The packager must run the python3 this test's PATH names (PS1B-577).
+        probe = 'command -v python3 && python3 -c "import sys; print(sys.version.split()[0])"'
+        seen = subprocess.run([bash, "-c", probe], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              env=shell_env(bash)).stdout.split()
+        assert len(seen) == 2 and os.path.realpath(seen[0]) == os.path.realpath(shutil.which("python3")), \
+            ("the packager would run another python3", seen, shutil.which("python3"))
+        shell_python = "; the packager's python3: %s, Python %s" % (seen[0], seen[1])
     syntax = subprocess.run([bash, "-n", to_shell_path(PACKAGER, bash)], capture_output=True, text=True,
                             env=shell_env(bash))
     assert syntax.returncode == 0, syntax.stderr
@@ -613,7 +630,7 @@ def main() -> int:
         assert code == 1 and "setup host executable 'Resident_Evil_2' not found" in out, (code, out)
 
         reached = whole_packager(bash, Path(tmp))
-    print(f"package setup program set test: PASS (whole packager run {reached})")
+    print(f"package setup program set test: PASS (whole packager run {reached}{shell_python})")
     return 0
 
 

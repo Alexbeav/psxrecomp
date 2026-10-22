@@ -55,8 +55,15 @@ def shell_env(bash: str) -> dict:
     launched from a PATH without grep (PowerShell, or any build environment that
     does not add Git's usr\bin) silently takes the OPTIONAL branch for every
     recipe and this test reports a wording regression that is not there.
+
+    Only Windows needs it: Git Bash and MSYS2 keep their tools beside bash.exe,
+    off the PATH a test starts from. On Linux and macOS bash was found on PATH,
+    and putting its folder first (/bin, then /usr/bin) made the packager run
+    /usr/bin/python3 instead of the python3 that PATH names (PS1B-577).
     """
     env = dict(os.environ)
+    if os.name != "nt":
+        return env
     here = os.path.dirname(bash)
     extra = [here, os.path.join(os.path.dirname(here), "bin"),
              os.path.join(os.path.dirname(here), "usr", "bin")]
