@@ -1359,7 +1359,9 @@ static char s_cache_root_canon[768];
 static int  s_cache_root_canon_ok = 0;
 
 /* Rule 3: no stderr logging. Most recent loader event recorded here and
- * surfaced through overlay_loader_status. */
+ * surfaced through overlay_loader_status. The buffer is short and a cache path
+ * has no bound, so a line that names a path puts its facts first and the path
+ * last: a deep folder then cuts only the path's tail (PS1B-569). */
 static char s_last_msg[256] = {0};
 
 static void loader_log(const char *fmt, ...) {
@@ -1435,10 +1437,10 @@ static int cache_entry_suppress_for_shortfall(int ci, int needed) {
     }
     e->capacity_suppressed = 1;
     s_cand_overflow += (uint64_t)needed;
-    loader_log("*** CANDIDATE TABLE SHORTFALL (%d): suppressing %s (%d "
+    loader_log("*** CANDIDATE TABLE SHORTFALL (%d): suppressing a shard (%d "
                "manifest candidates, %d slots remain); native coverage is "
-               "falling back to the interpreter", CAND_CAP, e->path, needed,
-               CAND_CAP - s_cand_n);
+               "falling back to the interpreter. In %s", CAND_CAP, needed,
+               CAND_CAP - s_cand_n, e->path);
     return 1;
 }
 
@@ -2112,12 +2114,12 @@ static int posix_abi_sweep_file(const PsxOverlayCacheFile *file, void *opaque) {
     }
 
     if (handle) {
-        loader_log("ABI preflight rejecting %s: dll=0x%X runtime=0x%X",
-                   file->path, abi, PSX_OVERLAY_ABI_TAG);
+        loader_log("ABI preflight rejecting dll=0x%X runtime=0x%X. In %s",
+                   abi, PSX_OVERLAY_ABI_TAG, file->path);
         s_abi_rejected++;
     } else
-        loader_log("ABI preflight rejecting unloadable %s: %s",
-                   file->path, error);
+        loader_log("ABI preflight rejecting an unloadable shard: %s. In %s",
+                   error, file->path);
     /* Do not delete by canonical pathname after inspecting a loaded handle:
      * an atomic publisher may already have replaced that path with a new file. */
     cache_idx_remove_path(file->path);
@@ -2733,7 +2735,7 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
                             int manifest_provenance, int tier) {
     HMODULE h = prepared ? prepared : LoadLibraryA(dll_path);
     if (!h) {
-        loader_log("LoadLibrary(%s) failed: %lu", dll_path, GetLastError());
+        loader_log("LoadLibrary failed: %lu. In %s", GetLastError(), dll_path);
         return 0;
     }
     /* ABI gate: reject any DLL whose contract ABI doesn't match this runtime
@@ -2746,9 +2748,9 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
      * (wrong ABI, or a different-flavor cache e.g. widescreen vs base) is
      * rejected so autocompile can replace it for THIS build. */
     if (abi != PSX_OVERLAY_ABI_TAG) {
-        loader_log("ABI/flavor mismatch in %s: dll=0x%X runtime=0x%X — rejecting "
-                   "without pathname deletion", dll_path, abi,
-                   PSX_OVERLAY_ABI_TAG);
+        loader_log("ABI/flavor mismatch: dll=0x%X runtime=0x%X — rejecting "
+                   "without pathname deletion. In %s", abi,
+                   PSX_OVERLAY_ABI_TAG, dll_path);
         s_abi_rejected++;
         note_stale_cache();
         FreeLibrary(h);
@@ -2778,8 +2780,8 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
         char name[32];
         snprintf(name, sizeof(name), "func_%08X", man[i].entry);
         if (!GetProcAddress(h, name)) {
-            loader_log("manifest/export mismatch in %s: missing %s -- "
-                       "rejecting whole DLL", dll_path, name);
+            loader_log("manifest/export mismatch: missing %s -- "
+                       "rejecting whole DLL. In %s", name, dll_path);
             FreeLibrary(h);
             return 0;
         }
@@ -2862,14 +2864,15 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
         loaded_pair_commit(tier, manifest_provenance,
                            manifest_pair_id, man, man_n);
     if (s_cand_overflow != overflow_before)
-        loader_log("*** CANDIDATE TABLE FULL (%d): loaded %s -> %d registered, "
+        loader_log("*** CANDIDATE TABLE FULL (%d): %d registered, "
                    "%llu dropped; native coverage is falling back to the "
-                   "interpreter. Raise CAND_CAP.", CAND_CAP, dll_path,
+                   "interpreter. Raise CAND_CAP. In %s", CAND_CAP,
                    registered,
-                   (unsigned long long)(s_cand_overflow - overflow_before));
+                   (unsigned long long)(s_cand_overflow - overflow_before),
+                   dll_path);
     else
-        loader_log("loaded %s -> %d candidates (%u no-manifest)",
-                   dll_path, registered, s_no_manifest);
+        loader_log("loaded %d candidates (%u no-manifest) from %s",
+                   registered, s_no_manifest, dll_path);
     if (registered == 0) {
         /* load_one_dll deliberately leaves a zero-candidate path retryable.  Do
          * not leak a LoadLibrary reference on every retry after CAND_CAP is
@@ -2889,15 +2892,15 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
     void *h = prepared ? prepared
                        : psx_overlay_posix_library_open(dll_path, error,
                                                         sizeof(error));
-    if (!h) { loader_log("dlopen(%s) failed: %s", dll_path, error); return 0; }
+    if (!h) { loader_log("dlopen failed: %s. In %s", error, dll_path); return 0; }
     /* ABI gate (see the _WIN32 branch). */
     typedef int (*AbiFn)(void);
     AbiFn abi_fn = (AbiFn)psx_overlay_posix_library_symbol(h, "overlay_abi");
     int abi = abi_fn ? abi_fn() : 0;
     if (abi != PSX_OVERLAY_ABI_TAG) {
-        loader_log("ABI/flavor mismatch in %s: dll=0x%X runtime=0x%X — rejecting "
-                   "without pathname deletion", dll_path, abi,
-                   PSX_OVERLAY_ABI_TAG);
+        loader_log("ABI/flavor mismatch: dll=0x%X runtime=0x%X — rejecting "
+                   "without pathname deletion. In %s", abi,
+                   PSX_OVERLAY_ABI_TAG, dll_path);
         s_abi_rejected++;
         note_stale_cache();
         psx_overlay_posix_library_close(h);
@@ -2924,8 +2927,8 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
     }
     for (int i = 0; i < man_n; i++) {
         if (!psx_overlay_posix_library_entry(h, man[i].entry)) {
-            loader_log("manifest/export mismatch in %s: missing func_%08X -- "
-                       "rejecting whole DLL", dll_path, man[i].entry);
+            loader_log("manifest/export mismatch: missing func_%08X -- "
+                       "rejecting whole DLL. In %s", man[i].entry, dll_path);
             psx_overlay_posix_library_close(h);
             return 0;
         }
@@ -2978,13 +2981,14 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
         loaded_pair_commit(tier, manifest_provenance,
                            manifest_pair_id, man, man_n);
     if (s_cand_overflow != overflow_before)
-        loader_log("*** CANDIDATE TABLE FULL (%d): loaded %s -> %d registered, "
+        loader_log("*** CANDIDATE TABLE FULL (%d): %d registered, "
                    "%llu dropped; native coverage is falling back to the "
-                   "interpreter. Raise CAND_CAP.", CAND_CAP, dll_path,
+                   "interpreter. Raise CAND_CAP. In %s", CAND_CAP,
                    registered,
-                   (unsigned long long)(s_cand_overflow - overflow_before));
+                   (unsigned long long)(s_cand_overflow - overflow_before),
+                   dll_path);
     else
-        loader_log("loaded %s -> %d manifest candidates", dll_path, registered);
+        loader_log("loaded %d manifest candidates from %s", registered, dll_path);
     if (registered == 0) {
         s_dll_flush[dll] = NULL;
         psx_overlay_posix_library_close(h);

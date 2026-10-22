@@ -157,6 +157,24 @@ def main() -> int:
         assert "ABI/flavor mismatch" in out and "dll=0x19" in out, out
         print("per-load gate refuses a v25 shard behind a sweep marker")
 
+        # 4b. The same from a cache folder more than 200 characters deep
+        #     (PS1B-569). The loader keeps a 256-byte line, so the tags must
+        #     come before the path: a deep folder may cut only the path.
+        cache = tmp / ("cache-deep-" + "d" * 100) / ("e" * 100)
+        shard = publish(cache, leaf, upstream)
+        (shard.parent / f".abi_{tag:08x}.ok").write_bytes(b"")
+        trace = tmp / "t-deep"
+        out = run_harness(harness, cache, shard, "reject", trace)
+        stale = next((line[line.index("stale=[") + 7:].rstrip("]")
+                      for line in out.splitlines() if "stale=[" in line), "")
+        print(f"deep cache ({len(str(shard))} characters of path): stale line "
+              f"of {len(stale)} characters: {stale}")
+        assert len(str(shard)) > 200 + len(str(tmp)), shard
+        assert trace_lines(trace) == [], out
+        assert stale.startswith(f"ABI/flavor mismatch: dll=0x19 runtime=0x{tag:X}"), (
+            f"the tags are not at the head of the stale line: {stale!r}")
+        print("a deep cache folder keeps the tags in the stale line")
+
         # 5. A cache folder from pin G2 (codegen 12) is never opened.
         cache = tmp / "cache-sibling"
         old_leaf = "cg12_6a0b6aaa_gc00000000_f0"
