@@ -22,6 +22,7 @@ void gpu_queue_service(void);
 int gpu_snapshot_validate(const uint8_t *p, uint32_t len);
 uint32_t gpu_queue_cycles_to_event(void);
 int gpu_queue_has_space(void);
+int gpu_dma_walk_ready(void);
 uint32_t gpu_dma_vram_upload_words(void); /* Active GP0(A0) payload remaining. */
 /* Experimental LL gate: 1 idle, 0 qualified mono-polyline wait, -1 outside
  * scope. This does not represent source draw budget or FIFO occupancy. */

@@ -756,13 +756,25 @@ static void gpu_ll_complete(void *opaque, int hit_limit) {
     complete_transfer(2);
 }
 
+static int gpu_ll_ready(void *opaque) {
+    (void)opaque;
+    return gpu_dma_walk_ready();
+}
+
+static int gpu_ll_has_space(void *opaque) {
+    (void)opaque;
+    return gpu_queue_has_space();
+}
+
 static const DMAGPULinkedListOps gpu_ll_ops = {
     gpu_ll_resolve_address,
     gpu_ll_read_word,
     gpu_ll_observe_header,
     gpu_ll_begin_node,
     gpu_ll_emit_word,
-    gpu_ll_complete
+    gpu_ll_complete,
+    gpu_ll_ready,
+    gpu_ll_has_space
 };
 
 static void start_async_gpu_linked_list(void) {
@@ -776,35 +788,26 @@ static void start_async_gpu_linked_list(void) {
      * packets to GP0. The event-driven walker below performs every guest-visible
      * header and payload read at its consumption boundary. */
     gpu_ws_prepass_linked_list(start_addr);
-    dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);
     event_ring_record_aux(EV_DMA_SCHED, 2u, channels[2].chcr);
     gpu_ot_stats.starts++;
     gpu_ot_start_cycle = psx_cycle_count;
     gpu_ot_polls_this_walk = 0;
+    /* The kick is a service: the walk runs at once on its lead (the CPU is
+     * not held), then at each grid edge. */
+    if (g_ls_replay_active)
+        dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);
+    else
+        dma_gpu_ll_kick(&gpu_linked_list, start_addr, 0x40000u, psx_cycle_count,
+                        &gpu_ll_ops, NULL);
 }
 
-/* Bound on the kick hold: a walk that has fetched more headers than 2 MiB of
- * RAM has words must be cyclic. */
-#define GPU_LL_HOLD_MAX_NODES 0x80000u
-
-/* PSX-SPX "CPU Operation during DMA": DMA outruns CPU memory access, and a CPU
- * read of RAM or I/O waits while DMA moves data. The kicking store therefore
- * returns only when the list walk needs GPU FIFO space or ends. Guest code that
- * rewrites a packet right after DrawOTag (the SCPH1001 intro's shared text
- * packets) cannot reach it before the walk does. A cyclic walk releases the
- * CPU and keeps running as before, and so does a walk the device service did
- * not move. */
-static void hold_cpu_for_gpu_linked_list(void) {
-    if (psx_in_device_service || g_ls_replay_active) return;
-    while (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
-           channel_enabled(2) &&
-           gpu_linked_list.nodes_processed < GPU_LL_HOLD_MAX_NODES &&
-           !(gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space())) {
-        uint32_t moved = gpu_linked_list.total_words;
-        psx_advance_cycles(dma_gpu_ll_cycles_to_event(&gpu_linked_list));
-        psx_devices_service_to_now();
-        if (gpu_linked_list.active && gpu_linked_list.total_words == moved) break;
-    }
+/* A channel 2 CHCR write while the walk runs is a service (PS1G-93 2d: a stop
+ * moves the walk to the write's limit first; a rewrite keeps it going). */
+static void serve_gpu_linked_list_at_write(void) {
+    if (!gpu_linked_list.active || !((channels[2].chcr >> 24) & 1u) ||
+        !channel_enabled(2) || g_ls_replay_active)
+        return;
+    dma_gpu_ll_serve_at(&gpu_linked_list, psx_cycle_count, &gpu_ll_ops, NULL);
 }
 
 /* ---- Source-profile DMA machines (TAS/source mode) ----
@@ -1745,7 +1748,6 @@ static void try_execute(int ch) {
                     channels[2].madr != gpu_linked_list.current_addr)
                     start_async_gpu_linked_list();
                 psx_next_service_cycle=0;
-                hold_cpu_for_gpu_linked_list();
             } else if(channels[2].chcr & 1u) {
                 memset(&gpu_block,0,sizeof gpu_block);
                 gpu_block.total_words=transfer_word_count(2);
@@ -1818,7 +1820,7 @@ uint32_t dma_cycles_to_irq(uint32_t i_mask) {
         if (est < best) best = est;
     }
     if (gpu_linked_list.active) {
-        uint32_t d = dma_gpu_ll_cycles_to_event(&gpu_linked_list);
+        uint32_t d = dma_gpu_ll_cycles_to_event(&gpu_linked_list, psx_cycle_count);
         if (d < best) best = d;
     }
     for (int ch = 0; ch < 7; ch++) {
@@ -1873,8 +1875,7 @@ uint32_t dma_cycles_to_internal_event(void) {
 
     if (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
         channel_enabled(2)) {
-        uint32_t d = gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space()
-                   ? gpu_queue_cycles_to_event() : dma_gpu_ll_cycles_to_event(&gpu_linked_list);
+        uint32_t d = dma_gpu_ll_cycles_to_event(&gpu_linked_list, psx_cycle_count);
         if (d < best) best = d;
     }
 
@@ -1905,7 +1906,7 @@ uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
         if (est < best) best = est;
     }
     if (channel_irq_flag_armed(2) && gpu_linked_list.active) {
-        uint32_t d = dma_gpu_ll_cycles_to_event(&gpu_linked_list);
+        uint32_t d = dma_gpu_ll_cycles_to_event(&gpu_linked_list, psx_cycle_count);
         if (d < best) best = d;
     }
     for (int ch = 0; ch < 7; ch++) {
@@ -1931,16 +1932,10 @@ void dma_advance(uint32_t cycles) {
         g_dma_cur_madr = gpu_linked_list.current_addr;
         g_dma_cur_bcr = channels[2].bcr;
         g_dma_initiator_pc = s_dma_ch_initiator_pc[2];
-        /* Preserve live RAM reads at each word event. A full GPU FIFO pauses
-         * payload delivery; elapsed blocked time is not later transfer credit. */
-        uint32_t left=cycles;
-        while(left && gpu_linked_list.active) {
-            if(gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space()) break;
-            uint32_t step=dma_gpu_ll_cycles_to_event(&gpu_linked_list);
-            if(step>left) step=left;
-            dma_gpu_ll_advance(&gpu_linked_list,step,&gpu_ll_ops,NULL);
-            left-=step;
-        }
+        /* The walk moves at each grid edge passed in this chunk; the
+         * event distance makes each chunk end on the next edge. */
+        dma_gpu_ll_serve_edges(&gpu_linked_list, psx_cycle_count - cycles,
+                               psx_cycle_count, &gpu_ll_ops, NULL);
     }
     if(gpu_block.active && channel_enabled(2) && (channels[2].chcr&(1u<<24))) {
         g_dma_cur_ch=2; g_dma_cur_madr=channels[2].madr;
@@ -2175,9 +2170,10 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                     channels[ch].chcr=(channels[ch].chcr&~mask)|(val&mask);
                     return;
                 }
-                /* A linked-list stop takes effect between packets. Keep the
-                 * already-started packet on the normal word-event clock before
-                 * exposing its next header to BreakDraw/DrawOTag callers. */
+                if (ch == 2) serve_gpu_linked_list_at_write();
+                /* A linked-list stop takes effect between packets. The rest of
+                 * the started packet moves without CPU time; only a full FIFO
+                 * waits for the GPU. */
                 if (ch == 2 && gpu_linked_list.active && channel_enabled(2) &&
                     (mask & (1u << 24)) && !(val & (1u << 24)) &&
                     gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD) {
@@ -2185,7 +2181,11 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                     while(gpu_linked_list.active &&
                           gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD &&
                           gpu_linked_list.current_addr==packet) {
-                        uint32_t wait=gpu_queue_has_space() ? 1u : gpu_queue_cycles_to_event();
+                        if(gpu_queue_has_space()) {
+                            dma_gpu_ll_finish_word(&gpu_linked_list,&gpu_ll_ops,NULL);
+                            continue;
+                        }
+                        uint32_t wait=gpu_queue_cycles_to_event();
                         if(wait==UINT32_MAX) {
                             /* Readback needs CPU access to GPUREAD/reset. Pause
                              * without losing the current packet or queued words. */

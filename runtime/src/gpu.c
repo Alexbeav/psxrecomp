@@ -79,7 +79,16 @@ static struct {
     int32_t credit;
     uint64_t cycle;
 } gpu_queue;
+/* A quad's second triangle, still to draw: the list walk treats the GPU as
+ * not ready until the first triangle is drawn (PS1G-93 probe 1f: a 256x256
+ * quad holds the walk about 16,300 clocks; 64x64 until bit 28 sets at 974).
+ * Kept outside the queue struct, so the savestate wire is unchanged; a loaded
+ * state starts without it. */
+static int gpu_walk_quad_pending;
+static int32_t gpu_walk_quad_floor;
+static int32_t gpu_queue_quad_second;
 static void gpu_queue_reset(void) {
+    gpu_walk_quad_pending = 0;
     memset(&gpu_queue, 0, sizeof gpu_queue);
     if(!source_gpu_runtime_active()) gpu_queue.cycle = psx_get_cycle_count();
 }
@@ -5986,9 +5995,14 @@ static int gpu_queue_command_cost(void) {
     int skipped=gpu_raster_skipped_row();
     if (skipped >= 0) { state.display_mode=0x24u; state.skip_field=(unsigned)skipped; }
     unsigned op=gp0_cmd_buf[0]>>24;
+    gpu_queue_quad_second=0;
     if (source_gpu_polygon_supported(op)) {
         int cost=source_gpu_command_polygon_cost(&state,gp0_cmd_buf,0);
-        if(op&8u) cost+=source_gpu_command_polygon_cost(&state,gp0_cmd_buf,1);
+        if(op&8u) {
+            int second=source_gpu_command_polygon_cost(&state,gp0_cmd_buf,1);
+            cost+=second;
+            gpu_queue_quad_second=second > 0 ? second : 0;
+        }
         return cost > 0 ? cost : 0;
     }
     if ((op & 0xe0u)==0x80u) return 2+source_gpu_command_copy_cost(&state,gp0_cmd_buf);
@@ -6017,9 +6031,13 @@ static void gpu_queue_consume(void) {
         gpu_write_gp0_body(value);
         g_exec_phase=old_phase;
         if ((before==GP0_IDLE || before==GP0_COLLECTING) &&
-            (gp0_state==GP0_IDLE || gp0_state==GP0_VRAM_WRITE))
-            gpu_queue.credit-=gpu_queue_command_cost();
-        else if ((before==GP0_POLYLINE_MONO && previous_vertices && gp0_state==before) ||
+            (gp0_state==GP0_IDLE || gp0_state==GP0_VRAM_WRITE)) {
+            int cost=gpu_queue_command_cost();
+            gpu_queue.credit-=cost;
+            gpu_walk_quad_pending=gpu_queue_quad_second > 0 && gpu_queue_quad_second < cost;
+            if(gpu_walk_quad_pending)
+                gpu_walk_quad_floor=gpu_queue.credit+(cost-gpu_queue_quad_second);
+        } else if ((before==GP0_POLYLINE_MONO && previous_vertices && gp0_state==before) ||
                  (before==GP0_POLYLINE_SHADED && previous_vertices==2)) {
             int dx=abs(polyline_prev_x-x),dy=abs(polyline_prev_y-y);
             gpu_queue.credit-=source_gpu_t_line(0,0,dx,dy,0);
@@ -6044,6 +6062,21 @@ uint32_t gpu_queue_cycles_to_event(void) {
 }
 
 int gpu_queue_has_space(void) { return gpu_queue.count < 16u; }
+
+/* The list walk's readiness before a header: GPUSTAT bit 28 (no queued word,
+ * no command partly received, no VRAM read owed), and not inside the first
+ * triangle of a quad. */
+int gpu_dma_walk_ready(void) {
+    if (source_gpu_runtime_active()) return 1;
+    gpu_queue_service();
+    if (gpu_queue.count || vram_read_active) return 0;
+    if (gp0_state != GP0_IDLE && gp0_state != GP0_VRAM_WRITE) return 0;
+    if (gpu_walk_quad_pending) {
+        if (gpu_queue.credit < gpu_walk_quad_floor) return 0;
+        gpu_walk_quad_pending = 0;
+    }
+    return 1;
+}
 
 void gpu_write_gp0(uint32_t val) {
     gp0_write_count++;
