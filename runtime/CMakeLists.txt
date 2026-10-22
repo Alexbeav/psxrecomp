@@ -468,6 +468,11 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_getlocp_after_seek_test PRIVATE include)
     add_test(NAME cdrom_getlocp_after_seek_test COMMAND cdrom_getlocp_after_seek_test
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
+    # PS1G-140: the CD retry dither fires in a stall loop only, and its run
+    # survives a save and load.
+    add_executable(cdrom_retry_snapshot_test tests/test_cdrom_retry_snapshot.c src/psx_sha256.c)
+    target_include_directories(cdrom_retry_snapshot_test PRIVATE include)
+    add_test(NAME cdrom_retry_snapshot_test COMMAND cdrom_retry_snapshot_test)
     # PS1B-317 fleet check: read streams that ended before their first sector,
     # counted for the run report (docs/RUN_REPORT_CDROM.md).
     add_executable(cdrom_silent_read_counter_test tests/test_cdrom_silent_read_counter.c src/psx_sha256.c)

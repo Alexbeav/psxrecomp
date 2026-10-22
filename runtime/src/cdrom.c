@@ -874,6 +874,10 @@ static void trace_cdrom(uint8_t kind, uint32_t addr, uint32_t val, uint8_t width
 #include "cdrom_random_tape.h"
 static CdRandomTape s_source_clock_tape;
 static int s_source_clock;
+static uint64_t s_cd_retry_dither_count; /* PS1G-140 */
+#define CD_RETRY_DITHER_LOG 32
+typedef struct { uint32_t frame; int target, run, cycles; } CdRetryDitherFire;
+static CdRetryDitherFire s_cd_retry_dither_log[CD_RETRY_DITHER_LOG];
 /* Independent drive operation, not a command second response. */
 static uint64_t s_source_reset_due;
 static uint64_t s_source_command_due, s_source_ready_due;
@@ -1850,11 +1854,85 @@ static int source_explicit_seek_cycles(uint8_t cmd)
 }
 /* T172 end CD explicit seek. */
 
+/* PS1G-140: a stall loop gets a deterministic first-sector delay of 0..1
+ * sector period, hashed from the cycle count. A stall loop is a read re-issued
+ * at the same target after the previous attempt delivered that sector but
+ * stopped within RETRY_STALL_SECTORS sectors past it (RE3 Europe, RPD
+ * stairwell: 33485-33487, then Pause, Setloc, ReadN). The delay starts at the
+ * RETRY_DITHER_AFTER-th such re-issue in a row. The default profile's
+ * latencies are otherwise constant, so each retry lands at the same phase
+ * against vblank; a game that loses a race at that phase (there: INT1
+ * acknowledged in its VSync handler before the DataReady callback runs)
+ * retries for minutes.
+ * Untouched: the first two re-issues of a run, a re-issue while no sector at
+ * or past the target has been delivered yet, and a re-read after an attempt
+ * that ran past RETRY_STALL_SECTORS (that restarts the run). last_sector_lba
+ * is not cleared per attempt, so once the run has reached the target, an
+ * attempt that delivers nothing still counts. A recorded replay that meets
+ * no such loop keeps its timing; one that meets a loop diverges at its third
+ * re-issue. Off in the source-clock profile (it has its own jitter), for XA
+ * streams, and with PSX_CD_RETRY_DITHER=0.
+ * The run (target and count) is in the CD section of the save state (boot
+ * state v16); power-on clears it. */
+#define RETRY_DITHER_AFTER 3
+#define RETRY_STALL_SECTORS 8
+static int s_retry_target = -1;
+static int s_retry_run;
+
+static int retry_dither_cycles(int target)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_CD_RETRY_DITHER");
+        enabled = !(e && e[0] == '0');
+    }
+    if (!enabled || s_source_clock || (mode_reg & 0x40u)) return 0;
+    if (target != s_retry_target) {
+        s_retry_target = target;
+        s_retry_run = 0;
+        return 0;
+    }
+    if (last_sector_lba < target) return 0;      /* nothing delivered yet */
+    if (last_sector_lba - target > RETRY_STALL_SECTORS) {   /* it was progressing */
+        s_retry_run = 0;
+        return 0;
+    }
+    if (++s_retry_run < RETRY_DITHER_AFTER) return 0;
+    uint32_t h = (uint32_t)psx_cycle_count * 0x9E3779B1u ^ (uint32_t)(psx_cycle_count >> 32);
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    s_cd_retry_dither_count++;
+    int dither = (int)(h % (uint32_t)source_drive_sector_period());
+    if (s_cd_retry_dither_count <= CD_RETRY_DITHER_LOG) {
+        CdRetryDitherFire *f = &s_cd_retry_dither_log[s_cd_retry_dither_count - 1];
+        f->frame = (uint32_t)s_frame_count;
+        f->target = target;
+        f->run = s_retry_run;
+        f->cycles = dither;
+    }
+    return dither;
+}
+
+/* PS1G-140 review: how often the dither fired, and the first fires, for the
+ * run report. */
+uint64_t cdrom_retry_dither_count(void) { return s_cd_retry_dither_count; }
+int cdrom_retry_dither_fire(int i, uint32_t *frame, int *target, int *run, int *cycles)
+{
+    if (i < 0 || (uint64_t)i >= s_cd_retry_dither_count || i >= CD_RETRY_DITHER_LOG) return 0;
+    *frame = s_cd_retry_dither_log[i].frame;
+    *target = s_cd_retry_dither_log[i].target;
+    *run = s_cd_retry_dither_log[i].run;
+    *cycles = s_cd_retry_dither_log[i].cycles;
+    return 1;
+}
+
 static void start_read_stream(uint8_t cmd) {
     last_sector_have_raw = GETLOCL_NO_HEADER;   /* until the first data sector */
     int source_target = setloc_pending ? s_setloc_lba :
         msf_to_lba(read_min, read_sec, read_sect);
     int seek_cycles = implicit_read_seek_cycles();
+    int retry_dither = retry_dither_cycles(source_target);
     source_cdda.position_valid=0;source_cdda.async_type=source_cdda.async_count=0;source_cdda.seeking=0;
     cdda_playing = 0;
     cdda_track = 0;
@@ -1881,7 +1959,7 @@ static void start_read_stream(uint8_t cmd) {
      * read that only continues the stream never gets here. */
     if (s_nymashock_drive) source_drive_hold_logical = 1;
     read_cmd = cmd;
-    read_delay = seek_cycles + initial_read_delay_cycles();
+    read_delay = seek_cycles + initial_read_delay_cycles() + retry_dither;
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
@@ -3781,6 +3859,7 @@ void cdrom_init(const char* cue_path) {
     response_read = 0;
     response_count = 0;
     last_sector_lba = -1;
+    s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
     last_sector_size = 0;
     last_sector_frame = 0;
     last_sector_mode = 0;
@@ -4505,6 +4584,10 @@ static int cdrom_snap_emit(PstW *w) {
      * times seeks and implicit reads from it, so every profile carries it, at
      * one shared offset. Full-machine/cross-profile restore remains unqualified;
      * matching-profile controller state is not reconstructed. */
+    /* PS1G-140: the retry-dither run (target and count) goes out in every
+     * profile, before the seek byte, so the offsets counted from the end stay
+     * as they were. A load inside a retry loop resumes the loop's count. */
+    WI(s_retry_target); WI(s_retry_run);
     W8(s_source_seek_paused);
     if (source_cdda.enabled) {
         WI(source_cdda.seeking); WI(source_cdda.position_valid);
@@ -4600,6 +4683,7 @@ static int cdrom_snap_parse(PstR *r) {
     RB(cd_pending_vol); RB(cd_decode_vol);
     R64(s_lid.close_due); R8(s_lid.physical_open); R8(s_lid.shell_open_latched);
     RI(s_lid_irq_pending);
+    RI(s_retry_target); RI(s_retry_run);
     R8(s_source_seek_paused);
     if (source_cdda.enabled) {
         RI(source_cdda.seeking); RI(source_cdda.position_valid);
@@ -4671,6 +4755,12 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
     uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;
     uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;
     if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;
+    {   /* PS1G-140 retry run: a read target from the lead-in (-150, 00:00:00) to the
+         * end of a disc (-1 also stands for no run), and a count not negative. */
+        const uint8_t *retry=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1-8;
+        int32_t target=(int32_t)cd_tape_le32(retry), run=(int32_t)cd_tape_le32(retry+4);
+        if (target < -150 || target > 450000 || run < 0) return 0;
+    }
     if (source_cdda.enabled) {
         const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;
         if (cd_tape_le32(c)>1 || cd_tape_le32(c+4)>1 ||

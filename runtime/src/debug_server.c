@@ -5985,7 +5985,7 @@ static void handle_cdrom_trace_dump(int id, const char *json)
     uint64_t start = (total > (uint64_t)count) ? total - (uint64_t)count : 0;
     if (start < oldest) start = oldest;
 
-    size_t bufsz = 256u + (size_t)count * 360u;
+    size_t bufsz = 256u + (size_t)count * 420u;
     char *buf = (char *)malloc(bufsz);
     if (!buf) { send_err(id, "oom"); return; }
 
@@ -5994,13 +5994,14 @@ static void handle_cdrom_trace_dump(int id, const char *json)
     pos += snprintf(buf + pos, bufsz - pos,
                     "{\"id\":%d,\"ok\":true,\"total\":%llu,\"oldest\":%llu,\"entries\":[",
                     id, (unsigned long long)total, (unsigned long long)oldest);
-    for (uint64_t seq = start; seq < total && pos < bufsz - 400; seq++) {
+    for (uint64_t seq = start; seq < total && pos < bufsz - 460; seq++) {
         const CDROMTraceEntry *e = &entries[seq % CDROM_TRACE_CAP];
         if (e->seq != seq) continue;
         if (frame_lo >= 0 && (int)e->frame < frame_lo) continue;
         if (frame_hi >= 0 && (int)e->frame > frame_hi) continue;
         pos += snprintf(buf + pos, bufsz - pos,
-                        "%s{\"seq\":%llu,\"kind\":\"%s\",\"addr\":\"0x%08X\","
+                        "%s{\"seq\":%llu,\"cycle\":%llu,\"ra\":\"0x%08X\","
+                        "\"kind\":\"%s\",\"addr\":\"0x%08X\","
                         "\"val\":\"0x%08X\",\"w\":%u,\"func\":\"0x%08X\","
                         "\"pc\":\"0x%08X\",\"frame\":%u,\"i_stat\":\"0x%08X\","
                         "\"index\":%u,\"stat\":\"0x%02X\","
@@ -6013,7 +6014,8 @@ static void handle_cdrom_trace_dump(int id, const char *json)
                         "\"pending_delay\":%d,\"reading\":%u,"
                         "\"read_cmd\":\"0x%02X\",\"read_delay\":%d}",
                         emitted ? "," : "",
-                        (unsigned long long)e->seq, cdrom_trace_kind_name(e->kind),
+                        (unsigned long long)e->seq, (unsigned long long)e->cycle,
+                        e->guest_ra, cdrom_trace_kind_name(e->kind),
                         e->addr, e->val, (unsigned)e->width,
                         e->func, e->pc, e->frame, e->i_stat,
                         e->index_reg, e->stat_reg, e->request_reg, e->irq_enable, e->irq_flag,

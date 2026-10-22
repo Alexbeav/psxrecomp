@@ -856,11 +856,22 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         extern void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent,
                                             uint32_t *longest_run);
         uint32_t starts = 0, silent = 0, longest_run = 0;
+        extern uint64_t cdrom_retry_dither_count(void);
+        extern int cdrom_retry_dither_fire(int i, uint32_t *frame, int *target,
+                                           int *run, int *cycles);
         cdrom_silent_read_stats(&starts, &silent, &longest_run);
         append_fmt(buf, sizeof(buf), &pos,
                    "  \"cdrom\": {\"read_starts\": %u, \"silent_reads\": %u, "
-                   "\"silent_run_max\": %u},\n",
-                   starts, silent, longest_run);
+                   "\"silent_run_max\": %u, \"retry_dither\": %llu, "
+                   "\"retry_dither_fires\": [",
+                   starts, silent, longest_run,
+                   (unsigned long long)cdrom_retry_dither_count());
+        uint32_t ff; int ft, fr, fc;
+        for (int i = 0; cdrom_retry_dither_fire(i, &ff, &ft, &fr, &fc); i++)
+            append_fmt(buf, sizeof(buf), &pos,
+                       "%s{\"frame\": %u, \"target\": %d, \"run\": %d, \"cycles\": %d}",
+                       i ? ", " : "", ff, ft, fr, fc);
+        append_fmt(buf, sizeof(buf), &pos, "]},\n");
     }
 
     /* Host overlay-DLL / resim gate at FAIL-FAST. Distinguishes "CD DMA never

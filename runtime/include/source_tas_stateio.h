@@ -52,8 +52,10 @@
  * v12-t172-test-a -> v13-t172-test-b (test pin B): boot state v13; source-DMA
  * wire rewritten (PS1B-186).
  * v13-t172-test-b -> v14-t172-test-b2: PS1B-186 spec v2 changes what the source-DMA
- * fields mean (served_until, link) with the layout unchanged. */
-#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v14-t172-test-b2"
+ * fields mean (served_until, link) with the layout unchanged.
+ * v14-t172-test-b2 -> v16-t172-ps1g140: boot state v16; the CD section carries
+ * the retry-dither run (PS1G-140). Boot state v15 (PS1B-97/105) kept this id. */
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v16-t172-ps1g140"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */
