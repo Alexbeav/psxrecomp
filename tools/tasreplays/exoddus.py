@@ -58,6 +58,11 @@ GAME_ID = 'SLUS-00710'
 EXE_SHA = '056fa1d3dd618c70f75088626e0362d59bc89078dcec70e0e7ad42af096472bc'
 DISC2_BOOT = 'SLUS_007.31'
 DISC2_EXE_SHA = 'cd946820652d21a2c5caeaa7d5834520e5d051c7e0a5c077d45f95e1d96b5ff8'
+# The full route draws more than the 65,536 words of the qualified cold tape: run full-f1 stopped at
+# return 121,935 with the tape spent (PS1G-43). The 1,048,576-word tape extends that prefix exactly;
+# Mega Man X4 pins the same file.
+TAPE_WORDS = 1048576
+TAPE_SHA = '8cb70d09a341acdbf7bd8dd3efc54e8640f988ed9e07d55733c85e04eb4c8ce4'
 SET_STEM = "Oddworld - Abe's Exoddus (USA)"
 DISC_STEMS = [f'{SET_STEM} (Disc 1)', f'{SET_STEM} (Disc 2)']
 TRACK_BYTES = [611978640, 483947520]
@@ -217,8 +222,8 @@ def setup(args):
     shutil.copyfile(bios, staged_bios)
     require_hash(staged_bios, BIOS_SHA)
     tape = project / 'cold-random.psxrng'
-    command([sys.executable, HERE / 'external/source_random_tape.py', tape], project / 'random-tape.log')
-    require_hash(tape, tekken3.TAPE_SHA)
+    command([sys.executable, HERE / 'external/source_random_tape.py', tape, '--count', TAPE_WORDS], project / 'random-tape.log')
+    require_hash(tape, TAPE_SHA)
     payload, receipt = octoshock210_route.convert(movie.read_bytes(), [checkpoint_asset_digest(c) for c in discs])
     if (receipt['frame_count'] != FRAMES or receipt['output_sha256'] != ROUTE_SHA
             or receipt['p1_words_le_sha256'] != P1_WORDS_SHA or receipt['p2_words_le_sha256'] != P2_WORDS_SHA
