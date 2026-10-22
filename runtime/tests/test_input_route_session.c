@@ -29,7 +29,7 @@ void sio_set_pad_connected(int slot, int value) { connected[slot] = value; }
 void sio_set_pad_config_capable(int slot, int value) { config_capable[slot] = value; }
 static int analog[PSX_MAX_PLAYERS];
 static uint8_t sticks[PSX_MAX_PLAYERS][4];
-static char event_log[256];
+static char event_log[2048];
 static int fail_event;
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry)
 { sticks[slot][0] = lx; sticks[slot][1] = ly; sticks[slot][2] = rx; sticks[slot][3] = ry; }
@@ -44,7 +44,7 @@ int sio_get_pad_mode_button(int slot) { if (slot != 0) abort(); return 0; }
 static int apply_event(uint8_t event, uint8_t disc_index, const char *disc_path,
                        char *why, size_t why_size)
 {
-    char row[80];
+    char row[600];
     snprintf(row, sizeof(row), "%s%u:%u:%s", event_log[0] ? "," : "",
              (unsigned)event, (unsigned)disc_index, disc_path ? disc_path : "-");
     if (strlen(event_log) + strlen(row) < sizeof(event_log)) strcat(event_log, row);

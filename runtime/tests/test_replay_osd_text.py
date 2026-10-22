@@ -114,7 +114,8 @@ if gate:
     messages.setdefault("Slot 12 needs disc 4: " + gate.group(1), "main.cpp save-state mount gate")
 
 # ---- input_route_session.c: why the product has no replay identity ----
-for signature in ("static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use_file_cache)\n{",
+for signature in ("static const char *disc_digest_path(const char *path, uint32_t *kind,\n"
+                  "                                    uint8_t out[32], int use_file_cache)\n{",
                   "int input_route_session_identity("):
     texts = re.findall(r'(?:return|error =) ' + LIT, body(IDENTITY, signature))
     assert texts, f"no identity reasons found in {signature[:40]}"
