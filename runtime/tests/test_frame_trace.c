@@ -254,6 +254,19 @@ int main(void) {
         CHECK(strstr(meta, "\"target_period_us\":0") != NULL);
     }
 
+    /* Fixed scratch buffers may shorten a string, never split a JSON escape. */
+    {
+        char controls[128]; static char json[1 << 16];
+        memset(controls, 1, sizeof controls - 1); controls[127] = 0;
+        psx_frame_trace_session(controls, 0);
+        CHECK(psx_frame_trace_to_json(json, sizeof json, 1) > 0);
+        const char *value = strstr(json, "\"runtime\":\"");
+        CHECK(value != NULL); value += strlen("\"runtime\":\"");
+        const char *end = strchr(value, '\"');
+        CHECK(end && (end - value) % 6 == 0);
+        for (; value < end; value += 6) CHECK(!memcmp(value, "\\u0001", 6));
+    }
+
     /* ---- XR cadence: the runtime's display-time delta and repeat marking ----
      * One presented pair per granted display period is the pacing target, so a
      * frame that carried no new pair must be distinguishable from one that did

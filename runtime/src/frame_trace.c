@@ -334,14 +334,15 @@ static const char *jstr(const char *s, char *tmp, int cap) {
     int o = 0;
     if (cap <= 0) return "";
     tmp[0] = '\0';
-    for (const char *p = s; p && *p && o < cap - 2; ++p) {
-        unsigned char c = (unsigned char)*p;
+    for (const unsigned char *p = (const unsigned char *)s; p && *p; ++p) {
+        const unsigned char c = *p;
+        const int need = c == '"' || c == '\\' || c == '\n' ? 2 : c < 0x20 ? 6 : 1;
+        if (need > cap - 1 - o) break;
         if (c == '"' || c == '\\') { tmp[o++] = '\\'; tmp[o++] = (char)c; }
-        else if (c == '\n') { tmp[o++] = '\\'; if (o < cap - 1) tmp[o++] = 'n'; }
-        else if (c < 0x20) { o += snprintf(tmp + o, (size_t)(cap - o), "\\u%04x", c); }
+        else if (c == '\n') { tmp[o++] = '\\'; tmp[o++] = 'n'; }
+        else if (c < 0x20) o += snprintf(tmp + o, (size_t)(cap - o), "\\u%04x", c);
         else tmp[o++] = (char)c;
     }
-    if (o > cap - 1) o = cap - 1;
     tmp[o] = '\0';
     return tmp;
 }
