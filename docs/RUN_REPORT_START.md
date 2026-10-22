@@ -27,6 +27,11 @@ mount refreshes it from the active reader; a refused change keeps the old value.
 A loaded SBI removes it; this field does not qualify the
 disc pressing, companion identity or protection/gameplay result.
 
+If the build names a default configuration but that file is missing, the
+start ends with `config_unreadable` before the launcher opens. A relative
+missing default is named from the executable directory. A build with no
+default configuration can still start without one.
+
 ## File names
 
 The report names a file by its **base name** only, never by its folder.
@@ -57,7 +62,7 @@ host name, no address and no folder.
 
 | `kind` | When |
 | --- | --- |
-| `config_unreadable` | `game.toml` cannot be read. |
+| `config_unreadable` | The selected configuration cannot be read, including a missing default `game.toml` or `set.toml`. |
 | `memcard_dir` | The folder given with `--memcard-dir` cannot be created. |
 | `overlay_cache` | The cache of compiled game code cannot be set up. |
 | `no_disc` | No usable disc: the image does not open, its `.sbi` is missing, or the picker was cancelled. |
