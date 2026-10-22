@@ -439,7 +439,10 @@ def plain_start_gate(bash, tmp: Path, zipped: bool) -> str:
     os.chmod(str(host), 0o755)
     code, out = package(bash, refused, emitters)
     assert code == 1 and "does not reach its launcher on a plain start; no package was made" in out, (code, out[-2000:])
-    assert 'key "name" not found' in out, out[-2000:]
+    # The printed tail keeps only the last lines of the program's stderr, and a
+    # run under a sanitizer can add its own report after the host's line. The
+    # log below keeps every line; the printed output must name the verdict.
+    assert "setup host plain start: FAIL" in out, out[-2000:]
     refused_log = refused / "dist" / "workbench-0.4.0-linux-x64.plain-start.stderr.txt"
     assert 'key "name" not found' in refused_log.read_text(encoding="utf-8")
     assert not list((refused / "dist").glob("*.zip")), "a refused setup program must not be packaged"
