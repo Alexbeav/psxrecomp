@@ -56,7 +56,8 @@ assert cancel < join < helper.index("disc_digest_cache_cancel(0)") < lock, (
 uses = re.findall(r"\binput_route_session_set_disc\(", MAIN)
 assert len(uses) == 1, f"input_route_session_set_disc is called outside the helper ({len(uses)} uses)"
 calls = re.findall(r"^\s+replay_identity_follow_disc\(", MAIN, re.M)
-assert len(calls) == 2, f"expected the two mount points to call the helper, found {len(calls)}"
+# The save-state mount, the frontend disc change and a route DISC_SELECT event.
+assert len(calls) == 3, f"expected the three mount points to call the helper, found {len(calls)}"
 
 # 1. The in-game disc change: after the drive took the disc, with the picked
 #    image's own serial and the path that was mounted.

@@ -8775,11 +8775,7 @@ static int input_route_apply_event(uint8_t event, uint8_t disc_index,
     }
     note_mounted_disc_warning(disc_path, identity.detected_serial);
     savestate_note_disc_mounted(disc_index);
-    {
-        std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
-        input_route_session_set_disc(identity.detected_serial.c_str(), disc_path);
-    }
-    s_replay_disc_serial = identity.detected_serial;
+    replay_identity_follow_disc(identity.detected_serial, disc_path);
     return 1;
 }
 
