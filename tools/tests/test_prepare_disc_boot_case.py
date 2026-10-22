@@ -7,6 +7,8 @@ spelling in game.toml. A case-sensitive lookup made the public kit's first-run
 setup stop with "missing slus_006.63 on disc". The staged file keeps the
 requested spelling so game.toml's exe path stays valid on Linux too.
 """
+from __future__ import annotations
+
 import importlib.util
 import struct
 import sys
