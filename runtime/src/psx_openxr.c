@@ -1,3 +1,4 @@
+#include "xr_origin_diagnostics.h"
 /* Opt-in Win32 OpenXR lifecycle. No guest state, console diagnostics or timing
  * phases: located poses and projection submission belong to one host frame.
  *
@@ -163,6 +164,7 @@ static XrAction s_pose_action[2];
 static XrSpace s_pose_space[2][2];
 static XrPath s_hand[2];
 static XrTime s_origin_reset_time;
+static unsigned s_origin_inversion_streak;
 static XrSwapchain s_chain[2];
 static XrSwapchainImageOpenGLKHR *s_images[2];
 static uint32_t s_count[2];
@@ -427,7 +429,9 @@ static void xr_destroy(void) {
     s_trigger=s_squeeze=XR_NULL_HANDLE;memset(s_click,0,sizeof s_click);
     memset(s_pose_action,0,sizeof s_pose_action);
     if(s_instance)xrDestroyInstance(s_instance);s_instance=XR_NULL_HANDLE;
-    s_origin_valid=0;s_origin_reset_time=0;s_stats.state=0;
+    s_origin_valid=0;s_origin_reset_time=0;s_origin_inversion_streak=0;
+    s_stats.origin_inversion_streak=s_stats.origin_ambiguous=0;s_stats.origin_up_dot=1.0f;
+    s_stats.state=0;
     s_stats.initialized=s_stats.running=s_stats.tracking=s_stats.frame_open=0;
 }
 /* Act on a flagged loss. A lost session/instance or an unusable swapchain tears
@@ -483,7 +487,8 @@ void psx_openxr_stats(PSXOpenXRStats *out) {
 void psx_openxr_recenter(void) {
     hands_clear();
 #if defined(PSX_OPENXR)
-    s_origin_valid=0;
+    s_origin_valid=0;s_origin_inversion_streak=0;
+    s_stats.origin_inversion_streak=s_stats.origin_ambiguous=0;
 #endif
 }
 void psx_openxr_shutdown(void) {
@@ -667,14 +672,24 @@ int psx_openxr_begin(int width,int height,double units) {
         q[i][0]=v->orientation.x;q[i][1]=v->orientation.y;q[i][2]=v->orientation.z;q[i][3]=v->orientation.w;
         p[i][0]=v->position.x;p[i][1]=v->position.y;p[i][2]=v->position.z;
     }
-    if(s_origin_reset_time && s_time>=s_origin_reset_time) {
-        s_origin_valid=0;s_origin_reset_time=0;
+    if(xr_origin_reference_reset_due(s_origin_reset_time!=0,s_origin_reset_time,s_time)) {
+        s_origin_valid=0;s_origin_reset_time=0;s_origin_inversion_streak=0;
     }
     if(!s_origin_valid) {
         memcpy(s_oq,q[0],sizeof s_oq);
         for(int j=0;j<3;j++)s_op[j]=(p[0][j]+p[1][j])*.5;
         s_origin_valid=1;
+        s_origin_inversion_streak=0;
     }
+    /* A sustained roll can be a legitimate headset pose. Report the ambiguous
+     * case without changing the reference; explicit recenter or the OpenXR
+     * reference-space change event owns origin recovery. */
+    double origin_up_dot=1.0;
+    s_origin_inversion_streak=xr_origin_observe_inversion(
+        s_origin_inversion_streak,s_origin_valid,s_oq,q[0],&origin_up_dot);
+    s_stats.origin_up_dot=(float)origin_up_dot;
+    s_stats.origin_inversion_streak=s_origin_inversion_streak;
+    s_stats.origin_ambiguous=s_origin_inversion_streak>=10u;
     double separation=0;
     for(int j=0;j<3;j++)separation+=(p[1][j]-p[0][j])*(p[1][j]-p[0][j]);
     s_stats.ipd_m=(float)sqrt(separation);
