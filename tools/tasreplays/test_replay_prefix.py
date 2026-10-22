@@ -54,6 +54,31 @@ with tempfile.TemporaryDirectory() as directory:
     expected = root/'dualshock-expected.psxrti2'; write_route(rows[:3], expected)
     assert route_identity(prefix) == route_identity(expected) and route_identity(prefix)['frames'] == 3
     assert route_identity(prefix)['format'] == 'PSXRTI2'
+    # PSXRTI3 two digital pads (octoshock210_route): records are kept byte for byte, the
+    # port layout and disc set stay, and only events before the last kept record remain.
+    def entry(tag, payload):
+        return struct.pack('<II', tag, len(payload)) + payload + bytes(-len(payload) % 4)
+    pads = [(0xfffe, 0xffff), (0xfffd, 0xfffe), (0xffff, 0xffff), (0xfff7, 0xffff), (0xffff, 0xffbf), (0xffef, 0xffff)]
+    events = [(2, 2, 0), (3, 4, 2), (3, 3, 2)]
+    discs = [bytes(range(32)), bytes(range(32, 64))]
+    ext = (entry(0x201, bytes((2, 0, 0, 0, 1, 1))) +
+           entry(0x202, struct.pack('<I', len(events)) + b''.join(struct.pack('<IBBxx', *e) for e in events)) +
+           entry(0x203, struct.pack('<I', 2) + b''.join(bytes((1, 0, 0, 0)) + d for d in discs)))
+    body = b''.join(struct.pack('<IHHHH', i+1, p1, 0, p2, 0) for i, (p1, p2) in enumerate(pads))
+    two = root/'two.psxrti3'
+    two.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 12, len(pads), 0, len(ext)) + ext + body)
+    whole = route_identity(two)
+    assert whole['format'] == 'PSXRTI3' and whole['port_layout'] == 'two-digital' and whole['frames'] == len(pads)
+    assert whole['port2_words_sha256'] == hashlib.sha256(b''.join(struct.pack('<H', p2) for _, p2 in pads)).hexdigest()
+    for records, kept in ((3, ['TRAY_OPEN']), (4, ['TRAY_OPEN', 'DISC_SELECT', 'TRAY_CLOSE']), (2, [])):
+        cut = route_identity(write_prefix_route(two, records, root/f'two-{records}.psxrti3'))
+        assert cut['frames'] == records and [e['event'] for e in cut['console_events']] == kept
+        assert cut['disc_set'] == whole['disc_set']
+        assert cut['words_sha256'] == hashlib.sha256(b''.join(struct.pack('<H', p1) for p1, _ in pads[:records])).hexdigest()
+        assert (root/f'two-{records}.psxrti3').read_bytes()[-12*records:] == body[:12*records]
+    assert route_identity(write_prefix_route(two, len(pads), root/'two-all.psxrti3')) == whole
+    rejects(lambda: write_prefix_route(two, len(pads)+1, root/'two-over.psxrti3'))
+    rejects(lambda: route_identity(two, axis_model='octoshock-byte'))
     # Malformed sources are refused before any prefix is written.
     for name, data in [('short', digital.read_bytes()[:20]), ('reserved', digital.read_bytes()[:20]+b'\1\0\0\0'+digital.read_bytes()[24:]),
                        ('truncated', digital.read_bytes()[:-1]), ('magic', b'PSXRTI3\0'+digital.read_bytes()[8:])]:

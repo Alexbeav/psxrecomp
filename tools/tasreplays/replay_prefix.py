@@ -22,11 +22,40 @@ def native_span(input_frames, source_endpoint, wanted):
     return wanted+1, 0
 
 
+def prefix_two_digital(data, records):
+    """The first `records` records of a PSXRTI3 two-digital-pad route (octoshock210_route),
+    with its port layout and disc set unchanged and only the console events that apply
+    before a kept record (frame < records)."""
+    from octoshock210_route import read_psxrti3, HEADER, TAG_PORT_LAYOUT, TAG_CONSOLE_EVENTS, TAG_DISC_SET, DEVICE_DIGITAL
+    route = read_psxrti3(data)
+    if type(records) is not int or not 1 <= records <= route['frames']: raise ValueError('prefix outside the route')
+    ext = bytearray()
+    def tlv(tag, payload):
+        ext.extend(struct.pack('<II', tag, len(payload))); ext.extend(payload); ext.extend(bytes(-len(payload) % 4))
+    tlv(TAG_PORT_LAYOUT, bytes([2, 0, 0, 0, DEVICE_DIGITAL, DEVICE_DIGITAL]))
+    if route['discs']:
+        events = [e for e in route['events'] if e[0] < records]
+        tlv(TAG_CONSOLE_EVENTS, struct.pack('<I', len(events)) + b''.join(struct.pack('<IBBxx', *e) for e in events))
+        tlv(TAG_DISC_SET, struct.pack('<I', len(route['discs'])) +
+            b''.join(bytes([kind, 0, 0, 0]) + bytes.fromhex(d) for kind, d in route['discs']))
+    rows = HEADER.size + HEADER.unpack_from(data)[5]
+    output = HEADER.pack(b'PSXRTI3\0', 3, 12, records, 0, len(ext)) + bytes(ext) + data[rows:rows + 12 * records]
+    read_psxrti3(output)
+    return output
+
+
 def write_prefix_route(source_route, records, target):
-    """Write the first `records` records of a PSXRTI1/PSXRTI2 route to a new file."""
+    """Write the first `records` records of a PSXRTI1/PSXRTI2 route, or of a PSXRTI3
+    two-digital-pad route, to a new file."""
     data = Path(source_route).read_bytes()
     if len(data) < 24: raise ValueError('short route')
     magic, version, size, count, reserved = struct.unpack_from('<8sIIII', data)
+    if magic == b'PSXRTI3\0':
+        output = prefix_two_digital(data, records)
+        target = Path(target)
+        with target.open('xb') as stream:
+            stream.write(output)
+        return target
     if magic not in FORMATS or (version, size) != FORMATS[magic] or reserved:
         raise ValueError('unsupported route header')
     if not 0 < count <= 1000000 or len(data) != 24+size*count: raise ValueError('route frame count or size')

@@ -1584,6 +1584,9 @@ if(BUILD_TESTING AND EXISTS
         add_test(NAME tas_pepsiman_admission
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_pepsiman.py")
+        add_test(NAME tas_run_native_roster
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_run_native_roster.py")
         # The Python driver compiles test_source_ram_page_probe.c at O0/O2.
         add_test(NAME tas_ram_long_route
             COMMAND ${Python3_EXECUTABLE}

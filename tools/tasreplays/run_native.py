@@ -1,4 +1,5 @@
-"""Run isolated PSXRTI1/PSXRTI2 playback and retain process and input evidence.
+"""Run isolated PSXRTI1/PSXRTI2 playback, or a PSXRTI3 two-digital-pad route with disc events,
+and retain process and input evidence.
 
 The native observer owns input checkpoints. A clean process exit alone does
 not qualify playback. Default execution has no window and uses software video.
@@ -59,6 +60,26 @@ MODE_MODELS = ('none', 'octoshock-2.4.2')
 MODE_PROFILE = 'octoshock-2.4.2-dualshock-mode'
 
 
+def two_digital_identity(data, start=0):
+    """A PSXRTI3 two-digital-pad route (octoshock210_route): P1 and P2 words from record
+    `start` on, its console events and its disc set. The runtime hashes P1 as
+    applied_words_sha256 and P2 as applied_port2_words_sha256."""
+    from octoshock210_route import read_psxrti3, EVENT_NAMES
+    route = read_psxrti3(data)
+    p1, p2 = bytearray(), bytearray()
+    steps, previous = 0, None
+    for index, row in enumerate(route['rows']):
+        steps += row != previous; previous = row
+        if index >= start:
+            p1 += struct.pack('<H', row[0]); p2 += struct.pack('<H', row[1])
+    return {'format': 'PSXRTI3', 'port_layout': 'two-digital', 'frames': route['frames'], 'steps': steps,
+            'sha256': hashlib.sha256(data).hexdigest(),
+            'words_sha256': hashlib.sha256(p1).hexdigest(),
+            'port2_words_sha256': hashlib.sha256(p2).hexdigest(),
+            'console_events': [{'frame': f, 'event': EVENT_NAMES[e], 'disc_index': d} for f, e, d in route['events']],
+            'disc_set': [{'kind': k, 'digest': d} for k, d in route['discs']]}
+
+
 def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL, mode_model='none'):
     if axis_model not in AXIS_MODELS:
         raise ValueError('unknown DualShock axis model')
@@ -70,6 +91,10 @@ def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL, mode_model='non
     if len(data) < 24:
         raise ValueError("short route")
     magic, version, size, count, reserved = struct.unpack_from("<8sIIII", data)
+    if magic == b'PSXRTI3\0':
+        if axis_model != DEFAULT_AXIS_MODEL or mode_model != 'none':
+            raise ValueError('an axis or MODE model applies to a DualShock route only')
+        return two_digital_identity(data, start)
     if magic == b'PSXRTI2\0':
         if (version, size, reserved) != (2, 12, 0) or not 0 < count <= 1000000 or len(data) != 24+12*count:
             raise ValueError('invalid DualShock route header/count/size')
@@ -181,6 +206,11 @@ def playback_identity_matches(complete, identity, tail):
     if (not isinstance(complete, dict) or complete.get('frame') != identity['frames']+tail or
             complete.get('input_frames') != identity['frames'] or complete.get('neutral_tail_ticks') != tail):
         return False
+    if identity.get('format') == 'PSXRTI3':
+        return (complete.get('port_layout') == 'two-digital' and
+                complete.get('applied_words_sha256') == identity['words_sha256'] and
+                complete.get('applied_port2_words_sha256') == complete.get('supplied_port2_words_sha256')
+                == identity['port2_words_sha256'])
     if identity.get('format') == 'PSXRTI2':
         return (complete.get('controller_profile') == identity.get('controller_profile', AXIS_MODELS[DEFAULT_AXIS_MODEL]) and
                 complete.get('original_controller_sha256') == identity['original_controller_sha256'] and
@@ -202,6 +232,33 @@ def source_clock_identity(path, toc_model, seek_model, read_model):
     if not 1 <= count <= 1048576 or len(data) != 20 + count * 4:
         raise ValueError('invalid source clock tape count or length')
     return {'path': str(path), 'sha256': hashlib.sha256(data).hexdigest(), 'words': count}
+
+
+def disc_roster(route, boot_disc, roster, game):
+    """Bind a PSXRTI3 disc set to --roster-disc (in order) and to game.toml [game] discs.
+
+    The runtime binds the route to the discs game.toml names and mounts the boot disc
+    from --disc, so all three must name the same images, disc 1 first."""
+    discs = route.get('disc_set') or []
+    if not discs:
+        if roster:
+            raise ValueError('--roster-disc needs a route with a disc set')
+        return None
+    if len(roster) != len(discs):
+        raise ValueError(f'the route names {len(discs)} discs; give each one with --roster-disc')
+    roster = [p.resolve(strict=True) for p in roster]
+    if roster[0] != boot_disc:
+        raise ValueError('--disc must be the first --roster-disc')
+    entries = []
+    for index, (path, disc) in enumerate(zip(roster, discs), 1):
+        if disc['kind'] != 1 or checkpoint_asset_digest(path) != disc['digest']:
+            raise ValueError(f'roster disc {index} differs from the route disc set: {path}')
+        entries.append({'index': index, 'path': str(path), 'kind': 'cue_asset_digest', 'digest': disc['digest']})
+    import tomllib
+    listed = tomllib.loads(Path(game).read_text(encoding='utf-8')).get('game', {}).get('discs')
+    if not isinstance(listed, list) or [str((Path(game).parent / d).resolve()) for d in listed] != [e['path'] for e in entries]:
+        raise ValueError('game.toml [game] discs must list the roster discs in route order')
+    return entries
 
 
 def settings_text(renderer, fast_boot, hle, bios, disc, card1):
@@ -255,6 +312,8 @@ def main():
     parser.add_argument("run_directory", type=Path)
     for name in ("exe", "game", "route", "disc", "bios"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument('--roster-disc', type=Path, action='append', default=[],
+                        help='each disc of a PSXRTI3 route disc set, in route order; the first is --disc')
     parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
     parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
@@ -448,6 +507,10 @@ def main():
         if not checkpoint_cards_valid(args.resume_from, resume_manifest):
             raise ValueError('checkpoint card image missing or SHA256 mismatch')
     completion_identity = route_identity(paths['route'], resume_inputs, args.axis_model, args.mode_button_model)
+    roster = disc_roster(identity, paths['disc'], args.roster_disc, paths['game'])
+    if identity.get('format') == 'PSXRTI3' and (args.resume_from or args.save_state_at or args.update_profile
+                                                or args.card1 or args.pad_ack_model.endswith('dualshock')):
+        raise ValueError('a two-pad route admits no resume, save state, retiming, card or DualShock ACK model')
 
     dualshock = identity.get('format') == 'PSXRTI2'
     if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
@@ -687,7 +750,7 @@ def main():
                    for name, path in paths.items()},
         "staged_executable": {"path": str(launch_exe), "sha256": staged_sha},
         "expected_exe_sha256": args.expected_exe_sha256,
-        "route": identity, "psx_environment": selected_env,
+        "route": identity, "disc_roster": roster, "psx_environment": selected_env,
         "initial_card1":initial_card,
         "staged_card1":str(staged_card) if staged_card else None,
         "settings_sha256": digest(run / "settings.toml"),
