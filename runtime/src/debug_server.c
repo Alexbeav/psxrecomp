@@ -66,6 +66,7 @@
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
 #include "render_pass.h"
+#include "frame_trace.h"
 #include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
 #include "guest_tty.h"
@@ -9332,6 +9333,34 @@ static void handle_render_pass_dump(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
 }
 
+/* frame_trace [format=json|chrome] [max=<n>]: the opt-in stereo/OpenXR frame
+ * trace (frame_trace.c). Capturing requires PSX_FRAME_TRACE=1 at launch; this
+ * command only reads the ring and never runs in the frame path. `max` bounds the
+ * newest records returned (default 240). Both formats are JSON objects, so the
+ * reply embeds the export verbatim. */
+static void handle_frame_trace(int id, const char *json) {
+    char format[16] = "json";
+    int max = json_get_int(json, "max", 240);
+    (void)json_get_str(json, "format", format, sizeof format);
+    if (max < 0) max = 0;
+    int chrome = strcmp(format, "chrome") == 0;
+    int need = chrome ? psx_frame_trace_to_chrome_json(NULL, 0, (uint32_t)max)
+                      : psx_frame_trace_to_json(NULL, 0, (uint32_t)max);
+    if (need <= 0) { send_err(id, "frame trace export failed"); return; }
+    char *buf = (char *)malloc((size_t)need + 1);
+    if (!buf) { send_err(id, "out of memory"); return; }
+    if (chrome) (void)psx_frame_trace_to_chrome_json(buf, need + 1, (uint32_t)max);
+    else (void)psx_frame_trace_to_json(buf, need + 1, (uint32_t)max);
+    send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"capacity\":%u,"
+             "\"count\":%llu,\"dropped\":%llu,\"missing\":%llu,"
+             "\"format\":\"%s\",\"max\":%d,\"trace\":%s}",
+             id, psx_frame_trace_enabled(), psx_frame_trace_capacity(),
+             (unsigned long long)psx_frame_trace_committed(),
+             (unsigned long long)psx_frame_trace_dropped(),
+             (unsigned long long)psx_frame_trace_missing(), format, max, buf);
+    free(buf);
+}
+
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
  * the redundant centre mirror and copy the canonical 4:3 frame into the wide
  * surface centre at present (fast). 0 = re-rasterize the whole wide surface
@@ -16255,6 +16284,7 @@ static const CmdEntry s_commands[] = {
     { "openxr_hands_override", handle_openxr_hands_override },
 #endif
     { "stereo_stats", handle_stereo_stats },
+    { "frame_trace", handle_frame_trace },
     { "stereo_dump", handle_stereo_dump },
     { "render_pass_dump",  handle_render_pass_dump },
     { "render_pass_refuse", handle_render_pass_refuse },

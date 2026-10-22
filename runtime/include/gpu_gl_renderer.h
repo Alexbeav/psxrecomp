@@ -164,6 +164,9 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 /* Cumulative CPU-upload diagnostics: calls, rects, pixels, conversion ticks,
  * texture-upload ticks, FBO-draw ticks. Active only with PSX_RUNTIME_PERF_DIAG. */
 void gl_renderer_runtime_diag(uint64_t out[6]);
+/* Cumulative scene primitive counters (pre double-draw): all submitted, and of
+ * those textured. Callers take deltas; the counters are never reset here. */
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured);
 
 /* Present an ARGB8888 image (BGRA byte order) as a letterboxed quad + swap.
  * Used for 24-bit (FMV) frames and the PSX_GL_FORCE_CPU_PRESENT diagnostic.

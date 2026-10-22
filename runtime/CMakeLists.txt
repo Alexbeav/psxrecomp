@@ -1629,6 +1629,11 @@ if(BUILD_TESTING)
     add_test(NAME present_sync_test COMMAND present_sync_test)
     target_include_directories(frame_pacing_test PRIVATE include)
     add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
+    # Opt-in stereo/OpenXR frame-trace ring (frame_trace.c): disabled-by-default,
+    # ring wrap, timestamp monotonicity, missing telemetry, export validity.
+    add_executable(frame_trace_test tests/test_frame_trace.c src/frame_trace.c)
+    target_include_directories(frame_trace_test PRIVATE include)
+    add_test(NAME frame_trace_test COMMAND frame_trace_test)
     # Render thread core ([video] render_thread, docs/RENDER_THREAD.md):
     # ordering across ring wraps, the frame bound, stale-frame detection and
     # the drain + context hand-off sync point, against a fake executor.
@@ -1774,6 +1779,7 @@ if(BUILD_TESTING)
         add_executable(render_pass_abort_test
             tests/test_render_pass_abort.c
             src/render_pass.c
+            src/frame_trace.c
             src/psx_cycles.c)
         target_include_directories(render_pass_abort_test PRIVATE include)
         add_test(NAME render_pass_abort_test COMMAND render_pass_abort_test)
@@ -1785,6 +1791,7 @@ if(BUILD_TESTING)
     add_executable(render_pass_sandbox_test
         tests/test_render_pass_sandbox.c
         src/render_pass.c
+        src/frame_trace.c
         src/render_pass_plan.c
         src/psx_cycles.c
         src/timers.c
@@ -2042,6 +2049,11 @@ if(BUILD_TESTING)
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_memory_debug_trace_guard.py
                              --cc ${CMAKE_C_COMPILER})
+            # The frame-trace record path must stay allocation- and IO-free, or
+            # it perturbs the frame it measures and no functional test notices.
+            add_test(NAME frame_trace_guard_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_trace_guard.py)
         endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
         add_test(NAME depth24_present_hold_vblank_test

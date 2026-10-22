@@ -733,6 +733,25 @@ typedef int (*PSXModStereoFn)(struct CPUState*, void*, uint32_t eye);
 int psx_mod_render_stereo(struct CPUState *cpu, const PSXModStereoFrame *frame,
                           PSXModStereoFn fn, void *user);
 uint32_t psx_mod_render_stereo_status(void);
+/* Annotate the current frame's trace record with a short tag (scene transition,
+ * state change). Only meaningful while PSX_FRAME_TRACE is on and a traced frame
+ * is open (a headset frame, opened by psx_mod_openxr_begin); a no-op otherwise. */
+void psx_mod_frame_trace_note(const char *tag);
+/* Bracket one guest call of a stereo eye's replay with a frame-trace sub-stage,
+ * so a hitch can be aimed at the call that grew instead of at the whole eye
+ * (the PSX_TRACE_GAME_* stages in frame_trace.h). The runtime does the timing,
+ * with the same clock and conversion as the eye's own stages, so the parts sum
+ * against eye_guest. A no-op unless PSX_FRAME_TRACE is on AND the call is made
+ * inside a traced stereo eye: a HUD capture's guest draws, the flat path and
+ * anything outside the eye's callback are ignored. A begin without a matching
+ * end (or an eye aborted mid-entry) contributes nothing; the unmeasured time
+ * stays visible as the difference between eye_guest and the sub-stages.
+ * Spans may nest: each stage keeps its own start tick, so a stage bracketed
+ * inside another is timed on its own and reports a subset of the outer span's
+ * wall time rather than a sibling of it. The hook's visibility override nests
+ * inside the guest traversal it is part of (game_select in game_traverse). */
+void psx_mod_frame_trace_stage_begin(uint32_t stage);
+void psx_mod_frame_trace_stage_end(uint32_t stage);
 /* 0 disables stereo output; 1 shows a complete pair side by side. Capture
  * itself does not enable presentation. Default 0; applies to this session. */
 int psx_mod_set_stereo_presentation(uint32_t mode);

@@ -9,6 +9,8 @@
 #include "psx_openxr.h"
 #include "vr_pose_math.h"
 #include "openxr_color.h"
+#include "frame_trace.h"
+#include "gpu_gl_renderer.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -103,6 +105,17 @@ int psx_openxr_surface_valid(const PSXModOpenXRSurface *v) {
 #define XR_USE_GRAPHICS_API_OPENGL
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+
+/* Frame-trace stage helper: perf ticks -> microseconds (CPU submission/wait
+ * wall time only, never GPU execution time). */
+static uint64_t xr_trace_us(uint64_t ticks) {
+    static double inv = 0.0;
+    if (inv == 0.0) {
+        double f = (double)gl_renderer_perf_frequency();
+        inv = f > 0.0 ? 1000000.0 / f : 1.0;
+    }
+    return (uint64_t)((double)ticks * inv);
+}
 static XrInstance s_instance;
 static XrSystemId s_system;
 static XrSession s_session;
@@ -123,6 +136,13 @@ static XrView s_views[2];
 static PSXModRenderView s_render[2];
 static double s_oq[4],s_op[3];
 static XrTime s_time;
+/* Cadence telemetry for the frame trace: the runtime's own predicted display
+ * time delta between submissions (what the compositor actually saw), and when
+ * the pose for the current frame was sampled (xrLocateViews return). */
+static XrTime s_prev_display_time;
+static int s_prev_display_valid;
+static uint32_t s_display_delta_us;
+static uint64_t s_pose_sample_ticks;
 /* Loss handling. A lost session/instance (or an unusable swapchain) is only
  * flagged where it is detected; service_loss() tears the stack down at the end
  * of the public call so no caller loses handles mid-sequence. */
@@ -354,6 +374,9 @@ static void hands_locate(int focused) {
 /* Destroy every XR object (children before parents). Safe on a partially
  * initialised stack and on a lost session: destroy calls need no live session. */
 static void xr_destroy(void) {
+    /* A new session must not inherit the previous one's display times: the
+     * first delta after a re-init would be meaningless. */
+    s_prev_display_valid=0;s_prev_display_time=0;
     for(int eye=0;eye<2;eye++) {
         for(int k=0;k<2;k++) {
             if(s_pose_space[eye][k])xrDestroySpace(s_pose_space[eye][k]);
@@ -547,11 +570,38 @@ int psx_openxr_begin(int width,int height,double units) {
         s_recovering=0;
     }
     if(!events() || !s_stats.running){(void)service_loss();return 0;}
+    /* Open this frame's trace record before the blocking waits. The record is
+     * committed by psx_openxr_end(); the two failure returns below commit it
+     * themselves so a lost session cannot leave a record open forever. */
+    psx_frame_trace_open();
+    /* Cleared so a frame that never reaches xrLocateViews (no render request,
+     * lost tracking, bad view maths) cannot report a stale pose age. */
+    s_pose_sample_ticks=0;
+    uint64_t trace_t = gl_renderer_perf_ticks();
     XrFrameWaitInfo wait={XR_TYPE_FRAME_WAIT_INFO};XrFrameState fs={XR_TYPE_FRAME_STATE};
-    if(!check(xrWaitFrame(s_session,&wait,&fs),"wait_frame")){(void)service_loss();return 0;}
+    if(!check(xrWaitFrame(s_session,&wait,&fs),"wait_frame")){
+        psx_frame_trace_add(PSX_TRACE_XR_WAIT_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
+        (void)service_loss();psx_frame_trace_commit();return 0;}
+    psx_frame_trace_add(PSX_TRACE_XR_WAIT_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
     s_stats.waits++;s_time=fs.predictedDisplayTime;s_stats.predicted_time=(uint64_t)s_time;
+    /* The runtime's own clock between submissions. This is the cadence the
+     * compositor saw, independent of our frame timing: delta / display period
+     * is how many granted periods one presented frame consumed. */
+    s_display_delta_us=0;
+    if(s_prev_display_valid && s_time>s_prev_display_time) {
+        uint64_t d=(uint64_t)(s_time-s_prev_display_time)/1000u;
+        s_display_delta_us=d>0xFFFFFFFFull?0xFFFFFFFFu:(uint32_t)d;
+    }
+    s_prev_display_time=s_time;s_prev_display_valid=1;
+    /* Record the runtime display period with its name for cadence analysis. */
+    psx_frame_trace_session(s_stats.runtime,
+                            fs.predictedDisplayPeriod>0?(uint32_t)(fs.predictedDisplayPeriod/1000):0u);
+    trace_t = gl_renderer_perf_ticks();
     XrFrameBeginInfo begin={XR_TYPE_FRAME_BEGIN_INFO};
-    if(!check(xrBeginFrame(s_session,&begin),"begin_frame")){(void)service_loss();return 0;}
+    if(!check(xrBeginFrame(s_session,&begin),"begin_frame")){
+        psx_frame_trace_add(PSX_TRACE_XR_BEGIN_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
+        (void)service_loss();psx_frame_trace_commit();return 0;}
+    psx_frame_trace_add(PSX_TRACE_XR_BEGIN_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
     s_stats.frame_open=1;s_stats.tracking=0;
     if(!fs.shouldRender){psx_openxr_end(0,NULL);return 0;}
     XrViewLocateInfo loc={XR_TYPE_VIEW_LOCATE_INFO};loc.viewConfigurationType=XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -559,6 +609,7 @@ int psx_openxr_begin(int width,int height,double units) {
     XrViewState vs={XR_TYPE_VIEW_STATE};uint32_t count=0;
     memset(s_views,0,sizeof s_views);s_views[0].type=s_views[1].type=XR_TYPE_VIEW;
     int located=check(xrLocateViews(s_session,&loc,&vs,2,&count,s_views),"locate_views");
+    s_pose_sample_ticks=gl_renderer_perf_ticks();
     s_stats.view_flags=(uint64_t)vs.viewStateFlags;
     if(!located || count!=2 ||
        (vs.viewStateFlags&(XR_VIEW_STATE_ORIENTATION_VALID_BIT|XR_VIEW_STATE_POSITION_VALID_BIT))!=
@@ -619,26 +670,37 @@ int psx_openxr_quad(double distance,double width,double height) {
 int psx_openxr_end(int keep,PSXOpenXRCopy copy) {
 #if defined(PSX_OPENXR)
     if(!s_stats.frame_open)return 0;
+    /* Defensive open: normally psx_openxr_begin() already opened the record. */
+    psx_frame_trace_open();
+    uint64_t trace_t;
     XrCompositionLayerProjectionView pv[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     int complete=keep && copy && s_stats.tracking;
     int quad=s_quad_distance>0;
     for(int eye=0;eye<(quad?1:2) && complete;eye++) {
         uint32_t index=0;
+        trace_t = gl_renderer_perf_ticks();
         XrSwapchainImageAcquireInfo ai={XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
         if(!check(xrAcquireSwapchainImage(s_chain[eye],&ai,&index),"acquire")){complete=0;break;}
+        psx_frame_trace_add(PSX_TRACE_XR_ACQUIRE, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
         XrSwapchainImageWaitInfo wi={XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wi.timeout=1000000000;
+        trace_t = gl_renderer_perf_ticks();
         XrResult wr=xrWaitSwapchainImage(s_chain[eye],&wi);
         /* A timeout leaves ownership acquired: wait again (bounded) before
          * releasing. Only XR_SUCCESS means the image is writable; the timeout
          * code is a success code and must not be mistaken for it. */
         if(wr==XR_TIMEOUT_EXPIRED){wi.timeout=2000000000;wr=xrWaitSwapchainImage(s_chain[eye],&wi);}
+        psx_frame_trace_add(PSX_TRACE_XR_WAIT_IMAGE, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
         int writable=check(wr,"wait_image") && wr==XR_SUCCESS;
         if(writable) {
+            trace_t = gl_renderer_perf_ticks();
             if(index>=s_count[eye] || !copy(eye,s_images[eye][index].image,s_w[eye],s_h[eye])) {
                 s_stats.stage="copy_image";s_stats.failures++;complete=0;
             }
+            psx_frame_trace_add(PSX_TRACE_XR_COPY, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
+            trace_t = gl_renderer_perf_ticks();
             XrSwapchainImageReleaseInfo ri={XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             if(!check(xrReleaseSwapchainImage(s_chain[eye],&ri),"release"))complete=0;
+            psx_frame_trace_add(PSX_TRACE_XR_RELEASE, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
         } else {
             /* Acquired but never writable. Release it best-effort so the acquire
              * count cannot leak; a runtime that refuses (the wait never completed)
@@ -665,7 +727,13 @@ int psx_openxr_end(int keep,PSXOpenXRCopy copy) {
     XrFrameEndInfo end={XR_TYPE_FRAME_END_INFO};end.displayTime=s_time;
     end.environmentBlendMode=XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     end.layerCount=complete?1:0;end.layers=complete?layers:NULL;
+    trace_t = gl_renderer_perf_ticks();
     int ok=check(xrEndFrame(s_session,&end),"end_frame");s_stats.frame_open=0;
+    psx_frame_trace_add(PSX_TRACE_XR_END_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
+    if(s_pose_sample_ticks)
+        psx_frame_trace_add(PSX_TRACE_POSE_AGE,
+                            xr_trace_us(gl_renderer_perf_ticks()-s_pose_sample_ticks));
+    psx_frame_trace_xr_cadence(s_display_delta_us, complete);
     if(ok && complete) {
         s_stats.submitted_surfaces=quad?0:((s_surface_mask&1)!=0)+((s_surface_mask&2)!=0);
         s_stats.submitted++;s_stats.submitted_pair_id=s_pair_id;
@@ -675,9 +743,18 @@ int psx_openxr_end(int keep,PSXOpenXRCopy copy) {
         if(s_source==2)s_stats.native_submitted++;
         if(quad){s_stats.quad_submitted++;s_stats.quad_distance_m=s_quad_distance;
             s_stats.quad_width_m=s_quad_width;s_stats.quad_height_m=s_quad_height;}
-    } else {s_stats.empty++;s_stats.submitted_surfaces=0;}
+        /* A fresh stereo pair already labelled the record source 1; only
+         * annotate native presentation when nothing else claimed it. */
+        psx_frame_trace_source(2);
+    } else {
+        s_stats.empty++;s_stats.submitted_surfaces=0;
+        psx_frame_trace_flag(PSX_FRAME_TRACE_XR_EMPTY);
+        psx_frame_trace_flag(PSX_FRAME_TRACE_STALE_PAIR);
+        psx_frame_trace_source(2);
+    }
     if(ok && complete)s_stats.stage="submitted";
     s_quad_distance=s_quad_width=s_quad_height=0;
+    psx_frame_trace_commit();
     (void)service_loss(); /* after the frame is closed: lost session / bad swapchain */
     return ok && complete;
 #else
