@@ -157,6 +157,7 @@ int dirty_ram_text_native_ok_ranges(const uint32_t* p, uint32_t n) {
     return dirty_ram_text_native_ok_ranges_from(p, n, 0);
 }
 int g_psx_cps_mode = 1;
+uint32_t g_psx_exec_seg_xor;
 volatile uint32_t g_psx_last_fn_entry;
 void psx_check_interrupts_at(CPUState* c, uint32_t pc) { (void)c; (void)pc; }
 void psx_check_interrupts_dispatch_entry(CPUState* c, uint32_t pc) { (void)c; (void)pc; }

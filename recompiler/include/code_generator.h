@@ -49,6 +49,11 @@ struct CodeGenConfig {
     // mismatch is EXPECTED (apply the transform only where the bytes match, skip
     // it elsewhere) rather than a hard config error.
     bool overlay_mode = false;
+    // Emit PC-valued constants (links, EPC, published PCs, dispatch targets,
+    // I-cache fetch addresses) as PSX_EXEC_PC(constant), so game code reports
+    // the segment it runs in rather than its KSEG0 compile address. Set for
+    // the main game image only; BIOS and overlay images keep plain constants.
+    bool exec_seg_relative = false;
     std::vector<PSXRecompV4::WidescreenSignedBoundSite> ws_signed_x_bound_sites;
     std::string indent;           // Indentation string (default: "    ")
     // Widescreen sprite-tag hooks ([widescreen] sprite_tag_funcs): functions
@@ -381,6 +386,9 @@ private:
     std::string emit_mid_block_cycle_charge(uint32_t addr, const ControlFlowGraph& cfg,
                                             const std::string& indent) const;
     std::string emit_interrupt_check(uint32_t resume_pc, const std::string& indent) const;
+    // A PC-valued constant: "0x%08Xu", or "PSX_EXEC_PC(0x%08Xu)" when
+    // config_.exec_seg_relative is set.
+    std::string pc_const(uint32_t pc) const;
     std::string emit_interrupt_check_expr(const std::string& resume_pc_expr,
                                           const std::string& indent) const;
 

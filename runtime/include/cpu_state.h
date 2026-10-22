@@ -323,6 +323,27 @@ extern uint64_t g_psx_bail_flattened;  /* unwinds flattened at outermost    */
 extern uint64_t g_psx_bail_anomaly;    /* bail flag seen where impossible   */
 #endif
 
+/* ==========================================================================
+ * Execution segment of the running game code.
+ *
+ * The game image is recompiled at its KSEG0 address, but a PS-X EXE may run
+ * from another segment: its header can load and enter it at KUSEG
+ * (0x00010000...), and a jump table or pointer can send it to KSEG1. The
+ * R3000A links, publishes EPC and tags the instruction cache with the virtual
+ * PC it is running at, so every PC-valued constant in game code is emitted
+ * as PSX_EXEC_PC(constant): the KSEG0 constant XORed with the segment bits of
+ * the address the game dispatcher entered at (0 when it entered at KSEG0).
+ * psx_dispatch_game_compiled sets it around each entry and restores it.
+ * Overlay DLLs are emitted without PSX_EXEC_PC and keep KSEG0 constants.
+ * Defined in runtime/src/traps.c.
+ * ========================================================================== */
+#ifdef PSX_OVERLAY_DLL_BUILD
+#define PSX_EXEC_PC(a) ((uint32_t)(a))
+#else
+extern uint32_t g_psx_exec_seg_xor;
+#define PSX_EXEC_PC(a) ((uint32_t)(a) ^ g_psx_exec_seg_xor)
+#endif
+
 /* Deduped wild-return source ledger (traps.c). Not present in overlay DLLs
  * (they share runtime bail state via pointers, not this recorder). */
 #ifndef PSX_OVERLAY_DLL_BUILD
