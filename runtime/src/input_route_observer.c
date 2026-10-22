@@ -354,7 +354,6 @@ void input_route_observer_resume(uint32_t consumed) {
     delivered_inputs = consumed;
     resumed_inputs = consumed;
     pending = 0;
-    port2_pending = 0;
 }
 void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
     if (!log_file) return;
