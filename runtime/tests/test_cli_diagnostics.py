@@ -147,7 +147,7 @@ class DiagnosticRebuildTests(unittest.TestCase):
             root = Path(temporary)
             (root / "set.toml").write_text("[set]\n", encoding="utf-8")
             args = cli.build_parser().parse_args([
-                "rebuild", "--config", str(root / "set.toml"),
+                "rebuild", "--config", str(root / "set.toml"), "--build-dir", "build-release",
                 "--diagnostic-dir", "build-diagnostic", "--diagnostic-required",
             ])
             progress = Mock()
