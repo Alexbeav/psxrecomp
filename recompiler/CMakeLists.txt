@@ -640,8 +640,9 @@ if(BUILD_TESTING)
     endif()
 
     # TAS checkpoint state I/O and the v7 identity dimensions. Both drivers compile their own
-    # C at O0 and O2 with -Werror, so they take no CMake target.
-    if(Python3_EXECUTABLE AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    # C at O0 and O2 with -Werror, so they take no CMake target. They take gcc-style flags,
+    # so they run with GCC and Clang (Apple's included), not MSVC (PS1B-581).
+    if(Python3_EXECUTABLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
         add_test(NAME tas_stateio_manifest COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_tas_stateio.py
             --cc ${CMAKE_C_COMPILER})
