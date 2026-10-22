@@ -18,9 +18,11 @@
  *   M5 The read re-issued after that Pause is charged with the motor on and
  *      delivers its first sector inside the 60-vblank retry window.
  *   M6 ReadS behaves as ReadN.
- *   M7 A source (comparison) profile is unchanged: the read start leaves the
- *      motor bit as it found it, and the re-issued read pays the motor-off
- *      charge again.
+ *   M7 A source (comparison) profile follows the same rule (PS1G-120): the
+ *      read start sets the motor bit, so the read re-issued after a Pause is
+ *      not charged the spin-up again. Street Fighter EX Plus Alpha asks for
+ *      LBA 8693 again every 35.66M cycles; with the bit clear each attempt
+ *      was charged 45.6M and no sector ever arrived.
  * Controller-level, through the MMIO interface. Synthetic sectors only; no
  * BIOS or game data.
  *
@@ -131,14 +133,14 @@ static void motor_already_on(void) {
     CHECK(got == want && (stat_reg & CDSTAT_MOTOR), "a read with the motor on is timed as before");
 }
 
-/* M7: a source profile keeps the status it had. */
-static void source_profile_unchanged(const char *drive) {
+/* M7: a source profile spins the motor up at a read start, once. */
+static void source_profile_spins_up(const char *drive) {
     char what[160];
     source_profile(drive);
     CHECK(s_source_clock, "the profile runs on the source clock");
     mode_reg = 0x80;
     for (int attempt = 0; attempt < 2; ++attempt) {
-        stat_reg = 0;                         /* motor off, as after a Stop */
+        if (attempt == 0) stat_reg = 0;       /* motor off, as after a Stop; a retry finds what the first left */
         reading = 0; s_source_seek_paused = 0; source_drive_head_valid = 0;
         cursor_at(LOGO_END_LBA + 1);
         param_fifo[0] = bin_to_bcd((NEXT_FILE_LBA + 150) / 4500);
@@ -148,10 +150,16 @@ static void source_profile_unchanged(const char *drive) {
         exec_command(0x02);                   /* Setloc */
         irq_flag = 0; response_clear();
         exec_command(0x06);
-        snprintf(what, sizeof what, "M7 %s: read start %d leaves the motor bit clear", drive, attempt + 1);
-        CHECK(reading && !(stat_reg & CDSTAT_MOTOR), what);
-        snprintf(what, sizeof what, "M7 %s: read start %d pays the motor-off charge (%d)", drive, attempt + 1, read_delay);
-        CHECK(read_delay >= 33868800, what);
+        snprintf(what, sizeof what, "M7 %s: read start %d sets the motor bit", drive, attempt + 1);
+        CHECK(reading && (stat_reg & CDSTAT_MOTOR), what);
+        if (attempt == 0) {
+            snprintf(what, sizeof what, "M7 %s: the first read start pays the motor-off charge (%d)", drive, read_delay);
+            CHECK(read_delay >= 33868800, what);
+        } else {
+            snprintf(what, sizeof what, "M7 %s: the re-issued read is due inside the retry window (%d of %d cycles)",
+                     drive, read_delay, RETRY_WINDOW);
+            CHECK(read_delay < RETRY_WINDOW, what);
+        }
         stop_read_stream();
     }
     stat_reg = CDSTAT_MOTOR | CDSTAT_PLAY;    /* and it sets nothing it did not before */
@@ -166,10 +174,10 @@ int main(int argc, char **argv) {
     retry_after_stop(0x06, "ReadN");
     retry_after_stop(0x1B, "ReadS");          /* M6 */
     motor_already_on();
-    source_profile_unchanged("");
-    source_profile_unchanged("nymashock-1.29.0");
-    source_profile_unchanged("octoshock-2.7");
+    source_profile_spins_up("");
+    source_profile_spins_up("nymashock-1.29.0");
+    source_profile_spins_up("octoshock-2.7");
     if (failures) { fprintf(stderr, "%d checks failed\n", failures); return 1; }
-    puts("PASS: a read start spins the motor up on the default path only");
+    puts("PASS: a read start spins the motor up on the default path and on source profiles");
     return 0;
 }

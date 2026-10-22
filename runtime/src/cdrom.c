@@ -1978,9 +1978,12 @@ static void start_read_stream(uint8_t cmd) {
      * sector does not pay it again. Without this a game library that
      * restarts a read after 60 silent vblanks (one second) never gets a
      * sector after a Stop: every attempt is charged a new full second
-     * (PS1B-317, Time Crisis). Default path only; a source profile keeps
-     * its own status. */
-    if (!s_source_clock) stat_reg |= CDSTAT_MOTOR;
+     * (PS1B-317, Time Crisis). A source profile follows the same rule: its
+     * Pause leaves the motor on too, and without the bit the retry of
+     * Street Fighter EX Plus Alpha at LBA 8693 was charged 45.6M cycles,
+     * longer than the library's 35.66M, so no sector ever arrived
+     * (PS1G-120). */
+    stat_reg |= CDSTAT_MOTOR;
     /* ENQUEUE: sector-read stream scheduled (due in read_delay cycles). A
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
@@ -2211,8 +2214,11 @@ static void start_source_cdda(int requested_track)
     cdrom_clear_pending_dataready();
     if (cdda_playing && !source_cdda.seeking && !requested_track && !setloc_pending) return;
 
+    /* Any track count (PS1G-118: Tomb Raider has 57). From track 10 on, the
+     * binary play_track_match differs from the BCD SubQ track, so an
+     * autopause Play of such a track ends at its first sector. */
     int tracks = iso_track_count(iso_handle);
-    if (tracks < 1 || tracks > 9) exit(2);
+    if (tracks < 1) exit(2);
     if (requested_track > tracks) requested_track = tracks;
     int origin = cdda_playing ? (cdda_lba > 2147483647U ? 0 : (int)cdda_lba) : msf_to_lba(read_min, read_sec, read_sect);
     if (origin < 0) origin = 0;
@@ -3024,11 +3030,7 @@ static void exec_command(uint8_t cmd) {
             break;
         }
         if(s_source_clock) {
-            if(reading || cdda_playing || pending_dataready) {
-                fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
-            }
-            /* Empty/paused stream is the qualified source scope.
-             * Spec 14.5 J2: the acknowledge (PSX-SPX "Init - Command 0Ah":
+            /* Spec 14.5 J2: the acknowledge (PSX-SPX "Init - Command 0Ah":
              * INT3, then INT2) carries the status from before the command
              * [UNIT: cdrom_c_fixture_replay_tekken_test, _pepsiman_test;
              * C1-C9 row 9]. Every Init on this path gets it, also one that
@@ -3042,6 +3044,16 @@ static void exec_command(uint8_t cmd) {
              * J4: an Init during a running reset changes neither. J5: the
              * completion is process_source_reset. */
             if (!s_source_reset_due) {
+                /* J6 (PS1G-118): an Init during a read, a CD-DA play or
+                 * with a pended data-ready notice stops that stream at the
+                 * command, as the default path below does (PSX-SPX "Init":
+                 * abort all commands). No sector, CD-DA report or pended
+                 * notice follows the acknowledge. The audio, the mode and
+                 * the position still change at the completion (J5). No
+                 * oracle transcript covers this yet (fixture N1, "an
+                 * established read"). */
+                if (reading || pending_dataready) stop_read_stream();
+                if (cdda_playing) stop_cdda_playback();
                 s_source_reset_due = psx_cycle_count + 1136000u;
                 stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
             }
@@ -3834,6 +3846,27 @@ void cdrom_init(const char* cue_path) {
                 exit(2);
             }
             s_nymashock_drive = 1;
+        }
+    }
+    {
+        /* PSX_CD_INIT_DRAW_ORDER=jitter-first or floor-first sets the order of
+         * Init's two draws for a route that has observed it (MediEvil 4875M on
+         * nymashock-1.29.0 takes the jitter draw first, PS1G-126). Unset or empty
+         * keeps the drive model's own order, so no other route changes. */
+        const char *draw_order = getenv("PSX_CD_INIT_DRAW_ORDER");
+        if (draw_order && *draw_order) {
+            if (!s_nymashock_drive) {
+                fprintf(stderr, "[CDROM] PSX_CD_INIT_DRAW_ORDER needs PSX_CD_DRIVE_MODEL\n");
+                exit(2);
+            }
+            if (strcmp(draw_order, "jitter-first") == 0) {
+                s_cd_reset_seek_draw_first = 1;
+            } else if (strcmp(draw_order, "floor-first") == 0) {
+                s_cd_reset_seek_draw_first = 0;
+            } else {
+                fprintf(stderr, "[CDROM] Unsupported PSX_CD_INIT_DRAW_ORDER=%s\n", draw_order);
+                exit(2);
+            }
         }
     }
     /* Spec section 4, S5: the drive starts with no idle head, no reset in

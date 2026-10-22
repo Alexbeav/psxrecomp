@@ -10,13 +10,16 @@
  * octoshock-byte selects Octoshock, whose wrapper hands the pad the logged
  * byte unscaled [ORACLE FIXTURE P1, Octoshock 2.3; corpus PSX-TAS-001]. */
 /* Physical MODE presses are delivered only when the route asks for them by
- * model: PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2. Otherwise a MODE press
- * stays refused at admission. */
-static inline int input_dualshock_mode_button_enabled(void)
+ * model: PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2 or nymashock-1.29.0. Otherwise
+ * a MODE press stays refused at admission. */
+static inline const char *input_dualshock_mode_model(void)
 {
     const char *model = getenv("PSX_INPUT_ROUTE_MODE_MODEL");
-    return model && !strcmp(model, "octoshock-2.4.2");
+    if (model && !strcmp(model, "octoshock-2.4.2")) return model;
+    if (model && !strcmp(model, "nymashock-1.29.0")) return model;
+    return NULL;
 }
+static inline int input_dualshock_mode_button_enabled(void) { return input_dualshock_mode_model() != NULL; }
 static inline int input_dualshock_raw_axes(void)
 {
     const char *model = getenv("PSX_INPUT_ROUTE_AXIS_MODEL");
@@ -24,7 +27,9 @@ static inline int input_dualshock_raw_axes(void)
 }
 static inline const char *input_dualshock_controller_profile(void)
 {
-    if (input_dualshock_mode_button_enabled()) return "octoshock-2.4.2-dualshock-mode";
+    if (input_dualshock_mode_model())
+        return strcmp(input_dualshock_mode_model(), "octoshock-2.4.2") ? "nymashock-1.29.0-dualshock-mode"
+                                                                       : "octoshock-2.4.2-dualshock-mode";
     return input_dualshock_raw_axes() ? "octoshock-byte-dualshock-neutral-analog"
                                       : "nymashock-2.9.1-dualshock-neutral-analog";
 }

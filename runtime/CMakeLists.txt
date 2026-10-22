@@ -24,7 +24,7 @@ psxrecomp_add_runtime_target(psx-runtime
 
 if(BUILD_TESTING)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c)
+        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c src/drawn_frames.c)
         target_include_directories(depth24_row_policy_test PRIVATE include)
         target_compile_options(depth24_row_policy_test PRIVATE
             -O2 -UNDEBUG -flto -fwhole-program -ffunction-sections -fdata-sections)
@@ -66,6 +66,12 @@ if(BUILD_TESTING)
         src/netplay_lan_version.c)
     target_include_directories(netplay_lan_version_test PRIVATE include)
     add_test(NAME netplay_lan_version_test COMMAND netplay_lan_version_test)
+    # PS1B-468: the game-drawn frame counter beside the video rate.
+    add_executable(drawn_frames_test
+        tests/test_drawn_frames.c
+        src/drawn_frames.c)
+    target_include_directories(drawn_frames_test PRIVATE include)
+    add_test(NAME drawn_frames_test COMMAND drawn_frames_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
@@ -112,7 +118,7 @@ if(BUILD_TESTING)
             "-DCXX_FRONTEND=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/fp_contract/check.cmake")
     if(NOT MSVC)
-        add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
+        add_executable(ws_world_scene_test tests/test_ws_world_scene.c src/drawn_frames.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)
         target_compile_options(ws_world_scene_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections)
         target_link_options(ws_world_scene_test PRIVATE -flto -Wl,--gc-sections)
@@ -250,6 +256,10 @@ if(BUILD_TESTING)
         # as the interpreter does (Cause.BT and register 6).
         add_test(NAME irq_handoff_ws_cull_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_irq_handoff_ws_cull.py --cc ${CMAKE_C_COMPILER})
+        # PS1B-520: the interpreter decides a branch on a [widescreen.cull]
+        # branch-site list as the generated code does.
+        add_test(NAME interp_ws_branch_sites_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_ws_branch_sites.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME syscall_change_thread_self_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_change_thread_self.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE}
@@ -479,12 +489,12 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_silent_read_counter_test PRIVATE include)
     add_test(NAME cdrom_silent_read_counter_test COMMAND cdrom_silent_read_counter_test)
     # PS1B-311: rows of the drive-profile behaviour spec that the older tests
-    # do not pin. The four named modes must stop fail-closed with a [CDROM] line.
+    # do not pin. The six named modes must stop fail-closed with a [CDROM] line.
     add_executable(cdrom_drive_profile_rows_test tests/test_cdrom_drive_profile_rows.c src/psx_sha256.c)
     target_include_directories(cdrom_drive_profile_rows_test PRIVATE include)
     add_test(NAME cdrom_drive_profile_rows_test COMMAND cdrom_drive_profile_rows_test
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
-    foreach(_case bad-model no-tape init-cdda init-read-seek)
+    foreach(_case bad-model no-tape init-cdda init-read-seek bad-draw-order draw-order-no-drive)
         add_test(NAME cdrom_drive_profile_rows_${_case}_test COMMAND cdrom_drive_profile_rows_test
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng ${_case})
         set_tests_properties(cdrom_drive_profile_rows_${_case}_test PROPERTIES
@@ -645,7 +655,7 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
         add_executable(${_target} tests/test_sio_port_device_identity.c)
         target_include_directories(${_target} PRIVATE include)
         target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
-        foreach(_profile IN ITEMS 0 1 2 3)
+        foreach(_profile IN ITEMS 0 1 2 3 4)
             add_test(NAME ${_target}_${_profile} COMMAND ${_target} ${_profile})
             add_test(NAME ${_target}_${_profile}_mouse_roundtrip
                 COMMAND ${_target} ${_profile} --touch-mouse)
@@ -961,7 +971,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME ws_hud_anchor_test COMMAND ws_hud_anchor_test)
 
     add_executable(gpu_textured_dot_nw_shift_exec_test
-        tests/test_gpu_textured_dot_nw_shift_exec.c)
+        tests/test_gpu_textured_dot_nw_shift_exec.c
+        src/drawn_frames.c)
     target_include_directories(gpu_textured_dot_nw_shift_exec_test PRIVATE
         include
         src)
@@ -1588,11 +1599,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         # Include production owners, then discard unrelated runtime machinery.
         add_executable(vblank_in_exception_test tests/test_vblank_in_exception.c)
-        add_executable(gpu_interlace_status_test tests/test_gpu_interlace_status.c)
-        add_executable(gpu_gpuread_latch_test tests/test_gpu_gpuread_latch.c)
-        add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c)
-        add_executable(dma_gpu_command_queue_test tests/test_dma_gpu_command_queue.c src/dma_gpu_ll.c)
-        add_executable(gpu_queue_boot_admission_test tests/test_gpu_queue_boot_admission.c src/dma_gpu_ll.c)
+        add_executable(gpu_interlace_status_test tests/test_gpu_interlace_status.c src/drawn_frames.c)
+        add_executable(gpu_gpuread_latch_test tests/test_gpu_gpuread_latch.c src/drawn_frames.c)
+        add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c src/drawn_frames.c)
+        add_executable(dma_gpu_command_queue_test tests/test_dma_gpu_command_queue.c src/dma_gpu_ll.c src/drawn_frames.c)
+        add_executable(gpu_queue_boot_admission_test tests/test_gpu_queue_boot_admission.c src/dma_gpu_ll.c src/drawn_frames.c)
         target_link_libraries(gpu_queue_boot_admission_test PRIVATE ZLIB::ZLIB)
         add_test(NAME gpu_queue_boot_admission COMMAND gpu_queue_boot_admission_test)
         foreach(_queue_test gpu_command_queue dma_gpu_command_queue gpu_queue_boot_admission)

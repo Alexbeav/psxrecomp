@@ -33,6 +33,8 @@ the same read for ever and never gets a sector.
 
 Time Crisis stayed on its logo with 191 silent reads in a row before the
 motor rule (behaviour spec 6.11, PS1B-317). With the rule it shows 1.
+Street Fighter EX Plus Alpha showed 134 on a source-profile route (the rule
+did not yet apply to source profiles, PS1G-120); with it the same route shows 1.
 
 ## Fleet check
 

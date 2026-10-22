@@ -13,6 +13,7 @@
 #include "fmt/format.h"
 #include "gte_register_classification.h"
 #include "recompiler_patch.h"
+#include "ws_branch_site_cases.h"
 
 namespace fs = std::filesystem;
 using PSXRecompV4::RecompilerPatch;
@@ -793,6 +794,46 @@ void codegen_tests() {
               std::string::npos &&
               nclip_exact.find("ws exact nclip") != std::string::npos,
           "codegen emits title-scoped exact NCLIP predicate");
+
+    // PS1B-520: the branch condition for each [widescreen.cull] branch-site
+    // list, token for token. The runtime fixture
+    // (runtime/tests/test_interp_ws_branch_sites.py) compiles these same
+    // conditions from ws_branch_site_cases.h and checks the interpreter
+    // decides each one the same way.
+    {
+        struct BranchSiteCase {
+            const char* name;
+            unsigned lists;
+            uint32_t word;
+            const char* cond;
+            const char* tag;
+        };
+#define WS_BRANCH_SITE_ROW(name, lists, word, cond, tag) \
+        {#name, lists, word, #cond, tag},
+        const BranchSiteCase cases[] = {WS_BRANCH_SITE_CASES(WS_BRANCH_SITE_ROW)};
+#undef WS_BRANCH_SITE_ROW
+        for (const BranchSiteCase& c : cases) {
+            PSXRecomp::CodeGenConfig site_config;
+            if (c.lists & WS_BS_BLTZ)
+                site_config.ws_cull_bltz_sites.insert(0x80010000u);
+            if (c.lists & WS_BS_KEEP)
+                site_config.ws_cull_branch_keep_sites.insert(0x80010000u);
+            if (c.lists & WS_BS_NCLIP_KEEP)
+                site_config.ws_cull_nclip_keep_sites.insert(0x80010000u);
+            if (c.lists & WS_BS_NCLIP_EXACT)
+                site_config.ws_cull_nclip_exact_sites.insert(0x80010000u);
+            const std::string code = generate_first_instruction(
+                c.word, {}, false, site_config);
+            std::string emitted = c.cond;
+            if (c.tag[0] != '\0')
+                emitted += std::string(" /* ") + c.tag + " */";
+            const std::string expected =
+                "int _bc_80010000 = (" + emitted + ");";
+            check(code.find(expected) != std::string::npos,
+                  std::string("codegen branch-site condition ") + c.name +
+                      ": " + emitted);
+        }
+    }
 
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);
