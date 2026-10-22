@@ -6,6 +6,7 @@
  */
 
 #include "cpu_state.h"
+#include "regional_launch.h"
 #include "projection_scale.hpp"
 #include "projection_scale_config.hpp"
 #include "mod_controller_source.h"
@@ -2686,8 +2687,8 @@ static std::filesystem::path resolve_existing_runtime_path(const char* requested
 
     std::error_code ec;
     fs::path p(requested);
-    if (fs::exists(p, ec)) return PSXRecompV4::host_absolute(p, ec);
-    if (PSXRecompV4::host_path_is_absolute(p)) return {};
+    if (PSXRecompV4::host_path_is_absolute(p))
+        return fs::exists(p, ec) ? PSXRecompV4::host_absolute(p, ec) : fs::path{};
 
     // Anchor exclusively on the exe directory — never cwd (see exe_dir_from_argv).
     const fs::path root = exe_dir_from_argv(argv0);
@@ -10360,6 +10361,12 @@ namespace {
         if (!disc_path || !disc_path[0] || !out) return 0;
         g_launcher_disc_path = disc_path;
         std::memset(out, 0, sizeof(*out));
+        const int profile_route = fntrace_is_game_started() ? 0 : PSXRecompV4::regional::picked(disc_path);
+        if (profile_route != 0) {
+            out->verdict = profile_route > 0 ? 1 : 3;
+            out->profile_handoff = profile_route > 0;
+            return 1;
+        }
         /* Which serial THIS disc should carry -- the set's per-disc value, or
          * the game's own for a single-disc title. The expected CRC is disc
          * 1's and is only consulted when the game supplied one, so a set that
@@ -15653,6 +15660,8 @@ static uint32_t gcs_gate_read_ram(uint32_t phys, uint32_t size) {
 }
 
 int main(int argc, char** argv) {
+    const int regional_result = PSXRecompV4::regional::startup(argc, argv);
+    if (regional_result >= 0) return regional_result;
     /* Force line-buffered output so messages appear even if killed. */
     std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
     std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
@@ -15714,6 +15723,7 @@ int main(int argc, char** argv) {
      * PSX_NO_LAUNCHER env) forces it off. --launcher wins if both are given. */
     bool        force_launcher    = false;
     bool        force_no_launcher = false;
+    bool        cli_launcher_disc_check = false;
     /* CLI overrides for running several instances side by side (soak fleet).
      * These win over any game-config value and, crucially, work for the BIOS
      * (which has no [game]-block config schema, so debug_port/renderer can't be
@@ -15803,6 +15813,8 @@ int main(int argc, char** argv) {
              * seeded with is resolved by then. */
             cli_netplay_query = argv[++i];
             force_launcher = true;
+        } else if (std::strcmp(argv[i], "--launcher-disc-check") == 0) {
+            cli_launcher_disc_check = true;
         } else if (std::strcmp(argv[i], "--launcher") == 0) {
             force_launcher = true;
         } else if (std::strcmp(argv[i], "--no-launcher") == 0) {
@@ -15861,6 +15873,21 @@ int main(int argc, char** argv) {
     }
 
     std::string default_game_config_storage;
+    if (!disc_override_path && !PSXRecompV4::regional::selected_disc.empty())
+        disc_override_path = PSXRecompV4::regional::selected_disc.c_str();
+    if (!game_config_path) {
+        /* A catalog backend must own its config. Never inherit another
+         * regional profile from cwd or a parent if its config is missing. */
+        if (!PSXRecompV4::regional::profiles.empty()) {
+            const auto own = PSXRecompV4::regional::self.parent_path() / "game.toml";
+            if (!std::filesystem::is_regular_file(own)) {
+                std::fprintf(stderr, "Missing regional backend game.toml\n");
+                return 1;
+            }
+            default_game_config_storage = own.string();
+            game_config_path = default_game_config_storage.c_str();
+        }
+    }
     if (!game_config_path) {
         std::filesystem::path default_game_config =
             resolve_existing_runtime_path(PSX_DEFAULT_GAME_CONFIG_PATH, argv[0]);
@@ -17127,6 +17154,24 @@ int main(int argc, char** argv) {
     }
 
 #if defined(RECOMP_LAUNCHER)
+    /* Noninteractive acceptance of the real launcher callback AFTER config
+     * resolution. Regional routing probes intentionally return before here. */
+    if (cli_launcher_disc_check) {
+        if (overlay_init_thread.joinable()) overlay_init_thread.join();
+        g_lnch_expected_serial = game_id;
+        g_lnch_expected_crc = game_disc_crc;
+        g_lnch_has_crc = game_has_disc_crc;
+        g_lnch_argv0 = argv[0];
+        const auto disc = disc_override_path
+            ? normalize_disc_path_for_launch(disc_override_path) : resolved_disc;
+        RecompLauncherCDiscVerify verdict{};
+        const int handled = ae_disc_verify(disc.string().c_str(), &verdict);
+        std::printf("launcher-disc-check expected=%s serial=%s verdict=%d iso=%d handoff=%d crc_required=%d config=%s\n",
+            game_id.c_str(), verdict.serial, verdict.verdict, verdict.iso_ok,
+            verdict.profile_handoff, game_has_disc_crc ? 1 : 0,
+            game_config_path ? game_config_path : "");
+        return handled && verdict.verdict == 1 && verdict.iso_ok && !verdict.profile_handoff ? 0 : 1;
+    }
     /* Integrated recomp-ui launcher: shown in its own GL window before the emulator
      * boots. Seeded with the effective settings (game.toml ∪ settings.toml);
      * on LAUNCH the user's choices are persisted to settings.toml and applied.
@@ -17668,6 +17713,11 @@ int main(int argc, char** argv) {
             launcher_boot_timing_mark("host:after_run_window");
 
             lr = rui_rc;
+            if (lr == RECOMP_LAUNCHER_RESULT_PROFILE) {
+                if (overlay_init_thread.joinable()) overlay_init_thread.join();
+                SDL_Quit();
+                return PSXRecompV4::regional::handoff();
+            }
 
             /* The launcher hands back the player's edits on Quit as well as on
              * Play (recomp_launcher.h: "*io still holds the edits"), so both
