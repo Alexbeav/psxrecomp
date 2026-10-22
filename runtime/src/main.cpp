@@ -5744,14 +5744,21 @@ static void apply_input_override_to_sio(int override_word) {
 #endif
     const uint16_t w = (uint16_t)override_word;
     if (input_route_session_owns_ports()) {
-        /* A PSXRTI3 digital route or a recording declares one digital pad at
-         * P1. The word is the whole device state, so recording and every
+        /* A PSXRTI3 digital route or a recording declares its digital pads.
+         * Each word is the whole device state, so recording and every
          * product's replay deliver identical input whatever host devices or
          * seat modes are configured. */
         sio_set_pad_state_slot(0, w);
         sio_set_pad_sticks(0, 0x80, 0x80, 0x80, 0x80);
         sio_request_pad_type(0, 0);
         psx_selfcheck_note_pad(0, w, 0x80, 0x80, 0x80, 0x80, 0);
+        uint16_t p2;
+        if (input_route_session_release_port2(&p2)) {
+            sio_set_pad_state_slot(1, p2);
+            sio_set_pad_sticks(1, 0x80, 0x80, 0x80, 0x80);
+            sio_request_pad_type(1, 0);
+            psx_selfcheck_note_pad(1, p2, 0x80, 0x80, 0x80, 0x80, 0);
+        }
         return;
     }
     PlayerInput& p = g_players[0];

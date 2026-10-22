@@ -138,6 +138,11 @@ typedef struct {
 } InputRouteConsoleEvent;
 
 typedef struct {
+    uint32_t frames;
+    uint16_t buttons[2];
+} InputTwoDigitalRouteStep;
+
+typedef struct {
     uint8_t kind;
     uint8_t digest[32];
 } InputRouteDisc;
@@ -238,9 +243,10 @@ static inline const char *input_route_v3_text(FILE *f, uint32_t length, char *ou
  * whole file passes. */
 /* `replay` NULL refuses the replay tags and the END marker, as before PS1B-191;
  * non-NULL admits them and receives the anchor location and settings. */
-static inline const char *input_route_v3_read_ex(
+static inline const char *input_route_v3_read_impl(
     FILE *f, InputRouteV3 *meta, InputRouteStep *digital,
-    InputDualShockRouteStep *dualshock, InputRouteMarker *markers,
+    InputDualShockRouteStep *dualshock, InputTwoDigitalRouteStep *two_digital,
+    InputRouteMarker *markers,
     InputRouteCheckpoint *checkpoints, InputRouteV3Replay *replay)
 {
     InputRouteV3Replay rp;
@@ -525,9 +531,12 @@ static inline const char *input_route_v3_read_ex(
     if (!s.port_count) {
         if (s.record_size != 8 && s.record_size != INPUT_DUALSHOCK_ROUTE_RECORD_BYTES)
             return "record size";
-    } else if (s.port_count != 1 ||
-               (s.port_devices[0] != INPUT_ROUTE_DEVICE_DIGITAL &&
-                s.port_devices[0] != INPUT_ROUTE_DEVICE_DUALSHOCK)) {
+    } else if (!((s.port_count == 1 &&
+                  (s.port_devices[0] == INPUT_ROUTE_DEVICE_DIGITAL ||
+                   s.port_devices[0] == INPUT_ROUTE_DEVICE_DUALSHOCK)) ||
+                 (s.port_count == 2 &&
+                  s.port_devices[0] == INPUT_ROUTE_DEVICE_DIGITAL &&
+                  s.port_devices[1] == INPUT_ROUTE_DEVICE_DIGITAL && two_digital))) {
         return "declared port layout not supported";
     }
     if (s.event_count && !s.disc_count) return "console events require disc set";
@@ -540,7 +549,30 @@ static inline const char *input_route_v3_read_ex(
         if (j == s.marker_count || markers[j].frame != checkpoints[i].frame)
             return "checkpoint without marker";
     }
-    if (s.record_size == 8) {
+    if (s.port_count == 2) {
+        unsigned char r[12];
+        uint32_t step = 0;
+        for (uint32_t i = 0; i < s.frames; ++i) {
+            if (fread(r, 1, sizeof(r), f) != sizeof(r)) return "short two-port record";
+            if (input_route_le32(r) != i + 1u) return "two-port record sequence";
+            if ((uint16_t)(r[6] | ((uint16_t)r[7] << 8)) ||
+                (uint16_t)(r[10] | ((uint16_t)r[11] << 8)))
+                return "two-port record reserved";
+            const uint16_t p1 = (uint16_t)(r[4] | ((uint16_t)r[5] << 8));
+            const uint16_t p2 = (uint16_t)(r[8] | ((uint16_t)r[9] << 8));
+            if (step && two_digital[step - 1].buttons[0] == p1 &&
+                        two_digital[step - 1].buttons[1] == p2) {
+                ++two_digital[step - 1].frames;
+            } else {
+                if (step == INPUT_ROUTE_MAX_STEPS) return "step capacity";
+                two_digital[step].frames = 1;
+                two_digital[step].buttons[0] = p1;
+                two_digital[step].buttons[1] = p2;
+                ++step;
+            }
+        }
+        s.steps = step;
+    } else if (s.record_size == 8) {
         if (!digital) return "digital records not admitted";
         error = input_route_read_records(f, s.frames, digital, &s.steps);
     } else {
@@ -573,7 +605,25 @@ static inline const char *input_route_v3_read(
     InputDualShockRouteStep *dualshock, InputRouteMarker *markers,
     InputRouteCheckpoint *checkpoints)
 {
-    return input_route_v3_read_ex(f, meta, digital, dualshock, markers, checkpoints, NULL);
+    return input_route_v3_read_impl(f, meta, digital, dualshock, NULL,
+                                    markers, checkpoints, NULL);
+}
+
+static inline const char *input_route_v3_read_ex(
+    FILE *f, InputRouteV3 *meta, InputRouteStep *digital,
+    InputDualShockRouteStep *dualshock, InputRouteMarker *markers,
+    InputRouteCheckpoint *checkpoints, InputRouteV3Replay *replay)
+{
+    return input_route_v3_read_impl(f, meta, digital, dualshock, NULL,
+                                    markers, checkpoints, replay);
+}
+
+static inline const char *input_route_v3_read_two_digital(
+    FILE *f, InputRouteV3 *meta, InputTwoDigitalRouteStep *steps,
+    InputRouteMarker *markers, InputRouteCheckpoint *checkpoints)
+{
+    return input_route_v3_read_impl(f, meta, NULL, NULL, steps,
+                                    markers, checkpoints, NULL);
 }
 
 static inline void input_route_put32(unsigned char *p, uint32_t value)

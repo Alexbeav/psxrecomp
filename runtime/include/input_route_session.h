@@ -94,8 +94,11 @@ int input_route_session_armed(void);
  * checked and PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS=1. */
 int input_route_session_boundary(void);
 
-/* Release product: the next route word, or -1 when no route is loaded. */
+/* Release product: the next P1 route word, or -1 when no route is loaded. */
 int input_route_session_release_override(void);
+/* For an admitted two-digital-pad layout, return P2 from the same record as
+ * the last P1 override. Returns 0 for every other route. */
+int input_route_session_release_port2(uint16_t *buttons);
 /* Release product: deliver a DualShock route input. 0 when not in that mode. */
 int input_route_session_release_dualshock(int buttons);
 

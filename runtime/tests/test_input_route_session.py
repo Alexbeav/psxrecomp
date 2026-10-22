@@ -187,6 +187,47 @@ with tempfile.TemporaryDirectory() as temp:
     def entry(tag, payload):
         return struct.pack('<II', tag, len(payload)) + payload + bytes((-len(payload)) % 4)
 
+    # Explicit two-digital-pad layout: each record carries distinct P1/P2
+    # words and reserved halfwords. The production session owns both ports.
+    two_layout = entry(0x00000201, bytes((2, 0, 0, 0, 1, 1)))
+    two_rows = ((0xfffe, 0xfffd), (0xfffb, 0xfff7), (0xffef, 0xffdf))
+    two_pad = root / 'two-digital.psxrti3'
+    two_pad.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 12, len(two_rows), 0,
+                                    len(two_layout)) + two_layout +
+                        b''.join(struct.pack('<IHHHH', n, p1, 0, p2, 0)
+                                 for n, (p1, p2) in enumerate(two_rows, 1)))
+    code, out, err = run(release, 'two-pad', two_pad, markers_exit=False)
+    check(code == 0 and out.splitlines()[-1] ==
+          'fffe/fffd,fffb/fff7,ffef/ffdf connected=1/1 owns=1',
+          'two digital pads deliver distinct words to both production SIO slots', out + err)
+
+    code, out, err = run(diagnostic, 'armed', two_pad, markers_exit=False)
+    check(code == 0 and 'admitted=0 armed=0' in out and
+          'two-port routes need the release product' in err,
+          'diagnostic product refuses a two-pad route it cannot deliver', out + err)
+    code, out, err = run(release, 'armed', two_pad, markers_exit=False,
+                         extra_env={'PSX_INPUT_ROUTE_CAPTURE_DIR': str(root / 'capture')})
+    check(code == 0 and 'admitted=0 armed=0' in out and
+          'two-port release capture is not supported' in err,
+          'single-port release capture cannot silently observe a two-pad route', out + err)
+
+    malformed_two = root / 'two-digital-reserved.psxrti3'
+    bad_rows = [struct.pack('<IHHHH', 1, 0xfffe, 1, 0xfffd, 0)]
+    malformed_two.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 12, 1, 0,
+                                          len(two_layout)) + two_layout + b''.join(bad_rows))
+    code, out, err = run(release, 'armed', malformed_two, markers_exit=False)
+    check(code == 0 and 'admitted=0 armed=0' in out and 'two-port record reserved' in err,
+          'two-pad record reserved bytes are refused', out + err)
+
+    mixed_layout = entry(0x00000201, bytes((2, 0, 0, 0, 1, 2)))
+    mixed = root / 'two-mixed.psxrti3'
+    mixed.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 16, 1, 0,
+                                  len(mixed_layout)) + mixed_layout + bytes(16))
+    code, out, err = run(release, 'armed', mixed, markers_exit=False)
+    check(code == 0 and 'admitted=0 armed=0' in out and
+          'declared port layout not supported' in err,
+          'unsupported mixed digital/DualShock profile is refused', out + err)
+
     roster1 = root / 'event-disc-1.bin'
     roster2 = root / 'event-disc-2.bin'
     roster1.write_bytes(b'disc one')
@@ -480,5 +521,11 @@ with tempfile.TemporaryDirectory() as temp:
     code, out, err = run(release, 'record', root / 'release.psxrti3', cue, bios, 10, markers_exit=False)
     check(code == 10 and 'diagnostic product' in err and not (root / 'release.psxrti3').exists(),
           'release product refuses to record', err)
+
+    main = (ROOT / 'runtime' / 'src' / 'main.cpp').read_text()
+    check('input_route_session_release_port2(&p2)' in main and
+          'sio_set_pad_state_slot(1, p2)' in main and
+          'sio_request_pad_type(1, 0)' in main,
+          'production main delivers admitted P2 buttons as a digital SIO pad')
 
 print(f'input_route_session: {checks} checks passed')

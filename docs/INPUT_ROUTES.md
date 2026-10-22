@@ -160,9 +160,10 @@ records  frame_count records of record_size, then end of file
   refuses a larger legacy route, an unknown contract version, or another
   advertised ceiling. `ext_bytes` is a multiple of 4 and at most 16 MiB. The
   file size must equal `28 + ext_bytes + frame_count * record_size`.
-- `record_size` 8 is a PSXRTI1 record (u32 one-based sequence, u16 active-low
-  buttons, u16 0); 12 is a PSXRTI2 record. A PSXRTI3 digital route declares one
-  digital pad on port 1.
+- Without a port-layout tag, `record_size` 8 is a PSXRTI1 record (u32
+  one-based sequence, u16 active-low buttons, u16 0) and 12 is a PSXRTI2
+  record. An explicit two-digital-pad layout also uses 12 bytes: sequence,
+  then one buttons/reserved pair for each port.
 - Tag bit 31 marks an entry that does not change replay. Readers skip unknown
   bit-31 tags and refuse any other unknown tag.
 
@@ -223,7 +224,12 @@ state. A host failure stops and disarms the route; it is never treated as a
 successful or skipped event. RESET remains unsupported and is refused before
 arming. PSXRTI1 and PSXRTI2 behavior and bytes are unchanged.
 
-This source revision validates one declared digital or DualShock port. It
-refuses a multi-port body after it validates the declared record size, because
-the runtime does not yet deliver the second port. This refusal prevents a
-two-pad Exoddus route from being treated as a one-pad route.
+The production route session admits either one declared digital or DualShock
+port, or exactly two declared digital ports. A two-digital route owns both SIO
+ports and delivers each record's distinct active-low button word to its port.
+Reserved record halfwords must be zero. Mixed digital/DualShock, two
+DualShock, missing-device and other multi-port profiles remain unsupported and
+are refused before the route arms. The legacy reader API still refuses every
+two-port body, so a caller must explicitly select the two-digital contract.
+The diagnostic product and the single-port release capture observer also
+refuse two-port routes; neither can silently report only port 1.

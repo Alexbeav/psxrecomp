@@ -174,6 +174,23 @@ int main(int argc, char **argv)
         return 0;
     }
 #ifdef PSX_NO_DEBUG_TOOLS
+    if (argc >= 3 && !strcmp(argv[1], "two-pad")) {
+        if (!input_route_session_admit(argv[2])) return 30;
+        for (unsigned frame = 0; frame < 3; ++frame) {
+            const int p1 = input_route_session_release_override();
+            uint16_t p2 = 0;
+            if (p1 < 0 || !input_route_session_release_port2(&p2)) return 31;
+            /* Production main.cpp sends these exact values to SIO slots. */
+            sio_set_pad_state_slot(0, (uint16_t)p1);
+            sio_set_pad_state_slot(1, p2);
+            printf("%s%04x/%04x", frame ? "," : "", pad[0], pad[1]);
+        }
+        printf(" connected=%d/%d owns=%d\n", connected[0], connected[1],
+               input_route_session_owns_ports());
+        return 0;
+    }
+#endif
+#ifdef PSX_NO_DEBUG_TOOLS
     if (argc >= 4 && !strcmp(argv[1], "pictures")) {
         /* The vblank of a release product (main.cpp): the frame counter, the
          * route boundary, the next route word, then the word applied to SIO.

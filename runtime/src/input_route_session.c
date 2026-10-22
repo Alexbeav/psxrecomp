@@ -67,8 +67,10 @@ static uint32_t s_next_event;
 /* Release replay. */
 static InputRouteStep *s_digital;
 static InputDualShockRouteStep *s_dual;
+static InputTwoDigitalRouteStep *s_two_digital;
 static uint32_t s_step_count, s_step_index, s_step_remaining;
-static int s_release_loaded, s_release_dual;
+static int s_release_loaded, s_release_dual, s_release_two_digital;
+static uint16_t s_release_port2 = 0xffff;
 static uint8_t s_dual_axes[4] = {128, 128, 128, 128};
 static uint8_t s_dual_mode_button;
 #ifdef PSX_NO_DEBUG_TOOLS
@@ -507,6 +509,7 @@ int input_route_session_admit(const char *path)
     unsigned char magic[8];
     InputRouteStep *digital;
     InputDualShockRouteStep *dual;
+    InputTwoDigitalRouteStep *two_digital;
     InputRouteV3 meta;
     uint32_t count = 0, frames = 0;
     const char *error = NULL;
@@ -528,16 +531,22 @@ int input_route_session_admit(const char *path)
     }
 #endif
     if (!alloc_steps(&digital, &dual)) { fclose(f); return refuse(path, "out of memory"); }
+    two_digital = (InputTwoDigitalRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS,
+                                                     sizeof(*two_digital));
+    if (!two_digital) { fclose(f); free(digital); free(dual); return refuse(path, "out of memory"); }
     memset(&meta, 0, sizeof(meta));
     if (v3) {
         if (!s_checkpoints)
             s_checkpoints = (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS,
                                                          sizeof(*s_checkpoints));
-        error = s_checkpoints ? input_route_v3_read(f, &meta, digital, dual, s_markers, s_checkpoints)
+        error = s_checkpoints ? input_route_v3_read_impl(f, &meta, digital, dual, two_digital,
+                                                         s_markers, s_checkpoints, NULL)
                               : "out of memory";
         if (!error) error = validate_event_roster(&meta);
         count = meta.steps; frames = meta.frames;
-        dualshock = meta.record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
+        dualshock = meta.port_count
+            ? meta.port_count == 1 && meta.port_devices[0] == INPUT_ROUTE_DEVICE_DUALSHOCK
+            : meta.record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
     } else if (!memcmp(magic, "PSXRTI2\0", 8)) {
         error = input_dualshock_route_read(f, dual, &count, &frames);
         dualshock = 1;
@@ -548,14 +557,21 @@ int input_route_session_admit(const char *path)
     if (fclose(f) && !error) error = "close error";
     for (uint32_t i = 0; !error && dualshock && i < count; ++i)
         if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (!error && meta.port_count == 2)
+        error = "two-port routes need the release product";
+#else
+    if (!error && meta.port_count == 2 && getenv("PSX_INPUT_ROUTE_CAPTURE_DIR"))
+        error = "two-port release capture is not supported";
+#endif
     if (error) {
-        free(digital); free(dual);
+        free(digital); free(dual); free(two_digital);
         memset(s_markers, 0, sizeof(s_markers));
         return refuse(path, error);
     }
 #ifdef PSX_NO_DEBUG_TOOLS
     if (!release_capture_begin(path, frames, dualshock)) {
-        free(digital); free(dual);
+        free(digital); free(dual); free(two_digital);
         memset(s_markers, 0, sizeof(s_markers));
         return 0;
     }
@@ -564,18 +580,25 @@ int input_route_session_admit(const char *path)
 #ifdef PSX_NO_DEBUG_TOOLS
     /* Release replay owns the steps. The diagnostic product reparses them in
      * its debug-server preload, which keeps its evidence observers. */
-    if (dualshock) { s_dual = dual; free(digital); }
-    else { s_digital = digital; free(dual); }
+    if (meta.port_count == 2) {
+        s_two_digital = two_digital; free(digital); free(dual);
+    } else if (dualshock) {
+        s_dual = dual; free(digital); free(two_digital);
+    } else {
+        s_digital = digital; free(dual); free(two_digital);
+    }
     s_step_count = count;
     s_step_index = 0;
-    s_step_remaining = dualshock ? s_dual[0].frames : s_digital[0].frames;
+    s_release_two_digital = meta.port_count == 2;
+    s_step_remaining = s_release_two_digital ? s_two_digital[0].frames :
+                       dualshock ? s_dual[0].frames : s_digital[0].frames;
     s_release_dual = dualshock;
     s_release_loaded = 1;
-    if (dualshock) input_route_admit_cold_p1(1);
+    if (dualshock && !s_release_two_digital) input_route_admit_cold_p1(1);
     fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=%s product=release\n",
             (unsigned)frames, (unsigned)count, v3 ? "PSXRTI3" : dualshock ? "PSXRTI2" : "PSXRTI1");
 #else
-    free(digital); free(dual);
+    free(digital); free(dual); free(two_digital);
 #endif
     if (!v3) return 1;
     s_meta = meta;
@@ -583,10 +606,14 @@ int input_route_session_admit(const char *path)
     s_next_event = 0;
     s_frame = 0;
     s_active = meta.marker_count != 0 || meta.event_count != 0;
-    if (!dualshock) {
-        /* A PSXRTI3 digital body declares one digital pad at P1. */
+    if (!dualshock || meta.port_count == 2) {
+        /* A PSXRTI3 digital body declares its digital controller ports. */
         s_owns_ports = 1;
         input_route_admit_cold_p1(0);
+        if (meta.port_count == 2) {
+            sio_set_pad_connected(1, 1);
+            sio_set_pad_config_capable(1, 0);
+        }
     }
     const char *exit_after = getenv("PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS");
     s_exit_after_markers = exit_after && !strcmp(exit_after, "1") && meta.marker_count;
@@ -820,6 +847,17 @@ int input_route_session_boundary(void)
 
 static int release_next_word(void)
 {
+    if (s_release_two_digital) {
+        uint16_t current = 0xffff;
+        s_release_port2 = 0xffff;
+        if (s_step_index < s_step_count) {
+            current = s_two_digital[s_step_index].buttons[0];
+            s_release_port2 = s_two_digital[s_step_index].buttons[1];
+            if (--s_step_remaining == 0 && ++s_step_index < s_step_count)
+                s_step_remaining = s_two_digital[s_step_index].frames;
+        }
+        return current;
+    }
     if (s_release_dual) {
         uint16_t current = 0xFFFF;
         s_dual_mode_button = 0;
@@ -861,6 +899,13 @@ int input_route_session_release_override(void)
     }
 #endif
     return release_next_word();
+}
+
+int input_route_session_release_port2(uint16_t *buttons)
+{
+    if (!s_release_loaded || !s_release_two_digital || !buttons) return 0;
+    *buttons = s_release_port2;
+    return 1;
 }
 
 int input_route_session_release_dualshock(int buttons)
