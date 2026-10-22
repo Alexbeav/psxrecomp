@@ -770,6 +770,76 @@ class SetSteps(unittest.TestCase):
             self.assertEqual(cli.calls, [])
             self.assertTrue(progress.errors()[0][3].get("verify_failed"))
 
+    def test_a_refusal_says_whether_the_refused_file_is_the_one_given_as_disc(self):
+        # The setup window passes the selected file as --disc and marks THAT
+        # file as refused. A set checks every disc, so the refusal must say
+        # whether it is about that file (PS1B-415).
+        def refusal(**args):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "set"
+                make_set(root)
+                d1, d2 = make_discs(Path(tmp) / "discs")
+                changes = {key: (value(d1, d2) if callable(value) else value) for key, value in args.items()}
+                cli, progress = fake_cli(root), Progress()
+                code = ps.generate_set(cli, generate_args(root, **changes), progress)
+                self.assertEqual(code, cli.EXIT_VERIFY, progress.events)
+                return progress.errors()[0][3].get("refused_given_disc")
+
+        # The selected file is taken as disc 1 and is not disc 1: it is the refused file.
+        self.assertIs(refusal(disc=lambda d1, d2: str(d2), set_disc=lambda d1, d2: [f"2={d1}"]), True)
+        # The selected file is disc 1 and is right; disc 2 is the wrong one.
+        self.assertIs(refusal(disc=lambda d1, d2: str(d1), set_disc=lambda d1, d2: [f"2={d1}"]), False)
+        # No --disc at all: nothing was "given", whichever disc is wrong.
+        self.assertIs(refusal(set_disc=lambda d1, d2: [f"1={d2}", f"2={d1}"]), False)
+        # --set-disc 1 wins over --disc: the --disc file is not disc 1.
+        self.assertIs(refusal(disc=lambda d1, d2: str(d1), set_disc=lambda d1, d2: [f"1={d2}", f"2={d2}"]), False)
+        # A --disc that is not a file: disc 1 then comes from the wizard's
+        # record, so the refused disc 1 is not the given file.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "set"
+            make_set(root)
+            d1, d2 = make_discs(Path(tmp) / "discs")
+            write(root / "disc.cfg", f"{d2}\n{d1}\n")
+            cli, progress = fake_cli(root), Progress()
+            code = ps.generate_set(cli, generate_args(root, disc=str(d1.parent / "gone.cue")), progress)
+            self.assertEqual(code, cli.EXIT_VERIFY, progress.events)
+            self.assertIn("Disc 1 of", progress.errors()[0][1])
+            self.assertIs(progress.errors()[0][3].get("refused_given_disc"), False)
+
+    def test_a_refusal_inside_one_programs_step_is_about_that_programs_disc(self):
+        # The digest check runs in each program's own generate, which sees its
+        # disc as "the given one". For the set that holds for disc 1 only, and
+        # only when disc 1 is the --disc file.
+        def refusal(who, **args):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "set"
+                make_set(root)
+                d1, d2 = make_discs(Path(tmp) / "discs")
+                changes = {key: value(d1, d2) for key, value in args.items()}
+                cli, progress = fake_cli(root), Progress()
+
+                def cmd_generate(args, child):
+                    if Path(args.project_root).name != who:
+                        return 0
+                    child.error("This is not the disc image this kit was made from.", code=3,
+                                verify_failed=True, refused_given_disc=bool(args.disc))
+                    return 3
+
+                cli.cmd_generate = cmd_generate
+                code = ps.generate_set(cli, generate_args(root, **changes), progress)
+                self.assertEqual(code, 3, progress.events)
+                error = progress.errors()[0]
+                self.assertTrue(error[1].startswith(who), error)
+                self.assertTrue(error[3].get("verify_failed"))
+                return error[3].get("refused_given_disc")
+
+        wizard = dict(disc=lambda d1, d2: str(d1), set_disc=lambda d1, d2: [f"2={d2}"])
+        self.assertIs(refusal("leon", **wizard), True)      # disc 1, the selected file
+        self.assertIs(refusal("claire", **wizard), False)   # disc 2, not the selected file
+        by_position = dict(set_disc=lambda d1, d2: [f"1={d1}", f"2={d2}"])
+        self.assertIs(refusal("leon", **by_position), False)
+        self.assertIs(refusal("claire", **by_position), False)
+
     def test_generate_runs_each_program_then_writes_the_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "set"
