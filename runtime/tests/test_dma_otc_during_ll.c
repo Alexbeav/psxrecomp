@@ -56,6 +56,7 @@ void gpu_write_gp0(uint32_t v) { gp0_words++; gp0_sum = gp0_sum * 31u + v; if ((
     if (poly_left) poly_left--; else if ((v >> 24) == 0x28u) poly_left = 4; }
 uint32_t gpu_dma_vram_upload_words(void) { return 1u << 20; }
 int gpu_dma_source_ll_ready(void) { return ll_ready && psx_cycle_count >= busy_until && !poly_left; }
+int gpu_dma_walk_ready(void) { return ll_ready && psx_cycle_count >= busy_until && !poly_left; }
 void gpu_ws_begin_linked_list(void) {}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) { (void)a; }
