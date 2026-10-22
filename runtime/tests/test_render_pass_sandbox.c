@@ -285,9 +285,9 @@ int gl_renderer_stereo_end(uint32_t eye, int keep) {
     return 1;
 }
 void gl_renderer_stereo_stage_reset(void) { s_stereo_mask = 0; }
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
-    if(!(s_stereo_mask & (1u<<eye))) return 0;
-    memset(rgba,0x5A,(size_t)w*h*4);return 1;
+int gl_renderer_stereo_stage_readback_pair(uint32_t w,uint32_t h,uint8_t *rgba) {
+    if((s_stereo_mask & 3u) != 3u) return 0;
+    memset(rgba,0x5A,(size_t)w*h*8);return 1;
 }
 void gl_renderer_stereo_reset(void) { s_stereo_mask = 0; s_stereo_published = 0; }
 int gl_renderer_stereo_set_presentation(uint32_t mode) { return mode <= 1; }
@@ -933,11 +933,9 @@ static void test_trace_substages(void) {
     render_pass_reset_session(); s_gl_status = 0; s_begin_ok = 1;
     psx_frame_trace_set_enabled(1);
     CHECK(psx_frame_trace_open(), "a frame record is open across the capture");
-    CHECK(psx_mod_render_capture_rgba(&cpu, &rect, traced_draw, &first,
-                                      pixels, sizeof pixels) &&
-          psx_mod_render_capture_rgba(&cpu, &rect, traced_draw, &second,
-                                      pixels, sizeof pixels),
-          "the captures rendered both mattes");
+    CHECK(psx_mod_render_capture_rgba_pair(&cpu, &rect, traced_draw, &first,
+                                           &second, pixels, sizeof pixels),
+          "the capture rendered both mattes");
     CHECK(s_traced_calls == 2 && psx_frame_trace_read(&rec, 1) == 0,
           "the capture replayed the draw and left no record of its own");
     psx_frame_trace_commit();
@@ -1045,26 +1043,55 @@ static void test_texture_stream_journal(void) {
     render_pass_journal_free(&j);
 }
 
+static void *s_dual_users[2];
+static int s_dual_draws;
 static int isolated_draw(CPUState *cpu,void *user,uint32_t alpha) {
-    (void)user;
     CHECK(alpha==0,"isolated capture has no temporal phase");
+    if(s_dual_draws<2)s_dual_users[s_dual_draws]=user;
+    s_dual_draws++;
     cpu->gpr[8]=0x1234;s_ram[0x456]=0x42;psx_advance_cycles(5000);
     return 1;
 }
 static void test_isolated_capture(void) {
     CPUState cpu={0};PSXModRenderPass rect={sizeof rect,0,0,0,2,2};
-    uint8_t pixels[16]={0};
+    int first=1,second=2;
+    uint8_t pixels[32]={0};
     render_pass_reset_session();s_gl_status=0;s_begin_ok=1;s_netplay=0;
     cpu.gpr[8]=123;s_ram[0x456]=0x77;
     uint64_t cycle=psx_cycle_count,published=s_stereo_published;
-    CHECK(psx_mod_render_capture_rgba(&cpu,&rect,isolated_draw,NULL,pixels,sizeof pixels),
-          "isolated capture succeeds without publishing a stereo pair");
+    s_dual_draws=0;
+    CHECK(psx_mod_render_capture_rgba_pair(&cpu,&rect,isolated_draw,&first,&second,
+                                           pixels,sizeof pixels),
+          "isolated dual capture succeeds without publishing a stereo pair");
+    CHECK(s_dual_draws==2 && s_dual_users[0]==&first && s_dual_users[1]==&second,
+          "one transaction per matte, each with its own user");
     CHECK(cpu.gpr[8]==123 && s_ram[0x456]==0x77 && psx_cycle_count==cycle,
           "isolated capture restores CPU, RAM and the guest clock");
-    CHECK(s_stereo_published==published && s_stereo_mask==0 && pixels[0]==0x5A,
-          "isolated pixels copied and temporary staging discarded");
-    CHECK(!psx_mod_render_capture_rgba(&cpu,&rect,isolated_draw,NULL,pixels,sizeof pixels-1),
+    CHECK(s_stereo_published==published && s_stereo_mask==0 &&
+          pixels[0]==0x5A && pixels[31]==0x5A,
+          "both isolated planes copied and temporary staging discarded");
+    /* The two mattes draw from one machine state, so the second one reuses the
+     * checkpoint the first one captured, the way a pair's right eye does. */
+    RenderStereoStats stats;
+    render_stereo_get_stats(&stats);
+    CHECK(stats.checkpoint_saves==1 && stats.checkpoint_reuses==1,
+          "the two mattes of one capture share one checkpoint");
+    s_dual_draws=0;
+    CHECK(!psx_mod_render_capture_rgba_pair(&cpu,&rect,isolated_draw,&first,&second,
+                                            pixels,sizeof pixels-1),
           "undersized pixel buffer refused");
+    CHECK(s_dual_draws==0 && !psx_mod_render_capture_rgba_pair(&cpu,&rect,isolated_draw,
+                                                               &first,NULL,pixels,sizeof pixels),
+          "a missing second matte is refused before any draw");
+    /* The capture's shared checkpoint is scoped to the capture: the pair that
+     * renders later in the same frame must still capture its first eye. */
+    PSXModStereoFrame f={sizeof f,2,0,240,320,240};
+    render_pass_reset_session();s_gl_status=0;s_begin_ok=1;s_eye_decline=-1;s_eye_calls=0;
+    CHECK(psx_mod_render_stereo(&cpu,&f,pair_draw,NULL)==1,
+          "a pair still renders after a capture");
+    render_stereo_get_stats(&stats);
+    CHECK(stats.checkpoint_saves==1 && stats.checkpoint_reuses==1,
+          "the pair after a capture captures its own baseline");
 }
 int main(void) {
     test_store_policy();

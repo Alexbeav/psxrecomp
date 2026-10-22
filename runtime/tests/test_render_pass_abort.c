@@ -215,8 +215,8 @@ int gl_renderer_stereo_end(uint32_t eye, int keep) {
     return 1;
 }
 void gl_renderer_stereo_stage_reset(void) { s_stereo_mask = 0; }
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
-    (void)eye;(void)w;(void)h;(void)rgba;return 0;
+int gl_renderer_stereo_stage_readback_pair(uint32_t w,uint32_t h,uint8_t *rgba) {
+    (void)w;(void)h;(void)rgba;return 0;
 }
 void gl_renderer_stereo_reset(void) { s_stereo_mask = 0; s_stereo_published = 0; }
 int gl_renderer_stereo_set_presentation(uint32_t mode) { return mode <= 1; }

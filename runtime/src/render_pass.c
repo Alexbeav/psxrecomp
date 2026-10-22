@@ -308,6 +308,12 @@ static int s_shed_geom_valid;
 /* A HUD-only capture transaction reuses eye 0's slot but is not an eye draw;
  * frame tracing must not attribute its cost to the left eye. */
 static int s_capture_only;
+/* The two transactions of one HUD capture call are a pair of their own: the
+ * second matte draws from exactly the state the restore that ended the first
+ * one put back, so it may reuse the first one's checkpoint the way a pair's
+ * right eye reuses the left's. Scoped to the capture call, so the reuse never
+ * reaches the pair that renders later in the same frame. */
+static int s_capture_pair;
 
 static int pass_refuse(const char *reason, uint32_t status) {
     /* A refusal always carries a reason: last_failure.reason == NULL means
@@ -900,10 +906,10 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_open_generation = 0;
     s_leaks_before = gl_renderer_pass_leaks();
 
-    /* A stereo eye whose machine state still equals the pair's captured
-     * baseline skips re-capturing it. */
-    int reuse_baseline = eye >= 0 && !s_capture_only &&
-                         s_baseline_ready && baseline_reuse_enabled();
+    /* A stereo eye, or the second matte of a capture, whose machine state still
+     * equals the baseline captured for it skips re-capturing that state. */
+    int reuse_baseline = eye >= 0 && s_baseline_ready && baseline_reuse_enabled() &&
+                         (!s_capture_only || s_capture_pair);
     if (!checkpoint_save(cpu, reuse_baseline)) {
         gl_renderer_pass_begin_diag(&s_attempt.gl);
         s_stats.checkpoint_refused++;
@@ -1039,10 +1045,12 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         }
     }
     /* The restore just put the live machine back to the captured baseline, so
-     * the other eye of this pair may reuse it. Anything else - a non-stereo
-     * transaction, a HUD-only capture, a failed eye or an unverified restore -
-     * leaves nothing safe to reuse. */
-    s_baseline_ready = (eye >= 0 && !s_capture_only && ok && verify_ok) ? 1 : 0;
+     * the other eye of this pair, or the other matte of this capture, may reuse
+     * it. Anything else - a non-stereo transaction, a capture that is not part
+     * of a matte pair, a failed eye or an unverified restore - leaves nothing
+     * safe to reuse. */
+    s_baseline_ready = (eye >= 0 && ok && verify_ok &&
+                        (!s_capture_only || s_capture_pair)) ? 1 : 0;
 
     t1 = gl_renderer_perf_ticks();
     {
@@ -1272,24 +1280,37 @@ void psx_mod_stereo_set_budget_ms(double ms) {
     s_shed_xr_budget_ms = (ms > 0.0 && ms < 1000.0) ? ms : 0.0;
 }
 
-int psx_mod_render_capture_rgba(CPUState *cpu,const PSXModRenderPass *rect,
-                               PSXModRenderPassFn fn,void *user,
-                               uint8_t *rgba,uint32_t bytes) {
-    if(s_pair_busy || !cpu || !rect || !fn || !rgba || rect->struct_size<sizeof *rect ||
+/* Two mattes of one slice in a single capture: the first transaction stages
+ * eye 0 and the second eye 1, so one read returns both. The two transactions
+ * are captures, not eye draws: neither publishes a pair nor samples the
+ * per-eye trace, and the checkpoint they share is their own. */
+int psx_mod_render_capture_rgba_pair(CPUState *cpu,const PSXModRenderPass *rect,
+                                    PSXModRenderPassFn fn,void *user_first,
+                                    void *user_second,uint8_t *rgba,uint32_t bytes) {
+    if(s_pair_busy || !cpu || !rect || !fn || !rgba || !user_first || !user_second ||
+       rect->struct_size<sizeof *rect ||
        !rect->w || !rect->h || rect->x+rect->w>1024 || rect->y+rect->h>512 ||
-       (uint64_t)rect->w*rect->h*4>bytes || transaction_status(1)!=PSX_MOD_RENDER_PASS_READY)return 0;
+       (uint64_t)rect->w*rect->h*8>bytes || transaction_status(1)!=PSX_MOD_RENDER_PASS_READY)return 0;
     if(g_overlay_flush_pending_cycles)g_overlay_flush_pending_cycles();
     uint64_t trace_t0=gl_renderer_perf_ticks();
     s_pair_busy=1;s_plan_serial++;
     gl_renderer_stereo_stage_reset();
     PSXModRenderPass capture=*rect;capture.alpha_q16=0;
-    s_capture_only=1;   /* this eye-0 transaction is a HUD capture, not an eye draw */
-    int ok=render_transaction(cpu,&capture,fn,user,0);
-    s_capture_only=0;
+    /* Start uncaptured: the ready flag carries the pair's baseline from the
+     * previous frame, which describes a machine the guest has since changed. */
+    s_capture_only=1;s_capture_pair=1;s_baseline_ready=0;
+    uint64_t cycle=psx_cycle_count,stores=g_guest_store_count;
+    int ok=render_transaction(cpu,&capture,fn,user_first,0);
+    /* The second matte must draw from the state the first one's restore put
+     * back. If the clock or the store count moved, that baseline no longer
+     * describes it, so capture the machine again instead of reusing it. */
+    if(psx_cycle_count!=cycle || g_guest_store_count!=stores)s_baseline_ready=0;
+    if(ok)ok=render_transaction(cpu,&capture,fn,user_second,1);
+    s_capture_only=0;s_capture_pair=0;s_baseline_ready=0;
     uint64_t trace_t1=gl_renderer_perf_ticks();
     psx_frame_trace_add(PSX_TRACE_HUD_DRAW,
                         trace_ticks_to_us(trace_t1-trace_t0));
-    if(ok)ok=gl_renderer_stereo_stage_readback(0,rect->w,rect->h,rgba);
+    if(ok)ok=gl_renderer_stereo_stage_readback_pair(rect->w,rect->h,rgba);
     psx_frame_trace_add(PSX_TRACE_HUD_READBACK,
                         trace_ticks_to_us(gl_renderer_perf_ticks()-trace_t1));
     gl_renderer_stereo_stage_reset();s_pair_busy=0;
