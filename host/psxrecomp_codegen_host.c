@@ -19,6 +19,7 @@
 #  include <signal.h>
 #  include <spawn.h>
 #  include <strings.h>
+#  include <sys/file.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
@@ -644,6 +645,14 @@ static void toolchain_text_rename_failed(char* out, size_t cap, long error) {
                  "may be open in another program, or the folder may be protected.");
         return;
     }
+#else
+    if (error == EBUSY) {
+        snprintf(out, cap,
+                 "Another program is using the installed toolchain, for example a "
+                 "running build. The toolchain was not changed. Wait until it ends "
+                 "and try again.");
+        return;
+    }
 #endif
     snprintf(out, cap,
              "The installed toolchain folder could not be renamed (system error "
@@ -1049,6 +1058,112 @@ static void path_put_in_front(const char* first, const char* second) {
     free(neu);
 }
 
+#if !defined(_WIN32)
+/* A pack in use (PS1B-416). On Windows a folder with an open file cannot be
+ * renamed, and that is what keeps an installer from taking a pack away from a
+ * build. Linux and macOS rename it anyway, so there this program holds a
+ * shared lock on the folder of each pack it puts on PATH, for as long as it
+ * runs, and an installer takes the exclusive lock without waiting before it
+ * renames a folder aside (set_dir_aside); when it cannot, the pack is in use
+ * and stays. tools/toolchain_pack.py does the same, so a CLI rebuild holds the
+ * pack it builds with. On a filesystem without locks nothing is held and the
+ * rename goes on as before. */
+#define PACK_HOLDS 8
+static int g_pack_hold_fd[PACK_HOLDS] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static dev_t g_pack_hold_dev[PACK_HOLDS];
+static ino_t g_pack_hold_ino[PACK_HOLDS];
+
+static void pack_hold_pause(void) {
+    struct timespec t = {0, 50000000L};
+    nanosleep(&t, NULL);
+}
+
+/* The slot that holds this folder, or -1. */
+static int pack_hold_slot(dev_t dev, ino_t ino) {
+    int i;
+    for (i = 0; i < PACK_HOLDS; ++i)
+        if (g_pack_hold_fd[i] >= 0 && g_pack_hold_dev[i] == dev && g_pack_hold_ino[i] == ino)
+            return i;
+    return -1;
+}
+
+/* Hold a shared lock on the pack folder until this program ends. Again for the
+ * same folder: nothing. A folder an installer is renaming this instant is
+ * waited for briefly; a new folder under the same name is then held. */
+static void hold_pack(const char* pack_root) {
+    int tries, i;
+    for (tries = 0; tries < 20; ++tries) {
+        struct stat st, locked;
+        char* real = realpath(pack_root, NULL);
+        int fd;
+        if (!real || stat(real, &st) != 0) {
+            free(real);
+            pack_hold_pause();      /* set aside; the new pack takes the name next */
+            continue;
+        }
+        if (pack_hold_slot(st.st_dev, st.st_ino) >= 0) {
+            free(real);
+            return;
+        }
+        fd = open(real, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (fd < 0) {
+            free(real);
+            return;
+        }
+        if (flock(fd, LOCK_SH | LOCK_NB) != 0) {
+            int e = errno;
+            close(fd);
+            free(real);
+            if (e == EWOULDBLOCK || e == EAGAIN) {
+                pack_hold_pause();  /* an installer is renaming it this instant */
+                continue;
+            }
+            return;                 /* no locks on this filesystem */
+        }
+        if (fstat(fd, &locked) == 0 && stat(real, &st) == 0 &&
+            st.st_dev == locked.st_dev && st.st_ino == locked.st_ino) {
+            free(real);
+            for (i = 0; i < PACK_HOLDS && g_pack_hold_fd[i] >= 0; ++i)
+                ;
+            if (i == PACK_HOLDS) {
+                close(fd);          /* eight packs held already */
+                return;
+            }
+            g_pack_hold_fd[i] = fd;
+            g_pack_hold_dev[i] = locked.st_dev;
+            g_pack_hold_ino[i] = locked.st_ino;
+            return;
+        }
+        close(fd);                  /* renamed between the open and the lock: again */
+        free(real);
+    }
+}
+
+/* -2: another program holds the folder. -1: nothing to lock (not a folder, or
+ * no locks on this filesystem). Else the descriptor that holds the exclusive
+ * lock until it is closed. This program's own hold on the folder is let go. */
+static int claim_for_rename(const char* path) {
+    struct stat st;
+    int fd, slot;
+    if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode))
+        return -1;
+    slot = pack_hold_slot(st.st_dev, st.st_ino);
+    if (slot >= 0) {
+        close(g_pack_hold_fd[slot]);
+        g_pack_hold_fd[slot] = -1;
+    }
+    fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        int e = errno;
+        close(fd);
+        return (e == EWOULDBLOCK || e == EAGAIN) ? -2 : -1;
+    }
+    return fd;
+}
+#endif
+
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
@@ -1073,6 +1188,7 @@ static void activate_toolchain_path(void) {
         g_toolchain_bin[0] = '\0';
         return;
     }
+    hold_pack(pack_root);   /* an installer leaves a pack in use alone (PS1B-416) */
 #endif
 
     /* Prepend pack python/ (Windows) or python/bin (Unix), then bin/. */
@@ -2512,8 +2628,9 @@ static int toolchain_readonly_skip(const char* what, const char* path) {
  *
  *   - a new pack is unpacked beside the installed one and checked there;
  *   - the installed folder is then renamed aside (set_dir_aside). A folder with
- *     an open file cannot be renamed on Windows: the installed pack then stays
- *     and the new one is dropped;
+ *     an open file cannot be renamed on Windows; on Linux and macOS a folder
+ *     another program holds (hold_pack, PS1B-416) is not renamed. The
+ *     installed pack then stays and the new one is dropped;
  *   - the new pack takes the name, the pointer follows, and only then the
  *     folder that was set aside is removed. What cannot be removed whole stays
  *     under its dot-name (no lookup reads dot-names) and goes on a later pass;
@@ -2553,14 +2670,25 @@ static int remove_pointer_only(const char* path) {
 }
 
 /* Rename a folder to a dot-name beside it. 0 when it cannot be renamed (a file
- * in it is open): nothing has changed then. */
+ * in it is open on Windows; another program holds the pack elsewhere, EBUSY):
+ * nothing has changed then. */
 static int set_dir_aside(const char* path, char* aside, size_t cap) {
     char parent[1400], name[300];
     const char* base = path_base_name(path);
     int n;
+#if !defined(_WIN32)
+    int lock_fd, done = 0;
+#endif
     aside[0] = '\0';
     if (!base || !base[0] || !dirname_copy(parent, sizeof(parent), path))
         return 0;
+#if !defined(_WIN32)
+    lock_fd = claim_for_rename(path);
+    if (lock_fd == -2) {
+        g_tc_aside_error = (long)EBUSY;
+        return 0;
+    }
+#endif
     for (n = 0; n < 100; ++n) {
 #if defined(_WIN32)
         unsigned long pid = (unsigned long)GetCurrentProcessId();
@@ -2582,12 +2710,20 @@ static int set_dir_aside(const char* path, char* aside, size_t cap) {
             return 1;
         g_tc_aside_error = (long)GetLastError();
 #else
-        if (rename(path, aside) == 0)
-            return 1;
+        if (rename(path, aside) == 0) {
+            done = 1;
+            break;
+        }
         g_tc_aside_error = (long)errno;
 #endif
         break;
     }
+#if !defined(_WIN32)
+    if (lock_fd >= 0)
+        close(lock_fd);
+    if (done)
+        return 1;
+#endif
     aside[0] = '\0';
     return 0;
 }
@@ -3469,8 +3605,9 @@ static int path_is_under_dir(const char* child, const char* parent) {
 }
 
 /* One older install: a link is removed as a link; a folder is set aside and
- * then removed. A folder with an open file cannot be set aside on Windows: it
- * is in use and stays whole. */
+ * then removed. A folder with an open file cannot be set aside on Windows, nor
+ * a folder another program holds on Linux and macOS: it is in use and stays
+ * whole. */
 static int prune_one_toolchain_child(const char* child) {
     char aside[1500];
     if (path_is_link(child))

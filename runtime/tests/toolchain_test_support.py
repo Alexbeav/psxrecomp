@@ -130,6 +130,9 @@ def s3(error: int, windows: bool = WINDOWS) -> str:
     if windows and error == 5:
         return ("Windows refused to rename the installed toolchain folder (error 5, access denied). The toolchain "
                 "was not changed. A file in it may be open in another program, or the folder may be protected.")
+    if not windows and error == 16:     # EBUSY: another program holds the pack (PS1B-416)
+        return ("Another program is using the installed toolchain, for example a running build. The toolchain "
+                "was not changed. Wait until it ends and try again.")
     return "The installed toolchain folder could not be renamed (system error %d). The toolchain was not changed." % error
 
 
@@ -380,6 +383,16 @@ int main(int argc, char** argv) {
         resolve_toolchain_bin(second, sizeof(second));
         printf("first=%%s\nsecond=%%s\nnote=%%s\n", first, second, g_tc_repair_note);
         ret = 0;
+    } else if (strcmp(op, "hold") == 0) {
+        /* A program that uses the pack (PS1B-416): activate_toolchain_path, say so, then wait
+         * until stdin closes. It opens no file in the pack while it waits. */
+        int ch;
+        activate_toolchain_path();
+        printf("bin=%%s\nheld=1\n", g_toolchain_bin);
+        fflush(stdout);
+        while ((ch = getchar()) != EOF)
+            ;
+        ret = g_toolchain_bin[0] ? 1 : 0;
     } else if (strcmp(op, "rename-text") == 0) {
         /* The sentence for a rename that failed with the system error <a>. */
         toolchain_text_rename_failed(err, sizeof(err), atol(a));
