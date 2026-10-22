@@ -225,6 +225,9 @@ void gte_render_view_get(int32_t xyz[3]) { memcpy(xyz, s_view, sizeof s_view); }
 void gte_render_view_set(const int32_t xyz[3]) { memcpy(s_view, xyz, sizeof s_view); }
 static PSXModRenderView s_pose;
 void gte_render_pose_get(PSXModRenderView *v) { *v = s_pose; memcpy(v->translation, s_view, sizeof s_view); }
+int gpu_render_projective_begin(void) { return 1; }
+void gpu_render_projective_end(void) {}
+void psx_mod_set_render_projective(int enabled) { (void)enabled; }
 void gte_render_pose_set(const PSXModRenderView *v) { s_pose = *v; memcpy(s_view, v->translation, sizeof s_view); }
 int gl_renderer_stereo_publish(uint64_t id, uint64_t cycle, const int32_t view[2][3]) {
     (void)cycle; (void)view;

@@ -165,6 +165,29 @@ int main(void) {
     fixture_projective_supported=1;gp0_cmd_source_addr=UINT32_MAX;
     assert(!native_wide_projective_draw());
     assert(fixture_projective_draws==2);
+    /* VR replay uses the clipping transport at ordinary 4:3, including
+     * unsaturated positive vertices (smooth motion), only inside its pass. */
+    gp0_cmd_source_addr=0x10004u; ws_cfg_num=4;ws_cfg_den=3;
+    fixture_projective_supported=1;
+    fixture_pgxp_enabled=0;fixture_pgxp_cpu_mode=0;
+    psx_mod_set_render_projective(1);
+    assert(!fixture_pgxp_enabled && fixture_projection_tracking);
+    assert(!native_wide_projective_draw());
+    assert(gpu_render_projective_begin());
+    assert(fixture_pgxp_enabled && fixture_pgxp_cpu_mode);
+    g_psx_render_pass_active=1;
+    assert(native_wide_projective_draw());
+    fixture_homogeneous[1].valid=0;
+    assert(!native_wide_projective_draw());
+    fixture_homogeneous[1].valid=1;
+    fixture_backend=GR_BACKEND_SOFTWARE;
+    assert(!native_wide_projective_draw());
+    fixture_backend=GR_BACKEND_OPENGL;
+    g_psx_render_pass_active=0;
+    assert(!native_wide_projective_draw());
+    gpu_render_projective_end();
+    assert(!fixture_pgxp_enabled && !fixture_pgxp_cpu_mode);
+    psx_mod_set_render_projective(0);
     puts("native_wide_projection_test: PASS");
     return 0;
 }

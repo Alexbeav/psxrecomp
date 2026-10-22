@@ -7,6 +7,28 @@
 uint64_t s_frame_count;
 uint64_t psx_cycle_count;          /* gpu_timeline.c stamps notes with it */
 int g_exec_phase;
+int g_psx_render_pass_active;
+void psx_mod_counter_add(const char *name, uint32_t delta) { (void)name; (void)delta; }
+static int fixture_pgxp_enabled;
+int pgxp_enabled(void) { return fixture_pgxp_enabled; }
+static int fixture_pgxp_cpu_mode;
+int pgxp_cpu_mode(void) { return fixture_pgxp_cpu_mode; }
+void pgxp_set_cpu_mode(int enabled) { fixture_pgxp_cpu_mode=enabled; }
+int pgxp_projective_scope_begin(PGXPProjectiveScope *scope) {
+    if (!scope || scope->active) return 0;
+    scope->saved_enabled=fixture_pgxp_enabled;
+    scope->saved_cpu_mode=fixture_pgxp_cpu_mode;
+    fixture_pgxp_enabled=1;
+    fixture_pgxp_cpu_mode=1;
+    scope->active=1;
+    return 1;
+}
+void pgxp_projective_scope_end(PGXPProjectiveScope *scope) {
+    if (!scope || !scope->active) return;
+    fixture_pgxp_cpu_mode=scope->saved_cpu_mode;
+    fixture_pgxp_enabled=scope->saved_enabled;
+    scope->active=0;
+}
 uint32_t g_debug_current_func_addr;
 uint32_t g_debug_last_store_pc;
 CPUState *debug_cpu_ptr;
@@ -141,7 +163,6 @@ void psx_fatal_halt(const char *reason) {
     assert(!"psx_fatal_halt called");
 }
 
-static int fixture_pgxp_enabled;
 void pgxp_set_enabled(int enabled) { fixture_pgxp_enabled = enabled; }
 int gte_geometry_correction_enabled(void) { return g_test_geometry_correction; }
 int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,

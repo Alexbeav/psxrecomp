@@ -5330,6 +5330,8 @@ static void native_draw_end(int previous) { sw_set_faithful_authority(previous);
 static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; s_projected_uv_valid = 0; s_pz_valid = 0; }
 
 int gl_renderer_projective_supported(void) {
+    /* Eye replay owns a separate FBO even when native-wide presentation is off. */
+    if (s_pass_active) return s_raster_ok;
     if (s_rth_on && !rt_on_render_thread() && !rt_held())
         return s_raster_ok && s_rthm_cur && !cpu_vram_authoritative();
     return s_raster_ok && g_wide_cur && !cpu_vram_authoritative();

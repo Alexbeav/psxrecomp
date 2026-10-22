@@ -542,6 +542,29 @@ extern "C" void pgxp_checkpoint_rollback(void) {
     }
 }
 
+extern "C" int pgxp_projective_scope_begin(PGXPProjectiveScope *scope) {
+    if (!scope || scope->active) return 0;
+    scope->saved_enabled = s_enabled;
+    scope->saved_cpu_mode = s_cpu_mode;
+    if (!scope->saved_enabled) {
+        pgxp_set_enabled(1);
+        if (!s_enabled) {
+            s_cpu_mode = scope->saved_cpu_mode;
+            return 0;
+        }
+    }
+    s_cpu_mode = 1;
+    scope->active = 1;
+    return 1;
+}
+
+extern "C" void pgxp_projective_scope_end(PGXPProjectiveScope *scope) {
+    if (!scope || !scope->active) return;
+    s_cpu_mode = scope->saved_cpu_mode;
+    if (!scope->saved_enabled) pgxp_set_enabled(0);
+    scope->active = 0;
+}
+
 static inline int pv_live(const PGXPValue *pv) {
     return pv && pv->gen == s_gen && (pv->flags & PGXP_F_VXY) != 0;
 }

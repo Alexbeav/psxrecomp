@@ -9229,14 +9229,15 @@ static void handle_openxr_pose_override(int id,const char *json) {
     extern void psx_openxr_pose_clear(void);
     if(json_get_int(json,"clear",0)){ psx_openxr_pose_clear(); send_fmt("{\"id\":%d,\"ok\":true,\"cleared\":1}",id); return; }
     int x=json_get_int(json,"x_mm",0),y=json_get_int(json,"y_mm",0),z=json_get_int(json,"z_mm",0);
-    int pitch_deg=json_get_int(json,"pitch_deg",0);
+    double pitch_deg=(double)json_get_int(json,"pitch_deg",0) +
+        (double)json_get_int(json,"pitch_mdeg",0)/1000.0;
     if(!psx_openxr_pose_override((double)x/1000.0,(double)y/1000.0,(double)z/1000.0)){
         send_err(id,"pose offset must be finite and within +/-10 m");return;
     }
     if(!psx_openxr_pose_pitch_override((double)pitch_deg)){
         send_err(id,"pitch_deg must be finite and within +/-90");return;
     }
-    send_fmt("{\"id\":%d,\"ok\":true,\"x_mm\":%d,\"y_mm\":%d,\"z_mm\":%d,\"pitch_deg\":%d}",id,x,y,z,pitch_deg);
+    send_fmt("{\"id\":%d,\"ok\":true,\"x_mm\":%d,\"y_mm\":%d,\"z_mm\":%d,\"pitch_deg\":%.6f}",id,x,y,z,pitch_deg);
 }
 
 static void handle_openxr_input_override(int id,const char *json) {

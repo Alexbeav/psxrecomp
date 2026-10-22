@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #include "cpu_state.h"
@@ -724,6 +725,14 @@ static void test_journal(void) {
 #undef POLICY
 }
 
+static int s_projective_scope, s_projective_refuse;
+int gpu_render_projective_begin(void) {
+    if (s_projective_refuse) return 0;
+    ++s_projective_scope;
+    return 1;
+}
+void gpu_render_projective_end(void) { s_projective_scope=0; }
+void psx_mod_set_render_projective(int enabled) { (void)enabled; }
 static int s_eye_calls, s_eye_decline = -1;
 static int pair_draw(CPUState *cpu, void *user, uint32_t eye) {
     (void)user;
@@ -739,6 +748,15 @@ static int pair_draw(CPUState *cpu, void *user, uint32_t eye) {
     v.projection = 1; v.fx_q16 = 200 << 16; v.fy_q16 = 100 << 16;
     v.translation[0] = eye ? 24 : -24;
     CHECK(psx_mod_render_view(&v), "full scoped pose accepted");
+    v.precise=1; v.rotation[2]=1;v.rotation[4]=1;v.rotation[6]=-1;
+    v.translation_precise[0]=v.translation[0]+.125;
+    CHECK(psx_mod_render_view(&v), "fractional scoped pose accepted");
+    v.translation_precise[1]=NAN;
+    CHECK(!psx_mod_render_view(&v), "nonfinite precise pose rejected");
+    v.translation_precise[1]=0;
+    v.rotation[0]=2;
+    CHECK(!psx_mod_render_view(&v), "unbounded precise rotation rejected");
+
 
     cpu->gpr[8] = eye + 1; s_ram[0x456] = (uint8_t)eye;
     psx_advance_cycles(5000u + eye);
@@ -765,7 +783,7 @@ static void test_stereo(void) {
           "one baseline per pair, reused by the second eye");
     CHECK(stats.checkpoint_ram_bytes > 0,
           "the captured baseline reports the RAM it copied");
-    CHECK(s_prec_open == 0, "precision tracking is armed and rolled back per eye");
+    CHECK(s_prec_open == 0 && s_projective_scope == 0, "precision tracking is armed and rolled back per eye");
     CHECK(cpu.gpr[8] == 123 && s_ram[0x456] == 0x77 && psx_cycle_count == cycle,
           "live state restored after the pair");
     CHECK(s_view[0] == 0 && stats.eye_view[0][0] == -24 && stats.eye_view[1][0] == 24,
@@ -773,6 +791,14 @@ static void test_stereo(void) {
     CHECK(s_pose.struct_size == 0 && !s_pose.projection, "pose restored after pair");
     CHECK(!psx_mod_render_view_offset(1, 0, 0), "view rejected outside render callback");
     published = s_stereo_published;
+    s_projective_refuse = 1;
+    CHECK(!psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) &&
+          s_stereo_published == published && s_stereo_mask == 0,
+          "projective PGXP refusal rolls the checkpoint back without publication");
+    CHECK(s_prec_open == 0 && s_projective_scope == 0 && cpu.gpr[8] == 123 &&
+          s_ram[0x456] == 0x77 && psx_cycle_count == cycle,
+          "projective refusal restores the complete live state");
+    s_projective_refuse = 0;
     s_eye_decline = 1;
     CHECK(!psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) &&
           s_stereo_published == published && s_stereo_mask == 0,
