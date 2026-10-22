@@ -7,6 +7,7 @@
 #include <toml.hpp>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <vector>
 #include <stdexcept>
@@ -79,7 +80,9 @@ inline void remember(const Profile& profile,const std::string& disc) {
         0
 #endif
         )+".tmp");
-    {std::ofstream out(temp,std::ios::binary);out<<toml::format(state);out.flush();if(!out)throw std::runtime_error("Cannot save regional selection");}
+    /* TOML continuation lines trim leading whitespace. Width-wrapping a
+     * filename at a space would silently change the remembered disc path. */
+    {std::ofstream out(temp,std::ios::binary);out<<toml::format(state,(std::numeric_limits<std::size_t>::max)());out.flush();if(!out)throw std::runtime_error("Cannot save regional selection");}
 #if defined(_WIN32)
     if(!MoveFileExW(temp.c_str(),(root/"europe-selection.toml").c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
         throw std::runtime_error("Cannot commit regional selection");
