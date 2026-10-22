@@ -3495,8 +3495,7 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "internal_resolution = " << s.internal_resolution << "\n";
     }
     if (s.has_supersample)
-        f << "supersample       = " << (s.supersample_milli / 1000.0) << "
-";
+        f << "supersample       = " << (s.supersample_milli / 1000.0) << "\n";
     if (s.has_dynamic_resolution)
         f << "dynamic_resolution = " << (s.dynamic_resolution ? "true" : "false") << "\n";
     if (s.has_dynamic_resolution_min &&
