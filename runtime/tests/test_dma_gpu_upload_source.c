@@ -179,6 +179,7 @@ int main(int argc,char **argv) {
 /* GPUSTAT.28 "ready to receive DMA block": the upload checks it at each block start (spec 2.4). */
 static int gpu_block_ready=1;
 int gpu_dma_source_ll_ready(void) {return gpu_block_ready;}
+int gpu_dma_walk_ready(void) {return gpu_block_ready;}
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}

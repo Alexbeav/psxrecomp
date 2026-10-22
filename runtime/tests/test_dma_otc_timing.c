@@ -70,6 +70,7 @@ uint32_t cdrom_dma_sector_word_count(void) { abort(); }
 int cdrom_get_setloc_lba(void) { abort(); }
 void dirty_ram_mark_executable_range(uint32_t a, uint32_t n) { (void)a; (void)n; abort(); }
 int gpu_dma_source_ll_ready(void) { abort(); }
+int gpu_dma_walk_ready(void) { abort(); }
 uint32_t gpu_dma_vram_upload_words(void) { abort(); }
 uint32_t gpu_read_gpuread(void) { abort(); }
 void gpu_set_gp0_linked_list_node(uint32_t a, uint32_t n) { (void)a; (void)n; abort(); }

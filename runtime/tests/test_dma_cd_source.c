@@ -138,6 +138,7 @@ int main(int argc,char **argv) {
 
 /* LL option is off in this adjacent fixture. */
 int gpu_dma_source_ll_ready(void) {abort();}
+int gpu_dma_walk_ready(void) {abort();}
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}
