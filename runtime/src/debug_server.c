@@ -9292,6 +9292,10 @@ static void handle_stereo_stats(int id, const char *json) {
              "\"last_eye\":%d,\"last_failure\":\"%s\","
              "\"last_failed_attempt\":%llu,\"last_failed_eye\":%d,"
              "\"last_failed_reason\":\"%s\",\"retained_pair_id\":%llu,"
+             "\"shedding\":%d,\"shed_streak\":%llu,\"shed_streak_ms\":%u,"
+             "\"shed_streak_max\":%llu,\"stale_frames\":%llu,\"budget_resets\":%llu,"
+             "\"budget_ms\":%.3f,\"budget_source\":%u,"
+             "\"last_pair_age_ms\":%llu,"
              "\"last_pair_ms\":%.3f,\"avg_pair_ms\":%.3f,"
              "\"published\":{\"valid\":%u,\"pair_id\":%llu,\"guest_cycle\":%llu,"
              "\"width\":%u,\"height\":%u,\"staged_mask\":%u,\"mode\":%u,\"presents\":%llu},\"captures\":%s}",
@@ -9307,6 +9311,10 @@ static void handle_stereo_stats(int id, const char *json) {
              (unsigned long long)s.last_failed_attempt, s.last_failed_eye,
              s.last_failed_reason ? s.last_failed_reason : "",
              (unsigned long long)s.retained_pair_id,
+             s.shedding, (unsigned long long)s.shed_streak, s.shed_streak_ms,
+             (unsigned long long)s.shed_streak_max, (unsigned long long)s.stale_frames,
+             (unsigned long long)s.budget_resets, s.budget_ms, s.budget_source,
+             (unsigned long long)s.last_pair_age_ms,
              s.last_pair_ms, s.avg_pair_ms, g.valid, (unsigned long long)g.pair_id,
              (unsigned long long)g.guest_cycle, g.width, g.height, g.staged_mask,
              g.mode, (unsigned long long)g.presents, captures);

@@ -1638,6 +1638,12 @@ if(BUILD_TESTING)
     add_executable(frame_trace_test tests/test_frame_trace.c src/frame_trace.c)
     target_include_directories(frame_trace_test PRIVATE include)
     add_test(NAME frame_trace_test COMMAND frame_trace_test)
+    # Stereo shedding/recovery policy (docs/STEREO_RENDERING.md): bounded streaks,
+    # authoritative probes, hysteresis, pair age separate from the estimate.
+    add_executable(stereo_shed_policy_test tests/test_stereo_shed_policy.c
+                   src/stereo_shed_policy.c)
+    target_include_directories(stereo_shed_policy_test PRIVATE include)
+    add_test(NAME stereo_shed_policy_test COMMAND stereo_shed_policy_test)
     # Render thread core ([video] render_thread, docs/RENDER_THREAD.md):
     # ordering across ring wraps, the frame bound, stale-frame detection and
     # the drain + context hand-off sync point, against a fake executor.
@@ -1784,6 +1790,7 @@ if(BUILD_TESTING)
             tests/test_render_pass_abort.c
             src/render_pass.c
             src/frame_trace.c
+            src/stereo_shed_policy.c
             src/psx_cycles.c)
         target_include_directories(render_pass_abort_test PRIVATE include)
         add_test(NAME render_pass_abort_test COMMAND render_pass_abort_test)
@@ -1796,6 +1803,7 @@ if(BUILD_TESTING)
         tests/test_render_pass_sandbox.c
         src/render_pass.c
         src/frame_trace.c
+        src/stereo_shed_policy.c
         src/render_pass_plan.c
         src/psx_cycles.c
         src/timers.c
