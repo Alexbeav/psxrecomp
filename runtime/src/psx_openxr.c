@@ -43,6 +43,41 @@ static int valid_pose_numbers(const double q[4],const double p[3]) {
     for(int i=0;i<3;i++)if(!isfinite(p[i]) || fabs(p[i])>100)return 0;
     return n>=.5 && n<=1.5;
 }
+/* Test-only synthetic head motion: translation in room-space metres and an optional pitch, added to
+ * both eyes after the origin is established so it reads as the head moving in the world. The
+ * translation checks that the world shifts rigidly with the head. The pitch exists because the
+ * defects that only appear when looking down cannot be reached by translation, and because the only
+ * other look path is unwired. Armed by the first override call; default off, so shipped behaviour
+ * is unchanged. */
+static int s_pose_bob_armed;
+static double s_pose_bob_m[3];
+static double s_pose_bob_pitch_deg;
+void psx_openxr_pose_bob(double q[2][4],double p[2][3]) {
+    if(!s_pose_bob_armed)return;
+    for(int i=0;i<2;i++)for(int j=0;j<3;j++)p[i][j]+=s_pose_bob_m[j];
+    if(s_pose_bob_pitch_deg!=0.0) {
+        double h=s_pose_bob_pitch_deg*(3.141592653589793/180.0)*0.5,sq=sin(h),cq=cos(h);
+        for(int i=0;i<2;i++) {
+            double x=q[i][0],y=q[i][1],z=q[i][2],w=q[i][3];
+            /* Left multiply by a rotation about the XR X axis: a look up or down. */
+            q[i][0]=sq*w+cq*x;q[i][1]=cq*y-sq*z;q[i][2]=sq*y+cq*z;q[i][3]=cq*w-sq*x;
+        }
+    }
+}
+int psx_openxr_pose_override(double x_m,double y_m,double z_m) {
+    if(!isfinite(x_m)||!isfinite(y_m)||!isfinite(z_m))return 0;
+    if(fabs(x_m)>10.0||fabs(y_m)>10.0||fabs(z_m)>10.0)return 0;
+    s_pose_bob_m[0]=x_m;s_pose_bob_m[1]=y_m;s_pose_bob_m[2]=z_m;s_pose_bob_armed=1;
+    return 1;
+}
+int psx_openxr_pose_pitch_override(double pitch_deg) {
+    if(!isfinite(pitch_deg) || fabs(pitch_deg)>90.0)return 0;
+    s_pose_bob_pitch_deg=pitch_deg;s_pose_bob_armed=1;
+    return 1;
+}
+void psx_openxr_pose_clear(void) {
+    s_pose_bob_m[0]=s_pose_bob_m[1]=s_pose_bob_m[2]=0.0;s_pose_bob_pitch_deg=0.0;s_pose_bob_armed=0;
+}
 int psx_openxr_hands_override(const PSXModOpenXRHands *hands) {
     if(!hands){s_hands_override=0;hands_clear();return 1;}
     if(hands->struct_size!=sizeof *hands || hands->focused>1 || hands->origin_valid>1)return 0;
@@ -643,6 +678,9 @@ int psx_openxr_begin(int width,int height,double units) {
     double separation=0;
     for(int j=0;j<3;j++)separation+=(p[1][j]-p[0][j])*(p[1][j]-p[0][j]);
     s_stats.ipd_m=(float)sqrt(separation);
+#ifndef PSX_NO_DEBUG_TOOLS
+    psx_openxr_pose_bob(q, p);   /* test-only synthetic head motion; no-op unless armed */
+#endif
     for(int i=0;i<2;i++) {
         XrFovf *v=&s_views[i].fov;
         double f[4]={v->angleLeft,v->angleRight,v->angleUp,v->angleDown};
