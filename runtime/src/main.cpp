@@ -10254,7 +10254,9 @@ extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     v->frame_generation = g_frame_generation ? 1 : 0;
     v->renderer = g_video_renderer;
     v->internal_resolution = g_video_internal_res;
-    v->supersampling = g_video_scale;
+    /* The legacy factor as booted: the live scale moves with the internal
+     * resolution and supersample, which apply without a relaunch. */
+    v->supersampling = g_video_boot_valid ? g_video_boot.supersampling : g_video_scale;
     v->render_thread = g_render_thread ? 1 : 0;
     v->present_thread = g_present_thread ? 1 : 0;
     v->supersample_milli = g_video_ss_milli;
