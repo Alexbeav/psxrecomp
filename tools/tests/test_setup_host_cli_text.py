@@ -98,9 +98,10 @@ int main(int argc, char** argv) {
     if (strcmp(argv[1], "value") == 0) {
         room = (size_t)atoi(argv[4]);
         out = room_new(room);
-        if (!json_get_string(g_rows, argv[3], out, room)) return 3;
-        if (!room_kept(out, room)) return 4;
+        if (!json_get_string(g_rows, argv[3], out, room)) { free(out); return 3; }
+        if (!room_kept(out, room)) { free(out); return 4; }
         fwrite(out, 1, strlen(out), stdout);
+        free(out);
         return 0;
     }
     if (strcmp(argv[1], "fail") == 0 && argc >= 6) {
@@ -118,8 +119,9 @@ int main(int argc, char** argv) {
         room = (size_t)atoi(argv[4]);
         out = room_new(room);
         cli_fail_msg(out, room, argv[5], atol(argv[3]), &tail);
-        if (!room_kept(out, room)) return 4;
+        if (!room_kept(out, room)) { free(out); return 4; }
         fwrite(out, 1, strlen(out), stdout);
+        free(out);
         return 0;
     }
     return 2;
