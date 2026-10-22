@@ -9295,6 +9295,8 @@ static void handle_stereo_stats(int id, const char *json) {
              "\"shedding\":%d,\"shed_streak\":%llu,\"shed_streak_ms\":%u,"
              "\"shed_streak_max\":%llu,\"stale_frames\":%llu,\"budget_resets\":%llu,"
              "\"budget_ms\":%.3f,\"budget_source\":%u,"
+             "\"checkpoint_saves\":%llu,\"checkpoint_reuses\":%llu,"
+             "\"checkpoint_ram_bytes\":%llu,"
              "\"last_pair_age_ms\":%llu,"
              "\"last_pair_ms\":%.3f,\"avg_pair_ms\":%.3f,"
              "\"published\":{\"valid\":%u,\"pair_id\":%llu,\"guest_cycle\":%llu,"
@@ -9314,6 +9316,9 @@ static void handle_stereo_stats(int id, const char *json) {
              s.shedding, (unsigned long long)s.shed_streak, s.shed_streak_ms,
              (unsigned long long)s.shed_streak_max, (unsigned long long)s.stale_frames,
              (unsigned long long)s.budget_resets, s.budget_ms, s.budget_source,
+             (unsigned long long)s.checkpoint_saves,
+             (unsigned long long)s.checkpoint_reuses,
+             (unsigned long long)s.checkpoint_ram_bytes,
              (unsigned long long)s.last_pair_age_ms,
              s.last_pair_ms, s.avg_pair_ms, g.valid, (unsigned long long)g.pair_id,
              (unsigned long long)g.guest_cycle, g.width, g.height, g.staged_mask,

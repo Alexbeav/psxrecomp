@@ -759,6 +759,13 @@ static void test_stereo(void) {
           "two restored eye transactions form one pair");
     CHECK(stats.eye_cycle[0] == cycle && stats.eye_cycle[1] == cycle &&
           stats.eye_hash[0] == stats.eye_hash[1], "same checkpoint identifiers");
+    /* PR3: the pair captures one machine baseline and the second eye reuses it,
+     * yet both eyes still start from that same checkpoint (checked above). */
+    CHECK(stats.checkpoint_saves == 1 && stats.checkpoint_reuses == 1,
+          "one baseline per pair, reused by the second eye");
+    CHECK(stats.checkpoint_ram_bytes > 0,
+          "the captured baseline reports the RAM it copied");
+    CHECK(s_prec_open == 0, "precision tracking is armed and rolled back per eye");
     CHECK(cpu.gpr[8] == 123 && s_ram[0x456] == 0x77 && psx_cycle_count == cycle,
           "live state restored after the pair");
     CHECK(s_view[0] == 0 && stats.eye_view[0][0] == -24 && stats.eye_view[1][0] == 24,
@@ -823,6 +830,32 @@ static void test_stereo(void) {
               "tracing changes neither the published pair nor the guest state");
         CHECK(psx_frame_trace_committed() > 0, "the traced pair was recorded");
         psx_frame_trace_set_enabled(0); psx_frame_trace_reset();
+    }
+
+    /* PSX_STEREO_BASELINE=0 restores the pre-PR3 capture per eye, and a pair
+     * rendered that way must still start both eyes from one checkpoint. */
+    {
+#ifdef _WIN32
+        _putenv("PSX_STEREO_BASELINE=0");
+#else
+        setenv("PSX_STEREO_BASELINE", "0", 1);
+#endif
+        f.period_vblanks = 2;
+        render_pass_reset_session(); s_gl_status = 0; s_begin_ok = 1; s_eye_calls = 0;
+        cpu.gpr[8] = 123; s_ram[0x456] = 0x77;
+        CHECK(psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) == 1,
+              "pair renders with baseline reuse disabled");
+        render_stereo_get_stats(&stats);
+        CHECK(stats.checkpoint_saves == 2 && stats.checkpoint_reuses == 0,
+              "reuse off captures a baseline per eye");
+        CHECK(stats.eye_hash[0] == stats.eye_hash[1] && s_eye_calls == 2,
+              "capture-per-eye still starts both eyes from one checkpoint");
+#ifdef _WIN32
+        _putenv("PSX_STEREO_BASELINE=1");
+#else
+        setenv("PSX_STEREO_BASELINE", "1", 1);
+#endif
+        render_pass_reset_session();
     }
 }
 

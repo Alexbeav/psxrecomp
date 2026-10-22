@@ -102,6 +102,11 @@ typedef struct RenderStereoStats {
     uint32_t budget_source;                /* 0 vblank (fallback), 1 headset, 2 env */
     uint64_t last_pair_age_ms;             /* age of the retained pair, this frame */
     int      shedding;                     /* policy is currently suppressing */
+    /* Pair-scoped baseline: how often a machine snapshot was captured, and how
+     * often a later eye of the same pair reused it instead of re-capturing. */
+    uint64_t checkpoint_saves;             /* snapshots captured */
+    uint64_t checkpoint_reuses;            /* eyes that reused the pair baseline */
+    uint64_t checkpoint_ram_bytes;         /* RAM bytes copied by those captures */
 } RenderStereoStats;
 void render_stereo_get_stats(RenderStereoStats *out);
 int render_pass_netplay_enabled(void);
