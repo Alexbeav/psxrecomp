@@ -3165,6 +3165,23 @@ static void exec_command(uint8_t cmd) {
              * target, which is the delivery cursor (PSX-SPX "GetlocP": it
              * works during a seek). */
             if ((s_nymashock_drive || s_source_read_pipeline) && !(stat_reg & CDSTAT_SEEK)) lba += 1;
+            /* PS1B-109: on the source clock, G2c holds only until one sector
+             * period before the first delivery. From then on the still
+             * seeking read names the target + 1; the status stays 42h, motor
+             * and seek (PSX-SPX "Status code (stat)"). read_delay is the time
+             * left to that delivery; the source clock runs commands after the
+             * read timer has advanced to the same cycle. Spyro the Dragon
+             * 5523M, return 1661: GetlocP 132,712 cycles before the first
+             * delivery of sector 113448 at double speed (period 225,792,
+             * 150 sectors per second, PSX-SPX "CDROM Incoming Data / Buffer
+             * Overrun Timings") names 113449; at 1,264,488 cycles before it
+             * names 113448. Boundary: a GetlocP exactly one period before the
+             * delivery names the target + 1. The reply then steps up by one at
+             * each period boundary, as it does at each later delivery under
+             * G2b, where the step is seen on the cycle of the delivery itself
+             * (cdrom_getlocp_first_delivery_test). */
+            if (s_source_clock && (stat_reg & CDSTAT_SEEK) && read_delay > 0 &&
+                read_delay <= sector_delay_cycles()) lba += 1;
         } else if (s_nymashock_drive && source_drive_last_decoded() >= 0) {
             /* Spec 6.7 G3: idle drive, drive profile. Without a decoded
              * position the two branches below answer (G4). */
