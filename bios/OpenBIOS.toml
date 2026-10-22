@@ -19,6 +19,13 @@
 #     --extra recompiler/seeds/openbios_dispatch_miss.json \
 #     --out recompiler/seeds/openbios_elf_seeds.json
 #
+# Local patch: bios/openbios.bin is that build (sha256 fabe498fbf22...)
+# with 14 words of the kernel's free replaced, so that free returns on a
+# free list whose link does not lie above its node instead of looping
+# (PS1G-142, Wipeout XL). tools/patch_openbios.py holds the words, applies
+# them to the upstream image and checks this file; no function moves, so
+# the seeds above are unchanged. Re-pinning OpenBIOS means re-applying it.
+#
 # The address model below was established by direct disassembly of the boot
 # path (reset vector -> copy loops), each copy confirmed twice (boot + the
 # warm-restart path reloading lengths from ROM constants; the shell length
@@ -33,7 +40,7 @@ entry_pc     = "0xBFC00000"
 text_size    = "0x80000"
 
 [program.image]
-sha256          = "fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57"
+sha256          = "32dbc89c2e620c9a671fabe05772c3ae0ab38e4d15b4fdeeb6f7ca07093ef8c3"
 license         = "MIT"
 redistributable = true
 

@@ -7,7 +7,8 @@ the PCSX-Redux authors, licensed **MIT** (notice: `bios/OpenBIOS.LICENSE`;
 the binary also links permissively-licensed code from
 [uC-sdk](https://github.com/grumpycoders/uC-sdk), noted there too). Vendored
 as the prebuilt image `bios/openbios.bin` (pin and build recipe recorded in
-`bios/OpenBIOS.toml`) and statically recompiled by
+`bios/OpenBIOS.toml`), with a local 14-word patch to the kernel's free
+(`tools/patch_openbios.py`), and statically recompiled by
 `psxrecomp-bios --config bios/OpenBIOS.toml` exactly like the retail BIOS.
 Normal runtime builds stage it automatically so players supply only a disc;
 `bios/OpenBIOS.LICENSE` always rides alongside the shipped image.

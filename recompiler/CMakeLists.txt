@@ -1151,6 +1151,13 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_stall_report.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1G-142: the patched OpenBIOS free returns on a list whose link does
+        # not lie above its node, and matches the upstream free on valid lists.
+        add_test(
+            NAME openbios_free_guard
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_openbios_free_guard.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME prepare_disc_boot_case
             COMMAND ${Python3_EXECUTABLE}
