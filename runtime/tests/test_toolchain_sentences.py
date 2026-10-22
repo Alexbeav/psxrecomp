@@ -33,7 +33,7 @@ sentence is compared:
   the five steps   a made-up pack for each, checked by the setup host (a probe
                    that includes its source file) and by the CLI's module.
   S2               a zip whose pack has cmake and no compiler, installed.
-  S3, by number    the host's sentence for 32, 5 and 13; the CLI's install with
+  S3, by number    the host's sentence for 32, 5, 13 and 16; the CLI's install with
                    a rename that fails with each number (the failure is put in
                    by the test).
   S4, both         the CLI's download with a temporary folder that is not there
@@ -85,7 +85,7 @@ from toolchain_test_support import (D_REASONS, EXE, STEPS, WINDOWS, make_pack, m
 
 THIS = Path(__file__).resolve()
 SKIPPED = 77
-NUMBERS = (32, 5, 13)
+NUMBERS = (32, 5, 13, 16)     # 16 is EBUSY elsewhere than Windows: another program holds the pack (PS1B-416)
 
 
 def make_stubs(tmp: Path, cc: str | None) -> dict | None:
