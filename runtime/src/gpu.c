@@ -3231,24 +3231,55 @@ static uint32_t ws_nw_left_hud_packet_hi = 0;
  * HUD can share the same builder, and either entry hook may run first. Clear
  * tags for recycled non-HUD packets; frame expiry protects unused addresses. */
 static WsPrimitiveRole ws_primitive_roles[WS_ROLE_BUCKETS];
+/* Producer-owned roles have a separate path from legacy packet-anchor tags.
+ * Debug counters establish that current title hooks reach actual rendering. */
+static GpuWsTagStats ws_hud_role_stats, ws_world_role_stats;
+void gpu_ws_get_role_stats(GpuWsTagStats *hud, GpuWsTagStats *world) {
+    if (hud) *hud = ws_hud_role_stats;
+    if (world) *world = ws_world_role_stats;
+}
 void gpu_ws_tag_hud_primitive(uint32_t primitive, int edge) {
     WsPrimitiveRole* tag = ws_role_write(ws_primitive_roles, primitive,
                                         (uint32_t)s_frame_count);
     if (tag) tag->hud_edge = edge < 0 ? -1 : edge > 0 ? 1 : 0;
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (tag && edge) {
+        ++ws_hud_role_stats.tag_calls;
+        ws_hud_role_stats.last_tag_frame = (uint32_t)s_frame_count;
+    }
+#endif
 }
 void gpu_ws_tag_world_primitive(uint32_t primitive, int is_world) {
     WsPrimitiveRole* tag = ws_role_write(ws_primitive_roles, primitive,
                                         (uint32_t)s_frame_count);
     if (tag) tag->world = is_world != 0;
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (tag && is_world) {
+        ++ws_world_role_stats.tag_calls;
+        ws_world_role_stats.last_tag_frame = (uint32_t)s_frame_count;
+    }
+#endif
 }
 static int ws_tagged_world_primitive(void) {
     const WsPrimitiveRole* tag = ws_role_read(ws_primitive_roles,
         gp0_cmd_source_addr, (uint32_t)s_frame_count);
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (tag && tag->world) {
+        ++ws_world_role_stats.hit;
+        ws_world_role_stats.last_hit_frame = (uint32_t)s_frame_count;
+    }
+#endif
     return tag && tag->world;
 }
 static int ws_tagged_hud_edge(void) {
     const WsPrimitiveRole* tag = ws_role_read(ws_primitive_roles,
         gp0_cmd_source_addr, (uint32_t)s_frame_count);
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (tag && tag->hud_edge) {
+        ++ws_hud_role_stats.hit;
+        ws_hud_role_stats.last_hit_frame = (uint32_t)s_frame_count;
+    }
+#endif
     return tag ? tag->hud_edge : 0;
 }
 void gpu_ws_set_nw_hud_corners(int on) { ws_nw_hud_corners = on ? 1 : 0; }
@@ -3271,7 +3302,9 @@ static int32_t ws_nw_hud_shift(int32_t x, int32_t w) {
     int32_t off = ws_nw_offset();
     if (off <= 0) return 0;
     int hud_edge = ws_tagged_hud_edge();
-    if (hud_edge) return hud_edge * off;
+    /* The compositor's anchor shifts the world origin too. Cancel that part
+     * for producer-owned HUD so both edges stay attached to the viewport. */
+    if (hud_edge) return hud_edge * off - ws_view_current().shift;
     int32_t explicit_delta = 0;
     if (ws_nw_explicit_hud_delta(&explicit_delta)) return explicit_delta;
     if (!ws_nw_left_hud_packet() && !ws_nw_hud_corners) return 0;

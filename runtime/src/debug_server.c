@@ -8485,11 +8485,13 @@ static void handle_ws_hud_mode(int id, const char *json)
 static void handle_ws_tag_stats(int id, const char *json)
 {
     (void)json;
-    GpuWsTagStats hud, bg;
+    GpuWsTagStats hud, bg, hud_roles, world_roles;
     gpu_ws_get_tag_stats(&hud, &bg);
-    const GpuWsTagStats *s[2] = { &hud, &bg };
-    char part[2][256];
-    for (int i = 0; i < 2; i++)
+    extern void gpu_ws_get_role_stats(GpuWsTagStats*, GpuWsTagStats*);
+    gpu_ws_get_role_stats(&hud_roles, &world_roles);
+    const GpuWsTagStats *s[4] = { &hud, &bg, &hud_roles, &world_roles };
+    char part[4][256];
+    for (int i = 0; i < 4; i++)
         snprintf(part[i], sizeof part[i],
                  "{\"tag_calls\":%llu,\"tag_rejected\":%llu,\"hit\":%llu,"
                  "\"stale\":%llu,\"guard_mismatch\":%llu,"
@@ -8500,8 +8502,8 @@ static void handle_ws_tag_stats(int id, const char *json)
                  (unsigned long long)s[i]->stale,
                  (unsigned long long)s[i]->guard_mismatch,
                  s[i]->last_tag_frame, s[i]->last_hit_frame);
-    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,\"hud\":%s,\"background\":%s}",
-             id, (unsigned long long)s_frame_count, part[0], part[1]);
+    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,\"hud\":%s,\"background\":%s,\"hud_roles\":%s,\"world_roles\":%s}",
+             id, (unsigned long long)s_frame_count, part[0], part[1], part[2], part[3]);
 }
 
 /* Kernel-image bless state: {"cmd":"kernel_bless"} ->
