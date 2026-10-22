@@ -2,4 +2,6 @@
 # The Windows gate points RECOMP_UI_ROOT at a checkout of it and `gate_launcher.py check`
 # refuses any other commit (PS1B-485). Change this line in the same commit that moves the launcher pin.
 # Pin H and pin I: aff1c6ef (Alexbeav/psxrecomp stage/pin-i; PIN-I-FIX-PILE.md "Base").
-aff1c6ef29faa51d57d2f67610d8902bf7cb8772
+# Next pin (PS1B-482): f998b0a, which adds the launcher module and its host adapter
+# (recomp_target_launcher_module_host) that PSX_LAUNCHER_MODULE needs; it descends from aff1c6ef.
+f998b0a77558d660dc35f507ee2e93eade0f12c6
