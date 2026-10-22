@@ -204,7 +204,8 @@ else:
     print('spyro2-5278M real movie absent; real-movie checks skipped')
 
 LIBRARY = Path(r'D:\Projects\Recompilations\PS1\Library\Movies\tas')
-for title in sorted(spyro.TITLES):
+# spyro2-5278M has its own real-movie check above (Nymashock 2.8 reader).
+for title in sorted(t for t in spyro.TITLES if t != 'spyro2-5278M'):
     entry, spec = spyro.title_spec(title)
     real = LIBRARY / spec['movie']
     if real.is_file():
