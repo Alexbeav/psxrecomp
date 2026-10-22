@@ -936,6 +936,13 @@ if(BUILD_TESTING)
     target_link_libraries(disc_path_resolve_test PRIVATE chdr-static)
     add_test(NAME disc_path_resolve_test COMMAND disc_path_resolve_test)
 
+    add_executable(regional_selection_test tests/test_regional_selection.cpp)
+    target_compile_features(regional_selection_test PRIVATE cxx_std_17)
+    target_include_directories(regional_selection_test PRIVATE include
+        ${PSXRECOMP_ROOT}/recompiler/lib/toml11)
+    add_test(NAME regional_selection_test COMMAND regional_selection_test
+        ${CMAKE_CURRENT_BINARY_DIR}/regional-selection-fixture)
+
     # Both BIOS filename conventions (bare vs region-qualified) resolve, in
     # both directions, so a config and a dump folder may disagree.
     add_executable(bios_rom_alias_test tests/test_bios_rom_alias.cpp)
