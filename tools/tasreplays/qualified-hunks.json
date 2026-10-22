@@ -8386,14 +8386,24 @@
             "/* Which source wrote the route's axis bytes. The default is Nymashock, which",
             " * hands the pad a 16-bit value per axis; PSX_INPUT_ROUTE_AXIS_MODEL=",
             " * octoshock-byte selects Octoshock, whose wrapper hands the pad the logged",
-            " * byte unscaled [ORACLE FIXTURE P1, Octoshock 2.3; corpus PSX-TAS-001]. */",
+            " * byte unscaled [ORACLE FIXTURE P1, Octoshock 2.3; corpus PSX-TAS-001]. */"
+          ]
+        },
+        {
+          "file": "runtime/include/input_dualshock_delivery.h",
+          "lines": [
             "static inline int input_dualshock_raw_axes(void)",
             "{",
             "    const char *model = getenv(\"PSX_INPUT_ROUTE_AXIS_MODEL\");",
             "    return model && !strcmp(model, \"octoshock-byte\");",
             "}",
             "static inline const char *input_dualshock_controller_profile(void)",
-            "{",
+            "{"
+          ]
+        },
+        {
+          "file": "runtime/include/input_dualshock_delivery.h",
+          "lines": [
             "    return input_dualshock_raw_axes() ? \"octoshock-byte-dualshock-neutral-analog\"",
             "                                      : \"nymashock-2.9.1-dualshock-neutral-analog\";",
             "}"
@@ -8424,6 +8434,30 @@
             "                   \"\\\"guest_analog_mode\\\":%d\", input_dualshock_controller_profile(),",
             "                   expected, supplied, last_protocol_mode);"
           ]
+        }
+      ],
+      "repins": [
+        {
+          "as_of": "5bb8884b24bb71c0efc4608317fbca019d7bfeb8",
+          "issue": "PS1G-127",
+          "reason": "the MODE model (PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2) inserts input_dualshock_mode_button_enabled() and its comment between the axis comment and input_dualshock_raw_axes(), and one MODE line at the top of input_dualshock_controller_profile(), so the pinned 14-line run is split in three; no pinned line changed",
+          "dropped_lines": 0,
+          "added_lines": 0,
+          "from_blocks": 6,
+          "to_blocks": 8,
+          "replacement_blocks_added": 0,
+          "note": "Re-pinned with `qualified_hunks.py seed --commit 2b52eed7 --as-of HEAD` on the rebase of fix/ps1g-127-chrono-mode onto PS1G-116 (rebased as fix/ps1g-127-chrono-mode-r2). Block 2 (axis comment through input_dualshock_controller_profile, 14 lines) becomes blocks of 4, 7 and 3 lines; all 22 pinned lines are kept. Without PSX_INPUT_ROUTE_MODE_MODEL the default and octoshock-byte paths are unchanged, so qualified_tree stays the Spyro 4083M tree; the route behind this entry (Spyro 4083M) is replayed by the trial that carries this re-pin (D24 condition 3)."
+        },
+        {
+          "as_of": "814f7856e2ac8566ab76692519700d3a613d0c3f",
+          "issue": "PS1G-123",
+          "reason": "restore the reviewed MODE implementation onto current 67ff; split the same 14-line header block into 4, 7 and 3 lines without changing any of the 22 pinned lines",
+          "dropped_lines": 0,
+          "added_lines": 0,
+          "from_blocks": 6,
+          "to_blocks": 8,
+          "replacement_blocks_added": 0,
+          "note": "The qualified_tree and original Spyro 4083M route remain unchanged. This private candidate has source/fixture controls only; the original route behind the pin still requires its trial replay before stage adoption. The historical PS1G-127 re-pin is retained as provenance."
         }
       ]
     },
