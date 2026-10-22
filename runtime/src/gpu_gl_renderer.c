@@ -8830,27 +8830,33 @@ void gl_renderer_stereo_stage_reset(void) {
     GL_RT_SYNC("stereo_stage_reset");
     s_stereo_pair[1 - s_stereo_current].mask = 0;
 }
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
-    GL_RT_SYNC("capture_readback");
-    if(eye>=2 || !rgba || !w || !h || w>1024 || h>512)return 0;
+/* Both staged eye images in one read. The blit target is double height, eye 0
+ * into its lower half and eye 1 into its upper half, so one glReadPixels
+ * returns the two height-sized planes contiguously, eye 0 first. */
+int gl_renderer_stereo_stage_readback_pair(uint32_t w,uint32_t h,uint8_t *rgba) {
+    GL_RT_SYNC("capture_readback_pair");
+    if(!rgba || !w || !h || w>1024 || h>512)return 0;
     StereoPair *pair=&s_stereo_pair[1-s_stereo_current];
-    if(!(pair->mask&(1u<<eye)))return 0;
+    if((pair->mask&3u)!=3u)return 0;
     GLint read,draw,texture,pack,pbo,row,skipr,skipp;
     GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(0x8DB9);
     glGetIntegerv(0x8CAA,&read);glGetIntegerv(0x8CA6,&draw);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);
     glGetIntegerv(GL_PACK_ALIGNMENT,&pack);glGetIntegerv(0x88ED,&pbo);glGetIntegerv(GL_PACK_ROW_LENGTH,&row);
     glGetIntegerv(GL_PACK_SKIP_ROWS,&skipr);glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipp);
     int ok=pass_make_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h,
-                              w,h,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
+                              w,h*2u,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
     if(ok) {
         glDisable(GL_SCISSOR_TEST);glDisable(0x8DB9);
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
         p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,s_capture_read_fbo);
-        p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,0,w,h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        for(uint32_t eye=0;eye<2u;eye++) {
+            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
+            p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,(GLint)(eye*h),w,(GLint)((eye+1u)*h),
+                                GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        }
         p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,s_capture_read_fbo);
         p_glBindBuffer(0x88EB,0);glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
         glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
-        glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+        glReadPixels(0,0,w,h*2u,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
     }
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,read);p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,draw);
     glBindTexture(GL_TEXTURE_2D,texture);glPixelStorei(GL_PACK_ALIGNMENT,pack);
