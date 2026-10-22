@@ -1484,6 +1484,14 @@ function(psxrecomp_add_runtime_target target)
                     -Wno-missing-profile)
                 target_link_options(${target} PRIVATE
                     "-fprofile-use=${_psx_pgo_dir}")
+                if(WIN32)
+                    # -fprofile-use turns on hot/cold function splitting. On
+                    # Windows x64 the split code breaks SEH unwinding: the
+                    # Tekken 3 build exited 0xC0000028 (STATUS_BAD_STACK) at
+                    # frame 95, and ran the route exactly without the split.
+                    target_compile_options(${target} PRIVATE
+                        -fno-reorder-blocks-and-partition)
+                endif()
             endif()
         else()
             message(FATAL_ERROR
