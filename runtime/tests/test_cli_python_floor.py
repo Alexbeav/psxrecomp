@@ -194,9 +194,10 @@ def main() -> None:
     check_detector()
 
     # prepare_disc.py is not imported but spawned with sys.executable, so it
-    # runs on the same host interpreter and shares the floor.
+    # runs on the same host interpreter and shares the floor. The bios hint
+    # test runs as a ctest on that interpreter too (PS1B-579).
     closure: dict[Path, str] = {}
-    for entry in ("psxrecomp_cli.py", "tools/prepare_disc.py"):
+    for entry in ("psxrecomp_cli.py", "tools/prepare_disc.py", "tools/tests/test_package_setup_bios_hint.py"):
         closure.update(import_closure(ROOT / entry))
     names = {p.name for p in closure}
     for required in ("release_stage.py", "compile_overlays.py", "toolchain_pack.py",
