@@ -581,6 +581,10 @@ int psx_openxr_begin(int width,int height,double units) {
     XrFrameWaitInfo wait={XR_TYPE_FRAME_WAIT_INFO};XrFrameState fs={XR_TYPE_FRAME_STATE};
     if(!check(xrWaitFrame(s_session,&wait,&fs),"wait_frame")){
         psx_frame_trace_add(PSX_TRACE_XR_WAIT_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
+        /* Session-level submission failure: the stereo cadence context is gone,
+         * so drop any stale pair-time estimate rather than carrying it into the
+         * recovery attempt. */
+        psx_mod_stereo_reset_budget();
         (void)service_loss();psx_frame_trace_commit();return 0;}
     psx_frame_trace_add(PSX_TRACE_XR_WAIT_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
     s_stats.waits++;s_time=fs.predictedDisplayTime;s_stats.predicted_time=(uint64_t)s_time;
@@ -594,12 +598,18 @@ int psx_openxr_begin(int width,int height,double units) {
     }
     s_prev_display_time=s_time;s_prev_display_valid=1;
     /* Record the runtime display period with its name for cadence analysis. */
+    /* What the runtime wants us to hit is the only true deadline for the pair.
+     * Hand it to stereo shedding (PSX VBlank is a guest redraw budget, not a
+     * compositor deadline) and record it with the runtime name so a trace can be
+     * read without guessing the headset's refresh. */
+    psx_mod_stereo_set_budget_ms(fs.predictedDisplayPeriod>0?(double)fs.predictedDisplayPeriod/1e6:0.0);
     psx_frame_trace_session(s_stats.runtime,
                             fs.predictedDisplayPeriod>0?(uint32_t)(fs.predictedDisplayPeriod/1000):0u);
     trace_t = gl_renderer_perf_ticks();
     XrFrameBeginInfo begin={XR_TYPE_FRAME_BEGIN_INFO};
     if(!check(xrBeginFrame(s_session,&begin),"begin_frame")){
         psx_frame_trace_add(PSX_TRACE_XR_BEGIN_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
+        psx_mod_stereo_reset_budget();
         (void)service_loss();psx_frame_trace_commit();return 0;}
     psx_frame_trace_add(PSX_TRACE_XR_BEGIN_FRAME, xr_trace_us(gl_renderer_perf_ticks()-trace_t));
     s_stats.frame_open=1;s_stats.tracking=0;

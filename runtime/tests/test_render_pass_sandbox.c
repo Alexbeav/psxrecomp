@@ -780,6 +780,23 @@ static void test_stereo(void) {
     f.period_vblanks = 0;
     CHECK(!psx_mod_render_stereo(&cpu, &f, pair_draw, NULL), "invalid cadence refused");
 
+    /* The headset deadline the OpenXR layer pushes outranks the guest-VBlank
+     * fallback, and dropping it restores the fallback. */
+    f.period_vblanks = 2;
+    psx_mod_stereo_reset_budget();
+    psx_mod_stereo_set_budget_ms(11.1);
+    CHECK(psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) == 1,
+          "pair renders under a headset deadline");
+    render_stereo_get_stats(&stats);
+    CHECK(stats.budget_source == 1 && stats.budget_ms > 11.0 && stats.budget_ms < 11.2,
+          "headset deadline drives the pair budget");
+    psx_mod_stereo_reset_budget();
+    CHECK(psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) == 1,
+          "pair renders after the deadline is dropped");
+    render_stereo_get_stats(&stats);
+    CHECK(stats.budget_source == 0 && stats.budget_ms > 0.0,
+          "guest-VBlank fallback restored when no headset deadline is set");
+
     /* Tracing is observation only: the same pair must publish the same id and
      * reach the same guest-state hashes with capture on as with it off. */
     {

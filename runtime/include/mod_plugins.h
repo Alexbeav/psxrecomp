@@ -752,6 +752,16 @@ void psx_mod_frame_trace_note(const char *tag);
  * inside the guest traversal it is part of (game_select in game_traverse). */
 void psx_mod_frame_trace_stage_begin(uint32_t stage);
 void psx_mod_frame_trace_stage_end(uint32_t stage);
+/* Drop the stereo shedding policy's pair-time estimate and derived budget. Call
+ * on a scene/mode transition so a new scene does not inherit the previous one's
+ * timing; cheap and idempotent. Shedding itself is unchanged. */
+void psx_mod_stereo_reset_budget(void);
+/* Set the stereo pair budget from a real headset deadline in milliseconds,
+ * pushed by the OpenXR layer from the target display period (11.1 ms at 90 Hz,
+ * 8.3 ms at 120 Hz). 0 clears it. The guest-VBlank-derived value is only a
+ * fallback: a PSX redraw budget is not an OpenXR display deadline, and the two
+ * disagree on every non-60 Hz headset. PSX_STEREO_SHED_BUDGET_MS still wins. */
+void psx_mod_stereo_set_budget_ms(double ms);
 /* 0 disables stereo output; 1 shows a complete pair side by side. Capture
  * itself does not enable presentation. Default 0; applies to this session. */
 int psx_mod_set_stereo_presentation(uint32_t mode);

@@ -38,6 +38,7 @@
 #include "timers.h"
 #include "psx_video_timing.h"
 #include "gte_view.h"
+#include "stereo_shed_policy.h"
 
 extern uint8_t *memory_get_ram_ptr(void);
 extern uint8_t *memory_get_scratchpad_ptr(void);
@@ -283,7 +284,16 @@ static RenderPassFailure s_attempt;
 static const char *s_checkpoint_failure;
 static RenderStereoStats s_stereo;
 static int s_pair_busy;
-static uint32_t s_pair_retry;
+/* Whole-pair shedding/recovery policy (bounded in time and count; see
+ * stereo_shed_policy.c). Replaces the old attempt counter, which could suppress
+ * many pairs after a single over-budget frame. */
+static StereoShedPolicy s_shed;
+/* Headset deadline pushed by the OpenXR layer (target display period, ms).
+ * 0 = no headset: fall back to the guest-VBlank redraw budget. */
+static double s_shed_xr_budget_ms;
+static uint32_t s_shed_period;
+static int32_t s_shed_w, s_shed_h;
+static int s_shed_geom_valid;
 /* A HUD-only capture transaction reuses eye 0's slot but is not an eye draw;
  * frame tracing must not attribute its cost to the left eye. */
 static int s_capture_only;
@@ -322,6 +332,32 @@ static int verify_on(void) {
     return s_verify;
 }
 
+/* PSX_STEREO_SHED_BUDGET_MS, when set, replaces the guest-VBlank-derived budget
+ * with a real headset deadline (e.g. 11.1 at 90 Hz, 8.3 at 120 Hz). The VBlank
+ * cadence is only a fallback: it is a guest redraw budget, not an OpenXR
+ * display deadline, and conflating the two is wrong on every non-60 Hz headset.
+ * Returns 0 when unset so the caller derives the fallback. */
+static double shed_budget_override_ms(void) {
+    static double v = -1.0;
+    if (v < 0.0) {
+        const char *e = getenv("PSX_STEREO_SHED_BUDGET_MS");
+        double d = e ? atof(e) : 0.0;
+        v = (d > 0.0 && d < 1000.0) ? d : 0.0;
+    }
+    return v;
+}
+
+/* The pair budget actually used, in priority order: the explicit env override,
+ * the headset display deadline the OpenXR layer pushed, then the guest-VBlank
+ * redraw budget as a last resort. */
+static double shed_budget_ms(uint32_t period_vblanks, uint32_t *source) {
+    double ov = shed_budget_override_ms();
+    if (ov > 0.0) { if (source) *source = 2; return ov; }
+    if (s_shed_xr_budget_ms > 0.0) { if (source) *source = 1; return s_shed_xr_budget_ms; }
+    if (source) *source = 0;
+    return period_vblanks * (double)g_psx_vblank_cycles / 33868.8 * 0.8;
+}
+
 void render_pass_get_stats(RenderPassStats *out) {
     if (!out) return;
     *out = s_stats;
@@ -342,7 +378,12 @@ void render_pass_reset_session(void) {
     memset(&s_stereo, 0, sizeof s_stereo);
     s_stereo.last_eye = -1;
     s_pair_busy = 0;
-    s_pair_retry = 0;
+    /* Shedding policy: defaults, then env overrides (PSX_STEREO_SHED=0 gives the
+     * baseline diagnostic with shedding fully disabled). */
+    stereo_shed_policy_init(&s_shed);
+    stereo_shed_policy_configure_from_env(&s_shed);
+    stereo_shed_policy_reset(&s_shed);
+    s_shed_geom_valid = 0;
     /* Frame tracing is opt-in per session: re-read the env, install the host
      * clock, and clear any previous session's records. */
     psx_frame_trace_configure_from_env();
@@ -1029,27 +1070,55 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
      * previous traced frame. */
     int trace_on = psx_frame_trace_enabled();
     int trace_opened = trace_on ? psx_frame_trace_open() : 0;
+    uint64_t now_ms = psx_host_mono_ms();
     if (trace_on) {
         static uint64_t prev_ms;
         static int prev_valid;
-        uint64_t now_ms = psx_host_mono_ms();
         if (prev_valid)
             psx_frame_trace_add(PSX_TRACE_GUEST_SIM, (now_ms - prev_ms) * 1000u);
         prev_ms = now_ms; prev_valid = 1;
         psx_frame_trace_attempt(s_stereo.attempts, 0, 0);
     }
-    budget_ms = frame->period_vblanks * (double)g_psx_vblank_cycles /
-                33868.8 * 0.8;
-    if (s_stereo.avg_pair_ms > budget_ms && ++s_pair_retry < 30u) {
-        s_stereo.shed++;
-        if (trace_on) {
-            psx_frame_trace_attempt(s_stereo.attempts, s_pair_retry, 0);
-            psx_frame_trace_flag(PSX_FRAME_TRACE_STALE_PAIR);
-            if (trace_opened) psx_frame_trace_commit();
-        }
-        return 0;
+    budget_ms = shed_budget_ms(frame->period_vblanks, &s_stereo.budget_source);
+    s_stereo.budget_ms = budget_ms;
+    /* A scene/mode transition changes cadence and workload, so the previous
+     * average and budget do not carry over. */
+    if (!s_shed_geom_valid || frame->period_vblanks != s_shed_period ||
+        (int32_t)frame->w != s_shed_w || (int32_t)frame->h != s_shed_h) {
+        if (s_shed_geom_valid) s_stereo.budget_resets++;
+        s_shed_period = frame->period_vblanks;
+        s_shed_w = (int32_t)frame->w; s_shed_h = (int32_t)frame->h;
+        s_shed_geom_valid = 1;
+        stereo_shed_policy_reset(&s_shed);
     }
-    s_pair_retry = 0;
+    stereo_shed_policy_set_budget(&s_shed, budget_ms);
+    {
+        int was_shedding = s_shed.shedding;
+        if (stereo_shed_policy_should_shed(&s_shed, now_ms)) {
+            s_stereo.shed++;
+            s_stereo.stale_frames++;
+            s_stereo.shed_streak = stereo_shed_policy_streak_sheds(&s_shed);
+            if (s_stereo.shed_streak > s_stereo.shed_streak_max)
+                s_stereo.shed_streak_max = s_stereo.shed_streak;
+            s_stereo.shed_streak_ms = stereo_shed_policy_streak_ms(&s_shed, now_ms);
+            s_stereo.shedding = 1;
+            if (trace_on) {
+                psx_frame_trace_attempt(s_stereo.attempts, s_stereo.shed_streak,
+                                        s_stereo.shed_streak_ms);
+                psx_frame_trace_flag(PSX_FRAME_TRACE_STALE_PAIR | PSX_FRAME_TRACE_SHED);
+                if (trace_opened) psx_frame_trace_commit();
+            }
+            return 0;
+        }
+        /* Log once per streak (not per frame), with both the skipped count and
+         * the elapsed wall clock the old attempt counter never tracked. */
+        if (was_shedding)
+            fprintf(stderr, "psxrecomp: stereo shed streak ended after %llu "
+                    "skipped, %u ms\n",
+                    (unsigned long long)s_stereo.shed_streak,
+                    s_stereo.shed_streak_ms);
+    }
+    s_stereo.shedding = s_shed.shedding;
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
     cycle = psx_cycle_count; stores = g_guest_store_count;
     mismatches = s_stats.verify_mismatch; aborted = s_stats.aborted;
@@ -1085,8 +1154,6 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     elapsed = (double)(gl_renderer_perf_ticks() - t0) * 1000.0 /
               (double)gl_renderer_perf_frequency();
     s_stereo.last_pair_ms = elapsed;
-    s_stereo.avg_pair_ms = s_stereo.avg_pair_ms > 0.0
-        ? s_stereo.avg_pair_ms * 0.9 + elapsed * 0.1 : elapsed;
     if (ok && !gl_renderer_stereo_publish(s_stereo.attempts, cycle, s_stereo.eye_view)) {
         ok = 0; s_stereo.last_failure = "pair_publish";
     }
@@ -1102,6 +1169,17 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
         s_stereo.retained_pair_id = s_stereo.last_pair_id;
         gl_renderer_stereo_stage_reset();
     }
+    /* Fold the attempt into the policy's estimate (it owns the EMA now). A
+     * failed or aborted attempt still counts as a measurement, so a stale high
+     * average cannot outlive the condition that produced it; only a published
+     * pair refreshes the retained-pair age. Pair age is tracked separately from
+     * the compute-time estimate so "how old is the picture" never hides behind
+     * "how fast was the last attempt". */
+    stereo_shed_policy_note_pair(&s_shed, elapsed, now_ms, ok);
+    s_stereo.avg_pair_ms = stereo_shed_policy_avg_ms(&s_shed);
+    s_stereo.last_pair_age_ms = stereo_shed_policy_pair_age_ms(&s_shed, now_ms);
+    s_stereo.shedding = s_shed.shedding;
+    if (!ok) s_stereo.stale_frames++;
     if (trace_on) {
         psx_frame_trace_add(PSX_TRACE_PAIR_TOTAL, (uint64_t)(elapsed * 1000.0));
         psx_frame_trace_result(ok, ok ? s_stereo.last_pair_id : 0,
@@ -1111,6 +1189,24 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     }
     s_pair_busy = 0;
     return ok;
+}
+
+/* Game hook: a scene or mode transition invalidates the pair-time estimate and
+ * the derived budget, so the new scene does not inherit the old one's. Cheap
+ * and idempotent; safe to call on every transition. */
+void psx_mod_stereo_reset_budget(void) {
+    stereo_shed_policy_reset(&s_shed);
+    s_shed_geom_valid = 0;
+    /* The deadline came from a session that is now gone or whose cadence just
+     * changed; the OpenXR layer re-pushes it on the next frame it runs. */
+    s_shed_xr_budget_ms = 0.0;
+    s_stereo.budget_resets++;
+}
+
+void psx_mod_stereo_set_budget_ms(double ms) {
+    /* Push the headset deadline. Ignore nonsense rather than letting a bad
+     * value widen or collapse the budget. */
+    s_shed_xr_budget_ms = (ms > 0.0 && ms < 1000.0) ? ms : 0.0;
 }
 
 int psx_mod_render_capture_rgba(CPUState *cpu,const PSXModRenderPass *rect,
