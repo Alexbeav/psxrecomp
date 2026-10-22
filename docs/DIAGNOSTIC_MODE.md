@@ -101,6 +101,14 @@ The diagnostic product can record what you play as a frame-exact input route
   two-product rebuild the result carries `diagnostic_error`; with
   `--diagnostic-only` the rebuild exits non-zero with the error, and the setup
   host (or the Windows helper) starts the normal product instead.
+- For automated qualification, add `--diagnostic-required` to a rebuild with
+  `--diagnostic-dir`. A failed diagnostic build returns exit code 1 and
+  `ok: false` in the result, with the normal executable path and the diagnostic
+  error. The normal executable stays available. Without this flag, the same
+  failure still returns success for the normal build. The flag needs a
+  diagnostic directory that differs from `--build-dir`; an invalid request
+  returns exit code 2 before any build. Sets of programs still reject diagnostic
+  builds. `--diagnostic-only` already returns failure without the new flag.
 - Regression coverage: `runtime/tests/test_cli_diagnostics.py` (rebuild builds
   both products; the collector's include and exclude lists),
   `runtime/tests/test_cli_diagnostic_only.py` (a diagnostic request leaves the

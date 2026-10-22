@@ -29,72 +29,134 @@ def _write_cache(build_dir, extra):
 
 
 class DiagnosticRebuildTests(unittest.TestCase):
+    def _rebuild(self, root, *, required=False, fail_diagnostic=False,
+                 diagnostic_dir="build-diagnostic"):
+        (root / "game.toml").write_text('[game]\nname = "fixture"\n', encoding="utf-8")
+        calls = []
+
+        def fake_configure(project_root, build_dir, *, pgo, extra, progress):
+            calls.append(("configure", Path(build_dir).name,
+                          [e for e in extra if "PSX_DEBUG_TOOLS" in e]))
+            if fail_diagnostic and Path(build_dir).name == "build-diagnostic":
+                raise RuntimeError("synthetic diagnostic configure failure")
+            _write_cache(build_dir, extra)
+
+        def fake_build(build_dir, target, progress):
+            calls.append(("build", Path(build_dir).name))
+            Path(build_dir).mkdir(parents=True, exist_ok=True)
+            (Path(build_dir) / "Fixture.exe").write_bytes(b"MZ-authored-fixture")
+
+        args = argparse.Namespace(
+            config=str(root / "game.toml"), project_root=str(root), build_dir="build-release",
+            target="psx-runtime", exe_basename="Fixture", disc="", no_pgo=True, force_pgo=False,
+            cmake_extra=[], diagnostic_dir=diagnostic_dir, diagnostic_required=required,
+            prune_after="")
+        progress = Mock()
+        with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: True), \
+             patch.object(cli, "stage_overlay_toolchain_for_product", lambda *a, **k: None), \
+             patch.object(cli, "stage_notices_for_product", lambda *a, **k: None), \
+             patch.object(cli, "_cmake_configure", side_effect=fake_configure), \
+             patch.object(cli, "_cmake_build", side_effect=fake_build), \
+             patch.object(cli, "_resolve_runtime_exe",
+                          side_effect=lambda d, t, b: (Path(d) / "Fixture.exe", None)):
+            code = cli.cmd_rebuild(args, progress)
+        return code, progress, calls
+
     def test_rebuild_builds_normal_then_diagnostic_product(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "game.toml").write_text("[game]\nname = \"fixture\"\n", encoding="utf-8")
-            calls = []
-
-            def fake_configure(project_root, build_dir, *, pgo, extra, progress):
-                calls.append(("configure", Path(build_dir).name, [e for e in extra if "PSX_DEBUG_TOOLS" in e]))
-                _write_cache(build_dir, extra)
-
-            def fake_build(build_dir, target, progress):
-                calls.append(("build", Path(build_dir).name))
-                Path(build_dir).mkdir(parents=True, exist_ok=True)
-                (Path(build_dir) / "Fixture.exe").write_bytes(b"MZ")
-
-            args = argparse.Namespace(
-                config=str(root / "game.toml"), project_root=str(root), build_dir="build-release",
-                target="psx-runtime", exe_basename="Fixture", disc="", no_pgo=True, force_pgo=False,
-                cmake_extra=[], diagnostic_dir="build-diagnostic", prune_after="")
-            progress = Mock()
-            with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: True), \
-                 patch.object(cli, "stage_overlay_toolchain_for_product", lambda *a, **k: None), \
-                 patch.object(cli, "_cmake_configure", side_effect=fake_configure), \
-                 patch.object(cli, "_cmake_build", side_effect=fake_build), \
-                 patch.object(cli, "_resolve_runtime_exe",
-                              side_effect=lambda d, t, b: (Path(d) / "Fixture.exe", None)):
-                code = cli.cmd_rebuild(args, progress)
-            self.assertEqual(code, cli.EXIT_OK)
-            # normal product first (debug tools off), diagnostic second (on)
-            self.assertEqual(calls[0], ("configure", "build-release", ["-DPSX_DEBUG_TOOLS=OFF"]))
-            self.assertEqual(calls[1], ("build", "build-release"))
-            self.assertEqual(calls[2], ("configure", "build-diagnostic", ["-DPSX_DEBUG_TOOLS=ON"]))
-            self.assertEqual(calls[3], ("build", "build-diagnostic"))
-            result = progress.result.call_args.kwargs
-            self.assertTrue(result["ok"])
-            self.assertTrue(str(result["diagnostic_exe"]).endswith("Fixture.exe"))
-            self.assertIn("build-diagnostic", str(result["diagnostic_exe"]))
-            self.assertIsNone(result["diagnostic_error"])
+        for required in (False, True):
+            with self.subTest(required=required), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                code, progress, calls = self._rebuild(root, required=required)
+                self.assertEqual(code, cli.EXIT_OK)
+                self.assertEqual(calls, [
+                    ("configure", "build-release", ["-DPSX_DEBUG_TOOLS=OFF"]),
+                    ("build", "build-release"),
+                    ("configure", "build-diagnostic", ["-DPSX_DEBUG_TOOLS=ON"]),
+                    ("build", "build-diagnostic"),
+                ])
+                result = progress.result.call_args.kwargs
+                self.assertTrue(result["ok"])
+                self.assertEqual(Path(result["diagnostic_exe"]), root / "build-diagnostic/Fixture.exe")
+                self.assertIsNone(result["diagnostic_error"])
 
     def test_diagnostic_build_failure_keeps_the_normal_product(self):
+        for required in (False, True):
+            with self.subTest(required=required), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                code, progress, calls = self._rebuild(root, required=required, fail_diagnostic=True)
+                self.assertEqual(code, cli.EXIT_ERROR if required else cli.EXIT_OK)
+                result = progress.result.call_args.kwargs
+                self.assertEqual(result["ok"], not required)
+                self.assertIsNone(result["diagnostic_exe"])
+                self.assertIn("synthetic diagnostic configure failure", result["diagnostic_error"])
+                normal = root / "build-release/Fixture.exe"
+                self.assertEqual(Path(result["exe"]), normal)
+                self.assertEqual(normal.read_bytes(), b"MZ-authored-fixture")
+                self.assertEqual([call for call in calls if call[0] == "build"],
+                                 [("build", "build-release")])
+                self.assertFalse((root / "build-diagnostic/Fixture.exe").exists())
+
+    def test_default_without_diagnostic_dir_builds_only_normal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, progress, calls = self._rebuild(Path(temporary), diagnostic_dir="")
+            self.assertEqual(code, cli.EXIT_OK)
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(progress.result.call_args.kwargs["ok"])
+            self.assertIsNone(progress.result.call_args.kwargs["diagnostic_exe"])
+
+    def test_required_missing_product_fails_even_without_error_text(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(cli, "build_diagnostic_product", return_value=(None, "")):
+            code, progress, _ = self._rebuild(Path(temporary), required=True)
+            self.assertEqual(code, cli.EXIT_ERROR)
+            self.assertFalse(progress.result.call_args.kwargs["ok"])
+            self.assertIsNone(progress.result.call_args.kwargs["diagnostic_exe"])
+
+    def test_required_invalid_directory_refuses_before_toolchain_or_build(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "game.toml").write_text("[game]\nname = \"fixture\"\n", encoding="utf-8")
+            (root / "game.toml").write_text('[game]\nname = "fixture"\n', encoding="utf-8")
+            normal = root / "build-release/Fixture.exe"
+            normal.parent.mkdir()
+            normal.write_bytes(b"MZ-existing-normal")
+            for directory in ("", "   ", "build-release", str(normal.parent)):
+                with self.subTest(directory=directory):
+                    args = cli.build_parser().parse_args([
+                        "rebuild", "--config", str(root / "game.toml"),
+                        "--project-root", str(root), "--build-dir", "build-release",
+                        "--diagnostic-dir", directory, "--diagnostic-required",
+                    ])
+                    progress = Mock()
+                    with patch.object(cli, "activate_embedded_toolchain") as activate, \
+                         patch.object(cli, "_cmake_configure") as configure, \
+                         patch.object(cli, "_cmake_build") as build, \
+                         patch.object(cli, "program_set_tool", return_value=None) as dispatch:
+                        self.assertEqual(cli.cmd_rebuild(args, progress), cli.EXIT_USAGE)
+                    activate.assert_not_called()
+                    configure.assert_not_called()
+                    build.assert_not_called()
+                    progress.result.assert_not_called()
+                    if not directory.strip():
+                        dispatch.assert_not_called()
+                    self.assertEqual(normal.read_bytes(), b"MZ-existing-normal")
 
-            def fake_configure(project_root, build_dir, *, pgo, extra, progress):
-                if Path(build_dir).name == "build-diagnostic":
-                    raise RuntimeError("synthetic diagnostic configure failure")
-                _write_cache(build_dir, extra)
+    def test_required_program_set_keeps_existing_diagnostic_refusal(self):
+        import program_set
 
-            args = argparse.Namespace(
-                config=str(root / "game.toml"), project_root=str(root), build_dir="build-release",
-                target="psx-runtime", exe_basename="Fixture", disc="", no_pgo=True, force_pgo=False,
-                cmake_extra=[], diagnostic_dir="build-diagnostic", prune_after="")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "set.toml").write_text("[set]\n", encoding="utf-8")
+            args = cli.build_parser().parse_args([
+                "rebuild", "--config", str(root / "set.toml"),
+                "--diagnostic-dir", "build-diagnostic", "--diagnostic-required",
+            ])
             progress = Mock()
-            with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: True), \
-                 patch.object(cli, "stage_overlay_toolchain_for_product", lambda *a, **k: None), \
-                 patch.object(cli, "_cmake_configure", side_effect=fake_configure), \
-                 patch.object(cli, "_cmake_build", lambda *a, **k: None), \
-                 patch.object(cli, "_resolve_runtime_exe",
-                              side_effect=lambda d, t, b: (Path(d) / "Fixture.exe", None)):
-                code = cli.cmd_rebuild(args, progress)
-            self.assertEqual(code, cli.EXIT_OK)
-            result = progress.result.call_args.kwargs
-            self.assertTrue(result["ok"])
-            self.assertIsNone(result["diagnostic_exe"])
-            self.assertIn("synthetic diagnostic configure failure", result["diagnostic_error"])
+            with patch.object(cli, "program_set_tool", return_value=program_set), \
+                 patch.object(program_set, "load_set", return_value={"root": str(root)}), \
+                 patch.object(program_set, "read_marker") as marker:
+                self.assertEqual(cli.cmd_rebuild(args, progress), cli.EXIT_USAGE)
+            marker.assert_not_called()
+            self.assertEqual(progress.error.call_args.args[0], program_set.NO_DIAGNOSTIC)
 
 
 class DiagnosticsCollectorTests(unittest.TestCase):
