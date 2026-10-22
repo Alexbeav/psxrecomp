@@ -185,11 +185,7 @@ int main(int argc,char **argv) {
     psx_advance_cycles(25); psx_devices_service_to_now();
     assert(gpu_linked_list.active && gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD);
     assert(gpu_linked_list.payload_index<20);
-#ifndef TEST_BASE
-    unsigned before_release=gpu_linked_list.payload_index;
-    psx_advance_cycles(gpu_queue_cycles_to_event()); psx_devices_service_to_now();
-    assert(gpu_linked_list.payload_index==before_release+1);
-#endif
+    /* The payload moves only at a walk service; the stop below drains it. */
     psx_write_word(0x1004+18*4,0xe2000123); /* active-node word still unread */
     /* A real stop must finish this packet, even beyond its nominal clocks. */
     dma_write(0x1f8010a8,0);

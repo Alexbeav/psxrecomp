@@ -53,6 +53,7 @@ void gpu_set_gp0_source(uint32_t a) { (void)a; }
 void gpu_write_gp0(uint32_t v) { gp0_words++; gp0_sum = gp0_sum * 31u + v; }
 uint32_t gpu_dma_vram_upload_words(void) { return 1u << 20; }
 int gpu_dma_source_ll_ready(void) { return ll_ready; }
+int gpu_dma_walk_ready(void) { return ll_ready; }
 void gpu_ws_begin_linked_list(void) {}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) { (void)a; }

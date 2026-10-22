@@ -2178,6 +2178,10 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                     (mask & (1u << 24)) && !(val & (1u << 24)) &&
                     gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD) {
                     uint32_t packet=gpu_linked_list.current_addr;
+                    uint32_t keep=channels[ch].chcr;
+                    /* Busy clears for the drain, so no grid service starts
+                     * another header while the GPU frees FIFO space. */
+                    channels[ch].chcr&=~(1u<<24);
                     while(gpu_linked_list.active &&
                           gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD &&
                           gpu_linked_list.current_addr==packet) {
@@ -2189,7 +2193,7 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                         if(wait==UINT32_MAX) {
                             /* Readback needs CPU access to GPUREAD/reset. Pause
                              * without losing the current packet or queued words. */
-                            channels[ch].chcr=(channels[ch].chcr&~mask)|(val&mask);
+                            channels[ch].chcr=(keep&~mask)|(val&mask);
                             channels[ch].madr=gpu_linked_list.current_addr;
                             psx_next_service_cycle=0;
                             return;
@@ -2197,6 +2201,7 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                         psx_advance_cycles(wait);
                         psx_devices_service_to_now();
                     }
+                    channels[ch].chcr=keep;
                 }
                 channels[ch].chcr = (channels[ch].chcr & ~mask) | (val & mask);
                 if ((mask & (1u << 24)) && !((channels[ch].chcr >> 24) & 1u)) {
