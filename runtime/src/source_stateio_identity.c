@@ -7,6 +7,9 @@
 #include "psx_sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(__APPLE__)
+#  include <mach-o/dyld.h>  /* _NSGetExecutablePath: macOS has no /proc */
+#endif
 #include <string.h>
 
 #if defined(_WIN32)
@@ -51,6 +54,18 @@ int source_stateio_exe_sha256(char out[65]) {
 #if defined(_WIN32)
     DWORD n = GetModuleFileNameA(NULL, path, (DWORD)sizeof path);
     if (n == 0 || n >= sizeof path) { out[0] = '\0'; return 0; }
+#elif defined(__APPLE__)
+    /* dyld names the executable; realpath makes it absolute and resolves a
+     * symlink, as /proc/self/exe does on Linux. */
+    char raw[1024], *real;
+    uint32_t raw_cap = (uint32_t)sizeof raw;
+    if (_NSGetExecutablePath(raw, &raw_cap) != 0 || !(real = realpath(raw, NULL))) {
+        out[0] = '\0';
+        return 0;
+    }
+    if (strlen(real) >= sizeof path) { free(real); out[0] = '\0'; return 0; }
+    memcpy(path, real, strlen(real) + 1);
+    free(real);
 #else
     ssize_t n = readlink("/proc/self/exe", path, sizeof path - 1);
     if (n <= 0 || (size_t)n >= sizeof path) { out[0] = '\0'; return 0; }

@@ -1,5 +1,6 @@
 """v7 identity dimensions, compiled at O0/O2 with -Werror."""
 import argparse
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -41,7 +42,28 @@ def main():
             cfg_a, cfg_b = config_of(out_a), config_of(out_b)
             assert len(cfg_a) == 64 and len(cfg_b) == 64, (opt, cfg_a, cfg_b)
             assert cfg_a != cfg_b, (opt, 'config digest did not react to PSX_TIMER1_MODEL')
-    print('PASS: v7 identity dimensions at O0/O2')
+            # The runtime-binary digest is the SHA-256 of the executable file, also when
+            # the working directory is elsewhere and when it is started through a
+            # symlink (PS1B-581: macOS has no /proc/self/exe).
+            want = hashlib.sha256(exe.read_bytes()).hexdigest()
+            elsewhere = root / ('elsewhere' + opt)
+            elsewhere.mkdir()
+            launches = [('changed cwd', str(exe))]
+            link = elsewhere / ('identity-link' + opt + ('.exe' if os.name == 'nt' else ''))
+            try:
+                os.symlink(str(exe), str(link))
+                launches.append(('symlink', str(link)))
+            except (OSError, NotImplementedError) as error:
+                print('SKIP: symlink launch at %s (%s)' % (opt, error))
+            for how, path in launches:
+                out = subprocess.run([path, str(probe)], env=env_a, cwd=str(elsewhere),
+                                     capture_output=True, timeout=30)
+                assert out.returncode == 0, (opt, how, out.returncode, out.stdout, out.stderr)
+                got = [line.split('=', 1)[1].strip() for line in
+                       out.stdout.decode('utf-8', errors='replace').splitlines() if line.startswith('exe=')]
+                assert got == [want], (opt, how, 'runtime-binary digest is not the executable file', got, want)
+    print('PASS: v7 identity dimensions at O0/O2 (runtime-binary digest equals the executable, '
+          'from another working directory and through a symlink)')
 
 if __name__ == '__main__':
     main()
