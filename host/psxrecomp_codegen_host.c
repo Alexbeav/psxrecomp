@@ -2163,7 +2163,9 @@ static void handle_progress_line(const char* line,
             snprintf(message, sizeof(message), "%s", phase);
         on_progress(progress_ctx, (float)pct, message[0] ? message : NULL);
     } else if (strcmp(event, "log") == 0 || strcmp(event, "error") == 0) {
-        char message[240] = "";
+        /* A log line can carry two paths (the staged overlay toolchain and its
+         * shard compiler), so it gets more room than a phase's title. */
+        char message[1024] = "";
         if (json_get_string(line, "message", message, sizeof(message)))
             on_progress(progress_ctx, -1.0f, message);
     }
@@ -5365,6 +5367,36 @@ static void host_start_helper_and_exit(const char* helper) {
 #endif
 
 #if !defined(PSX_HAS_GAME_DISPATCH)
+#if !defined(_WIN32)
+/* PS1B-153: the on-demand build runs on the forward path, where no window
+ * shows progress. The CLI's own lines (what it staged beside the product, its
+ * warnings) go to stderr instead of being dropped. */
+static void diagnostic_build_progress(void* ctx, float pct,
+                                      const char* message) {
+    (void)ctx;
+    (void)pct;
+    if (message && message[0])
+        fprintf(stderr, "psxrecomp-codegen: diagnostic build: %s\n", message);
+}
+
+/* Says whether overlay_toolchain/ is beside the diagnostic product. Without it
+ * the runtime's autocompile gate is false and overlays run interpreted. */
+static void report_diagnostic_overlay_toolchain(const char* exe) {
+    char dir[1300], tk[1400];
+    if (dirname_copy(dir, sizeof(dir), exe) && dir[0] &&
+        join_path(tk, sizeof(tk), dir, "overlay_toolchain") && path_is_dir(tk)) {
+        fprintf(stderr,
+                "psxrecomp-codegen: diagnostic build: overlay_toolchain/ is "
+                "beside the product: %s\n", tk);
+        return;
+    }
+    fprintf(stderr,
+            "psxrecomp-codegen: diagnostic build: WARNING: no overlay_toolchain/ "
+            "beside %s; overlays will run interpreted. The lines above say why.\n",
+            exe);
+}
+#endif
+
 /* Wave-5 F10: the diagnostic product on first request. Runs from the forward
  * path, before the wizard state exists, so it wires the little it needs. On
  * Windows the build is deferred to the helper bat (the setup exe must exit
@@ -5388,16 +5420,21 @@ static int host_build_diagnostic_on_demand(char* out_exe_path, size_t out_cap,
         return 0;
     }
     g_ready = 1;
+#if defined(_WIN32)
     if (!host_rebuild_game_ex(NULL, 0, 1, out_exe_path, out_cap, err_msg,
                               err_cap, NULL, NULL))
         return 0;
-#if !defined(_WIN32)
+#else
+    if (!host_rebuild_game_ex(NULL, 0, 1, out_exe_path, out_cap, err_msg,
+                              err_cap, diagnostic_build_progress, NULL))
+        return 0;
     if (!resolve_diagnostic_exe_path(out_exe_path, out_cap) ||
         !path_is_file(out_exe_path)) {
         snprintf(err_msg, err_cap, "build finished but %s/ has no product",
                  PSX_DIAGNOSTIC_DIR_NAME);
         return 0;
     }
+    report_diagnostic_overlay_toolchain(out_exe_path);
 #endif
     return 1;
 }

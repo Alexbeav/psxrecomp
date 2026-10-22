@@ -2315,8 +2315,12 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if diagnostic_exe is None:
             progress.error(f"diagnostic build failed: {diagnostic_error}", code=EXIT_ERROR)
             return EXIT_ERROR
+        # PS1B-153: the result names the overlay toolchain beside the product, or null when
+        # staging failed (its WARNING line above says why) and overlays will run interpreted.
+        overlay_toolchain = Path(diagnostic_exe).parent / "overlay_toolchain"
         progress.phase("done", pct=1.0, message="Diagnostic build complete")
-        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe))
+        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe),
+                        overlay_toolchain=str(overlay_toolchain) if overlay_toolchain.is_dir() else None)
         return EXIT_OK
 
     # mute_host_audio / hide_video: default ON; game.toml / CLI can disable.

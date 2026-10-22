@@ -1705,6 +1705,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         # not "Passed".
         set_tests_properties(codegen_host_handover_launcher_test PROPERTIES
                  SKIP_RETURN_CODE 77)
+        # PS1B-153: an on-demand diagnostic build prints the CLI's lines and says
+        # whether overlay_toolchain/ is beside the product. A stand-in CLI, in the
+        # closed environment of toolchain_test_support.py.
+        add_test(NAME codegen_host_diagnostic_overlay_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_diagnostic_overlay.py)
+        # Without recomp-ui, a C compiler, or off POSIX it prints "SKIP:" and returns 0.
+        set_tests_properties(codegen_host_diagnostic_overlay_test PROPERTIES
+                 SKIP_REGULAR_EXPRESSION "^SKIP:")
         # PS1B-410: with PSXRECOMP_TOOLCHAIN_READONLY=1 neither the setup host
         # nor the CLI changes a toolchain pack or a pointer to one. The test
         # works on a made-up cache in its own closed environment.

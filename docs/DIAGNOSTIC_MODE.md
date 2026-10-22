@@ -49,6 +49,11 @@ python psxrecomp/psxrecomp_cli.py rebuild --project-root . --config game.toml \
   --build-dir build-release --diagnostic-dir build-diagnostic --diagnostic-only
 ```
 
+On Linux and macOS the setup executable prints the build's own lines to its
+terminal as `psxrecomp-codegen: diagnostic build: ...`, and then says whether
+`overlay_toolchain/` is beside the new product. Without it overlays run
+interpreted; the build's WARNING line above says why.
+
 ## Collecting results for a GitHub issue
 
 1. Reproduce the problem in diagnostic mode, then quit the game (or let it crash).
@@ -86,7 +91,9 @@ The diagnostic product can record what you play as a frame-exact input route
 - The CLI `rebuild` command builds the diagnostic product after the normal
   one when it is given `--diagnostic-dir`. With `--diagnostic-only` it builds
   the diagnostic product alone and never configures, compiles, stages into or
-  prunes `--build-dir` (it refuses `--force-pgo` and `--prune-after`). A
+  prunes `--build-dir` (it refuses `--force-pgo` and `--prune-after`); its
+  result names `overlay_toolchain` beside the product, or null when staging
+  failed. A
   diagnostic request from the setup host uses `--diagnostic-only
   --diagnostic-dir build-diagnostic` on both the Windows deferred-helper route
   and the POSIX route, because setup pruned the normal product's intermediates
@@ -104,7 +111,10 @@ The diagnostic product can record what you play as a frame-exact input route
 - Regression coverage: `runtime/tests/test_cli_diagnostics.py` (rebuild builds
   both products; the collector's include and exclude lists),
   `runtime/tests/test_cli_diagnostic_only.py` (a diagnostic request leaves the
-  normal build directory unchanged, with or without PGO enabled) and
+  normal build directory unchanged, with or without PGO enabled),
+  `runtime/tests/test_codegen_host_diagnostic_overlay.py` (the POSIX on-demand
+  route prints the CLI's lines and says whether `overlay_toolchain/` is beside
+  the product) and
   `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings) and
   `runtime/tests/test_windows_rebuild_helper.py` (native Windows helper survival
   and refusal before writing when build paths overlap; skipped on other hosts).
