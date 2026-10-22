@@ -18839,11 +18839,15 @@ session_reboot:
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
         /* Headless / agent load: PSX_LOAD_SLOT=N stages slot load (0..11)
          * at the next safe block boundary after boot. */
+#if defined(RECOMP_LAUNCHER_MODULE_HOST)
+        /* A save slot chosen in the launcher module wins over PSX_LOAD_SLOT. */
         {
             const char *ls = std::getenv("PSX_LOAD_SLOT");
             int slot = ls ? atoi(ls) : -1;
-#if defined(RECOMP_LAUNCHER_MODULE_HOST)
             if (g_launcher_start_slot >= 0) slot = g_launcher_start_slot;
+#else
+        if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {
+            int slot = atoi(ls);
 #endif
             if (slot >= 0 && slot < 12) {
                 if (psx_netplay_active()) {
