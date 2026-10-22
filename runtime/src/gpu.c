@@ -6064,12 +6064,12 @@ uint32_t gpu_queue_cycles_to_event(void) {
 int gpu_queue_has_space(void) { return gpu_queue.count < 16u; }
 
 /* The list walk's readiness before a header: GPUSTAT bit 28 (no queued word,
- * no command partly received, no VRAM read owed), and not inside the first
- * triangle of a quad. */
+ * no command partly received), and not inside the first triangle of a quad.
+ * A VRAM read still owed leaves bit 28 set (probe case 4a). */
 int gpu_dma_walk_ready(void) {
     if (source_gpu_runtime_active()) return 1;
     gpu_queue_service();
-    if (gpu_queue.count || vram_read_active) return 0;
+    if (gpu_queue.count) return 0;
     if (gp0_state != GP0_IDLE && gp0_state != GP0_VRAM_WRITE) return 0;
     if (gpu_walk_quad_pending) {
         if (gpu_queue.credit < gpu_walk_quad_floor) return 0;
