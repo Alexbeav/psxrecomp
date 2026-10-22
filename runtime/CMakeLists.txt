@@ -3896,6 +3896,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_portable_install.py
                          --compiler ${CMAKE_C_COMPILER})
         set_tests_properties(toolchain_portable_install_test PROPERTIES SKIP_RETURN_CODE 77)
+        # PS1B-416: on Linux and macOS a pack in use (held by the CLI or the
+        # setup host that put it on PATH) is neither renamed nor replaced by an
+        # install or a prune. On Windows it prints "SKIP:"; read that as Skipped.
+        add_test(NAME toolchain_pack_in_use_test
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_pack_in_use.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_pack_in_use_test PROPERTIES
+                 SKIP_REGULAR_EXPRESSION "^SKIP:")
         # PS1B-410: the toolchain check does not depend on the length of PATH
         # (it failed past about 7,600 characters), and activating a pack does
         # not grow PATH.
