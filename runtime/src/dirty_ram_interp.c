@@ -2277,8 +2277,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             if (rd == 13) {
                 /* Cause register: only the software-interrupt pending bits
                  * [9:8] are writable; hardware IP [15:10], ExcCode [6:2] and
-                 * BD [31] are read-only from software (psx-spx, matches
-                 * PCSX-Redux/Beetle MTC0). */
+                 * BD [31] are read-only from software (PSX-SPX
+                 * cpuspecifications, "cop0r13 - CAUSE - (Read-only, except,
+                 * Bit8-9 are R/W)"). */
                 cpu->cop0[13] = (cpu->cop0[13] & ~0x0300u) | (val & 0x0300u);
             } else {
                 cpu->cop0[rd] = val;

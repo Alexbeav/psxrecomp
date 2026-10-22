@@ -60,6 +60,10 @@ int pgxp_load_projection(uint32_t addr, uint32_t word, PGXPProjection *out) {
     }
     return 0;
 }
+float pgxp_get_unclamped_depth(uint32_t addr, uint32_t word) {
+    PGXPProjection projection;
+    return pgxp_load_projection(addr, word, &projection) ? projection.z : 0.0f;
+}
 static int fixture_projection_tracking;
 int pgxp_projection_tracking(void) { return fixture_projection_tracking; }
 void pgxp_set_projection_tracking(int enabled) { fixture_projection_tracking=!!enabled; }

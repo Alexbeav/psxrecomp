@@ -34,8 +34,8 @@ namespace GTE {
 //
 // The real PS1 GTE does NOT compute an exact H*0x20000/SZ3. It uses an
 // Unsigned Newton-Raphson (UNR) reciprocal approximation driven by a 257-entry
-// seed table (documented in PSX-SPX "GTE Division Inaccuracy"; identical to the
-// mednafen/Beetle oracle in beetle-psx/mednafen/psx/gte.cpp). Exact division
+// seed table (documented in PSX-SPX geometrytransformationenginegte, "GTE Division
+// Inaccuracy"; the Beetle reference gives the same results). Exact division
 // diverges from hardware by +/-1 (occasionally up to a few units) on ~25% of
 // inputs, which is enough to flip games' distance/intensity threshold branches
 // (e.g. Ape Escape's additive-glow CLUT semi-transparency bit). This is the
@@ -1082,7 +1082,7 @@ static int32_t gte_h_scaled(const GTEState* gte) {
 // ---------------------------------------------------------------------------
 // RTPS — Perspective Transformation (internal, operates on given vertex V)
 //
-// Matches DuckStation/Beetle (psx-spx):
+// PSX-SPX geometrytransformationenginegte, "COP2 0180001h - 15 Cycles - RTPS":
 //   MAC1/2/3 = (TR*1000h + RT*V) SAR (sf*12)
 //   IR1/IR2  = limB(MAC, lm)
 //   IR3 FLAG = limB(MAC3_unshifted SAR 12, lm=0); stored IR3 = limB(MAC3, lm)
@@ -1140,7 +1140,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
 
     gte->IR1 = gte->saturate_ir(gte->MAC1, 1, lm);
     gte->IR2 = gte->saturate_ir(gte->MAC2, 2, lm);
-    // IR3 quirk (psx-spx / DuckStation): FLAG.22 from (mac3>>12) as if lm=0;
+    // IR3 quirk (PSX-SPX, RTPS note): FLAG.22 from (mac3>>12) as if lm=0;
     // stored IR3 clamps MAC3 with the real lm bit and does not touch FLAG again.
     (void)gte->saturate_ir(static_cast<int32_t>(mac3 >> 12), 3, false);
     {
@@ -1256,6 +1256,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         int64_t cx16 = sx16 < -kLim ? -kLim : (sx16 > kLim - 1 ? kLim - 1 : sx16);
         int64_t cy16 = sy16 < -kLim ? -kLim : (sy16 > kLim - 1 ? kLim - 1 : sy16);
         int32_t px16 = (int32_t)cx16, py16 = (int32_t)cy16;
+        bool unclamped_projection = false;
         /* Preserve projection precision (G1.11): shadow the exact projection
          * instead when the vertex qualifies and it lies inside the GPU's
          * truncation-agreement window; outside it the IR path's shadow is
@@ -1265,15 +1266,18 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
          * passes), where the shadow would be dropped anyway. */
         if (!proj_override && pgxp_preserve_projection() && pgxp_active()) {
             int32_t ex16, ey16;
-            if (pgxp_project_precise(mac1, mac2, mac3, shift, gte->IR1, gte->IR2,
-                                     gte->SZ[3], gte_h_scaled(gte), gte->OFX, gte->OFY,
-                                     x_num, x_den, &ex16, &ey16) &&
-                pgxp_ppp_accept(ex16, ey16, (uint32_t)gte->SXY[2])) {
+            const int precise = pgxp_project_precise(mac1, mac2, mac3, shift,
+                                     gte->IR1, gte->IR2, gte->SZ[3], gte_h_scaled(gte),
+                                     gte->OFX, gte->OFY, x_num, x_den, &ex16, &ey16);
+            if (precise == 2 || (precise == 1 &&
+                pgxp_ppp_accept(ex16, ey16, (uint32_t)gte->SXY[2]))) {
+                unclamped_projection = precise == 2;
                 px16 = ex16;
                 py16 = ey16;
             }
         }
         pgxp_gte_push_sxy(px16, py16, gte->SZ[3], (uint32_t)gte->SXY[2]);
+        if (unclamped_projection) pgxp_gte_mark_unclamped((uint32_t)(mac3 >> 12));
         if (!proj_override && pgxp_projection_tracking() && shift == 12 && !lm) {
             const double z = (double)(mac3 >> 12);
             const double h_proj = (double)gte_h_scaled(gte);
@@ -1566,7 +1570,7 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
 // ---------------------------------------------------------------------------
 // AVSZ3 (0x2D) — Average Z (3 points)
 // ---------------------------------------------------------------------------
-// Hardware (psx-spx / DuckStation): MAC0 keeps ZSF3*(SZ1+SZ2+SZ3); only OTZ
+// Hardware (PSX-SPX, "AVSZ3"): MAC0 keeps ZSF3*(SZ1+SZ2+SZ3); only OTZ
 // gets MAC0/1000h. CTR NdIntroWoodEmitHelper indexes the batch OT with
 // MAC0>>17 (== OTZ>>5). Shifting MAC0 here collapsed every face into slot 0
 // (arms/trophy/chest z-fight + missing banner under later same-bucket paint).
@@ -1793,8 +1797,10 @@ void gte_mvmva(GTEState* gte, uint32_t instr) {
         case 1: std::memcpy(M, gte->L, sizeof(M)); break;
         case 2: std::memcpy(M, gte->LC, sizeof(M)); break;
         default: {
-            /* Undocumented matrix selector wiring, verified by hardware
-             * register vectors (also used by Beetle/DuckStation). */
+            /* Matrix selector 3: PSX-SPX geometrytransformationenginegte,
+             * "MVMVA": "Setting Mx=3 selects a garbage matrix" (-R*10h,
+             * +R*10h, IR0, RT13 x3, RT22 x3), verified by hardware
+             * register vectors. */
             const int16_t color = static_cast<int16_t>(
                 static_cast<uint16_t>(gte->RGBC & 0xFFu) << 4);
             M[0][0] = static_cast<int16_t>(-color);

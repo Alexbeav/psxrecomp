@@ -194,6 +194,21 @@ int main(void) {
         CHECK(one[0].seq == extra);
     }
 
+    /* Opening the next frame must not retire a committed slot before commit. */
+    {
+        static PSXFrameTraceRecord retained[4096];
+        uint32_t capacity = psx_frame_trace_capacity();
+        uint64_t committed = psx_frame_trace_committed();
+        CHECK(psx_frame_trace_open() == 1);
+        psx_frame_trace_note("not committed");
+        CHECK(psx_frame_trace_read(retained, capacity) == capacity);
+        CHECK(retained[0].seq == committed - capacity + 1);
+        CHECK(retained[capacity - 1].seq == committed);
+        psx_frame_trace_commit();
+        CHECK(psx_frame_trace_read(retained, capacity) == capacity);
+        CHECK(retained[capacity - 1].seq == committed + 1);
+    }
+
     /* ---- exports: valid, NULL-terminated, truncation-safe ---- */
     {
         static char big[1 << 20];
@@ -237,6 +252,19 @@ int main(void) {
         CHECK(m > 0 && m < (int)sizeof meta);
         CHECK(strstr(meta, "\"runtime\":\"Odd\\\"Runtime\"") != NULL);
         CHECK(strstr(meta, "\"target_period_us\":0") != NULL);
+    }
+
+    /* Fixed scratch buffers may shorten a string, never split a JSON escape. */
+    {
+        char controls[128]; static char json[1 << 16];
+        memset(controls, 1, sizeof controls - 1); controls[127] = 0;
+        psx_frame_trace_session(controls, 0);
+        CHECK(psx_frame_trace_to_json(json, sizeof json, 1) > 0);
+        const char *value = strstr(json, "\"runtime\":\"");
+        CHECK(value != NULL); value += strlen("\"runtime\":\"");
+        const char *end = strchr(value, '\"');
+        CHECK(end && (end - value) % 6 == 0);
+        for (; value < end; value += 6) CHECK(!memcmp(value, "\\u0001", 6));
     }
 
     /* ---- XR cadence: the runtime's display-time delta and repeat marking ----

@@ -655,7 +655,7 @@ int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
  * transaction. Draws two mattes of the same slice, the first into eye 0 of the
  * stage surface and the second into eye 1, so both planes of a frame cost one
  * readback instead of two. Never publishes an eye pair or changes presentation.
- * Returns native-sized top-to-bottom RGBA8 pixels (alpha remains the PSX mask
+ * Returns native-sized bottom-to-top RGBA8 pixels (alpha remains the PSX mask
  * bit, not coverage). Call outside another pass. rgba_bytes must cover
  * 2*rect->w*rect->h*4; the first matte arrives in the buffer's first half and
  * the second in its second half. */

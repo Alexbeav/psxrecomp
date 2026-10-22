@@ -297,6 +297,8 @@ void pgxp_projective_scope_end(PGXPProjectiveScope *scope)
 { (void)scope; abort(); }
 int pgxp_load_projection(uint32_t addr, uint32_t packed, PGXPProjection *out)
 { (void)addr; (void)packed; (void)out; abort(); }
+float pgxp_get_unclamped_depth(uint32_t addr, uint32_t packed)
+{ (void)addr; (void)packed; abort(); }
 int gl_renderer_projective_supported(void) { abort(); }
 void gl_renderer_draw_projected_triangle(const PSXProjectedVertex vertices[3],
     uint16_t texpage, uint16_t cx, uint16_t cy, int raw, int semi, int perspective)

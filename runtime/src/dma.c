@@ -9,7 +9,7 @@
  * request-mode transfers are advanced from the guest cycle clock so games
  * which synchronize video decode through DMA busy/request state see realistic
  * backpressure.
- * Reference: nocash PSX specs, DuckStation src/core/dma.cpp
+ * Reference: PSX-SPX, page dmachannels (DMA Channels).
  */
 
 #include "dma.h"

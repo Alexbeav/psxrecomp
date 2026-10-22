@@ -273,6 +273,11 @@ By contributing, you agree your contribution is licensed under the same license 
 the project. Do not submit code you don't have the right to contribute, and do not
 copy from incompatible licenses or proprietary sources.
 
+Runtime comments cite hardware facts to PSX-SPX, and emulators are used only as
+black-box references whose outputs we compare. See
+[`docs/PROVENANCE.md`](docs/PROVENANCE.md) for the rules and for the passages
+still to be replaced.
+
 ### Upstream-derived work and credit
 
 When a change adapts code or behavior from another branch or repository, add a

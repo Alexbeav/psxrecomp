@@ -18,6 +18,8 @@
 #define PSX_FRAME_TRACE_DEFAULT 2048
 
 static PSXFrameTraceRecord s_ring[PSX_FRAME_TRACE_MAX];
+/* An in-progress frame never overwrites the retained committed window. */
+static PSXFrameTraceRecord s_pending;
 
 static int      s_configured;
 static int      s_enabled;
@@ -129,7 +131,7 @@ void psx_frame_trace_reset(void) {
 }
 
 static PSXFrameTraceRecord *open_record(void) {
-    return &s_ring[(s_opened - 1u) & (uint64_t)(s_cap - 1u)];
+    return &s_pending;
 }
 
 static uint64_t stamp_now(void) {
@@ -145,7 +147,7 @@ int psx_frame_trace_open(void) {
     ensure_configured();
     if (!s_enabled || s_have_open) return 0;
     uint64_t seq = s_opened + 1u;
-    PSXFrameTraceRecord *r = &s_ring[(seq - 1u) & (uint64_t)(s_cap - 1u)];
+    PSXFrameTraceRecord *r = &s_pending;
     memset(r, 0, sizeof *r);
     r->seq = seq;
     r->eye_failed = -1;
@@ -283,6 +285,7 @@ void psx_frame_trace_commit(void) {
     } else if (s_have_publish) {
         r->pair_age_ms = r->open_ms - s_last_publish_ms;
     }
+    s_ring[(r->seq - 1u) & (uint64_t)(s_cap - 1u)] = *r;
     s_committed++;
     s_have_open = 0;
 }
@@ -331,14 +334,15 @@ static const char *jstr(const char *s, char *tmp, int cap) {
     int o = 0;
     if (cap <= 0) return "";
     tmp[0] = '\0';
-    for (const char *p = s; p && *p && o < cap - 2; ++p) {
-        unsigned char c = (unsigned char)*p;
+    for (const unsigned char *p = (const unsigned char *)s; p && *p; ++p) {
+        const unsigned char c = *p;
+        const int need = c == '"' || c == '\\' || c == '\n' ? 2 : c < 0x20 ? 6 : 1;
+        if (need > cap - 1 - o) break;
         if (c == '"' || c == '\\') { tmp[o++] = '\\'; tmp[o++] = (char)c; }
-        else if (c == '\n') { tmp[o++] = '\\'; if (o < cap - 1) tmp[o++] = 'n'; }
-        else if (c < 0x20) { o += snprintf(tmp + o, (size_t)(cap - o), "\\u%04x", c); }
+        else if (c == '\n') { tmp[o++] = '\\'; tmp[o++] = 'n'; }
+        else if (c < 0x20) o += snprintf(tmp + o, (size_t)(cap - o), "\\u%04x", c);
         else tmp[o++] = (char)c;
     }
-    if (o > cap - 1) o = cap - 1;
     tmp[o] = '\0';
     return tmp;
 }
