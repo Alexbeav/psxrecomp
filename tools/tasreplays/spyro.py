@@ -24,6 +24,11 @@ run (the shared 2.2.2 models with the 2.3 CD-DA and MDEC models), except that th
 with the DualShock ACK timing: run_native refuses the digital Octoshock ACK model for a DualShock
 route.
 
+spyro1-5523M was recorded on BizHawk 2.7.0 and re-saved by 2.9.1 (input log and sync settings
+unchanged). It presses MODE, which it may only under --mode-button-model octoshock-2.4.2: under
+that model the pad latches the button and evaluates it only on the port's DTR falling edge (corpus
+PSX-TAS-001).
+
 The source reference is the one spyro_admission.py admits. No reference is generated from a
 candidate, and no movie input is changed to correct a divergence.
 """
@@ -39,6 +44,7 @@ import subprocess
 import sys
 
 import build_cache
+import crash
 import dualshock_route
 import media_container
 import nymashock28_route
@@ -91,6 +97,7 @@ PROFILE_NYMA28 = [
     '--axis-model', AXIS_MODEL,
 ]
 SPYRO2_STEM = "Spyro 2 - Ripto's Rage! (USA)"
+PROFILE_27 = [*crash.PROFILE, '--axis-model', AXIS_MODEL]
 TITLES = {
     'spyro2-5278M': {
         # Canonical PSXRTI2 controller bytes of the movie (dualshock_route.write_route).
@@ -121,6 +128,19 @@ TITLES = {
         'profile': PROFILE_23,
     },
 }
+
+TITLES['spyro1-5523M'] = dict(
+    TITLES['spyro3-4083M'],
+    controller_sha256='fc5d6d009d52b3e8fa2cdd25c4dc96d40e2088d9b7cac81c58c06f22e1ee6991',
+    reader={'emu_versions': ('Version 2.7.0',), 'allow_resaved': True},
+    boot='SCUS_942.28', game_id='SCUS-94228',
+    exe_sha256='a533d75cab8afaae6107ec35a02a9a5fe979a92c7c955f9cf1ee50f693a1b998',
+    disc_stem='Spyro the Dragon (USA)', track_bytes=661547040,
+    load_address=0x80010000, entry_pc=0x8005B8E0, text_size=0x65800, stack_base=0x801FFFF0,
+    system_cnf=b'BOOT = cdrom:\\SCUS_942.28;1\r\nTCB = 4\r\nEVENT = 16\r\nSTACK = 801FFFF0\r\n',
+    name='Spyro the Dragon', exe_name='Spyro1-TAS',
+    profile=[*PROFILE_27, '--mode-button-model', 'octoshock-2.4.2'],
+)
 
 digest = tekken3.digest
 write = tekken3.write_json
@@ -201,7 +221,7 @@ def read_route(movie, title):
         rows, facts = nymashock28_route.read_movie_nymashock28(movie, **entry['reader'])
     else:
         rows, facts = dualshock_route.read_movie_octoshock_dualshock(movie, **entry['reader'])
-    if facts['mode_press_frames']:
+    if facts['mode_press_frames'] and '--mode-button-model' not in entry['profile']:
         raise ValueError('movie presses the physical Analog button; no runtime models it yet')
     if len(rows) != spec['frames']:
         raise ValueError('incomplete original movie')

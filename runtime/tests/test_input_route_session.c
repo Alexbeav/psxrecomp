@@ -34,6 +34,10 @@ void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry
 void sio_set_pad_analog(int slot, int enabled, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 { analog[slot] = enabled; sio_set_pad_sticks(slot, a, b, c, d); }
 void sio_set_pad_state_slot(int slot, uint16_t buttons) { pad[slot] = buttons; }
+/* These original session cases qualify neutral physical MODE only. */
+void sio_set_pad_mode_button(int slot, int pressed) { if (slot != 0 || pressed) abort(); }
+int sio_get_pad_mode_button(int slot) { if (slot != 0) abort(); return 0; }
+
 
 #ifdef PSX_NO_DEBUG_TOOLS
 /* A release product links the route observer and drives it from the release

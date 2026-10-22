@@ -60,6 +60,8 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
                            uint8_t *r, uint8_t *g, uint8_t *b) {
     (void)di; (void)x; (void)y; *r = *g = *b = 0;
 }
+/* These original observer cases deliver neutral physical MODE. */
+int sio_get_pad_mode_button(int slot) { if (slot != 0) abort(); return 0; }
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
     card_case = argv[1];
@@ -68,7 +70,7 @@ int main(int argc, char **argv) {
         if (!input_route_observer_dualshock_init(2)) return 4;
         input_route_observer_resume(3);
         input_route_observer_boundary(3, 3);
-        input_route_observer_dualshock_input(0xFFFF, neutral);
+        input_route_observer_dualshock_input(0xFFFF, neutral, 0);
         input_route_observer_dualshock_applied(0xFFFF, neutral, 1, 1, 1);
         input_route_observer_boundary(4, 4);
         return 8;
@@ -79,7 +81,7 @@ int main(int argc, char **argv) {
         uint8_t sticks[4] = {0,1,254,128};
         const uint8_t sticks2[4] = {129,128,131,130}, neutral[4] = {128,128,128,128};
         input_route_observer_boundary(0, 1);
-        input_route_observer_dualshock_input(0xFFEF, source);
+        input_route_observer_dualshock_input(0xFFEF, source, 0);
         if (!strcmp(argv[1], "ds_missing")) input_route_observer_boundary(1, 2);
         if (!strcmp(argv[1], "ds_wrong_axis")) sticks[0] = 1;
         if (!strcmp(argv[1], "ds_unconverted")) sticks[2] = 255;
@@ -87,10 +89,10 @@ int main(int argc, char **argv) {
         input_route_observer_dualshock_applied(0xFFEF, sticks,
             strcmp(argv[1], "ds_disconnected") != 0, strcmp(argv[1], "ds_plainpad") != 0, 0);
         input_route_observer_boundary(1, 2);
-        input_route_observer_dualshock_input(0xFFFF, source2);
+        input_route_observer_dualshock_input(0xFFFF, source2, 0);
         input_route_observer_dualshock_applied(0xFFFF, sticks2, 1, 1, 1);
         input_route_observer_boundary(2, 3);
-        input_route_observer_dualshock_input(0xFFFF, !strcmp(argv[1], "ds_tail_axis") ? source : neutral);
+        input_route_observer_dualshock_input(0xFFFF, !strcmp(argv[1], "ds_tail_axis") ? source : neutral, 0);
         input_route_observer_dualshock_applied(0xFFFF, neutral, 1, 1, 1);
         input_route_observer_boundary(3, 4);
         return 8;

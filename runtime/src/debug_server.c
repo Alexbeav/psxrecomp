@@ -339,6 +339,7 @@ static int      s_input_route_file_mode = 0;
 static uint32_t s_input_route_consumed = 0;
 static PSX_BSS InputDualShockRouteStep s_dualshock_route[INPUT_ROUTE_MAX_STEPS];
 static uint8_t s_dualshock_axes[4] = {128,128,128,128};
+static uint8_t s_dualshock_mode_button;
 static int s_dualshock_route_mode;
 #include "input_update_replay.h"
 #include "input_instruction_histogram_impl.h"
@@ -379,7 +380,7 @@ int debug_server_preload_input_route(const char *path)
         if (ack_model && !strcmp(ack_model, "octoshock-2.2.2-digital"))
             error = "digital Octoshock ACK profile cannot qualify a Nymashock DualShock";
         for (uint32_t i = 0; !error && i < count; ++i)
-            if (dual[i].analog_button) error = "physical Analog press is not qualified";
+            if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
         if (error) {
             fprintf(stderr, "input route rejected: %s\n", error);
             free(dual); return 0;
@@ -397,8 +398,9 @@ int debug_server_preload_input_route(const char *path)
         s_input_route_remaining = s_dualshock_route[0].frames;
         s_input_route_active = s_input_route_file_mode = s_dualshock_route_mode = 1;
         s_input_route_consumed = 0;
-        fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=PSXRTI2 physical_analog=neutral_only\n",
-                (unsigned)frames, (unsigned)count);
+        fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=PSXRTI2 physical_analog=%s\n",
+                (unsigned)frames, (unsigned)count,
+                input_dualshock_mode_button_enabled() ? "octoshock-2.4.2" : "neutral_only");
         return 1;
     }
     staged = (InputRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*staged));
@@ -15016,18 +15018,20 @@ int debug_server_get_input_override(void)
         input_route_observer_boundary(s_input_route_consumed, s_frame_count);
     if (s_dualshock_route_mode) {
         uint16_t current = 0xFFFF;
+        s_dualshock_mode_button = 0;
         memset(s_dualshock_axes, 128, sizeof(s_dualshock_axes));
         if (s_input_route_active && s_input_route_index < s_input_route_count) {
             const InputDualShockRouteStep *step = &s_dualshock_route[s_input_route_index];
             current = step->buttons;
             memcpy(s_dualshock_axes, step->axes_ly_lx_ry_rx, 4);
+            s_dualshock_mode_button = step->analog_button;
             if (--s_input_route_remaining == 0) {
                 if (++s_input_route_index < s_input_route_count)
                     s_input_route_remaining = s_dualshock_route[s_input_route_index].frames;
                 else s_input_route_active = 0;
             }
         }
-        input_route_observer_dualshock_input(current, s_dualshock_axes);
+        input_route_observer_dualshock_input(current, s_dualshock_axes, s_dualshock_mode_button);
         ++s_input_route_consumed;
         return current;
     }
@@ -15076,7 +15080,7 @@ int debug_server_get_axis_override(unsigned char st[4])
 int debug_server_apply_dualshock_input(int buttons)
 {
     if (!s_dualshock_route_mode) return 0;
-    input_dualshock_deliver((uint16_t)buttons, s_dualshock_axes);
+    input_dualshock_deliver_mode((uint16_t)buttons, s_dualshock_axes, s_dualshock_mode_button);
     return 1;
 }
 

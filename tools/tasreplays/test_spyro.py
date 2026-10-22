@@ -61,6 +61,13 @@ expected += ['--cd-cdda-model', 'octoshock-2.3', '--mdec-source-model', 'octosho
 assert pairs(spyro.PROFILE_23) == pairs(expected) and len(spyro.PROFILE_23) == len(expected)
 assert entry['profile'] is spyro.PROFILE_23
 
+# 5523M: its own disc and boot program, the resaved 2.7 reader, and MODE only under the DTR-edge model.
+e1, s1 = spyro.title_spec('spyro1-5523M')
+assert s1['host'] == '2.7' and s1['frames'] == 128104 and e1['bios_stem'] + '.BIN' == s1['firmware'] == 'SCPH5501.BIN'
+assert e1['reader'] == {'emu_versions': ('Version 2.7.0',), 'allow_resaved': True} and e1['disc_stem'] + '.bin' in s1['media']
+assert e1['system_cnf'] == b'BOOT = cdrom:\\SCUS_942.28;1\r\nTCB = 4\r\nEVENT = 16\r\nSTACK = 801FFFF0\r\n'
+assert e1['profile'] == [*spyro.PROFILE_27, '--mode-button-model', 'octoshock-2.4.2'] and 'card1_sha256' not in e1
+
 # 10,000 returns of the 80,352-input movie: 10,001 records, no tail.
 assert native_span(spec['frames'], spec['frames'] + 3600, 10000) == (10001, 0)
 assert native_span(spec['frames'], spec['frames'] + 3600, spec['frames'] + 3600) == (spec['frames'], 3601)
@@ -96,6 +103,9 @@ with tempfile.TemporaryDirectory() as directory:
 saved = spyro.require_hash, dualshock_route.read_movie_octoshock_dualshock
 try:
     spyro.require_hash = lambda path, expected: None
+    s1full = [(0xFFFF, 128, 128, 128, 128, 0)] * s1['frames']
+    dualshock_route.read_movie_octoshock_dualshock = lambda movie, **kw: (s1full, {'mode_press_frames': 4})
+    assert spyro.read_route(Path('movie.bk2'), 'spyro1-5523M') == s1full
     full = [(0xFFFF, 128, 128, 128, 128, 0)] * spec['frames']
     for rows, facts in ((full, {'mode_press_frames': 1}), (full[:-1], {'mode_press_frames': 0})):
         dualshock_route.read_movie_octoshock_dualshock = lambda movie, rows=rows, facts=facts, **kw: (rows, facts)
@@ -194,16 +204,22 @@ else:
     print('spyro2-5278M real movie absent; real-movie checks skipped')
 
 LIBRARY = Path(r'D:\Projects\Recompilations\PS1\Library\Movies\tas')
-real = LIBRARY / spec['movie']
-if real.is_file():
-    rows = spyro.read_route(real, 'spyro3-4083M')
-    with tempfile.TemporaryDirectory() as directory:
-        route = Path(directory) / 'input.psxrti2'
-        receipt = dualshock_route.write_route(rows, route)
-        assert receipt['canonical_controller_sha256'] == entry['controller_sha256']
-        identity = run_native.route_identity(route, axis_model=spyro.AXIS_MODEL)
-        assert identity['frames'] == spec['frames'] and identity['expected_protocol_sha256'] == entry['controller_sha256']
-    print('spyro3-4083M real movie: %d frames, controller %s' % (len(rows), entry['controller_sha256'][:12]))
-else:
-    print('spyro3-4083M real movie absent; real-movie checks skipped')
+for title in sorted(spyro.TITLES):
+    entry, spec = spyro.title_spec(title)
+    real = LIBRARY / spec['movie']
+    if real.is_file():
+        rows = spyro.read_route(real, title)
+        with tempfile.TemporaryDirectory() as directory:
+            route = Path(directory) / 'input.psxrti2'
+            receipt = dualshock_route.write_route(rows, route)
+            assert receipt['canonical_controller_sha256'] == entry['controller_sha256']
+            mode_flag = '--mode-button-model'
+            mode_model = entry['profile'][entry['profile'].index(mode_flag) + 1] if mode_flag in entry['profile'] else 'none'
+            if any(row[5] for row in rows):
+                rejects(lambda: run_native.route_identity(route, axis_model=spyro.AXIS_MODEL))
+            identity = run_native.route_identity(route, axis_model=spyro.AXIS_MODEL, mode_model=mode_model)
+            assert identity['frames'] == spec['frames'] and identity['expected_protocol_sha256'] == entry['controller_sha256']
+        print('%s real movie: %d frames, controller %s' % (title, len(rows), entry['controller_sha256'][:12]))
+    else:
+        print('%s real movie absent; real-movie checks skipped' % title)
 print('Spyro adapter: title entries, raw-axis DualShock profile, reference/setup/route guards and 10k span pass')

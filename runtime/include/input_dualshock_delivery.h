@@ -9,6 +9,14 @@
  * hands the pad a 16-bit value per axis; PSX_INPUT_ROUTE_AXIS_MODEL=
  * octoshock-byte selects Octoshock, whose wrapper hands the pad the logged
  * byte unscaled [ORACLE FIXTURE P1, Octoshock 2.3; corpus PSX-TAS-001]. */
+/* Physical MODE presses are delivered only when the route asks for them by
+ * model: PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2. Otherwise a MODE press
+ * stays refused at admission. */
+static inline int input_dualshock_mode_button_enabled(void)
+{
+    const char *model = getenv("PSX_INPUT_ROUTE_MODE_MODEL");
+    return model && !strcmp(model, "octoshock-2.4.2");
+}
 static inline int input_dualshock_raw_axes(void)
 {
     const char *model = getenv("PSX_INPUT_ROUTE_AXIS_MODEL");
@@ -16,6 +24,7 @@ static inline int input_dualshock_raw_axes(void)
 }
 static inline const char *input_dualshock_controller_profile(void)
 {
+    if (input_dualshock_mode_button_enabled()) return "octoshock-2.4.2-dualshock-mode";
     return input_dualshock_raw_axes() ? "octoshock-byte-dualshock-neutral-analog"
                                       : "nymashock-2.9.1-dualshock-neutral-analog";
 }
@@ -58,5 +67,12 @@ static inline void input_dualshock_deliver(uint16_t buttons, const uint8_t sourc
     input_dualshock_protocol_sticks(source_ly_lx_ry_rx, st);
     sio_set_pad_state_slot(0, buttons);
     sio_set_pad_sticks(0, st[0], st[1], st[2], st[3]);
+}
+/* Same as input_dualshock_deliver, and latches the physical MODE button state
+ * for the pad's DTR-edge evaluation (see sio.c). */
+static inline void input_dualshock_deliver_mode(uint16_t buttons, const uint8_t source_ly_lx_ry_rx[4], uint8_t mode)
+{
+    input_dualshock_deliver(buttons, source_ly_lx_ry_rx);
+    sio_set_pad_mode_button(0, mode);
 }
 #endif
