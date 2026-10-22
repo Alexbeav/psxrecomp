@@ -173,7 +173,9 @@ static uint8_t frame_checksum(const uint8_t *frame) {
 }
 
 /* Format a 128KB card image to match a real PS1 blank card.
- * Layout verified against DuckStation's MemoryCardImage::Format(). */
+ * Layout per PSX-SPX controllersandmemorycards, "Memory Card Data Format":
+ * header frame, directory frames (free A0h, next FFFFh), broken sector
+ * list (FFFFFFFFh = none) and the write test frame 63. */
 static void memcard_format(uint8_t *data) {
     memset(data, 0xFF, MEMCARD_SIZE);
 
