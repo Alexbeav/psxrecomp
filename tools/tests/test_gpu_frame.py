@@ -332,8 +332,16 @@ class OneShotServer:
                 c.close()   # <- the contract: one request per connection
 
     def stop(self):
+        # Wake the accept() and wait for the thread: a thread still blocked at
+        # interpreter exit leaves its objects behind, and a leak checker reports them.
+        import socket as _s
         self.running = False
+        try:
+            self.sock.shutdown(_s.SHUT_RDWR)
+        except OSError:
+            pass
         self.sock.close()
+        self.thread.join(timeout=5)
 
 
 class TestDebugConn(unittest.TestCase):
