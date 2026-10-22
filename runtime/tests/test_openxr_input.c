@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "xr_surface_math.h"
+#include "xr_origin_diagnostics.h"
 extern void psx_openxr_pose_bob(double q[2][4], double p[2][3]);
 extern int psx_openxr_pose_override(double, double, double);
 extern int psx_openxr_pose_pitch_override(double);
@@ -14,6 +15,23 @@ extern void psx_openxr_pose_clear(void);
     } \
 } while (0)
 int main(void) {
+    const double upright[4]={0,0,0,1}, upside[4]={0,0,1,0}, yaw180[4]={0,1,0,0};
+    unsigned inversion=0;double up_dot=0;
+    for(int i=0;i<9;i++)
+        inversion=xr_origin_observe_inversion(inversion,1,upright,upside,&up_dot);
+    CHECK(inversion==9 && up_dot < -0.5);
+    inversion=xr_origin_observe_inversion(inversion,1,upright,upside,&up_dot);
+    CHECK(inversion==10 && up_dot < -0.5);
+    /* A valid sustained roll stays ambiguous but never requests a reset. */
+    inversion=xr_origin_observe_inversion(inversion,1,upright,yaw180,&up_dot);
+    CHECK(inversion==0 && fabs(up_dot-1.0)<1e-12);
+    inversion=xr_origin_observe_inversion(7,0,upright,upside,&up_dot);
+    CHECK(inversion==0 && up_dot==1.0);
+    inversion=xr_origin_observe_inversion(7,1,upside,upside,&up_dot);
+    CHECK(inversion==0 && fabs(up_dot-1.0)<1e-12);
+    CHECK(!xr_origin_reference_reset_due(0,100,100));
+    CHECK(!xr_origin_reference_reset_due(1,101,100));
+    CHECK(xr_origin_reference_reset_due(1,100,100));
     /* Synthetic controls are absolute, bounded and inert after clearing. */
     double bob_q[2][4]={{0,0,0,1},{0,0,0,1}};
     double bob_p[2][3]={{-.03,0,0},{.03,0,0}};
