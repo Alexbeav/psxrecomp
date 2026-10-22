@@ -194,6 +194,21 @@ int main(void) {
         CHECK(one[0].seq == extra);
     }
 
+    /* Opening the next frame must not retire a committed slot before commit. */
+    {
+        static PSXFrameTraceRecord retained[4096];
+        uint32_t capacity = psx_frame_trace_capacity();
+        uint64_t committed = psx_frame_trace_committed();
+        CHECK(psx_frame_trace_open() == 1);
+        psx_frame_trace_note("not committed");
+        CHECK(psx_frame_trace_read(retained, capacity) == capacity);
+        CHECK(retained[0].seq == committed - capacity + 1);
+        CHECK(retained[capacity - 1].seq == committed);
+        psx_frame_trace_commit();
+        CHECK(psx_frame_trace_read(retained, capacity) == capacity);
+        CHECK(retained[capacity - 1].seq == committed + 1);
+    }
+
     /* ---- exports: valid, NULL-terminated, truncation-safe ---- */
     {
         static char big[1 << 20];

@@ -18,6 +18,8 @@
 #define PSX_FRAME_TRACE_DEFAULT 2048
 
 static PSXFrameTraceRecord s_ring[PSX_FRAME_TRACE_MAX];
+/* An in-progress frame never overwrites the retained committed window. */
+static PSXFrameTraceRecord s_pending;
 
 static int      s_configured;
 static int      s_enabled;
@@ -129,7 +131,7 @@ void psx_frame_trace_reset(void) {
 }
 
 static PSXFrameTraceRecord *open_record(void) {
-    return &s_ring[(s_opened - 1u) & (uint64_t)(s_cap - 1u)];
+    return &s_pending;
 }
 
 static uint64_t stamp_now(void) {
@@ -145,7 +147,7 @@ int psx_frame_trace_open(void) {
     ensure_configured();
     if (!s_enabled || s_have_open) return 0;
     uint64_t seq = s_opened + 1u;
-    PSXFrameTraceRecord *r = &s_ring[(seq - 1u) & (uint64_t)(s_cap - 1u)];
+    PSXFrameTraceRecord *r = &s_pending;
     memset(r, 0, sizeof *r);
     r->seq = seq;
     r->eye_failed = -1;
@@ -283,6 +285,7 @@ void psx_frame_trace_commit(void) {
     } else if (s_have_publish) {
         r->pair_age_ms = r->open_ms - s_last_publish_ms;
     }
+    s_ring[(r->seq - 1u) & (uint64_t)(s_cap - 1u)] = *r;
     s_committed++;
     s_have_open = 0;
 }
