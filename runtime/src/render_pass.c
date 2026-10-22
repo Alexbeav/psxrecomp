@@ -26,8 +26,10 @@
 #include "cpu_state.h"
 #include "dirty_ram_interp.h"
 #include "dma.h"
+#include "frame_trace.h"
 #include "gpu.h"
 #include "gpu_gl_renderer.h"
+#include "host_time.h"
 #include "mod_plugins.h"
 #include "mod_runtime.h"
 #include "interrupts.h"
@@ -282,6 +284,9 @@ static const char *s_checkpoint_failure;
 static RenderStereoStats s_stereo;
 static int s_pair_busy;
 static uint32_t s_pair_retry;
+/* A HUD-only capture transaction reuses eye 0's slot but is not an eye draw;
+ * frame tracing must not attribute its cost to the left eye. */
+static int s_capture_only;
 
 static int pass_refuse(const char *reason, uint32_t status) {
     /* A refusal always carries a reason: last_failure.reason == NULL means
@@ -338,6 +343,11 @@ void render_pass_reset_session(void) {
     s_stereo.last_eye = -1;
     s_pair_busy = 0;
     s_pair_retry = 0;
+    /* Frame tracing is opt-in per session: re-read the env, install the host
+     * clock, and clear any previous session's records. */
+    psx_frame_trace_configure_from_env();
+    psx_frame_trace_set_clock(psx_host_mono_ms);
+    psx_frame_trace_reset();
     gl_renderer_stereo_reset();
     gl_renderer_pass_set_flip_shown(0);
 }
@@ -392,6 +402,14 @@ uint32_t psx_mod_render_stereo_status(void) {
 void render_stereo_get_stats(RenderStereoStats *out) { if (out) *out = s_stereo; }
 int psx_mod_set_stereo_presentation(uint32_t mode) {
     return mode <= 1u ? gl_renderer_stereo_set_presentation(mode) : 0;
+}
+
+/* Game-side annotation for the frame trace (mod_plugins.h): a title hook marks
+ * a scene/state transition on the record the runtime opened for this frame. A
+ * no-op when tracing is off or no record is open. */
+void psx_mod_frame_trace_note(const char *tag) {
+    psx_frame_trace_note(tag);
+    psx_frame_trace_flag(PSX_FRAME_TRACE_SCENE_TRANSITION);
 }
 int psx_mod_render_view_offset(int32_t x, int32_t y, int32_t z) {
     int32_t xyz[3] = {x, y, z};
@@ -605,6 +623,51 @@ static double ema_ms(double cur, uint64_t ticks) {
     return cur > 0.0 ? cur * 0.9 + ms * 0.1 : ms;
 }
 
+/* Ticks -> microseconds for frame_trace. CPU submission time only: it is not
+ * GPU execution time. */
+static double s_us_per_tick = 0.0;
+static uint64_t trace_ticks_to_us(uint64_t ticks) {
+    if (s_us_per_tick == 0.0) {
+        double f = (double)gl_renderer_perf_frequency();
+        s_us_per_tick = f > 0.0 ? 1000000.0 / f : 1.0;
+    }
+    return (uint64_t)((double)ticks * s_us_per_tick);
+}
+
+/* ---- guest sub-stage spans (mod_plugins.h) ------------------------------
+ * The game hook brackets the guest calls it replays once per eye, and the
+ * runtime times them with its own tick clock, exactly as the eye stages are
+ * timed, so the parts sum against eye_guest. Accepted only inside a traced
+ * stereo eye (s_sub_eye): a HUD capture's guest draws and the flat path report
+ * their own stages and must not write these slots. */
+static int      s_sub_eye = -1;    /* traced eye accepting spans, -1 = none */
+/* One start tick per stage rather than one open span at a time, so a stage can
+ * be bracketed inside another: the hook's visibility override runs inside the
+ * guest traversal it is part of. The outer span keeps its own wall time, so a
+ * nested stage is a subset of it rather than a sibling. */
+static int      s_sub_open[PSX_TRACE_STAGE_COUNT];
+static uint64_t s_sub_ticks[PSX_TRACE_STAGE_COUNT];
+
+/* No span survives an eye boundary, so an eye aborted mid-entry cannot carry a
+ * start tick into the next one. */
+static void sub_spans_forget(void) {
+    memset(s_sub_open, 0, sizeof s_sub_open);
+}
+
+void psx_mod_frame_trace_stage_begin(uint32_t stage) {
+    if (s_sub_eye < 0 || stage >= PSX_TRACE_STAGE_COUNT) return;
+    s_sub_open[stage] = 1;          /* an unpaired begin restarts that span */
+    s_sub_ticks[stage] = gl_renderer_perf_ticks();
+}
+
+void psx_mod_frame_trace_stage_end(uint32_t stage) {
+    if (s_sub_eye < 0 || stage >= PSX_TRACE_STAGE_COUNT) return;
+    if (!s_sub_open[stage]) return; /* an end with no begin records nothing */
+    uint64_t now = gl_renderer_perf_ticks();
+    psx_frame_trace_add(stage, trace_ticks_to_us(now - s_sub_ticks[stage]));
+    s_sub_open[stage] = 0;
+}
+
 static void watchdog_overrun(void) {
     s_stats.watchdog++;
     s_stats.watchdog_flag = 1;
@@ -692,6 +755,10 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_attempt.attempt = ++s_stats.pass_attempts;
     s_attempt.plan = s_plan_serial;
     s_attempt.guest_cycle = psx_cycle_count;
+    /* No guest sub-stage span may survive into this transaction: the eye that
+     * accepts them is decided below, once the trace decision is known. */
+    s_sub_eye = -1;
+    sub_spans_forget();
     if (pass) {
         s_attempt.struct_size = pass->struct_size;
         if (pass->struct_size >= sizeof *pass) {
@@ -726,6 +793,16 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         if (inv == 0.0) inv = 1000.0 / (double)gl_renderer_perf_frequency();
         s_ms_per_tick = inv;
     }
+    /* Per-eye trace sampling (opt-in): primitive counts and upload pixels are
+     * cumulative, so the eye's cost is the delta across its transaction. */
+    int trace_on = eye >= 0 && !s_capture_only && psx_frame_trace_enabled();
+    uint64_t trace_prims0 = 0, trace_tex0 = 0, trace_diag0[6] = {0,0,0,0,0,0};
+    if (trace_on) {
+        gl_renderer_scene_prim_counts(&trace_prims0, &trace_tex0);
+        gl_renderer_runtime_diag(trace_diag0);
+    }
+    /* This eye, and only this eye, accepts the hook's guest sub-stage spans. */
+    s_sub_eye = trace_on ? (int)eye : -1;
     reuse = !open && eye != RP_EYE_LOCAL && s_restored_valid &&
             s_restored_plan == s_plan_serial &&
             s_restored_cycle == psx_cycle_count &&
@@ -794,7 +871,13 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
                  "%s", s_abort_detail);
         ok = 0;
     }
-    s_stats.guest_cycles_last = psx_cycle_count - cycles_before;
+    /* Any span still open here was never ended by the hook, or the eye aborted
+     * mid-entry through the longjmp above. Drop them instead of closing them:
+     * the elapsed time is then not charged to an entry that never finished, and
+     * it shows up as the difference between eye_guest and the guest sub-stages. */
+    sub_spans_forget();
+    uint64_t guest_cycles = psx_cycle_count - cycles_before;
+    s_stats.guest_cycles_last = guest_cycles;
     if (eye >= 0) gte_render_view_get(s_stereo.eye_view[eye]);
     tg = gl_renderer_perf_ticks();
     s_pass_cpu = NULL;
@@ -826,6 +909,26 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_stats.avg_guest_ms = ema_ms(s_stats.avg_guest_ms, tg - tb);
     s_stats.avg_end_ms = ema_ms(s_stats.avg_end_ms, te - tg);
     s_stats.avg_restore_ms = ema_ms(s_stats.avg_restore_ms, tr - te);
+
+    if (trace_on) {
+        uint32_t base = eye == PSX_MOD_EYE_LEFT ? PSX_TRACE_EYE_BEGIN_L
+                                                : PSX_TRACE_EYE_BEGIN_R;
+        psx_frame_trace_add(base + 0, trace_ticks_to_us(tb - t0));
+        psx_frame_trace_add(base + 1, trace_ticks_to_us(tg - tb));
+        psx_frame_trace_add(base + 2, trace_ticks_to_us(te - tg));
+        psx_frame_trace_add(base + 3, trace_ticks_to_us(tr - te));
+        uint64_t p1 = 0, t1x = 0, diag1[6] = {0,0,0,0,0,0};
+        gl_renderer_scene_prim_counts(&p1, &t1x);
+        gl_renderer_runtime_diag(diag1);
+        psx_frame_trace_draw(eye, (uint32_t)(p1 - trace_prims0),
+                             (uint32_t)(t1x - trace_tex0));
+        psx_frame_trace_eye_cycles(eye, (uint32_t)guest_cycles);
+        /* Upload pixels -> bytes assumes the 16-bit VRAM format uploads use. */
+        psx_frame_trace_gpu((diag1[2] - trace_diag0[2]) * 2u,
+                            (uint32_t)leaks);
+        s_sub_eye = -1;
+        sub_spans_forget();
+    }
 
     if (verify_on()) {
         hash_after = state_hash(cpu);
@@ -920,10 +1023,31 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     if (status != PSX_MOD_RENDER_PASS_READY) {
         s_stereo.refused++; s_stereo.last_failure = "status"; return 0;
     }
+    /* Frame trace (opt-in). The runtime already opened this frame's record in
+     * psx_openxr_begin() when a headset is active; opening here covers the
+     * desktop stereo path, and the guest-sim gap is the host time since the
+     * previous traced frame. */
+    int trace_on = psx_frame_trace_enabled();
+    int trace_opened = trace_on ? psx_frame_trace_open() : 0;
+    if (trace_on) {
+        static uint64_t prev_ms;
+        static int prev_valid;
+        uint64_t now_ms = psx_host_mono_ms();
+        if (prev_valid)
+            psx_frame_trace_add(PSX_TRACE_GUEST_SIM, (now_ms - prev_ms) * 1000u);
+        prev_ms = now_ms; prev_valid = 1;
+        psx_frame_trace_attempt(s_stereo.attempts, 0, 0);
+    }
     budget_ms = frame->period_vblanks * (double)g_psx_vblank_cycles /
                 33868.8 * 0.8;
     if (s_stereo.avg_pair_ms > budget_ms && ++s_pair_retry < 30u) {
-        s_stereo.shed++; return 0;
+        s_stereo.shed++;
+        if (trace_on) {
+            psx_frame_trace_attempt(s_stereo.attempts, s_pair_retry, 0);
+            psx_frame_trace_flag(PSX_FRAME_TRACE_STALE_PAIR);
+            if (trace_opened) psx_frame_trace_commit();
+        }
+        return 0;
     }
     s_pair_retry = 0;
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
@@ -978,6 +1102,13 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
         s_stereo.retained_pair_id = s_stereo.last_pair_id;
         gl_renderer_stereo_stage_reset();
     }
+    if (trace_on) {
+        psx_frame_trace_add(PSX_TRACE_PAIR_TOTAL, (uint64_t)(elapsed * 1000.0));
+        psx_frame_trace_result(ok, ok ? s_stereo.last_pair_id : 0,
+                               ok ? -1 : s_stereo.last_eye,
+                               ok ? NULL : s_stereo.last_failure);
+        if (trace_opened) psx_frame_trace_commit();
+    }
     s_pair_busy = 0;
     return ok;
 }
@@ -989,11 +1120,21 @@ int psx_mod_render_capture_rgba(CPUState *cpu,const PSXModRenderPass *rect,
        !rect->w || !rect->h || rect->x+rect->w>1024 || rect->y+rect->h>512 ||
        (uint64_t)rect->w*rect->h*4>bytes || transaction_status(1)!=PSX_MOD_RENDER_PASS_READY)return 0;
     if(g_overlay_flush_pending_cycles)g_overlay_flush_pending_cycles();
+    uint64_t trace_t0=gl_renderer_perf_ticks();
     s_pair_busy=1;s_plan_serial++;
     gl_renderer_stereo_stage_reset();
     PSXModRenderPass capture=*rect;capture.alpha_q16=0;
+    s_capture_only=1;   /* this eye-0 transaction is a HUD capture, not an eye draw */
     int ok=render_transaction(cpu,&capture,fn,user,0);
+    s_capture_only=0;
+    uint64_t trace_t1=gl_renderer_perf_ticks();
+    psx_frame_trace_add(PSX_TRACE_HUD_DRAW,
+                        trace_ticks_to_us(trace_t1-trace_t0));
     if(ok)ok=gl_renderer_stereo_stage_readback(0,rect->w,rect->h,rgba);
+    psx_frame_trace_add(PSX_TRACE_HUD_READBACK,
+                        trace_ticks_to_us(gl_renderer_perf_ticks()-trace_t1));
     gl_renderer_stereo_stage_reset();s_pair_busy=0;
+    psx_frame_trace_add(PSX_TRACE_HUD_CAPTURE,
+                        trace_ticks_to_us(gl_renderer_perf_ticks()-trace_t0));
     return ok;
 }

@@ -7611,6 +7611,14 @@ uint64_t gl_renderer_perf_prim_split(double *out_tex_frac) {
     return s_scene_prims;
 }
 
+/* Cumulative scene primitives for per-frame attribution (frame_trace). Callers
+ * take deltas; these counters are never reset here. */
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured) {
+    GL_RT_SYNC("scene_prim_counts");
+    if (prims) *prims = s_scene_prims;
+    if (textured) *textured = s_scene_prims_tex;
+}
+
 int gl_renderer_perf_aggregate(int wide_filter, double out[18]) {
     GL_RT_SYNC("perf_aggregate");
     for (int i = 0; i < 18; i++) out[i] = 0.0;

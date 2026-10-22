@@ -232,6 +232,13 @@ int gl_renderer_stereo_publish(uint64_t id, uint64_t cycle, const int32_t view[2
     s_stereo_published = id;
     return 1;
 }
+/* Referenced by render_pass.c's frame tracing and stereo shedding. */
+void gl_renderer_runtime_diag(uint64_t out[6]) { memset(out, 0, 6 * sizeof *out); }
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured) {
+    if (prims) *prims = 0;
+    if (textured) *textured = 0;
+}
+uint64_t psx_host_mono_ms(void) { return 1; }
 
 /* ---- an overlay shard's cycle shim (overlay_dispatch_preamble.c.inc) --- */
 static uint32_t s_shard_pending;

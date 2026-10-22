@@ -23,6 +23,7 @@
  * The GPU, presenter and remaining devices are mocks. Build/run:
  * ctest -R render_pass_sandbox_test */
 
+#include "frame_trace.h"
 #include "render_pass.h"
 #include "render_pass_plan.h"
 
@@ -222,6 +223,9 @@ void gpu_pass_checkpoint_restore(void) {}
 static uint64_t s_ticks;
 uint64_t gl_renderer_perf_ticks(void) { return s_ticks += 1000; }
 uint64_t gl_renderer_perf_frequency(void) { return 1000000000u; }
+/* 1000 ticks per sample and a 1 GHz tick make one runtime sample exactly 1 us,
+ * so a bracketed guest span is the caller's own bump plus a known microsecond. */
+static void tick_bump(uint64_t ticks) { s_ticks += ticks; }
 static uint32_t s_gl_status = PSX_MOD_RENDER_PASS_READY;
 uint32_t gl_renderer_pass_unavailable(void) { return s_gl_status; }
 uint32_t gl_renderer_pass_plan(uint32_t p, uint32_t s, uint32_t *a,
@@ -300,6 +304,18 @@ int gl_renderer_stereo_publish(uint64_t id, uint64_t cycle, const int32_t view[2
     s_stereo_published = id;
     return 1;
 }
+
+/* Frame-trace draw/diag inputs and the host clock the stereo shedding and
+ * tracing use. Not GL state this sandbox models, but render_pass.c references
+ * them, so they must exist to link. */
+void gl_renderer_runtime_diag(uint64_t out[6]) { memset(out, 0, 6 * sizeof *out); }
+static uint64_t s_prims_stub;
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured) {
+    if (prims) *prims = s_prims_stub;
+    if (textured) *textured = s_prims_stub / 2u;
+}
+static uint64_t s_host_ms;
+uint64_t psx_host_mono_ms(void) { return s_host_ms; }
 
 /* ---- 1. store policy --------------------------------------------------- */
 static void test_store_policy(void) {
@@ -763,6 +779,134 @@ static void test_stereo(void) {
           "capture failure still restores live state");
     f.period_vblanks = 0;
     CHECK(!psx_mod_render_stereo(&cpu, &f, pair_draw, NULL), "invalid cadence refused");
+
+    /* Tracing is observation only: the same pair must publish the same id and
+     * reach the same guest-state hashes with capture on as with it off. */
+    {
+        uint64_t off_pub, off_hash[2], off_pair;
+        f.period_vblanks = 2;
+        psx_frame_trace_set_enabled(0);
+        render_pass_reset_session(); psx_frame_trace_set_enabled(0);
+        s_gl_status = 0; s_begin_ok = 1; s_eye_calls = 0;
+        cpu.gpr[8] = 123; s_ram[0x456] = 0x77;
+        CHECK(psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) == 1, "pair with tracing off");
+        render_stereo_get_stats(&stats);
+        off_pub = s_stereo_published;
+        off_hash[0] = stats.eye_hash[0]; off_hash[1] = stats.eye_hash[1];
+        off_pair = stats.last_pair_id;
+
+        render_pass_reset_session();
+        psx_frame_trace_set_enabled(1); psx_frame_trace_reset();
+        s_gl_status = 0; s_begin_ok = 1; s_eye_calls = 0;
+        cpu.gpr[8] = 123; s_ram[0x456] = 0x77;
+        CHECK(psx_mod_render_stereo(&cpu, &f, pair_draw, NULL) == 1, "pair with tracing on");
+        render_stereo_get_stats(&stats);
+        CHECK(s_stereo_published == off_pub && stats.last_pair_id == off_pair &&
+              stats.eye_hash[0] == off_hash[0] && stats.eye_hash[1] == off_hash[1],
+              "tracing changes neither the published pair nor the guest state");
+        CHECK(psx_frame_trace_committed() > 0, "the traced pair was recorded");
+        psx_frame_trace_set_enabled(0); psx_frame_trace_reset();
+    }
+}
+
+/* ---- 4. per-eye trace counters and guest sub-stage spans ---------------- */
+/* The shape of the game hook's per-eye replay: bracket the guest calls, and let
+ * the runtime time them. See vr/psx_vr_stereo.c vr_draw_scene. */
+static int s_traced_calls;
+static int traced_draw(CPUState *cpu, void *user, uint32_t eye) {
+    (void)user;
+    s_traced_calls++;
+    s_prims_stub += 100u + 100u * eye;          /* 100 prims, then 200 */
+    psx_mod_frame_trace_stage_begin(PSX_TRACE_GAME_TRAVERSE);
+    tick_bump(3000);                            /* 3 us, plus 1 per sample */
+    /* The visibility override runs inside the traversal it belongs to, so its
+     * span nests in that one: it must be timed on its own without truncating
+     * the span it is inside. */
+    psx_mod_frame_trace_stage_begin(PSX_TRACE_GAME_SELECT);
+    tick_bump(2000);
+    psx_mod_frame_trace_stage_end(PSX_TRACE_GAME_SELECT);
+    tick_bump(1000);
+    psx_mod_frame_trace_stage_end(PSX_TRACE_GAME_TRAVERSE);
+    /* An end for a stage that was never opened, and a begin that is never
+     * ended: neither may reach the record. */
+    psx_mod_frame_trace_stage_begin(PSX_TRACE_GAME_ENV);
+    tick_bump(1000);
+    psx_mod_frame_trace_stage_end(PSX_TRACE_GAME_SUBMIT);
+    psx_mod_frame_trace_stage_begin(PSX_TRACE_GAME_ICON);
+    tick_bump(1000);
+    psx_advance_cycles(4000u + 1000u * eye);
+    return 1;
+}
+
+static void test_trace_substages(void) {
+    CPUState cpu = {0};
+    PSXModStereoFrame f = {sizeof f, 2, 0, 240, 320, 240};
+    PSXFrameTraceRecord rec;
+    PSXModRenderPass rect = {sizeof rect, 0, 0, 0, 2, 2};
+    int first = 1, second = 2;
+    uint8_t pixels[32] = {0};
+
+    /* A session reset re-reads PSX_FRAME_TRACE from the env, so enabling the
+     * trace has to come after it (as it does in a real session). */
+    render_pass_reset_session();
+    s_gl_status = 0; s_begin_ok = 1; s_eye_decline = -1; s_eye_calls = 0;
+    s_prims_stub = 0; s_traced_calls = 0;
+    psx_frame_trace_set_enabled(1);
+    psx_frame_trace_reset();
+
+    CHECK(psx_mod_render_stereo(&cpu, &f, traced_draw, NULL) == 1,
+          "the traced pair rendered");
+    CHECK(s_traced_calls == 2, "both eyes replayed the guest draw");
+    CHECK(psx_frame_trace_read(&rec, 1) == 1, "the pair left one record");
+    CHECK(rec.prims_l == 100 && rec.prims_r == 200,
+          "each eye's own primitive delta is recorded");
+    CHECK(rec.prims == 200 && rec.textured_prims == 100,
+          "the pair-level count is still the last eye's");
+    CHECK(rec.eye_cycles_l >= 4000u && rec.eye_cycles_r >= 5000u &&
+          rec.eye_cycles_r > rec.eye_cycles_l,
+          "each eye's own guest cycles are recorded");
+    CHECK(rec.stages_us[PSX_TRACE_GAME_TRAVERSE] == 18,
+          "both eyes' guest spans are recorded (9 us per eye, nesting included)");
+    CHECK(rec.stages_us[PSX_TRACE_GAME_SELECT] == 6,
+          "a nested span is timed on its own (3 us per eye) and stays a subset");
+    CHECK(rec.stages_us[PSX_TRACE_GAME_ENV] == 0 &&
+          rec.stages_us[PSX_TRACE_GAME_SUBMIT] == 0,
+          "an end that does not match an open span records nothing");
+    CHECK(rec.stages_us[PSX_TRACE_GAME_ICON] == 0,
+          "an unpaired begin records nothing rather than leak into the next span");
+
+    /* A HUD capture's guest draws run outside a traced eye: the hook's spans
+     * must not land in the frame they belong to. */
+    psx_frame_trace_reset();
+    s_prims_stub = 0;
+    s_traced_calls = 0;
+    render_pass_reset_session(); s_gl_status = 0; s_begin_ok = 1;
+    psx_frame_trace_set_enabled(1);
+    CHECK(psx_frame_trace_open(), "a frame record is open across the capture");
+    CHECK(psx_mod_render_capture_rgba(&cpu, &rect, traced_draw, &first,
+                                      pixels, sizeof pixels) &&
+          psx_mod_render_capture_rgba(&cpu, &rect, traced_draw, &second,
+                                      pixels, sizeof pixels),
+          "the captures rendered both mattes");
+    CHECK(s_traced_calls == 2 && psx_frame_trace_read(&rec, 1) == 0,
+          "the capture replayed the draw and left no record of its own");
+    psx_frame_trace_commit();
+    CHECK(psx_frame_trace_read(&rec, 1) == 1 &&
+          rec.stages_us[PSX_TRACE_GAME_TRAVERSE] == 0 &&
+          rec.prims_l == 0 && rec.prims_r == 0,
+          "a capture's guest draws write no per-eye or sub-stage slots");
+
+    /* Same with the trace off: the hook may bracket freely. */
+    psx_frame_trace_set_enabled(0);
+    psx_frame_trace_reset();
+    s_prims_stub = 0;
+    s_traced_calls = 0;
+    render_pass_reset_session(); s_gl_status = 0; s_begin_ok = 1;
+    CHECK(psx_mod_render_stereo(&cpu, &f, traced_draw, NULL) == 1,
+          "the pair renders with tracing off");
+    CHECK(s_traced_calls == 2 && psx_frame_trace_committed() == 0,
+          "nothing is recorded while tracing is off");
+    render_pass_reset_session();
 }
 
 static int local_draw(CPUState *cpu, void *user, uint32_t alpha) {
@@ -879,6 +1023,7 @@ int main(void) {
     test_journal();
     test_stereo();
     test_isolated_capture();
+    test_trace_substages();
     test_local_view();
     test_texture_stream_journal();
     CHECK(s_prec_open == 0, "precision checkpoints balanced");
