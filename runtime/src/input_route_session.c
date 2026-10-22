@@ -557,10 +557,7 @@ int input_route_session_admit(const char *path)
     if (fclose(f) && !error) error = "close error";
     for (uint32_t i = 0; !error && dualshock && i < count; ++i)
         if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
-#ifndef PSX_NO_DEBUG_TOOLS
-    if (!error && meta.port_count == 2)
-        error = "two-port routes need the release product";
-#else
+#ifdef PSX_NO_DEBUG_TOOLS
     if (!error && meta.port_count == 2 && getenv("PSX_INPUT_ROUTE_CAPTURE_DIR"))
         error = "two-port release capture is not supported";
 #endif
@@ -621,6 +618,28 @@ int input_route_session_admit(const char *path)
             meta.has_identity ? "present" : "absent", (unsigned)meta.marker_count,
             (unsigned)meta.checkpoint_count);
     return 1;
+}
+
+uint32_t input_route_session_port_count(void)
+{
+    return s_route_armed ? s_meta.port_count : 0u;
+}
+
+const char *input_route_session_read_v3_two_digital(FILE *f,
+                                                    InputTwoDigitalRouteStep *steps,
+                                                    uint32_t *step_count,
+                                                    uint32_t *frame_count)
+{
+    InputRouteV3 meta;
+    const char *error;
+    *step_count = *frame_count = 0;
+    if (!s_checkpoints) return "PSXRTI3 route was not admitted";
+    error = input_route_v3_read_two_digital(f, &meta, steps, s_markers, s_checkpoints);
+    if (error) return error;
+    if (meta.port_count != 2) return "route does not declare two digital pads";
+    *step_count = meta.steps;
+    *frame_count = meta.frames;
+    return NULL;
 }
 
 const char *input_route_session_read_v3_digital(FILE *f, InputRouteStep *steps,

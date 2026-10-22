@@ -5753,7 +5753,11 @@ static void apply_input_override_to_sio(int override_word) {
         sio_request_pad_type(0, 0);
         psx_selfcheck_note_pad(0, w, 0x80, 0x80, 0x80, 0x80, 0);
         uint16_t p2;
-        if (input_route_session_release_port2(&p2)) {
+        int have_p2 = input_route_session_release_port2(&p2);
+#ifndef PSX_NO_DEBUG_TOOLS
+        if (!have_p2) have_p2 = debug_server_route_port2(&p2);
+#endif
+        if (have_p2) {
             sio_set_pad_state_slot(1, p2);
             sio_set_pad_sticks(1, 0x80, 0x80, 0x80, 0x80);
             sio_request_pad_type(1, 0);

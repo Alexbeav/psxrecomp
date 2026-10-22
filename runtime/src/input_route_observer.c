@@ -55,6 +55,12 @@ static int dualshock_mode;
 static psx_sha256_ctx expected_protocol_hash;
 static uint8_t pending_controller[7];
 static int last_protocol_mode;
+/* PSXRTI3 two-digital-pad route: P2 is hashed beside P1, sample for sample. */
+static int port2_mode;
+static psx_sha256_ctx port2_input_hash;
+static psx_sha256_ctx port2_delivered_hash;
+static uint16_t pending_port2;
+static int port2_pending;
 
 static void fail(const char *message) {
     fprintf(stderr, "input route observation failed: %s\n", message);
@@ -135,6 +141,15 @@ static void close_observation_json(FILE *f) {
                    "\"expected_protocol_sha256\":\"%s\",\"original_controller_sha256\":\"%s\","
                    "\"guest_analog_mode\":%d", input_dualshock_controller_profile(),
                    expected, supplied, last_protocol_mode);
+    }
+    if (port2_mode) {
+        uint8_t bytes[32]; char applied[65], supplied[65];
+        psx_sha256_ctx hash = port2_delivered_hash;
+        psx_sha256_final(&hash, bytes); hex_hash(bytes, applied);
+        hash = port2_input_hash;
+        psx_sha256_final(&hash, bytes); hex_hash(bytes, supplied);
+        fprintf(f, ",\"port_layout\":\"two-digital\",\"applied_port2_words_sha256\":\"%s\","
+                   "\"supplied_port2_words_sha256\":\"%s\"", applied, supplied);
     }
     if (resumed_inputs) fprintf(f,",\"resumed_inputs\":%u",resumed_inputs);
     if (fputs("}\n", f) < 0 || ferror(f)) fail("observation JSON write");
@@ -279,6 +294,38 @@ int input_route_observer_dualshock_init(uint32_t total) {
     psx_sha256_init(&expected_protocol_hash);
     return input_route_observer_init(total);
 }
+int input_route_observer_two_digital_init(uint32_t total) {
+    if (log_file || dualshock_mode || port2_mode || !total) return 0;
+    port2_mode = 1;
+    port2_pending = 0;
+    psx_sha256_init(&port2_input_hash);
+    psx_sha256_init(&port2_delivered_hash);
+    return input_route_observer_init(total);
+}
+/* P2 of the same record as the P1 input just supplied; called before either
+ * sample is applied, so delivered_inputs still counts the previous records. */
+void input_route_observer_port2_input(uint16_t buttons) {
+    if (!log_file) return;
+    if (!port2_mode) fail("P2 input used without a two-pad route");
+    if (port2_pending) fail("previous P2 input was not delivered to SIO");
+    pending_port2 = buttons;
+    port2_pending = 1;
+    const uint8_t word[2] = {(uint8_t)buttons, (uint8_t)(buttons >> 8)};
+    if (delivered_inputs < total_inputs)
+        psx_sha256_update(&port2_input_hash, word, sizeof(word));
+    else if (buttons != 0xFFFF) fail("post-input P2 sample was not neutral");
+}
+/* Called before input_route_observer_applied() for the same record. */
+void input_route_observer_port2_applied(uint16_t buttons, int connected, int analog) {
+    if (!log_file) return;
+    if (!port2_mode) fail("P2 observation used without a two-pad route");
+    if (!port2_pending || pending_port2 != buttons || !connected || analog)
+        fail("SIO delivery differs from P2 route");
+    const uint8_t word[2] = {(uint8_t)buttons, (uint8_t)(buttons >> 8)};
+    if (delivered_inputs < total_inputs)
+        psx_sha256_update(&port2_delivered_hash, word, sizeof(word));
+    port2_pending = 0;
+}
 void input_route_observer_input(uint16_t buttons) {
     if (!log_file) return;
     if (dualshock_mode) fail("digital input used for DualShock route");
@@ -291,7 +338,7 @@ void input_route_observer_input(uint16_t buttons) {
     else if (buttons != 0xFFFF) fail("post-input sample was not neutral");
 }
 void input_route_observer_set_end(uint32_t total) {
-    if (!total || total != delivered_inputs || pending) fail("invalid dynamic input end");
+    if (!total || total != delivered_inputs || pending || port2_pending) fail("invalid dynamic input end");
     total_inputs=total;
 }
 /* TAS checkpoint resume: the delivered-input counter is observer state that
@@ -307,6 +354,7 @@ void input_route_observer_resume(uint32_t consumed) {
     delivered_inputs = consumed;
     resumed_inputs = consumed;
     pending = 0;
+    port2_pending = 0;
 }
 void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
     if (!log_file) return;
@@ -357,7 +405,7 @@ void input_route_observer_dualshock_applied(uint16_t buttons, const uint8_t stic
     pending = 0;
 }
 void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
-    if (log_file && (pending || completed != delivered_inputs))
+    if (log_file && (pending || port2_pending || completed != delivered_inputs))
         fail("boundary does not follow exact SIO delivery count");
     if (video_file) {
         uint32_t gpu[5],clock[3];

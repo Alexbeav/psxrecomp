@@ -10,6 +10,11 @@ void input_route_observer_resume(uint32_t consumed);
 void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame);
 void input_route_observer_input(uint16_t buttons);
 void input_route_observer_applied(uint16_t buttons, int connected, int analog);
+/* PSXRTI3 two-digital-pad route: P1 goes through the digital calls above and
+ * P2 through these, input before applied, P2 applied before P1 applied. */
+int input_route_observer_two_digital_init(uint32_t total);
+void input_route_observer_port2_input(uint16_t buttons);
+void input_route_observer_port2_applied(uint16_t buttons, int connected, int analog);
 void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source_axes[4], uint8_t mode_button);
 void input_route_observer_dualshock_applied(uint16_t buttons, const uint8_t sticks_lx_ly_rx_ry[4],
                                           int connected, int config_capable, int analog);

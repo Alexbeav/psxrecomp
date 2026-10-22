@@ -97,6 +97,30 @@ int main(int argc, char **argv) {
         input_route_observer_boundary(3, 4);
         return 8;
     }
+    if (!strncmp(argv[1], "two_", 4)) {
+        /* PSXRTI3 two digital pads: P2 input and delivery sit beside P1. */
+        if (!input_route_observer_two_digital_init(2)) return 4;
+        if (!strcmp(argv[1], "two_dual_init") && input_route_observer_dualshock_init(2)) return 5;
+        input_route_observer_boundary(0, 1);
+        input_route_observer_input(0xFFF7);
+        input_route_observer_port2_input(0xFFBF);
+        if (strcmp(argv[1], "two_undelivered") != 0)
+            input_route_observer_port2_applied(!strcmp(argv[1], "two_wrong") ? 0xFFFF : 0xFFBF,
+                strcmp(argv[1], "two_disconnected") != 0, !strcmp(argv[1], "two_analog"));
+        input_route_observer_applied(0xFFF7, 1, 0);
+        input_route_observer_boundary(1, 2);
+        input_route_observer_input(0xFFFF);
+        input_route_observer_port2_input(0xFFEF);
+        input_route_observer_port2_applied(0xFFEF, 1, 0);
+        input_route_observer_applied(0xFFFF, 1, 0);
+        input_route_observer_boundary(2, 3);
+        input_route_observer_input(0xFFFF);
+        input_route_observer_port2_input(!strcmp(argv[1], "two_tail_pressed") ? 0xFFEF : 0xFFFF);
+        input_route_observer_port2_applied(!strcmp(argv[1], "two_tail_pressed") ? 0xFFEF : 0xFFFF, 1, 0);
+        input_route_observer_applied(0xFFFF, 1, 0);
+        input_route_observer_boundary(3, 4);
+        return 8;
+    }
     CPUState cpu = {0};
     if (!strcmp(argv[1], "cpu")) {
         cpu.pc=0x80012340; cpu.gpr[31]=0x80054320;

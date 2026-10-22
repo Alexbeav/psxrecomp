@@ -107,4 +107,30 @@ with tempfile.TemporaryDirectory() as directory:
     assert done['frame'] == 4 and done['resumed_inputs'] == 3
     assert done['input_frames'] == 2 and done['neutral_tail_ticks'] == 2
     assert done['applied_controller_sha256'] == done['expected_protocol_sha256'] == hashlib.sha256(b'').hexdigest()
-print('input_route_observer: digital, DualShock delivery, loaded-card identity and tail resume passed')
+with tempfile.TemporaryDirectory() as directory:
+    # PSXRTI3 two digital pads: P2 is hashed as supplied and as delivered, and
+    # a wrong, missing, disconnected, analog or non-neutral-tail P2 fails closed.
+    for case in ('two_valid', 'two_wrong', 'two_undelivered', 'two_disconnected', 'two_analog',
+                 'two_tail_pressed'):
+        out = Path(directory) / case
+        out.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+        run = subprocess.run([str(exe), case], env=env, capture_output=True)
+        assert run.returncode == (0 if case == 'two_valid' else 3), (case, run.returncode, run.stderr)
+        if case != 'two_valid':
+            assert not (out / 'complete.json').exists()
+            continue
+        p2 = hashlib.sha256(bytes.fromhex('bfffefff')).hexdigest()
+        for name in ('complete.json', 'input-end.json'):
+            record = json.loads((out / name).read_text())
+            assert record['port_layout'] == 'two-digital'
+            assert record['applied_port2_words_sha256'] == record['supplied_port2_words_sha256'] == p2
+            assert record['applied_words_sha256'] == hashlib.sha256(bytes.fromhex('f7ffffff')).hexdigest()
+    out = Path(directory) / 'two_dual_init'
+    out.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith('PSX_')}
+    env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+    run = subprocess.run([str(exe), 'two_dual_init'], env=env, capture_output=True)
+    assert run.returncode == 0, ('a DualShock init after a two-pad init is refused', run.returncode, run.stderr)
+print('input_route_observer: digital, DualShock delivery, loaded-card identity and tail resume, two digital pads passed')

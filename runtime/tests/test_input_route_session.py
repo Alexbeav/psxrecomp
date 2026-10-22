@@ -201,10 +201,11 @@ with tempfile.TemporaryDirectory() as temp:
           'fffe/fffd,fffb/fff7,ffef/ffdf connected=1/1 owns=1',
           'two digital pads deliver distinct words to both production SIO slots', out + err)
 
+    # The diagnostic product admits it too: its debug server delivers P2 from
+    # the same record as P1 and the route observer hashes both ports.
     code, out, err = run(diagnostic, 'armed', two_pad, markers_exit=False)
-    check(code == 0 and 'admitted=0 armed=0' in out and
-          'two-port routes need the release product' in err,
-          'diagnostic product refuses a two-pad route it cannot deliver', out + err)
+    check(code == 0 and 'admitted=1 armed=1' in out,
+          'diagnostic product admits a two-pad route', out + err)
     code, out, err = run(release, 'armed', two_pad, markers_exit=False,
                          extra_env={'PSX_INPUT_ROUTE_CAPTURE_DIR': str(root / 'capture')})
     check(code == 0 and 'admitted=0 armed=0' in out and
@@ -527,5 +528,12 @@ with tempfile.TemporaryDirectory() as temp:
           'sio_set_pad_state_slot(1, p2)' in main and
           'sio_request_pad_type(1, 0)' in main,
           'production main delivers admitted P2 buttons as a digital SIO pad')
+    check('debug_server_route_port2(&p2)' in main,
+          'diagnostic main delivers the debug-server P2 word to the same SIO slot')
+    debug = (ROOT / 'runtime' / 'src' / 'debug_server.c').read_text()
+    check('input_route_session_port_count() == 2' in debug and
+          'input_route_observer_port2_input(s_route_port2)' in debug and
+          'input_route_observer_port2_applied(sio_get_pad_buttons_slot(1)' in debug,
+          'debug server preloads, supplies and observes P2 of a two-pad route')
 
 print(f'input_route_session: {checks} checks passed')

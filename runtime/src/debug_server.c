@@ -341,6 +341,11 @@ static PSX_BSS InputDualShockRouteStep s_dualshock_route[INPUT_ROUTE_MAX_STEPS];
 static uint8_t s_dualshock_axes[4] = {128,128,128,128};
 static uint8_t s_dualshock_mode_button;
 static int s_dualshock_route_mode;
+/* PSXRTI3 two-digital-pad route: P1 runs through s_input_route as a digital
+ * route; P2 of each step sits beside it, so both ports advance together. */
+static PSX_BSS uint16_t s_input_route_p2[INPUT_ROUTE_MAX_STEPS];
+static int s_two_port_mode;
+static uint16_t s_route_port2 = 0xFFFF;
 #include "input_update_replay.h"
 #include "input_instruction_histogram_impl.h"
 
@@ -368,6 +373,35 @@ int debug_server_preload_input_route(const char *path)
         if (fread(v3_header, 1, sizeof(v3_header), f) != sizeof(v3_header) ||
             fseek(f, 0, SEEK_SET)) { fclose(f); return 0; }
         v3_record_size = input_route_le32(v3_header + 12);
+    }
+    /* A two-pad record is also 12 bytes; the admitted port layout, not the
+     * record size, tells it from a DualShock record. */
+    if (v3 && input_route_session_port_count() == 2) {
+        InputTwoDigitalRouteStep *two = (InputTwoDigitalRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*two));
+        if (!two) { fclose(f); return 0; }
+        error = input_route_session_read_v3_two_digital(f, two, &count, &frames);
+        if (fclose(f) && !error) error = "close error";
+        if (!error && getenv("PSX_INPUT_UPDATE_CLOCK")) error = "two-pad routes do not admit input retiming";
+        if (error) {
+            fprintf(stderr, "input route rejected: %s\n", error);
+            free(two); return 0;
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            s_input_route[i].frames = two[i].frames;
+            s_input_route[i].buttons = two[i].buttons[0];
+            s_input_route_p2[i] = two[i].buttons[1];
+        }
+        free(two);
+        if (!input_route_observer_two_digital_init(frames) || !input_instruction_histogram_configure()) return 0;
+        s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
+        s_input_route_count = count; s_input_route_index = 0;
+        s_input_route_remaining = s_input_route[0].frames;
+        s_input_route_active = s_input_route_file_mode = s_two_port_mode = 1;
+        s_input_route_consumed = 0;
+        s_route_port2 = 0xFFFF;
+        fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=PSXRTI3 ports=two-digital\n",
+                (unsigned)frames, (unsigned)count);
+        return 1;
     }
     if (!memcmp(magic, "PSXRTI2\0", 8) || v3_record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES) {
         InputDualShockRouteStep *dual = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*dual));
@@ -7831,6 +7865,8 @@ static void handle_input_route_clear(int id, const char *json)
     s_input_route_count = 0;
     s_input_route_index = 0;
     s_input_route_remaining = 0;
+    s_two_port_mode = 0;
+    s_route_port2 = 0xFFFF;
     send_ok(id);
 }
 
@@ -15005,9 +15041,20 @@ void debug_server_note_input_applied(void)
             connected, sio_get_pad_config_capable(0), sio_get_pad_analog(0));
         return;
     }
+    if (s_two_port_mode)
+        input_route_observer_port2_applied(sio_get_pad_buttons_slot(1),
+                                           sio_get_pad_connected(1), sio_get_pad_analog(1));
     if (s_input_route_file_mode)
         input_route_observer_applied(sio_get_pad_buttons_slot(0),
                                     sio_get_pad_connected(0), sio_get_pad_analog(0));
+}
+
+/* The P2 word of the record whose P1 word the last override returned. */
+int debug_server_route_port2(uint16_t *buttons)
+{
+    if (!s_two_port_mode || !buttons) return 0;
+    *buttons = s_route_port2;
+    return 1;
 }
 
 int debug_server_get_input_override(void)
@@ -15042,6 +15089,10 @@ int debug_server_get_input_override(void)
         int current = (int)s_input_route[s_input_route_index].buttons;
         if (s_input_route_file_mode) {
             input_route_observer_input((uint16_t)current);
+            if (s_two_port_mode) {
+                s_route_port2 = s_input_route_p2[s_input_route_index];
+                input_route_observer_port2_input(s_route_port2);
+            }
             ++s_input_route_consumed;
         }
         if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
@@ -15058,6 +15109,10 @@ int debug_server_get_input_override(void)
     /* A file route never releases P1 to physical input at EOF. */
     if (s_input_route_file_mode) {
         input_route_observer_input(0xFFFF);
+        if (s_two_port_mode) {
+            s_route_port2 = 0xFFFF;
+            input_route_observer_port2_input(0xFFFF);
+        }
         ++s_input_route_consumed;
         return 0xFFFF;
     }

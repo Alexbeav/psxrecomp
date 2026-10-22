@@ -75,6 +75,12 @@ const char *input_route_session_read_v3_dualshock(FILE *f,
                                                   InputDualShockRouteStep *steps,
                                                   uint32_t *step_count,
                                                   uint32_t *frame_count);
+const char *input_route_session_read_v3_two_digital(FILE *f,
+                                                    InputTwoDigitalRouteStep *steps,
+                                                    uint32_t *step_count,
+                                                    uint32_t *frame_count);
+/* Ports declared by the admitted PSXRTI3 port-layout tag; 0 without one. */
+uint32_t input_route_session_port_count(void);
 
 /* Identity of this product for a player replay (PS1B-191): pin, disc serial
  * and digest, BIOS stem and boot mode. The disc digest is hashed on first use

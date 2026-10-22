@@ -215,6 +215,9 @@ int debug_server_get_axis_override(unsigned char st[4]);
 int debug_server_turbo_enabled(void);
 /* File playback only: assert actual P1 SIO state after normal VBlank sampling. */
 void debug_server_note_input_applied(void);
+/* File playback of a PSXRTI3 two-digital-pad route: the P2 word from the same
+ * record as the last P1 override. Returns 0 for every other route. */
+int debug_server_route_port2(uint16_t *buttons);
 
 /* TCP-controlled turbo mode. When enabled the frontend skips presentation and
  * wall-clock pacing at vblank, matching the keyboard TAB turbo path. */
