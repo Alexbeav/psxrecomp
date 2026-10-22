@@ -292,6 +292,17 @@ static StereoShedPolicy s_shed;
  * 0 = no headset: fall back to the guest-VBlank redraw budget. */
 static double s_shed_xr_budget_ms;
 static uint32_t s_shed_period;
+/* Pair-scoped baseline (PR3). Both eyes of a stereo pair render from the same
+ * guest checkpoint: eye L captures it and the restore that ends eye L puts the
+ * live machine back to exactly that captured state, so eye R can reuse the
+ * capture instead of copying the whole live RAM a second time. Guards:
+ *   - only stereo eyes inside one pair reuse it (s_baseline_ready is cleared by
+ *     any non-stereo transaction and at the start of every pair);
+ *   - a verify mismatch while reusing it retires the optimization for the
+ *     session, falling back to a capture per eye (PSX_STEREO_BASELINE=0 does
+ *     the same up front). */
+static int s_baseline_ready;        /* live machine == captured baseline */
+static int s_baseline_enabled = -1; /* PSX_STEREO_BASELINE; -1 = not read yet */
 static int32_t s_shed_w, s_shed_h;
 static int s_shed_geom_valid;
 /* A HUD-only capture transaction reuses eye 0's slot but is not an eye draw;
@@ -358,6 +369,17 @@ static double shed_budget_ms(uint32_t period_vblanks, uint32_t *source) {
     return period_vblanks * (double)g_psx_vblank_cycles / 33868.8 * 0.8;
 }
 
+/* Pair-scoped checkpoint reuse is on by default; PSX_STEREO_BASELINE=0 forces a
+ * machine capture per eye (the pre-PR3 behavior) so the two can be compared, and
+ * a restore-verify mismatch turns it off for the rest of the session. */
+static int baseline_reuse_enabled(void) {
+    if (s_baseline_enabled < 0) {
+        const char *e = getenv("PSX_STEREO_BASELINE");
+        s_baseline_enabled = (e && e[0] == '0') ? 0 : 1;
+    }
+    return s_baseline_enabled;
+}
+
 void render_pass_get_stats(RenderPassStats *out) {
     if (!out) return;
     *out = s_stats;
@@ -384,6 +406,9 @@ void render_pass_reset_session(void) {
     stereo_shed_policy_configure_from_env(&s_shed);
     stereo_shed_policy_reset(&s_shed);
     s_shed_geom_valid = 0;
+    /* Pair-scoped baseline: re-read the env and start uncaptured. */
+    s_baseline_ready = 0;
+    s_baseline_enabled = -1;
     /* Frame tracing is opt-in per session: re-read the env, install the host
      * clock, and clear any previous session's records. */
     psx_frame_trace_configure_from_env();
@@ -590,46 +615,58 @@ static uint64_t state_hash(const CPUState *cpu) {
     return h;
 }
 
-static int checkpoint_save(const CPUState *cpu) {
+/* `reuse` skips the bulk capture (RAM, scratchpad, icache, DMA, CPU, timers)
+ * when a previous eye of the same pair already captured this exact machine
+ * state. The per-eye arms are never skipped: the GPU transaction snapshot and
+ * gte_precision_checkpoint_begin() bound the pass and end with the restore. */
+static int checkpoint_save(const CPUState *cpu, int reuse) {
     uint32_t dma_len = dma_snapshot_bytes();
     /* The whole live RAM: a pass's stores fold through the same geometry
      * (render_pass_store_to), so every byte one can reach is in here. */
     uint32_t ram_bytes = memory_get_ram_bytes();
     s_checkpoint_failure = NULL;
-    if (s_ram_copy_cap < ram_bytes) {
-        uint8_t *p = (uint8_t *)realloc(s_ram_copy, ram_bytes);
-        if (!p) { s_checkpoint_failure = "checkpoint_ram"; return 0; }
-        s_ram_copy = p;
-        s_ram_copy_cap = ram_bytes;
-    }
-    if (!s_dma_copy) {
-        s_dma_copy = (uint8_t *)malloc(dma_len);
-        if (!s_dma_copy) { s_checkpoint_failure = "checkpoint_dma"; return 0; }
+    /* A reused baseline must own its buffers and describe this machine (RAM
+     * and DMA geometry cannot change inside a session). */
+    int can_reuse = reuse && s_ram_copy && s_dma_copy &&
+                    s_ck.ram_bytes == ram_bytes && s_ck.dma_len == dma_len;
+    if (!can_reuse) {
+        if (s_ram_copy_cap < ram_bytes) {
+            uint8_t *p = (uint8_t *)realloc(s_ram_copy, ram_bytes);
+            if (!p) { s_checkpoint_failure = "checkpoint_ram"; return 0; }
+            s_ram_copy = p;
+            s_ram_copy_cap = ram_bytes;
+        }
+        if (!s_dma_copy) {
+            s_dma_copy = (uint8_t *)malloc(dma_len);
+            if (!s_dma_copy) { s_checkpoint_failure = "checkpoint_dma"; return 0; }
+        }
     }
     if (!gpu_pass_checkpoint_save()) {
         s_checkpoint_failure = "checkpoint_gpu";
         return 0;
     }
-    s_ck.cpu = *cpu;
-    s_ck.ram_bytes = ram_bytes;
-    memcpy(s_ram_copy, memory_get_ram_ptr(), ram_bytes);
-    memcpy(s_ck.spad, memory_get_scratchpad_ptr(), RP_SPAD_SIZE);
-    memcpy(s_ck.icache, g_psx_icache_tv, sizeof s_ck.icache);
-    s_ck.i_stat = i_stat;
-    s_ck.i_mask = i_mask;
-    s_ck.csv = interrupts_get_cycles_since_vblank();
-    timers_get_snapshot(s_ck.t_counter, s_ck.t_mode, s_ck.t_target,
-                        s_ck.t_irq, s_ck.t_frac);
-    s_ck.dma_len = dma_len;
-    dma_snapshot_write(s_dma_copy);
-    s_ck.store_count = g_guest_store_count;
-    s_ck.mmio_count = g_mmio_access_count;
-    s_ck.last_store_pc = g_debug_last_store_pc;
-    s_ck.current_func = g_debug_current_func_addr;
-    s_ck.dispatch_depth = g_psx_dispatch_depth;
-    s_ck.call_bail = g_psx_call_bail;
-    memset(&s_ck.nest, 0, sizeof s_ck.nest);
-    nesting_save(&s_ck.nest);
+    if (!can_reuse) {
+        s_ck.cpu = *cpu;
+        s_ck.ram_bytes = ram_bytes;
+        memcpy(s_ram_copy, memory_get_ram_ptr(), ram_bytes);
+        memcpy(s_ck.spad, memory_get_scratchpad_ptr(), RP_SPAD_SIZE);
+        memcpy(s_ck.icache, g_psx_icache_tv, sizeof s_ck.icache);
+        s_ck.i_stat = i_stat;
+        s_ck.i_mask = i_mask;
+        s_ck.csv = interrupts_get_cycles_since_vblank();
+        timers_get_snapshot(s_ck.t_counter, s_ck.t_mode, s_ck.t_target,
+                            s_ck.t_irq, s_ck.t_frac);
+        s_ck.dma_len = dma_len;
+        dma_snapshot_write(s_dma_copy);
+        s_ck.store_count = g_guest_store_count;
+        s_ck.mmio_count = g_mmio_access_count;
+        s_ck.last_store_pc = g_debug_last_store_pc;
+        s_ck.current_func = g_debug_current_func_addr;
+        s_ck.dispatch_depth = g_psx_dispatch_depth;
+        s_ck.call_bail = g_psx_call_bail;
+        memset(&s_ck.nest, 0, sizeof s_ck.nest);
+        nesting_save(&s_ck.nest);
+    }
     gte_precision_checkpoint_begin();
     return 1;
 }
@@ -863,7 +900,11 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_open_generation = 0;
     s_leaks_before = gl_renderer_pass_leaks();
 
-    if (!checkpoint_save(cpu)) {
+    /* A stereo eye whose machine state still equals the pair's captured
+     * baseline skips re-capturing it. */
+    int reuse_baseline = eye >= 0 && !s_capture_only &&
+                         s_baseline_ready && baseline_reuse_enabled();
+    if (!checkpoint_save(cpu, reuse_baseline)) {
         gl_renderer_pass_begin_diag(&s_attempt.gl);
         s_stats.checkpoint_refused++;
         /* Capture the rejection status before rolling the GL transaction back. */
@@ -871,6 +912,8 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         transaction_end(eye, 0, 0);
         return pass_refuse(s_checkpoint_failure ? s_checkpoint_failure : "checkpoint", status);
     }
+    if (reuse_baseline) s_stereo.checkpoint_reuses++;
+    else { s_stereo.checkpoint_saves++; s_stereo.checkpoint_ram_bytes += s_ck.ram_bytes; }
     if (verify_on()) hash_before = state_hash(cpu);
 
     tb = gl_renderer_perf_ticks();
@@ -969,14 +1012,25 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
                             (uint32_t)leaks);
         s_sub_eye = -1;
         sub_spans_forget();
+        if (reuse_baseline) psx_frame_trace_flag(PSX_FRAME_TRACE_BASELINE_REUSED);
     }
 
+    int verify_ok = 1;
     if (verify_on()) {
         hash_after = state_hash(cpu);
         s_stats.verify_checks++;
         if (hash_after != hash_before || !gl_renderer_pass_verify_vram()) {
+            verify_ok = 0;
             s_stats.verify_mismatch++;
             if (eye >= 0) { ok = 0; s_stereo.last_failure = "restore_verify"; }
+            /* A mismatch while the eye rendered from the pair's shared baseline
+             * is exactly what this guard is for: retire the reuse for the
+             * session and capture per eye again from here on. */
+            if (reuse_baseline && baseline_reuse_enabled()) {
+                s_baseline_enabled = 0;
+                fprintf(stderr, "psxrecomp: pair baseline reuse disabled after "
+                                "a restore-verify mismatch\n");
+            }
             if (s_stats.verify_mismatch <= 8)
                 fprintf(stderr, "psxrecomp: RENDER PASS VERIFY mismatch "
                         "(state %016llx -> %016llx)\n",
@@ -984,6 +1038,11 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
                         (unsigned long long)hash_after);
         }
     }
+    /* The restore just put the live machine back to the captured baseline, so
+     * the other eye of this pair may reuse it. Anything else - a non-stereo
+     * transaction, a HUD-only capture, a failed eye or an unverified restore -
+     * leaves nothing safe to reuse. */
+    s_baseline_ready = (eye >= 0 && !s_capture_only && ok && verify_ok) ? 1 : 0;
 
     t1 = gl_renderer_perf_ticks();
     {
@@ -1132,6 +1191,10 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     call.fn = fn; call.user = user;
     s_pair_busy = 1;
     s_plan_serial++; /* separate the backup lease from any temporal plan */
+    /* The guest has run since the previous pair, so the retained snapshot no
+     * longer describes the machine: only the second eye of this pair may reuse
+     * what the first one captures. */
+    s_baseline_ready = 0;
     t0 = gl_renderer_perf_ticks();
     for (call.eye = 0; call.eye < 2u; call.eye++) {
         s_stereo.last_eye = (int)call.eye;
