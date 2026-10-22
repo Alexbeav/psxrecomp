@@ -11062,6 +11062,13 @@ int gl_renderer_request_internal_scale(int scale) {
  * ceiling (clamped like the boot scale to the full-VRAM limit) and queues the
  * step. Returns the scale that will apply, 0 when not possible (windowed
  * high-resolution mode, CPU-authoritative dual rendering, no context). */
+/* Whether gl_renderer_set_internal_scale_live can move the scale on this
+ * session at all: not in windowed high-resolution mode, not with
+ * CPU-authoritative dual rendering, and only with a live raster context. */
+int gl_renderer_internal_scale_live_capable(void) {
+    return (s_ctx && s_raster_ok && !s_hiw && !s_cpu_auth_dual) ? 1 : 0;
+}
+
 int gl_renderer_set_internal_scale_live(int scale) {
     if (s_ctx) GL_RT_SYNC("set_internal_scale_live");
     if (!s_ctx || !s_raster_ok || s_hiw || s_cpu_auth_dual) return 0;

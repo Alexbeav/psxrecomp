@@ -10240,6 +10240,38 @@ static void dynres_setup(void) {
 static std::filesystem::path g_overlay_settings_path;  /* settings.toml */
 static PsxHostVideoSettings g_video_boot;              /* as the session booted */
 static bool g_video_boot_valid = false;
+/* Live Internal resolution / Supersample. g_video_internal_res and
+ * g_video_ss_milli are what the player requested (shown and saved); these are
+ * what the backend last actually applied. g_video_res_live_failed holds a
+ * relaunch requirement after a live change the backend refused, and
+ * g_video_res_live_capable mirrors gl_renderer_internal_scale_live_capable()
+ * for the menu thread. */
+static int g_video_res_applied_ir = PSX_IR_UNSET;
+static int g_video_res_applied_ss = 1000;
+static std::atomic<bool> g_video_res_live_failed{false};
+static std::atomic<bool> g_video_res_live_capable{false};
+
+static void video_res_refresh_capable(void) {
+    g_video_res_live_capable.store(g_gl_active && g_video_scale_applies &&
+                                   gl_renderer_internal_scale_live_capable() != 0);
+}
+
+/* psx_host_video_restart_bits plus the resolution group whenever the
+ * requested resolution differs from boot and cannot be (or was not) applied
+ * live on this backend. */
+static unsigned video_restart_bits(const PsxHostVideoSettings *boot,
+                                   const PsxHostVideoSettings *next) {
+    return psx_host_video_restart_bits_backend(
+        boot, next, g_video_res_live_capable.load() && !g_video_res_live_failed.load());
+}
+
+extern "C" void psx_video_resolution_applied(int *ir, int *ss_milli, int *live_capable,
+                                             int *restart_pending) {
+    if (ir) *ir = g_video_res_applied_ir;
+    if (ss_milli) *ss_milli = g_video_res_applied_ss;
+    if (live_capable) *live_capable = g_video_res_live_capable.load() ? 1 : 0;
+    if (restart_pending) *restart_pending = g_video_res_live_failed.load() ? 1 : 0;
+}
 
 extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     if (!v) return;
@@ -10260,7 +10292,12 @@ extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     v->render_thread = g_render_thread ? 1 : 0;
     v->present_thread = g_present_thread ? 1 : 0;
     v->supersample_milli = g_video_ss_milli;
-    if (!g_video_boot_valid) { g_video_boot = *v; g_video_boot_valid = true; }
+    video_res_refresh_capable();
+    if (!g_video_boot_valid) {
+        g_video_boot = *v; g_video_boot_valid = true;
+        g_video_res_applied_ir = v->internal_resolution;
+        g_video_res_applied_ss = v->supersample_milli;
+    }
 }
 
 extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
@@ -10306,15 +10343,30 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
          * frame (gl_renderer_set_internal_scale_live), no relaunch. */
         if (next->internal_resolution != PSX_IR_UNSET)
             g_video_internal_res = next->internal_resolution;
-        if (next->supersample_milli >= 1000 && next->supersample_milli <= 4000)
+        if (next->supersample_milli >= PSX_SS_MILLI_MIN &&
+            next->supersample_milli <= PSX_SS_MILLI_MAX)
             g_video_ss_milli = next->supersample_milli;
-        apply_internal_resolution(match_display_px_h(sdl_window));
-        if (g_gl_active && g_video_scale_applies) {
-            const int applied = gl_renderer_set_internal_scale_live(g_video_scale);
-            if (applied) {
-                std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
-                dynres_setup();   /* the new scale is the controller's ceiling */
-            }
+        /* The request is kept (and saved) either way; the session's scale
+         * only moves when the backend takes it. Otherwise the change waits
+         * for a relaunch and the restart bits say so. */
+        const int prev_scale = g_video_scale;
+        video_res_refresh_capable();
+        int applied = 0;
+        if (g_video_res_live_capable.load()) {
+            apply_internal_resolution(match_display_px_h(sdl_window));
+            applied = gl_renderer_set_internal_scale_live(g_video_scale);
+        }
+        if (applied) {
+            std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
+            g_video_res_applied_ir = g_video_internal_res;
+            g_video_res_applied_ss = g_video_ss_milli;
+            g_video_res_live_failed.store(false);
+            dynres_setup();   /* the new scale is the controller's ceiling */
+        } else {
+            g_video_scale = prev_scale;
+            g_video_res_live_failed.store(true);
+            std::fprintf(stdout, "psxrecomp: internal resolution change needs a "
+                                 "relaunch (live change unavailable)\n");
         }
     }
     if ((m & PSX_VIDEO_LIVE_FRAME_GEN) && g_gl_active) {
@@ -10344,7 +10396,7 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         } catch (...) {
         }
     }
-    return psx_host_video_restart_bits(&g_video_boot, next) | deferred;
+    return video_restart_bits(&g_video_boot, next) | deferred;
 }
 
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -16919,8 +16971,13 @@ unsigned mh_restart_bits(const PsxHostVideoSettings& next) {
      * with. The live internal resolution moves under dynamic resolution, so
      * comparing with boot alone flagged edits that never touched it (an
      * in-game texture filter change relaunched the game). */
-    unsigned out = psx_host_video_restart_bits(&g_ovl_video_boot, &next) &
+    unsigned out = video_restart_bits(&g_ovl_video_boot, &next) &
                    psx_host_video_restart_bits(&now, &next);
+    /* A resolution edit the backend cannot apply live waits for a relaunch
+     * (the pure helper treats resolution as live). */
+    if ((now.internal_resolution != next.internal_resolution ||
+         now.supersample_milli != next.supersample_milli))
+        out |= video_restart_bits(&g_ovl_video_boot, &next) & PSX_VIDEO_RESTART_RESOLUTION;
     /* In a netplay match only presentation applies live (psx_video_apply_live);
      * the rest waits for the next session. */
     if (g_ovl_netplay &&

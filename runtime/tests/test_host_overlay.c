@@ -146,6 +146,17 @@ static void test_video(void) {
     b.internal_resolution = 4; b.supersample_milli = 1500; b.present_thread = 1;
     CHECK(psx_host_video_live_changes(&a, &b) & PSX_VIDEO_LIVE_RESOLUTION);
     CHECK(psx_host_video_restart_bits(&a, &b) == PSX_VIDEO_RESTART_THREADS);
+    /* Live-capable GL: no relaunch for resolution. Refused / non-GL (hiw,
+     * CPU-authoritative dual, no context, software): the change waits. */
+    CHECK(psx_host_video_restart_bits_backend(&a, &b, 1) == PSX_VIDEO_RESTART_THREADS);
+    CHECK(psx_host_video_restart_bits_backend(&a, &b, 0) ==
+          (PSX_VIDEO_RESTART_RESOLUTION | PSX_VIDEO_RESTART_THREADS));
+    {
+        PsxHostVideoSettings c2 = a;
+        c2.supersample_milli = 1250;
+        CHECK(psx_host_video_restart_bits_backend(&a, &c2, 0) == PSX_VIDEO_RESTART_RESOLUTION);
+        CHECK(psx_host_video_restart_bits_backend(&a, &a, 0) == 0);
+    }
     b.supersampling = 2;
     CHECK(psx_host_video_restart_bits(&a, &b) == (PSX_VIDEO_RESTART_RESOLUTION | PSX_VIDEO_RESTART_THREADS));
     b.renderer = 0;

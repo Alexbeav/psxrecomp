@@ -109,6 +109,13 @@ unsigned psx_host_video_live_changes(const PsxHostVideoSettings *prev,
                                      const PsxHostVideoSettings *next);
 unsigned psx_host_video_restart_bits(const PsxHostVideoSettings *boot,
                                      const PsxHostVideoSettings *next);
+/* psx_host_video_restart_bits for a backend that may not move the resolution
+ * live: when res_live_ok is 0 (backend incapable, or a live change was
+ * refused), an internal resolution / supersample that differs from boot keeps
+ * PSX_VIDEO_RESTART_RESOLUTION. */
+unsigned psx_host_video_restart_bits_backend(const PsxHostVideoSettings *boot,
+                                             const PsxHostVideoSettings *next,
+                                             int res_live_ok);
 /* Runtime side (main.cpp). */
 unsigned psx_video_apply_live(const PsxHostVideoSettings *next);
 void     psx_video_current(PsxHostVideoSettings *out);

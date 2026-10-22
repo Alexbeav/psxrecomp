@@ -152,6 +152,17 @@ unsigned psx_host_video_restart_bits(const PsxHostVideoSettings *boot,
     return m;
 }
 
+unsigned psx_host_video_restart_bits_backend(const PsxHostVideoSettings *boot,
+                                             const PsxHostVideoSettings *next,
+                                             int res_live_ok) {
+    unsigned m = psx_host_video_restart_bits(boot, next);
+    if (boot && next && !res_live_ok &&
+        (boot->internal_resolution != next->internal_resolution ||
+         boot->supersample_milli != next->supersample_milli))
+        m |= PSX_VIDEO_RESTART_RESOLUTION;
+    return m;
+}
+
 /* ---- seamless relaunch ----------------------------------------------------- */
 #include <stdlib.h>
 #include <string.h>
