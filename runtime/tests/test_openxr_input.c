@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <math.h>
 #include "xr_surface_math.h"
+extern void psx_openxr_pose_bob(double q[2][4], double p[2][3]);
+extern int psx_openxr_pose_override(double, double, double);
+extern int psx_openxr_pose_pitch_override(double);
+extern void psx_openxr_pose_clear(void);
 /* Evaluate side effects and failures even when NDEBUG is defined. */
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -10,6 +14,26 @@
     } \
 } while (0)
 int main(void) {
+    /* Synthetic controls are absolute, bounded and inert after clearing. */
+    double bob_q[2][4]={{0,0,0,1},{0,0,0,1}};
+    double bob_p[2][3]={{-.03,0,0},{.03,0,0}};
+    psx_openxr_pose_clear();
+    CHECK(!psx_openxr_pose_override(NAN,0,0));
+    CHECK(!psx_openxr_pose_override(11,0,0));
+    CHECK(!psx_openxr_pose_pitch_override(INFINITY));
+    CHECK(!psx_openxr_pose_pitch_override(91));
+    psx_openxr_pose_bob(bob_q,bob_p);
+    CHECK(bob_p[0][0]==-.03 && bob_q[0][3]==1);
+    CHECK(psx_openxr_pose_override(.1,.2,-.3));
+    CHECK(psx_openxr_pose_pitch_override(30));
+    psx_openxr_pose_bob(bob_q,bob_p);
+    CHECK(fabs(bob_p[0][0]-.07)<1e-12 && fabs(bob_p[1][0]-.13)<1e-12);
+    CHECK(bob_p[0][1]==.2 && bob_p[1][2]==-.3);
+    CHECK(fabs(bob_q[0][0]-sin(3.141592653589793/12))<1e-12);
+    CHECK(bob_q[0][0]==bob_q[1][0] && bob_q[0][3]==bob_q[1][3]);
+    psx_openxr_pose_clear();
+    psx_openxr_pose_bob(bob_q,bob_p);
+    CHECK(fabs(bob_p[0][0]-.07)<1e-12);
     /* Shared head center gives coherent binocular geometry. Billboarding must
      * ignore attachment roll, respond to head motion, and reject near-plane
      * crossings. Common translation of eye/head/surface preserves projection. */

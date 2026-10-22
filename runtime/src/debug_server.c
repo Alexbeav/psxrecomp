@@ -9218,6 +9218,25 @@ static void handle_openxr_hands_override(int id,const char *json) {
 /* Debug-only synthetic action sample; axes are signed thousandths [-1000,1000].
  * Explicitly tagged so desktop controls cannot be mistaken for device evidence. */
 #ifndef PSX_NO_DEBUG_TOOLS
+/* openxr_pose_override: test-only synthetic head motion in millimetres, with an optional pitch_deg
+ * look angle, for headless head-motion checks. clear=1 disarms. Each call is absolute. The pitch is
+ * what reaches the defects that only appear when looking down, which no translation can show. */
+static void handle_openxr_pose_override(int id,const char *json) {
+    extern int psx_openxr_pose_override(double,double,double);
+    extern int psx_openxr_pose_pitch_override(double);
+    extern void psx_openxr_pose_clear(void);
+    if(json_get_int(json,"clear",0)){ psx_openxr_pose_clear(); send_fmt("{\"id\":%d,\"ok\":true,\"cleared\":1}",id); return; }
+    int x=json_get_int(json,"x_mm",0),y=json_get_int(json,"y_mm",0),z=json_get_int(json,"z_mm",0);
+    int pitch_deg=json_get_int(json,"pitch_deg",0);
+    if(!psx_openxr_pose_override((double)x/1000.0,(double)y/1000.0,(double)z/1000.0)){
+        send_err(id,"pose offset must be finite and within +/-10 m");return;
+    }
+    if(!psx_openxr_pose_pitch_override((double)pitch_deg)){
+        send_err(id,"pitch_deg must be finite and within +/-90");return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"x_mm\":%d,\"y_mm\":%d,\"z_mm\":%d,\"pitch_deg\":%d}",id,x,y,z,pitch_deg);
+}
+
 static void handle_openxr_input_override(int id,const char *json) {
     if(json_get_int(json,"clear",0)) psx_openxr_input_override(NULL);
     else {
@@ -16294,7 +16313,8 @@ static const CmdEntry s_commands[] = {
 #endif
     { "openxr_hands", handle_openxr_hands },
 #ifndef PSX_NO_DEBUG_TOOLS
-    { "openxr_hands_override", handle_openxr_hands_override },
+    { "openxr_hands_override",    handle_openxr_hands_override },
+    { "openxr_pose_override",     handle_openxr_pose_override },
 #endif
     { "stereo_stats", handle_stereo_stats },
     { "frame_trace", handle_frame_trace },
