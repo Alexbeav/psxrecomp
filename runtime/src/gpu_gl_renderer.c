@@ -397,6 +397,8 @@ static int load_modern_gl(void) {
 static SDL_Window   *s_win = NULL;
 static SDL_GLContext s_ctx = NULL;
 static uint16_t     *s_vram = NULL;       /* CPU VRAM array (gpu.c's storage) */
+/* GL_VENDOR names NVIDIA (captured at context creation). */
+static int s_vendor_nvidia = 0;
 static int           s_swap_interval = 1; /* SDL_GL swap interval (vsync mode) */
 
 /* ---- render thread ([video] render_thread, docs/RENDER_THREAD.md) --------
@@ -6450,6 +6452,10 @@ int gl_renderer_init_context(SDL_Window *win) {
     const char *gpu = (const char *)glGetString(0x1F01 /* GL_RENDERER */);
     fprintf(stdout, "psxrecomp: OpenGL context created (%s; %s)\n", ver ? ver : "?",
             gpu ? gpu : "?");
+    {
+        const char *vendor = (const char *)glGetString(0x1F00 /* GL_VENDOR */);
+        s_vendor_nvidia = (vendor && strstr(vendor, "NVIDIA")) ? 1 : 0;
+    }
 
     /* All-or-nothing: any missing entry point / failed shader / bad FBO means
      * the whole GL renderer is unavailable and the runtime stays on the pure
@@ -14151,6 +14157,8 @@ void gl_renderer_render_thread_stop(void) {
     s_rth_vram_priv = NULL;
     gr_refresh_backend();
 }
+
+int gl_renderer_vendor_is_nvidia(void) { return s_vendor_nvidia; }
 
 int gl_renderer_render_thread_active(void) { return s_rth_on; }
 

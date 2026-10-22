@@ -3958,11 +3958,18 @@ static int host_driver_vsync_unreliable(void) {
      * then costs a whole refresh (16.7 ms "GPU" at any internal scale,
      * render_busy 100 %), back-pressure slows the guest to 52-57 Hz, and
      * dynamic resolution drops for nothing. Swap interval 0 under the
-     * wall-clock pacer: 60.0 Hz, 4.4 ms. Exclusive fullscreen (2) keeps
-     * driver vsync. PSX_TRUST_DRIVER_VSYNC=1 restores it everywhere. */
+     * wall-clock pacer: 60.0 Hz, 4.4 ms.
+     *
+     * Scope is the measured case only: GL renderer active, the render thread
+     * running, GL_VENDOR NVIDIA, and not exclusive fullscreen (2). Other
+     * driver families, the unthreaded path and exclusive fullscreen keep
+     * driver vsync. Re-evaluated per call, so runtime fullscreen/renderer
+     * changes take effect. PSX_TRUST_DRIVER_VSYNC=1 keeps driver vsync. */
     if (const char *e = std::getenv("PSX_TRUST_DRIVER_VSYNC"); e && e[0] && e[0] != '0')
         return 0;
-    return (g_video_renderer == 1 && g_fullscreen != 2) ? 1 : 0;
+    return (g_video_renderer == 1 && g_gl_active && g_fullscreen != 2 &&
+            gl_renderer_render_thread_active() &&
+            gl_renderer_vendor_is_nvidia()) ? 1 : 0;
 #else
     static int cached = -1;
     if (cached >= 0)
@@ -4076,7 +4083,7 @@ static void log_present_cadence(void) {
                             "(%.4f ms/frame); driver vsync off (%s)\n",
                             g_frame_period_ms,
 #ifdef _WIN32
-                            "Windows GL: DWM composes"
+                            "Windows GL, NVIDIA render thread: DWM composes"
 #else
                             "under WSL"
 #endif
