@@ -53,7 +53,7 @@ int main(void) {
 '''
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            (path/'test.c').write_text(source, encoding='utf-8', newline='\n')
+            (path/'test.c').write_bytes(source.encode('utf-8'))  # LF on every host; write_text(newline=) is 3.10+
             executable = path / ('test.exe' if os.name == 'nt' else 'test')
             subprocess.run([gcc, '-std=c11', '-DPSX_ENABLE_BLOCK_CYCLES=1',
                             '-DPSX_NO_DEBUG_TOOLS', '-I'+str(root/'runtime/include'),
