@@ -2,9 +2,11 @@ name: TAS replay source checks
 on:
   # 2026-09-28: those three branches were dead refs - the default branch is main - so this
   # workflow never ran on a push or PR and only ever ran by hand. Point it at real refs.
+  # wave5/** as in kit-emitter-rebuild.yml: wave branches take changes before main (PS1B-147).
+  # A pull request into any branch, wave5 ones included, already runs it.
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "wave5/**"]
   workflow_dispatch:
 permissions:
   contents: read
