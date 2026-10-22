@@ -54,9 +54,10 @@ AXIS_MODELS = {'nymashock-u16': 'nymashock-2.9.1-dualshock-neutral-analog',
 DEFAULT_AXIS_MODEL = 'nymashock-u16'
 # A physical MODE press in the route (the analog flag of a PSXRTI2 row) is admitted only under a named MODE model.
 # 'octoshock-2.4.2': the pad evaluates the latched button when the port's DTR falls (corpus PSX-TAS-001).
-# It needs the Octoshock axis model, and the runtime reads PSX_INPUT_ROUTE_MODE_MODEL.
-MODE_MODELS = ('none', 'octoshock-2.4.2')
-MODE_PROFILE = 'octoshock-2.4.2-dualshock-mode'
+# 'nymashock-1.29.0': the pad also evaluates it when an input arrives while its DTR is inactive.
+# Each needs the octoshock-byte axis model (a route of protocol bytes), and the runtime reads
+# PSX_INPUT_ROUTE_MODE_MODEL.
+MODE_MODELS = ('none', 'octoshock-2.4.2', 'nymashock-1.29.0')
 
 
 def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL, mode_model='none'):
@@ -98,7 +99,7 @@ def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL, mode_model='non
             # Named only when not the default, so every recorded Nymashock identity is unchanged.
             identity.update(axis_model=axis_model, controller_profile=AXIS_MODELS[axis_model])
         if mode_model != 'none':
-            identity.update(mode_model=mode_model, controller_profile=MODE_PROFILE)
+            identity.update(mode_model=mode_model, controller_profile=mode_model + '-dualshock-mode')
         return identity
     if axis_model != DEFAULT_AXIS_MODEL or mode_model != 'none':
         raise ValueError('an axis or MODE model applies to a DualShock route only')
