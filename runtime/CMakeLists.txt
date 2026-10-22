@@ -1681,6 +1681,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(NOT MSVC)
+            add_test(NAME pgxp_mod_startup
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgxp_mod_startup.py
+                    --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME overlay_retry_c11_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_retry_c11.py --compiler ${CMAKE_C_COMPILER})

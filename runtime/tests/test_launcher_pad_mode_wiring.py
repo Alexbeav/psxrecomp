@@ -126,28 +126,50 @@ assert calls[1] < MAIN.index(PERSIST_US), (
     "the soft-return resolution must precede the us.p_mode[] write"
 )
 
-# ---- the mod override still cannot be lost across a soft return ----------
-# `goto session_reboot` re-enters the emulator BELOW the block that applies
-# g_mod_controller_mode_override, so the soft-return readback is the only place
-# an active override can be re-asserted. That is precisely why the resolution
-# helper takes it as an argument instead of the clamp being unconditional.
+# ---- every session applies its own mod override -------------------------
+# PS1G-66 moved the override reset, plugin activation and apply block under
+# `session_reboot:`, so the first start and every lobby rematch (`goto
+# session_reboot`) clear the override, run the session's plugins and apply it.
+# The soft-return readback runs BEFORE that, while the override still holds
+# the previous session's value, so it must not be passed: it would keep a
+# mod's pad mode for a rematch that drops the mod (netplay clears mods), over
+# lock_mode, and persist it in us.p_mode[]. It passes -1 instead.
+RESET = "g_mod_controller_mode_override.fill(-1);"
+ACTIVATE = "mod_runtime_activate_plugins();"
 APPLY = "player_mode[i] = g_mod_controller_mode_override[i];"
 assert APPLY in MAIN, "the mod controller-mode override apply block is gone"
+assert MAIN.count(RESET) == 1 and MAIN.count(ACTIVATE) == 1
 assert "goto session_reboot;" in MAIN
 assert "\nsession_reboot:" in MAIN
-assert MAIN.index("\nsession_reboot:") > MAIN.index(APPLY), (
-    "session_reboot: moved above the override apply; if it is now BELOW it, "
-    "the soft-return re-assert in the readback loop may be redundant -- "
-    "re-derive before deleting it"
+assert (
+    MAIN.index("\nsession_reboot:")
+    < MAIN.index(RESET)
+    < MAIN.index(ACTIVATE)
+    < MAIN.index(APPLY)
+    < MAIN.index("goto session_reboot;")
+), (
+    "the override reset, activation and apply must follow session_reboot:, so "
+    "a rematch reruns them; if they move above it again, the soft-return "
+    "readback must be passed the live override again"
 )
-assert MAIN.count("g_mod_controller_mode_override[i])") == 2, (
-    "both launcher-exit resolutions must be passed the live override; found "
-    f"{MAIN.count('g_mod_controller_mode_override[i])')} such argument(s)"
+soft_return_call = MAIN[calls[1]:MAIN.index(PERSIST_US)]
+assert "ctrl_locked_mode[i],\n" in soft_return_call and "-1);" in soft_return_call, (
+    "the soft-return resolution must pass -1 (no override): the override it "
+    "would read belongs to the previous session"
+)
+assert "g_mod_controller_mode_override" not in soft_return_call, (
+    "the soft-return resolution reads the previous session's mod override"
+)
+# The first launcher exit runs before any activation, so the override it is
+# passed is still the initial -1; it stays wired for symmetry with the helper.
+assert MAIN.count("g_mod_controller_mode_override[i])") == 1, (
+    "expected only the first launcher-exit resolution to be passed the "
+    f"override; found {MAIN.count('g_mod_controller_mode_override[i])')}"
 )
 # The direct apply block reads it twice (the >= 0 test and the assignment).
-assert MAIN.count("g_mod_controller_mode_override[i]") == 4, (
-    "expected 4 g_mod_controller_mode_override[i] reads: the apply block's "
-    "guard + assignment, plus one argument per launcher-exit resolution; "
+assert MAIN.count("g_mod_controller_mode_override[i]") == 3, (
+    "expected 3 g_mod_controller_mode_override[i] reads: the apply block's "
+    "guard + assignment, plus the first launcher-exit resolution; "
     f"found {MAIN.count('g_mod_controller_mode_override[i]')}"
 )
 

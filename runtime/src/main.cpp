@@ -1365,6 +1365,8 @@ static int           g_mod_load_wall_multiplier = -1;
 static int           g_mod_load_release_frames = -1;
 static int           g_mod_disc_speed_divisor = -1;
 static int           g_mod_disc_instant_rate = -1;
+/* Activation records PGXP until GPU startup. -1 means no mod request. */
+static int           g_mod_pgxp_cpu_mode = -1;
 
 static int present_vsync_owns_cadence(void);
 static int present_effective_swap_interval(void);
@@ -1561,6 +1563,10 @@ extern "C" int psx_mod_set_bezel_artwork(const char* path) {
     std::fprintf(stdout, "psxrecomp: mod selected bezel artwork %s\n",
                  g_bezel_path.c_str());
     return 1;
+}
+
+extern "C" void psx_mod_request_pgxp(int cpu_mode) {
+    g_mod_pgxp_cpu_mode = cpu_mode ? 1 : 0;
 }
 
 extern "C" int psx_mod_set_load_acceleration(
@@ -17540,53 +17546,6 @@ int main(int argc, char** argv) {
                 "The game cannot start with the selected mods.\n\n" + mod_error);
         }
     }
-    /* Activation callbacks are re-run after every launcher session. Clear
-     * game-owned controller overrides/policies first so disabling a package
-     * cannot leave its prior state latched across a soft return. */
-    g_mod_controller_mode_override.fill(-1);
-    for (auto& policy : g_mod_controller_policy)
-        policy = ModControllerPresentationPolicy{};
-    g_mod_load_wall_multiplier = -1;
-    g_mod_load_release_frames = -1;
-    g_mod_disc_speed_divisor = -1;
-    g_mod_disc_instant_rate = -1;
-    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
-    g_turbo_load_wall_multiplier = 0;
-    g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
-    if (!turbo_loads_offered)
-        g_turbo_loads_enabled = 0;
-    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
-    mod_runtime_activate_plugins();
-    apply_netplay_local_viewport_aspect(net_cfg.enabled);
-    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
-        if (g_mod_controller_mode_override[i] >= 0)
-            player_mode[i] = g_mod_controller_mode_override[i];
-    }
-    if (g_mod_load_wall_multiplier >= 0 && g_fast_loading_optout) {
-        std::fprintf(stdout, "psxrecomp: Fast Loading is off for this title "
-                     "(game.toml [runtime] fast_loading_optout)\n");
-    } else if (g_mod_load_wall_multiplier >= 0) {
-        g_turbo_loads_enabled = 1;
-        g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
-        g_turbo_load_release_frames = g_mod_load_release_frames;
-        /* Fast Loading advances the guest at a host rate greater than real
-         * time. Keep the canonical SPU/CD stream running, but discard the
-         * accelerated presentation-side audio until pacing resumes; otherwise
-         * the SDL bridge overflows and the load becomes observably unstable. */
-        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
-        if (g_turbo_load_wall_multiplier) {
-            std::fprintf(stdout,
-                "psxrecomp: mod selected %dx load acceleration "
-                "(%d release frames)\n",
-                g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
-        } else {
-            std::fprintf(stdout,
-                "psxrecomp: mod selected uncapped load acceleration "
-                "(%d release frames)\n",
-                g_turbo_load_release_frames);
-        }
-    }
-
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
      * settings.toml override and the launcher's choice. No-op when unchanged. */
@@ -17639,6 +17598,56 @@ int main(int argc, char** argv) {
 
 session_reboot:
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */
+    /* Activation callbacks are re-run after every launcher session. Clear
+     * game-owned controller overrides/policies first so disabling a package
+     * cannot leave its prior state latched across a soft return. */
+    g_mod_controller_mode_override.fill(-1);
+    for (auto& policy : g_mod_controller_policy)
+        policy = ModControllerPresentationPolicy{};
+    g_mod_load_wall_multiplier = -1;
+    g_mod_load_release_frames = -1;
+    g_mod_disc_speed_divisor = -1;
+    g_mod_disc_instant_rate = -1;
+    g_mod_pgxp_cpu_mode = -1;
+    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
+    g_turbo_load_wall_multiplier = 0;
+    g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
+    if (!turbo_loads_offered)
+        g_turbo_loads_enabled = 0;
+    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    mod_runtime_activate_plugins();
+    /* Frame interpolation and bezel mods select OpenGL; --renderer still wins. */
+    if (cli_renderer >= 0) g_video_renderer = cli_renderer;
+    apply_netplay_local_viewport_aspect(net_cfg.enabled);
+    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+        if (g_mod_controller_mode_override[i] >= 0)
+            player_mode[i] = g_mod_controller_mode_override[i];
+    }
+    if (g_mod_load_wall_multiplier >= 0 && g_fast_loading_optout) {
+        std::fprintf(stdout, "psxrecomp: Fast Loading is off for this title "
+                     "(game.toml [runtime] fast_loading_optout)\n");
+    } else if (g_mod_load_wall_multiplier >= 0) {
+        g_turbo_loads_enabled = 1;
+        g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
+        g_turbo_load_release_frames = g_mod_load_release_frames;
+        /* Fast Loading advances the guest at a host rate greater than real
+         * time. Keep the canonical SPU/CD stream running, but discard the
+         * accelerated presentation-side audio until pacing resumes; otherwise
+         * the SDL bridge overflows and the load becomes observably unstable. */
+        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
+        if (g_turbo_load_wall_multiplier) {
+            std::fprintf(stdout,
+                "psxrecomp: mod selected %dx load acceleration "
+                "(%d release frames)\n",
+                g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
+        } else {
+            std::fprintf(stdout,
+                "psxrecomp: mod selected uncapped load acceleration "
+                "(%d release frames)\n",
+                g_turbo_load_release_frames);
+        }
+    }
+
     static int s_emu_session = 0;
     const bool rematch_session = (++s_emu_session > 1);
     std::fprintf(stdout, "psxrecomp runtime: loading BIOS from %s%s\n",
@@ -17783,9 +17792,9 @@ session_reboot:
     const int requested_scale = g_video_scale;
     g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
     gr_set_texture_filter(g_video_texfilter);
-    /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
-     * with both off every setter below leaves the tracking caches disabled and
-     * the draw path is the faithful integer one, unchanged. */
+    /* Sub-pixel vertex precision + perspective-correct UVs. Apply saved
+     * settings and the current offline mod request after GPU initialization.
+     * With both disabled caches stay off and drawing uses integer coordinates. */
     /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
      * corrections from process start so free-running (headless) boots can be
      * measured from the first projected vertex — a TCP toggle always arrives
@@ -17796,9 +17805,12 @@ session_reboot:
         g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
     if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
         g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
-    gte_geometry_correction_set(g_video_geometry_correction);
-    gpu_texture_correction_set(g_video_perspective_texturing);
-    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
+    const bool pgxp_mod_enabled = g_mod_pgxp_cpu_mode >= 0 && !net_cfg.enabled;
+    const int pgxp_session_geometry = g_video_geometry_correction || pgxp_mod_enabled;
+    const int pgxp_session_texture = g_video_perspective_texturing || pgxp_mod_enabled;
+    gte_geometry_correction_set(pgxp_session_geometry);
+    gpu_texture_correction_set(pgxp_session_texture);
+    pgxp_set_cpu_mode(pgxp_mod_enabled ? g_mod_pgxp_cpu_mode : g_video_pgxp_cpu_mode);
     pgxp_set_tolerance(g_video_pgxp_tolerance);
     /* Scanlines: env override wins over config, same as the corrections above,
      * so a headless/free-run boot can be captured with the effect armed from the
@@ -17812,12 +17824,12 @@ session_reboot:
     }
     gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                               g_video_scanline_strength);
-    if (g_video_geometry_correction || g_video_perspective_texturing) {
+    if (pgxp_session_geometry || pgxp_session_texture) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
-                     g_video_geometry_correction ? "on" : "off",
-                     g_video_perspective_texturing ? "on" : "off",
-                     (g_video_geometry_correction && requested_scale < 2)
+                     pgxp_session_geometry ? "on" : "off",
+                     pgxp_session_texture ? "on" : "off",
+                     (pgxp_session_geometry && requested_scale < 2)
                          ? " (needs [video] supersampling >= 2 to be visible)" : "");
     }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
@@ -19658,14 +19670,15 @@ soft_return_lobby:
                                    player_device[i]) <= 1) {
                         player_device[i] = "gamepad";
                     }
-                    /* Same resolution as the first launcher-exit path, and the
-                     * mod-override arm matters HERE specifically: `goto
-                     * session_reboot` re-enters the emulator BELOW the block
-                     * that applies g_mod_controller_mode_override, so a soft
-                     * return from the lobby never re-runs it. Before this
-                     * helper existed, an override survived a rematch only
-                     * because it round-tripped through ls.pad_mode[]; a bare
-                     * lock clamp here would have silently dropped it. */
+                    /* Same resolution as the first launcher-exit path, with no
+                     * mod override (-1). `goto session_reboot` now re-enters
+                     * ABOVE the override reset, plugin activation and apply
+                     * block (PS1G-66), so the rematch's own mods set the
+                     * override after this. g_mod_controller_mode_override
+                     * still holds the previous session's value here: passing
+                     * it would keep a mod's pad mode for a rematch that drops
+                     * the mod (netplay clears mods), over lock_mode, and write
+                     * it to settings.toml below. */
                     player_mode[i] =
                         PSXRecompV4::resolve_player_mode_after_launcher(
                             PSXRecompV4::launcher_pad_mode_from_launcher(
@@ -19673,7 +19686,7 @@ soft_return_lobby:
                                 kLauncherNegconMode),
                             ctrl_lock_mode,
                             ctrl_locked_mode[i],
-                            g_mod_controller_mode_override[i]);
+                            -1);
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                 }
             }

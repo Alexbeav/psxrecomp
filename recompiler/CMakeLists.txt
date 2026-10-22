@@ -1431,6 +1431,13 @@ if(BUILD_TESTING)
                     --self-test
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        if(NOT MSVC)
+            add_test(NAME pgxp_mod_startup
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_pgxp_mod_startup.py
+                    --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+        endif()
+
         # ---- runtime source-invariant guards --------------------------------
         # These live in runtime/tests/ but only READ runtime source, so they
         # need neither a generated BIOS nor a built runtime. Registering them

@@ -13,11 +13,10 @@
 //
 // 2. An ACTIVE mod controller-mode override outranks the lock. The first
 //    version of the clamp was an unconditional `if (lock) mode = locked`,
-//    which is correct for (1) and silently wrong here: `goto session_reboot`
-//    re-enters the emulator BELOW the block that applies
-//    g_mod_controller_mode_override, so a soft return from the lobby never
-//    re-runs it. The override used to survive a rematch only because it
-//    round-tripped through ls.pad_mode[]; the clamp cut that path.
+//    which is correct for (1) and silently wrong here. Since PS1G-66 every
+//    session, a lobby rematch included, reruns plugin activation and applies
+//    the override after `session_reboot:`, so the soft-return readback passes
+//    -1: the override it would read belongs to the previous session.
 //
 // 3. Whatever this returns is what gets persisted (seed.p_mode[] /
 //    us.p_mode[]), so a mode the game does not support must never come out of
