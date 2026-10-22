@@ -113,6 +113,24 @@ int main(void) {
     pgxp_set_tolerance(-1.0f);
     pgxp_set_cpu_mode(0);
 
+    /* PGXP mode is opened after the precision checkpoint and closed before
+     * rollback. The real generation and prior mode must survive the pass. */
+    {
+        pgxp_set_enabled(0);
+        const uint32_t gen = pgxp_test_generation();
+        pgxp_checkpoint_begin();
+        PGXPProjectiveScope scope = {};
+        CHECK(pgxp_projective_scope_begin(&scope));
+        CHECK(pgxp_enabled() && pgxp_cpu_mode());
+        CHECK(!pgxp_projective_scope_begin(&scope));
+        produce_at(ADDR_A);
+        pgxp_projective_scope_end(&scope);
+        pgxp_checkpoint_rollback();
+        CHECK(!pgxp_enabled() && !pgxp_cpu_mode());
+        CHECK(pgxp_test_generation() == gen);
+    }
+    pgxp_set_enabled(1);
+
     /* --- SWC2 produce -> GPU consume (the perspective-texturing spine) --- */
     produce_at(ADDR_A);
     {

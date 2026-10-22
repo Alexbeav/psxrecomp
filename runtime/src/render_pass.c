@@ -19,6 +19,7 @@
 #include "render_pass.h"
 
 #include <setjmp.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +40,9 @@
 #include "psx_video_timing.h"
 #include "gte_view.h"
 #include "stereo_shed_policy.h"
+
+extern int gpu_render_projective_begin(void);
+extern void gpu_render_projective_end(void);
 
 extern uint8_t *memory_get_ram_ptr(void);
 extern uint8_t *memory_get_scratchpad_ptr(void);
@@ -396,6 +400,7 @@ void render_pass_get_stats(RenderPassStats *out) {
 int render_pass_verification_enabled(void) { return verify_on(); }
 
 void render_pass_reset_session(void) {
+    psx_mod_set_render_projective(0);
     s_netplay_allowed = 0;
     memset(&s_stats, 0, sizeof s_stats);
     memset(g_render_pass_dropped_writes, 0, sizeof g_render_pass_dropped_writes);
@@ -493,13 +498,19 @@ int psx_mod_render_view_offset(int32_t x, int32_t y, int32_t z) {
 
 int psx_mod_render_view(const PSXModRenderView *view) {
     if (!g_psx_render_pass_active || !view || view->struct_size < sizeof *view ||
-        view->projection > 1u || view->projection_h_ref > 65535u) return 0;
+        view->projection > 1u || view->precise > 1u || view->projection_h_ref > 65535u) return 0;
     /* Bound products well inside int64. Rigid matrices are supplied by caller. */
     for (int i = 0; i < 9; ++i)
         if (view->rotation_q12[i] < -4096 || view->rotation_q12[i] > 4096) return 0;
     for (int i = 0; i < 3; ++i)
         if (view->translation[i] < -65536 || view->translation[i] > 65536) return 0;
     if (view->projection && (view->fx_q16 <= 0 || view->fy_q16 <= 0)) return 0;
+    if (view->precise) {
+        for (int i=0;i<9;++i)
+            if (!isfinite(view->rotation[i]) || fabs(view->rotation[i])>1.001) return 0;
+        for (int i=0;i<3;++i)
+            if (!isfinite(view->translation_precise[i]) || fabs(view->translation_precise[i])>65536) return 0;
+    }
     gte_render_pose_set(view);
     return 1;
 }
@@ -918,6 +929,13 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         transaction_end(eye, 0, 0);
         return pass_refuse(s_checkpoint_failure ? s_checkpoint_failure : "checkpoint", status);
     }
+    if (eye >= 0 && !s_capture_only && !gpu_render_projective_begin()) {
+        gl_renderer_pass_begin_diag(&s_attempt.gl);
+        status = transaction_status(transaction_kind(eye));
+        transaction_end(eye, 0, 0);
+        checkpoint_restore(cpu);
+        return pass_refuse("projective_pgxp", status);
+    }
     if (reuse_baseline) s_stereo.checkpoint_reuses++;
     else { s_stereo.checkpoint_saves++; s_stereo.checkpoint_ram_bytes += s_ck.ram_bytes; }
     if (verify_on()) hash_before = state_hash(cpu);
@@ -985,6 +1003,7 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     }
     te = gl_renderer_perf_ticks();
     local_scope_set(0);
+    gpu_render_projective_end();
     checkpoint_restore(cpu);
     psx_cycle_freeze_end(&s_freeze);
     s_nesting = 0;

@@ -1,3 +1,4 @@
+#include <cmath>
 #include "gte.h"
 #include "gte_view.h"
 #include "cpu_state.h"
@@ -766,6 +767,7 @@ static inline int gte_sxx(int32_t p){ int v=p&0xFFFF; return v>=0x8000? v-0x1000
 static inline int gte_syy(int32_t p){ int v=(p>>16)&0xFFFF; return v>=0x8000? v-0x10000:v; }
 
 static int32_t gte_h_scaled(const GTEState* gte);
+extern "C" int gpu_render_projective_enabled(void);
 static int32_t s_render_view[3];
 static PSXModRenderView s_render_pose;
 static bool s_render_rotate;
@@ -1091,8 +1093,10 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     const bool lm    = gte_instr_lm(instr);
 
     // Step 1: Matrix multiplication + translation
+    const bool render_projective = s_render_pose.projection && gpu_render_projective_enabled();
+    const bool precise_render = render_projective && s_render_pose.precise;
     auto dot = [&](int row, int mac_num) {
-        int64_t acc = ((int64_t)gte->TR[row] + (s_render_rotate ? 0 : s_render_view[row])) * 4096 +
+        int64_t acc = ((int64_t)gte->TR[row] + ((s_render_rotate || precise_render) ? 0 : s_render_view[row])) * 4096 +
                       (int64_t)gte->RT[row][0] * V[0];
         acc = gte_mac44_stage(gte, acc, mac_num);
         acc += (int64_t)gte->RT[row][1] * V[1];
@@ -1102,6 +1106,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     int64_t mac1 = dot(0, 1);
     int64_t mac2 = dot(1, 2);
     int64_t mac3 = dot(2, 3);
+    const int64_t render_source[3] = {mac1, mac2, mac3};
     if (s_render_rotate) {
         const int64_t v[3] = {mac1, mac2, mac3};
         int64_t result[3];
@@ -1112,6 +1117,17 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
             result[row] = (sum >> 12) + (int64_t)s_render_view[row] * 4096;
         }
         mac1 = result[0]; mac2 = result[1]; mac3 = result[2];
+    }
+
+    if (precise_render) {
+        int64_t camera[3];
+        for (int row=0;row<3;++row) {
+            double acc = s_render_pose.translation_precise[row]*4096.0;
+            for (int col=0;col<3;++col)
+                acc += render_source[col]*s_render_pose.rotation[row*3+col];
+            camera[row] = (int64_t)std::llround(acc);
+        }
+        mac1=camera[0];mac2=camera[1];mac3=camera[2];
     }
 
     // MAC1..3 overflow flags observe the unshifted 44-bit accumulator.
@@ -1218,6 +1234,14 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
                    ((int64_t)gte->IR2 * s_render_pose.fy_q16 / gte->SZ[3]) * h / ref;
         }
     }
+    if (render_projective && mac3 >= 4096 && shift == 12 && !lm) {
+        const double scale = s_render_pose.projection_h_ref ?
+            (double)gte_h_scaled(gte) / s_render_pose.projection_h_ref : 1.0;
+        sx16 = (int64_t)gte->OFX + s_render_pose.cx_delta_q16 +
+            (int64_t)std::llround((double)mac1*s_render_pose.fx_q16/mac3*scale);
+        sy16 = (int64_t)gte->OFY + s_render_pose.cy_delta_q16 +
+            (int64_t)std::llround((double)mac2*s_render_pose.fy_q16/mac3*scale);
+    }
     /* RTPS/RTPT reuse MAC0's overflow flags for each projected X/Y
      * accumulator before MAC0 is replaced by the depth-cue result. */
     gte->check_mac0_overflow(sx16);
@@ -1270,6 +1294,24 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         }
     }
     geom_note((uint32_t)gte->SXY[2], sx16, sy16);
+
+    /* A replay eye can see triangles crossing the camera plane. Preserve the
+     * signed, unsaturated projection alongside the architectural SXY word so
+     * the GPU clips in homogeneous space before perspective division. */
+    if (s_render_pose.projection && gpu_render_projective_enabled() &&
+        !s_gte_replay_sandbox && pgxp_projection_tracking() && shift == 12 && !lm) {
+        const double camera[3] = {mac1/4096.0, mac2/4096.0, mac3/4096.0};
+        const double z = camera[2];
+        const double scale = s_render_pose.projection_h_ref ?
+            (double)gte_h_scaled(gte) / s_render_pose.projection_h_ref : 1.0;
+        const double fx = s_render_pose.fx_q16 / 65536.0 * scale;
+        const double fy = s_render_pose.fy_q16 / 65536.0 * scale;
+        const double cx = (gte->OFX + (double)s_render_pose.cx_delta_q16) / 65536.0;
+        const double cy = (gte->OFY + (double)s_render_pose.cy_delta_q16) / 65536.0;
+        const PGXPProjection p = {(float)(cx*z + camera[0]*fx),
+            (float)(cy*z + camera[1]*fy), (float)z, 1.0f};
+        pgxp_gte_set_projection(&p);
+    }
 
     // Step 5: Depth cueing (MAC0/IR0) — only for last vertex of RTPT or RTPS
     if (setMac0) {
@@ -1505,6 +1547,21 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
     } else if (gpu_ws_precise_nclip_enabled() &&
                !s_gte_replay_sandbox && s_speculative_depth == 0) {
         s_nclip_fallbacks++;
+    }
+    /* Screen-coordinate saturation can reverse winding at an eye's near
+     * plane. The signed homogeneous determinant keeps the true facing even
+     * when one or two corners lie behind the eye. Scope to the render pass. */
+    if (s_render_pose.projection && gpu_render_projective_enabled()) {
+        PGXPProjection p[3];
+        if (pgxp_get_gte_projection(0, gte->SXY[0], &p[0]) &&
+            pgxp_get_gte_projection(1, gte->SXY[1], &p[1]) &&
+            pgxp_get_gte_projection(2, gte->SXY[2], &p[2])) {
+            const double det = (double)p[0].x*((double)p[1].y*p[2].z-(double)p[2].y*p[1].z)
+                -(double)p[0].y*((double)p[1].x*p[2].z-(double)p[2].x*p[1].z)
+                +(double)p[0].z*((double)p[1].x*p[2].y-(double)p[2].x*p[1].y);
+            const int sign = (det > 0) - (det < 0);
+            if (sign && sign != ((out > 0) - (out < 0))) out = sign;
+        }
     }
     gte->MAC0 = out;
     gte->set_error_flag();

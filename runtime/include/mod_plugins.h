@@ -790,8 +790,15 @@ typedef struct PSXModRenderView {
     uint32_t projection;
     uint32_t projection_h_ref; /* 0 absolute FOV; otherwise scale focal lengths by guest H/ref */
     int32_t fx_q16, fy_q16, cx_delta_q16, cy_delta_q16;
+    /* Optional host-only pose for projective replay. The ordinary path uses
+     * Q12/integer values; precise 1 preserves sub-unit movement inside replay. */
+    uint32_t precise;
+    double rotation[9], translation_precise[3];
 } PSXModRenderView;
 int psx_mod_render_view(const PSXModRenderView *view);
+/* Signed homogeneous projection and near clipping for replayed 3D packets.
+ * Requires intact PGXP provenance; native gameplay stays architectural. */
+void psx_mod_set_render_projective(int enabled);
 /* Begin locates both views at one predicted time. End submits only a fresh
  * complete pair; failed/shed redraws submit zero layers. */
 int psx_mod_openxr_enable(int enabled);

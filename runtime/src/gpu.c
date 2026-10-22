@@ -4594,6 +4594,27 @@ static void parse_vertex(uint32_t word, int32_t* x, int32_t* y) {
 extern int gte_geometry_correction_enabled(void);
 static int s_texture_correction_enabled = 0;
 static int s_native_wide_projection_correction = 0;
+static PGXPProjectiveScope s_render_pgxp_scope;
+static int s_render_projective, s_render_scope;
+extern int g_psx_render_pass_active;
+int gpu_render_projective_enabled(void) {
+    return s_render_projective && s_render_scope && g_psx_render_pass_active;
+}
+int gpu_render_projective_begin(void) {
+    if (!s_render_projective || s_render_scope) return 1;
+    if (!pgxp_projective_scope_begin(&s_render_pgxp_scope)) return 0;
+    s_render_scope = 1;
+    return 1;
+}
+void gpu_render_projective_end(void) {
+    if (!s_render_scope) return;
+    pgxp_projective_scope_end(&s_render_pgxp_scope);
+    s_render_scope = 0;
+}
+void psx_mod_set_render_projective(int enabled) {
+    s_render_projective = !!enabled;
+    pgxp_set_projection_tracking(s_render_projective || s_native_wide_projection_correction);
+}
 static uint64_t s_native_wide_projection_vertices = 0;
 extern int gte_precision_load_word(uint32_t addr, uint32_t packed,
                                    int32_t *x16, int32_t *y16, uint16_t *z);
@@ -4612,7 +4633,7 @@ void psx_mod_set_native_wide_projection_correction(int enabled) {
     s_native_wide_projection_vertices = 0;
     /* Signed camera-space provenance is required for correct native-wide
      * faces, including corners behind the camera. Arm it with the mode. */
-    pgxp_set_projection_tracking(s_native_wide_projection_correction);
+    pgxp_set_projection_tracking(s_render_projective || s_native_wide_projection_correction);
     gpu_pgxp_rederive_enable();
 }
 
@@ -5362,16 +5383,22 @@ static void setup_textured_draw(uint32_t color24, int semi_trans, int raw_textur
  * Use only intact GTE-derived words, clip their signed homogeneous projection,
  * and submit through the normal ordered GL passes and VRAM authority path. */
 static int native_wide_projective_draw(void) {
-    if (!gpu_ws_projective_enabled() || gp0_cmd_source_addr == UINT32_MAX) return 0;
+    const int render_projective = gpu_render_projective_enabled() &&
+        gr_backend() == GR_BACKEND_OPENGL && gl_renderer_projective_supported();
+    if ((!render_projective && !gpu_ws_projective_enabled()) || gp0_cmd_source_addr == UINT32_MAX) return 0;
+    if (render_projective) psx_mod_counter_add("vr.projective.packet",1);
     const unsigned op=gp0_cmd_buf[0]>>24;
     const unsigned stride=(op&16u)?3u:2u, n=(op&8u)?4u:3u;
     PSXProjectedVertex vertices[4];
-    int needs_clip=0;
+    int needs_clip=render_projective;
     for (unsigned i=0;i<n;++i) {
         const unsigned index=1+stride*i;
         const uint32_t word=gp0_cmd_buf[index];
         PGXPProjection p;
-        if (!pgxp_load_projection(gp0_cmd_source_addr+4*index,word,&p)) return 0;
+        if (!pgxp_load_projection(gp0_cmd_source_addr+4*index,word,&p)) {
+            if (render_projective) psx_mod_counter_add(i==0 ? "vr.projective.miss0" : i==1 ? "vr.projective.miss1" : "vr.projective.miss2",1);
+            return 0;
+        }
         int32_t x,y; parse_vertex(word,&x,&y);
         needs_clip |= p.z<p.near_z || x==-1024 || x==1023 || y==-1024 || y==1023;
         const uint32_t color=gp0_cmd_buf[(op&16u)?index-1:0];
@@ -5381,16 +5408,17 @@ static int native_wide_projective_draw(void) {
             (color&255)/255.0,((color>>8)&255)/255.0,((color>>16)&255)/255.0};
     }
     if (!needs_clip) return 0;
+    if (render_projective) psx_mod_counter_add("vr.projective.draw",1);
     const uint16_t clut=gp0_cmd_buf[2]>>16;
     const uint16_t tpage=gp0_cmd_buf[2+stride]>>16;
     set_tpage_from_poly(tpage);
     const int semi=(op&2u)?(int)semi_transparency:-1;
     gl_renderer_draw_projected_triangle(vertices,tpage&0x1ff,
-        (clut&63)*16,(clut>>6)&511,op&1u,semi,s_texture_correction_enabled);
+        (clut&63)*16,(clut>>6)&511,op&1u,semi,render_projective || s_texture_correction_enabled);
     if (n==4) {
         const PSXProjectedVertex second[3]={vertices[2],vertices[1],vertices[3]};
         gl_renderer_draw_projected_triangle(second,tpage&0x1ff,
-            (clut&63)*16,(clut>>6)&511,op&1u,semi,s_texture_correction_enabled);
+            (clut&63)*16,(clut>>6)&511,op&1u,semi,render_projective || s_texture_correction_enabled);
     }
     return 1;
 }

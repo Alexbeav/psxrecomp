@@ -311,6 +311,15 @@ int pgxp_load_precise_word(uint32_t addr, uint32_t packed,
 void pgxp_checkpoint_begin(void);
 void pgxp_checkpoint_rollback(void);
 
+/* Scoped PGXP mode change for an exact-projection render pass. Open after the
+ * precision checkpoint and close before rollback so the restored generation
+ * remains the pre-pass generation. */
+typedef struct PGXPProjectiveScope {
+    int saved_enabled, saved_cpu_mode, active;
+} PGXPProjectiveScope;
+int  pgxp_projective_scope_begin(PGXPProjectiveScope *scope);
+void pgxp_projective_scope_end(PGXPProjectiveScope *scope);
+
 /* Exact address-keyed packet precision, for a renderer preserving completed
  * static packets around a smaller interpolated drawing section. `expected`
  * MUST be the actual destination RAM/scratchpad word, read by the caller

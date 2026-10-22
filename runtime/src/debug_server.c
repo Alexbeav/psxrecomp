@@ -9236,6 +9236,7 @@ static void handle_openxr_pose_override(int id,const char *json) {
        z < -10000 || z > 10000 || pitch_deg < -90.0 || pitch_deg > 90.0) {
         send_err(id,"pose must be within +/-10 m and pitch within +/-90 degrees");return;
     }
+
     if(!psx_openxr_pose_override((double)x/1000.0,(double)y/1000.0,(double)z/1000.0)){
         send_err(id,"pose offset must be finite and within +/-10 m");return;
     }
