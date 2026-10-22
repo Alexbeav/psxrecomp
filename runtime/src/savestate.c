@@ -873,6 +873,15 @@ int savestate_pending(void) {
     return (s_save_pending >= 0 || s_load_pending >= 0) ? 1 : 0;
 }
 
+void savestate_get_status(PSXSavestateStatus* out) {
+    if (!out) return;
+    out->generation = s_status_generation;
+    out->pending = s_status_pending;
+    out->last_ok = s_status_last_ok;
+    out->last_load = s_status_last_load;
+    out->last_slot = s_status_last_slot;
+}
+
 void savestate_status_json(char* buf, size_t cap) {
     if (!buf || cap == 0) return;
     snprintf(buf, cap,
