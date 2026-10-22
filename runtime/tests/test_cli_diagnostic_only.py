@@ -44,7 +44,7 @@ def _snapshot(directory):
 
 
 class DiagnosticOnlyTests(unittest.TestCase):
-    def _run(self, root, args, *, fail_configure=False):
+    def _run(self, root, args, *, fail_configure=False, staged=True):
         calls = []
 
         def fake_configure(project_root, build_dir, *, pgo, extra, progress):
@@ -59,6 +59,8 @@ class DiagnosticOnlyTests(unittest.TestCase):
 
         def fake_stage(project_root, exe_dir, progress):
             calls.append(("stage", Path(exe_dir).name))
+            if staged:      # a failed staging logs a WARNING and leaves no folder
+                (Path(exe_dir) / "overlay_toolchain").mkdir()
 
         def fake_prune(project_root, build_dir, modes, progress):
             calls.append(("prune", Path(build_dir).name))
@@ -107,6 +109,17 @@ class DiagnosticOnlyTests(unittest.TestCase):
                 self.assertTrue(result["ok"])
                 self.assertTrue(result["diagnostic_only"])
                 self.assertIn("build-diagnostic", result["diagnostic_exe"])
+                self.assertEqual(result["overlay_toolchain"],
+                                 str(root / "build-diagnostic" / "overlay_toolchain"))
+
+    def test_result_says_when_the_overlay_toolchain_is_missing(self):
+        # PS1B-153: the host reads the result, so a failed staging must show in it.
+        with tempfile.TemporaryDirectory() as temporary:
+            root, _ = self._kit(temporary, '[game]\nname = "fixture"\n')
+            code, calls, progress = self._run(root, _args(root), staged=False)
+            self.assertEqual(code, cli.EXIT_OK)
+            self.assertIn(("stage", "build-diagnostic"), calls)
+            self.assertIsNone(progress.result.call_args.kwargs["overlay_toolchain"])
 
     def test_failure_is_an_error_and_leaves_the_normal_product(self):
         with tempfile.TemporaryDirectory() as temporary:
