@@ -181,7 +181,18 @@ static int disabled_entry_hits;
 static int unselected_entry_hits;
 static uint32_t active_entry_last;
 static int entry_test_mode, nested_result;
+#if defined(_WIN32) && defined(__GNUC__) && !defined(__clang__)
+/* Model a guest scheduler jump which abandons native C++ scopes. Asking the
+ * Windows CRT longjmp to unwind those scopes can itself fault in SEH, before
+ * this fixture gets to verify the stranded callback-context guard. */
+static intptr_t callback_escape[5];
+#define callback_setjmp() __builtin_setjmp(callback_escape)
+#define callback_longjmp() __builtin_longjmp(callback_escape, 1)
+#else
 static std::jmp_buf callback_escape;
+#define callback_setjmp() setjmp(callback_escape)
+#define callback_longjmp() std::longjmp(callback_escape, 1)
+#endif
 static uint32_t nested_pc;
 static void test_active_entry(CPUState* cpu, uint32_t address) {
     active_entry_hits++;
@@ -208,12 +219,12 @@ static void test_active_entry(CPUState* cpu, uint32_t address) {
         cpu->gpr[2] = 0x87654321u;
     } else if (entry_test_mode == 5) {
         /* Guest scheduling/RFE can abandon the callback's C++ scope. */
-        std::longjmp(callback_escape, 1);
+        callback_longjmp();
     } else if (entry_test_mode == 6) {
         if (!psx_mod_finish_function(cpu)) failures++;
         ModFunctionEntryContext interrupted{};
         mod_runtime_function_entry_context_save(&interrupted);
-        if (setjmp(callback_escape) == 0) {
+        if (callback_setjmp() == 0) {
             CPUState nested{};
             entry_test_mode = 5;
             psx_mod_function_entry(&nested, address);
@@ -877,7 +888,7 @@ int main(int argc, char** argv) {
     entry_test_mode = 0;
 
     entry_test_mode = 5;
-    if (setjmp(callback_escape) == 0) {
+    if (callback_setjmp() == 0) {
         psx_mod_function_entry(&entry_cpu, 0x80003000u);
         check(false, "callback must escape without its native cleanup");
     }
