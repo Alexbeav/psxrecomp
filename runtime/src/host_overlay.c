@@ -104,15 +104,47 @@ void psx_host_overlay_draw(int width, int height) {
 /* ---- Game HUD layer ------------------------------------------------------- */
 static PsxHostOverlayDrawFn s_hud_fn = NULL;
 static void *s_hud_ctx = NULL;
+static atomic_flag s_hud_lock = ATOMIC_FLAG_INIT;
+static atomic_int s_hud_inflight = 0;
+#if defined(_MSC_VER)
+static __declspec(thread) int s_in_hud = 0;
+#else
+static _Thread_local int s_in_hud = 0;
+#endif
+
+static void hud_lock(void) {
+    while (atomic_flag_test_and_set_explicit(&s_hud_lock, memory_order_acquire))
+        draw_yield();
+}
+static void hud_unlock(void) {
+    atomic_flag_clear_explicit(&s_hud_lock, memory_order_release);
+}
 
 void psx_host_set_hud_draw_cb(PsxHostOverlayDrawFn fn, void *ctx) {
+    hud_lock();
     s_hud_ctx = ctx;
     s_hud_fn = fn;
+    hud_unlock();
+    /* Match the overlay lifetime contract without allocating callback records.
+     * The single GL owner may unregister itself; its current call then ends
+     * before another frame can consume the replacement. */
+    if (!s_in_hud)
+        while (atomic_load(&s_hud_inflight) > 0) draw_yield();
 }
 
 void psx_host_hud_draw(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    hud_lock();
     PsxHostOverlayDrawFn fn = s_hud_fn;
-    if (fn && width > 0 && height > 0) fn(width, height, s_hud_ctx);
+    void *ctx = s_hud_ctx;
+    atomic_fetch_add(&s_hud_inflight, 1);
+    hud_unlock();
+    if (fn) {
+        s_in_hud = 1;
+        fn(width, height, ctx);
+        s_in_hud = 0;
+    }
+    atomic_fetch_sub(&s_hud_inflight, 1);
 }
 
 /* ---- P3: input sink -------------------------------------------------------- */

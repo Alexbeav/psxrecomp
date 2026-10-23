@@ -49,8 +49,10 @@ void psx_host_overlay_draw(int width, int height);  /* renderer side */
 /* ---- Game HUD layer ---------------------------------------------------------
  * A title's own heads-up display, drawn once per presented frame (real and
  * generated) under the in-game menu, same thread and GL rules as the overlay
- * callback above. Set once (title activation) and kept for the session; NULL
- * unregisters (no wait: the registrant keeps fn and ctx alive for the session). */
+ * callback above. OpenGL only; Vulkan and the SDL renderer never invoke it.
+ * Replacing or NULL unregistering drains prior calls as for the overlay above;
+ * the owner may then release its old context. Registration is session-scoped:
+ * activation reset and GL shutdown clear it. Register again on activation. */
 void psx_host_set_hud_draw_cb(PsxHostOverlayDrawFn fn, void *ctx);
 void psx_host_hud_draw(int width, int height);  /* renderer side */
 

@@ -6550,6 +6550,7 @@ static void pass_resources_release(void);
 static void present_image_ring_gl_forget(void);
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
+    psx_host_set_hud_draw_cb(NULL, NULL);
     /* After the worker has stopped (it presents, and captures, on its own
      * thread) and before the context dies: forget the ring's GL names. */
     present_image_ring_gl_forget();
