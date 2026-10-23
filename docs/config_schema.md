@@ -155,6 +155,14 @@ relocated image is matched by filename stem only when that stem is unique in
 the roster. The one-based persisted `disc.selected` index wins over a path
 that identifies another disc or has an ambiguous relocated name.
 
+### Settings across a rebuild
+
+Launcher edits are saved beside the setup executable before a rebuild hands
+control back to the setup host. When the host starts the built product, it copies
+those settings beside the product only if the product has no settings file.
+An existing product settings file, including an empty one, keeps its contents.
+This applies both after a rebuild and on later starts through the setup host.
+
 ### Multi-disc selection
 
 Relative disc paths in executable-side `settings.toml` and `disc.cfg` resolve

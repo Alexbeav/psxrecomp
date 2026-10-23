@@ -283,6 +283,11 @@ def main() -> int:
             project = tmp / f"case {index}"
             make_project(project, framework)
             shutil.copy2(product_exe, project / "build-release" / ("Probe" + suffix))
+            setup_settings = b'[video]\nrenderer="opengl"\nsupersampling=4\n'
+            product_settings = b'[video]\nrenderer="software"\nsupersampling=2\n'
+            # Exercise migration, no overwrite and absent input through real forward.
+            if index % 3 != 2: (project / "settings.toml").write_bytes(setup_settings)
+            if index % 3 == 1: (project / "build-release/settings.toml").write_bytes(product_settings)
             out = project / "handover-args.txt"
             env = host_environment(sandbox)
             env.update(variables)
@@ -313,6 +318,12 @@ def main() -> int:
                 failures += 1
             else:
                 print("ok: %s" % why)
+            settings_path = project / "build-release/settings.toml"
+            got_settings = settings_path.read_bytes() if settings_path.exists() else None
+            expected_settings = (setup_settings, product_settings, None)[index % 3]
+            if got_settings != expected_settings:
+                print("FAIL: forward settings handoff case %d" % index); failures += 1
+            else: print("ok: forward settings handoff case %d" % index)
         leftovers = sandbox_leftovers(sandbox)
         if leftovers:
             print("FAIL: the host wrote into its toolchain or data folders; a hand-over must not:\n  %s"
