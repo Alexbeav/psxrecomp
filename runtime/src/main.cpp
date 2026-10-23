@@ -3977,7 +3977,25 @@ static void sync_guest_cadence_to_video_standard(void) {
 
 static int host_driver_vsync_unreliable(void) {
 #ifdef _WIN32
-    return 0;
+    /* Windows OpenGL, windowed or borderless: DWM composes the window and
+     * owns the display's vsync, so a driver swap interval adds nothing but a
+     * stall. On NVIDIA (R4 0.8, RTX 4080, 610.88) a vsync'd SwapBuffers holds
+     * the GPU queue the render thread submits to: the render thread's frame
+     * then costs a whole refresh (16.7 ms "GPU" at any internal scale,
+     * render_busy 100 %), back-pressure slows the guest to 52-57 Hz, and
+     * dynamic resolution drops for nothing. Swap interval 0 under the
+     * wall-clock pacer: 60.0 Hz, 4.4 ms.
+     *
+     * Scope is the measured case only: GL renderer active, the render thread
+     * running, GL_VENDOR NVIDIA, and not exclusive fullscreen (2). Other
+     * driver families, the unthreaded path and exclusive fullscreen keep
+     * driver vsync. Re-evaluated per call, so runtime fullscreen/renderer
+     * changes take effect. PSX_TRUST_DRIVER_VSYNC=1 keeps driver vsync. */
+    if (const char *e = std::getenv("PSX_TRUST_DRIVER_VSYNC"); e && e[0] && e[0] != '0')
+        return 0;
+    return (g_video_renderer == 1 && g_gl_active && s_window_fullscreen.mode != 2 &&
+            gl_renderer_render_thread_active() &&
+            gl_renderer_vendor_is_nvidia()) ? 1 : 0;
 #else
     static int cached = -1;
     if (cached >= 0)
@@ -4088,8 +4106,14 @@ static void log_present_cadence(void) {
             !g_netplay_vsync_forced_off) {
             if (host_driver_vsync_unreliable()) {
                 std::printf("psxrecomp: present cadence: wall-clock pacer "
-                            "(%.4f ms/frame); driver vsync off under WSL\n",
-                            g_frame_period_ms);
+                            "(%.4f ms/frame); driver vsync off (%s)\n",
+                            g_frame_period_ms,
+#ifdef _WIN32
+                            "Windows GL, NVIDIA render thread: DWM composes"
+#else
+                            "under WSL"
+#endif
+                            );
             } else if (present_effective_swap_interval() != 0) {
                 std::printf("psxrecomp: present cadence: wall-clock pacer "
                             "(%.4f ms/frame); synchronized swaps on %.0f Hz panel\n",
@@ -8955,9 +8979,11 @@ static bool drain_host_events() {
                                              (int)mod)) {
                 const int target = s_window_fullscreen.mode ? 0 :
                                    (g_fullscreen ? g_fullscreen : 1);
-                if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
+                if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0) {
+                    apply_present_cadence();
+                    log_present_cadence();
                     host_osd_push(target ? "Fullscreen" : "Windowed", 1500);
-                else
+                } else
                     host_osd_push("Fullscreen change failed", 1500);
             }
         }
@@ -10143,6 +10169,10 @@ static void render_thread_vblank(void) {
         gl_renderer_set_present_thread(g_present_thread, g_present_thread_slots);
         if (g_gl_active && gr_backend() == GR_BACKEND_OPENGL &&
             gl_renderer_render_thread_start(g_render_thread_frames)) {
+            /* The NVIDIA policy only becomes eligible once the worker owns
+             * GL. Update the actual driver interval at that transition. */
+            apply_present_cadence();
+            log_present_cadence();
             std::fprintf(stdout, "psxrecomp: render thread on (OpenGL, %d frame(s) in flight)\n",
                          g_render_thread_frames);
             if (g_frame_generation) {
@@ -10284,8 +10314,11 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         if (m & ~present_only) deferred = PSX_VIDEO_RESTART_NETPLAY;
         m &= present_only;
     }
-    if (m & PSX_VIDEO_LIVE_FULLSCREEN)
-        (void)psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, next->fullscreen);
+    if ((m & PSX_VIDEO_LIVE_FULLSCREEN) &&
+        psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, next->fullscreen) == 0) {
+        apply_present_cadence();
+        log_present_cadence();
+    }
     if (m & PSX_VIDEO_LIVE_TEXTURE_FILTER) {
         g_video_texfilter = psx_texture_filter_from_ui(next->texture_filter);
         if (g_mod_texfilter < 0) gr_set_texture_filter(g_video_texfilter);

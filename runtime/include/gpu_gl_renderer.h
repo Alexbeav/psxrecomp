@@ -610,6 +610,7 @@ int  gl_renderer_get_texture_window_batching(void);
 int  gl_renderer_render_thread_start(int max_frames);
 void gl_renderer_render_thread_stop(void);
 int  gl_renderer_render_thread_active(void);
+int  gl_renderer_vendor_is_nvidia(void);
 void gl_renderer_render_thread_frame_boundary(void);
 void gl_renderer_render_thread_sync(const char *reason);
 int  gl_renderer_render_thread_json(char *out, size_t cap);
