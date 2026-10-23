@@ -397,6 +397,8 @@ static int load_modern_gl(void) {
 static SDL_Window   *s_win = NULL;
 static SDL_GLContext s_ctx = NULL;
 static uint16_t     *s_vram = NULL;       /* CPU VRAM array (gpu.c's storage) */
+/* GL_VENDOR names NVIDIA (captured at context creation). */
+static int s_vendor_nvidia = 0;
 static int           s_swap_interval = 1; /* SDL_GL swap interval (vsync mode) */
 
 /* ---- render thread ([video] render_thread, docs/RENDER_THREAD.md) --------
@@ -6475,6 +6477,10 @@ int gl_renderer_init_context(SDL_Window *win) {
     const char *gpu = (const char *)glGetString(0x1F01 /* GL_RENDERER */);
     fprintf(stdout, "psxrecomp: OpenGL context created (%s; %s)\n", ver ? ver : "?",
             gpu ? gpu : "?");
+    {
+        const char *vendor = (const char *)glGetString(0x1F00 /* GL_VENDOR */);
+        s_vendor_nvidia = (vendor && strstr(vendor, "NVIDIA")) ? 1 : 0;
+    }
 
     /* All-or-nothing: any missing entry point / failed shader / bad FBO means
      * the whole GL renderer is unavailable and the runtime stays on the pure
@@ -6575,6 +6581,7 @@ static void pass_resources_release(void);
 static void present_image_ring_gl_forget(void);
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
+    psx_host_set_hud_draw_cb(NULL, NULL);
     /* After the worker has stopped (it presents, and captures, on its own
      * thread) and before the context dies: forget the ring's GL names. */
     present_image_ring_gl_forget();
@@ -9947,8 +9954,10 @@ static void gl_swap_with_osd(void) {
             }
             if (ov_image(3, &px, &ow, &oh) && px)
                 gl_draw_osd_image(px, ow, oh, ww, wh, 0, 0, ww, wh);
-            /* In-game overlay provider (host_overlay.h P2), over everything
-             * the host composes; no-op unless one registered. */
+            /* The title's HUD layer, then the in-game overlay provider
+             * (host_overlay.h P2) over everything; each a no-op unless one
+             * registered. */
+            psx_host_hud_draw(ww, wh);
             psx_host_overlay_draw(ww, wh);
         }
     }
@@ -11093,6 +11102,39 @@ int gl_renderer_request_internal_scale(int scale) {
     if (dyn_record_step(scale)) return 1;
     s_dyn_pending = scale == s_hr_scale ? 0 : scale;
     return 1;
+}
+
+/* Settings -> Internal resolution / Supersampling changed in game. Drain the
+ * render queue and apply under the owned context before acknowledging it.
+ * A queued dynamic-resolution step is not proof its allocation succeeded. */
+/* Whether gl_renderer_set_internal_scale_live can move the scale on this
+ * session at all: not in windowed high-resolution mode, not with
+ * CPU-authoritative dual rendering, and only with a live raster context. */
+int gl_renderer_internal_scale_live_capable(void) {
+    return (s_ctx && s_raster_ok && !s_hiw && !s_cpu_auth_dual) ? 1 : 0;
+}
+
+int gl_renderer_set_internal_scale_live(int scale) {
+    if (s_ctx) GL_RT_SYNC("set_internal_scale_live");
+    if (!s_ctx || !s_raster_ok || s_hiw || s_cpu_auth_dual || s_pass_active) return 0;
+    int reason = 0;
+    if (scale < 1) scale = 1;
+    scale = psx_gl_clamp_full_vram_scale(scale, GL_MAX_INTERNAL_SCALE, s_gl_max_dim,
+                                         s_vram_budget, &reason);
+    if (!s_alloc_scale) {
+        if (!dyn_resources()) return 0;
+        s_alloc_scale = s_hr_scale;
+    }
+    const int previous_ceiling = s_alloc_scale;
+    s_alloc_scale = scale;   /* dyn_apply may allocate beyond the old surface */
+    if (!dyn_apply(scale) || s_hr_scale != scale) {
+        s_alloc_scale = previous_ceiling;
+        return 0;
+    }
+    s_dyn_pending = 0;
+    s_rthm_scale = scale;
+    s_req_scale = scale;
+    return scale;
 }
 
 int gl_renderer_step_internal_scale_now(int scale) {
@@ -14561,6 +14603,8 @@ void gl_renderer_render_thread_stop(void) {
     s_rth_vram_priv = NULL;
     gr_refresh_backend();
 }
+
+int gl_renderer_vendor_is_nvidia(void) { return s_vendor_nvidia; }
 
 int gl_renderer_render_thread_active(void) { return s_rth_on; }
 

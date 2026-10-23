@@ -46,6 +46,16 @@ void psx_host_overlay_set_draw_cb(PsxHostOverlayDrawFn fn, void *ctx);
 int  psx_host_overlay_has_draw(void);
 void psx_host_overlay_draw(int width, int height);  /* renderer side */
 
+/* ---- Game HUD layer ---------------------------------------------------------
+ * A title's own heads-up display, drawn once per presented frame (real and
+ * generated) under the in-game menu, same thread and GL rules as the overlay
+ * callback above. OpenGL only; Vulkan and the SDL renderer never invoke it.
+ * Replacing or NULL unregistering drains prior calls as for the overlay above;
+ * the owner may then release its old context. Registration is session-scoped:
+ * activation reset and GL shutdown clear it. Register again on activation. */
+void psx_host_set_hud_draw_cb(PsxHostOverlayDrawFn fn, void *ctx);
+void psx_host_hud_draw(int width, int height);  /* renderer side */
+
 /* ---- P3: input sink -----------------------------------------------------
  * The sink sees every host SDL event first (main thread), in the normal event
  * drain and in the host pause loop. Returning non-zero consumes the event.
@@ -75,10 +85,11 @@ typedef struct PsxHostVideoSettings {
     int dynamic_resolution;    /* 0/1 */
     int frame_generation;      /* 0/1 */
     int renderer;              /* restart */
-    int internal_resolution;   /* restart */
-    int supersampling;         /* restart */
+    int internal_resolution;   /* live (psx_video_apply_live) */
+    int supersampling;         /* legacy factor; restart */
     int render_thread;         /* restart */
     int present_thread;        /* restart */
+    int supersample_milli;     /* live: 1000 off, 1250, 1500, 2000 */
 } PsxHostVideoSettings;
 
 /* Texture filter values: PSX_TEXTURE_FILTER_* and psx_texture_filter_from_ui
@@ -99,6 +110,8 @@ typedef struct PsxHostVideoSettings {
 #define PSX_VIDEO_LIVE_PRESENT_LINEAR (1u << 4)
 #define PSX_VIDEO_LIVE_DYNRES         (1u << 5)
 #define PSX_VIDEO_LIVE_FRAME_GEN      (1u << 6)
+/* Internal resolution or supersampling: the scale moves at the next frame. */
+#define PSX_VIDEO_LIVE_RESOLUTION     (1u << 7)
 
 /* Pure helpers (unit-tested): which live fields differ, and which restart
  * fields differ from the values the session booted with. */
@@ -106,6 +119,13 @@ unsigned psx_host_video_live_changes(const PsxHostVideoSettings *prev,
                                      const PsxHostVideoSettings *next);
 unsigned psx_host_video_restart_bits(const PsxHostVideoSettings *boot,
                                      const PsxHostVideoSettings *next);
+/* psx_host_video_restart_bits for a backend that may not move the resolution
+ * live: when res_live_ok is 0 (backend incapable, or a live change was
+ * refused), an internal resolution / supersample that differs from boot keeps
+ * PSX_VIDEO_RESTART_RESOLUTION. */
+unsigned psx_host_video_restart_bits_backend(const PsxHostVideoSettings *boot,
+                                             const PsxHostVideoSettings *next,
+                                             int res_live_ok);
 /* Runtime side (main.cpp). */
 unsigned psx_video_apply_live(const PsxHostVideoSettings *next);
 void     psx_video_current(PsxHostVideoSettings *out);

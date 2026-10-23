@@ -31,6 +31,10 @@ extern "C" void psx_video_current(PsxHostVideoSettings *out) {
 extern "C" unsigned psx_host_video_restart_bits(const PsxHostVideoSettings *b,const PsxHostVideoSettings *n) {
     return b->renderer!=n->renderer ? PSX_VIDEO_RESTART_RENDERER : 0;
 }
+/* main.cpp's backend-aware wrapper; no live resolution in this fixture. */
+static unsigned video_restart_bits(const PsxHostVideoSettings *b,const PsxHostVideoSettings *n) {
+    return psx_host_video_restart_bits(b,n);
+}
 extern "C" unsigned psx_host_video_live_changes(const PsxHostVideoSettings *b,const PsxHostVideoSettings *n) {
     return b->texture_filter!=n->texture_filter ? PSX_VIDEO_LIVE_TEXTURE_FILTER : 0;
 }

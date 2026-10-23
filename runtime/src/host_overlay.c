@@ -101,6 +101,52 @@ void psx_host_overlay_draw(int width, int height) {
     atomic_fetch_sub(&s_draw_inflight, 1);
 }
 
+/* ---- Game HUD layer ------------------------------------------------------- */
+static PsxHostOverlayDrawFn s_hud_fn = NULL;
+static void *s_hud_ctx = NULL;
+static atomic_flag s_hud_lock = ATOMIC_FLAG_INIT;
+static atomic_int s_hud_inflight = 0;
+#if defined(_MSC_VER)
+static __declspec(thread) int s_in_hud = 0;
+#else
+static _Thread_local int s_in_hud = 0;
+#endif
+
+static void hud_lock(void) {
+    while (atomic_flag_test_and_set_explicit(&s_hud_lock, memory_order_acquire))
+        draw_yield();
+}
+static void hud_unlock(void) {
+    atomic_flag_clear_explicit(&s_hud_lock, memory_order_release);
+}
+
+void psx_host_set_hud_draw_cb(PsxHostOverlayDrawFn fn, void *ctx) {
+    hud_lock();
+    s_hud_ctx = ctx;
+    s_hud_fn = fn;
+    hud_unlock();
+    /* Match the overlay lifetime contract without allocating callback records.
+     * The single GL owner may unregister itself; its current call then ends
+     * before another frame can consume the replacement. */
+    if (!s_in_hud)
+        while (atomic_load(&s_hud_inflight) > 0) draw_yield();
+}
+
+void psx_host_hud_draw(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    hud_lock();
+    PsxHostOverlayDrawFn fn = s_hud_fn;
+    void *ctx = s_hud_ctx;
+    atomic_fetch_add(&s_hud_inflight, 1);
+    hud_unlock();
+    if (fn) {
+        s_in_hud = 1;
+        fn(width, height, ctx);
+        s_in_hud = 0;
+    }
+    atomic_fetch_sub(&s_hud_inflight, 1);
+}
+
 /* ---- P3: input sink -------------------------------------------------------- */
 static PsxHostInputSinkFn s_sink_fn = NULL;
 static void *s_sink_ctx = NULL;
@@ -131,6 +177,9 @@ unsigned psx_host_video_live_changes(const PsxHostVideoSettings *a,
     if (a->present_linear != b->present_linear) m |= PSX_VIDEO_LIVE_PRESENT_LINEAR;
     if (a->dynamic_resolution != b->dynamic_resolution) m |= PSX_VIDEO_LIVE_DYNRES;
     if (a->frame_generation != b->frame_generation) m |= PSX_VIDEO_LIVE_FRAME_GEN;
+    if (a->internal_resolution != b->internal_resolution ||
+        a->supersample_milli != b->supersample_milli)
+        m |= PSX_VIDEO_LIVE_RESOLUTION;
     return m;
 }
 
@@ -139,12 +188,24 @@ unsigned psx_host_video_restart_bits(const PsxHostVideoSettings *boot,
     unsigned m = 0;
     if (!boot || !next) return 0;
     if (boot->renderer != next->renderer) m |= PSX_VIDEO_RESTART_RENDERER;
-    if (boot->internal_resolution != next->internal_resolution ||
-        boot->supersampling != next->supersampling)
+    /* Internal resolution and supersample apply live; only the legacy
+     * integer factor still needs a relaunch. */
+    if (boot->supersampling != next->supersampling)
         m |= PSX_VIDEO_RESTART_RESOLUTION;
     if (boot->render_thread != next->render_thread ||
         boot->present_thread != next->present_thread)
         m |= PSX_VIDEO_RESTART_THREADS;
+    return m;
+}
+
+unsigned psx_host_video_restart_bits_backend(const PsxHostVideoSettings *boot,
+                                             const PsxHostVideoSettings *next,
+                                             int res_live_ok) {
+    unsigned m = psx_host_video_restart_bits(boot, next);
+    if (boot && next && !res_live_ok &&
+        (boot->internal_resolution != next->internal_resolution ||
+         boot->supersample_milli != next->supersample_milli))
+        m |= PSX_VIDEO_RESTART_RESOLUTION;
     return m;
 }
 

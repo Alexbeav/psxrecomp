@@ -1,5 +1,6 @@
 #include "mod_runtime.h"
 #include "host_launch_timing.h"
+#include "host_overlay.h"
 #include "cpu_state.h"
 
 #include "disc_path.h"
@@ -2964,6 +2965,8 @@ bool mod_runtime_read_disc_file_sectors(const std::string& path, uint32_t max_by
 extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     HostLaunchTimingScope timing(HOST_LAUNCH_PLUGIN_ACTIVATION);
+    /* Drain session-owned presentation callbacks before their contexts reset. */
+    psx_host_set_hud_draw_cb(nullptr, nullptr);
     mod_reset_plugin_sessions();
     RuntimeMods& s = state();
     s.ticket_ready = false;
