@@ -20313,6 +20313,12 @@ int main(int argc, char** argv) {
     DiscMenuSession disc_menu_session{};
 
 session_reboot:
+    /* A new backend/session must not inherit the prior applied settings or
+     * a refused live request. Capture its boot baseline again on first read. */
+    g_video_boot_valid = false;
+    video_res_set_applied(PSX_IR_UNSET, 1000);
+    g_video_res_live_failed.store(false);
+    g_video_res_live_capable.store(false);
     mod_runtime_set_mounted_disc_resolver(nullptr, nullptr);
     psx_disc_tray_reset_session();
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */
