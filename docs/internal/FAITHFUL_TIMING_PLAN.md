@@ -213,6 +213,11 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-23 — VR upstream split.** Precise projective replay reconstructed on
+  current master; six focused runtime regressions and the GPU-history guard pass.
+  Prior fork/headset acceptance remains historical. Other VR features are
+  separate single-commit branches. Central Beads F: is unavailable.
+
 - **2026-10-07 — DuckStation texture authoring fidelity (beads-qi66).**
   The early Tomba capture report exposed per-draw crops and automatic page
   fallback in the opt-in HD texture enhancement. An independent synthetic

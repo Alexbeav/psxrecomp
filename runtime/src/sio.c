@@ -69,8 +69,9 @@ static uint8_t pad_analog_device[PSX_MAX_PLAYERS] = {
 
 /* DualShock command 0x4D maps the six writable bytes in a 0x42 poll onto the
  * two motors: 0x00 = small/high-frequency, 0x01 = large/low-frequency,
- * 0xFF = unused. The map powers up unassigned and is echoed back while a new
- * map is latched, matching the physical pad/Mednafen protocol. */
+ * 0xFF = unused (PSX-SPX controllersandmemorycards, "Config Mode - Command 4Dh").
+ * The map powers up unassigned and is echoed back while a new map is
+ * latched, as on the Mednafen reference. */
 static uint8_t pad_rumble_map[PSX_MAX_PLAYERS][6] = {
     PSX_PAD_INIT({ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF })
 };
@@ -274,8 +275,9 @@ static uint8_t pad_protocol_id(int logical) {
 }
 
 /* NeGcon (NPC-101) poll payload: buttons, twist, then analog I, II and L
- * (Mednafen psx/input/negcon.cpp). The device has no config mode and no
- * motors; every byte is fixed by the current host sample. */
+ * (PSX-SPX controllersandmemorycards, "neGcon Racing Controller").
+ * The device has no config mode and no motors; every byte is fixed by the
+ * current host sample. */
 static void pad_fill_negcon_poll(int logical, uint8_t out[8]) {
     out[0] = 0x23;
     out[1] = 0x5A;
@@ -1412,7 +1414,7 @@ static void pad_process_byte(uint8_t tx_byte) {
         if (pad_analog[lp] == SIO_PAD_NEGCON) {
             /* NeGcon answers only the 0x42 poll. Its ID byte goes out with any
              * command, but for anything else it does not ACK and the
-             * transaction ends (Mednafen negcon.cpp phase 1). */
+             * transaction ends, as on the Mednafen reference. */
             pad_fill_negcon_poll(lp, pad_response);
             sio_rx_data = pad_response[0];
             if (tx_byte == 0x42) {
@@ -1817,8 +1819,9 @@ static void mc_process_byte(uint8_t tx_byte) {
         } else {
             mc_data_idx = 0;
             mc_state = MC_WRITE_LSB_ECHO;
-            /* Hardware/Beetle echo the high address byte on the address-LSB
-             * transfer (zero for all 1Mbit card sectors), then echo the low
+            /* Hardware echoes the high address byte on the address-LSB
+             * transfer (PSX-SPX controllersandmemorycards, "Writing Data to Memory
+             * Card": reply "pre"; zero for all 1Mbit card sectors), then echo the low
              * address byte while receiving the first payload byte.  Some BIOS
              * card-write paths validate this handshake before they schedule the
              * follow-up directory reads. */

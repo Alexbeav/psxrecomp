@@ -66,6 +66,7 @@
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
 #include "render_pass.h"
+#include "frame_trace.h"
 #include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
 #include "guest_tty.h"
@@ -8543,6 +8544,26 @@ static void handle_host_launch_timings(int id, const char *json)
     free(events);
 }
 
+/* mod_cmd: {"cmd":"mod_cmd","name":"...","args":"..."} runs a plugin's named
+ * debug command (psx_mod_register_command) and returns its text reply. */
+static void handle_mod_cmd(int id, const char *json)
+{
+    extern int psx_mod_run_command(const char *name, const char *args, char *reply, int cap);
+    char name[64], args[1024], reply[1024], esc[2048];
+    if (!json_get_str(json, "name", name, sizeof name)) { send_err(id, "name required"); return; }
+    if (!json_get_str(json, "args", args, sizeof args)) args[0] = '\0';
+    const int r = psx_mod_run_command(name, args, reply, (int)sizeof reply);
+    if (r == -1) { send_err(id, "unknown mod command"); return; }
+    size_t e = 0;
+    for (const char *p = reply; *p && e + 3 < sizeof esc; p++) {
+        if (*p == '"' || *p == '\\') esc[e++] = '\\';
+        if ((unsigned char)*p >= 0x20) esc[e++] = *p;
+        else if (*p == '\n') { esc[e++] = '\\'; esc[e++] = 'n'; }
+    }
+    esc[e] = '\0';
+    send_fmt("{\"id\":%d,\"ok\":true,\"result\":%d,\"reply\":\"%s\"}\n", id, r, esc);
+}
+
 static void handle_mod_counters(int id, const char *json)
 {
     extern int psx_mod_counters_snapshot(const char **names, uint64_t *counts,
@@ -9067,7 +9088,8 @@ static void handle_openxr_stats(int id, const char *json) {
              "\"frame_open\":%u,\"result\":%d,\"stage\":\"%s\",\"runtime\":\"%s\","
              "\"last_failure\":\"%s\",\"last_failure_result\":%d,\"view_flags\":%llu,"
              "\"waits\":%llu,\"submitted\":%llu,\"empty\":%llu,\"failures\":%llu,"
-             "\"predicted_time\":%llu,\"ipd_m\":%.6f,\"units_per_meter\":%.6f,"
+             "\"predicted_time\":%llu,\"ipd_m\":%.6f,\"origin_up_dot\":%.6f,"
+             "\"origin_inversion_streak\":%u,\"origin_ambiguous\":%u,\"units_per_meter\":%.6f,"
              "\"gl_version\":%llu,\"min_gl_version\":%llu,\"max_gl_version\":%llu,\"swapchain_format\":%lld,"
              "\"submitted_layer\":%u,\"quad_submitted\":%llu,"
              "\"submitted_source\":%u,\"native_submitted\":%llu,\"submitted_native_frame\":%llu,"
@@ -9077,7 +9099,8 @@ static void handle_openxr_stats(int id, const char *json) {
              s.stage?s.stage:"off",s.runtime,s.last_failure?s.last_failure:"",s.last_failure_result,
              (unsigned long long)s.view_flags,(unsigned long long)s.waits,
              (unsigned long long)s.submitted,(unsigned long long)s.empty,
-             (unsigned long long)s.failures,(unsigned long long)s.predicted_time,s.ipd_m,s.units_per_meter,
+              (unsigned long long)s.failures,(unsigned long long)s.predicted_time,s.ipd_m,
+              s.origin_up_dot,s.origin_inversion_streak,s.origin_ambiguous,s.units_per_meter,
              (unsigned long long)s.gl_version,(unsigned long long)s.min_gl_version,
              (unsigned long long)s.max_gl_version,(long long)s.swapchain_format,s.submitted_layer,
              (unsigned long long)s.quad_submitted,s.submitted_source,
@@ -9197,6 +9220,32 @@ static void handle_openxr_hands_override(int id,const char *json) {
 /* Debug-only synthetic action sample; axes are signed thousandths [-1000,1000].
  * Explicitly tagged so desktop controls cannot be mistaken for device evidence. */
 #ifndef PSX_NO_DEBUG_TOOLS
+/* openxr_pose_override: test-only synthetic head motion in millimetres, with an optional pitch_deg
+ * look angle, for headless head-motion checks. clear=1 disarms. Each call is absolute. The pitch is
+ * what reaches the defects that only appear when looking down, which no translation can show. */
+static void handle_openxr_pose_override(int id,const char *json) {
+    extern int psx_openxr_pose_override(double,double,double);
+    extern int psx_openxr_pose_pitch_override(double);
+    extern void psx_openxr_pose_clear(void);
+    if(json_get_int(json,"clear",0)){ psx_openxr_pose_clear(); send_fmt("{\"id\":%d,\"ok\":true,\"cleared\":1}",id); return; }
+    int x=json_get_int(json,"x_mm",0),y=json_get_int(json,"y_mm",0),z=json_get_int(json,"z_mm",0);
+    double pitch_deg=(double)json_get_int(json,"pitch_deg",0) +
+        (double)json_get_int(json,"pitch_mdeg",0)/1000.0;
+    /* Validate the complete absolute request before changing either override. */
+    if(x < -10000 || x > 10000 || y < -10000 || y > 10000 ||
+       z < -10000 || z > 10000 || pitch_deg < -90.0 || pitch_deg > 90.0) {
+        send_err(id,"pose must be within +/-10 m and pitch within +/-90 degrees");return;
+    }
+
+    if(!psx_openxr_pose_override((double)x/1000.0,(double)y/1000.0,(double)z/1000.0)){
+        send_err(id,"pose offset must be finite and within +/-10 m");return;
+    }
+    if(!psx_openxr_pose_pitch_override((double)pitch_deg)){
+        send_err(id,"pitch_deg must be finite and within +/-90");return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"x_mm\":%d,\"y_mm\":%d,\"z_mm\":%d,\"pitch_deg\":%.6f}",id,x,y,z,pitch_deg);
+}
+
 static void handle_openxr_input_override(int id,const char *json) {
     if(json_get_int(json,"clear",0)) psx_openxr_input_override(NULL);
     else {
@@ -9271,6 +9320,12 @@ static void handle_stereo_stats(int id, const char *json) {
              "\"last_eye\":%d,\"last_failure\":\"%s\","
              "\"last_failed_attempt\":%llu,\"last_failed_eye\":%d,"
              "\"last_failed_reason\":\"%s\",\"retained_pair_id\":%llu,"
+             "\"shedding\":%d,\"shed_streak\":%llu,\"shed_streak_ms\":%u,"
+             "\"shed_streak_max\":%llu,\"stale_frames\":%llu,\"budget_resets\":%llu,"
+             "\"budget_ms\":%.3f,\"budget_source\":%u,"
+             "\"checkpoint_saves\":%llu,\"checkpoint_reuses\":%llu,"
+             "\"checkpoint_ram_bytes\":%llu,"
+             "\"last_pair_age_ms\":%llu,"
              "\"last_pair_ms\":%.3f,\"avg_pair_ms\":%.3f,"
              "\"published\":{\"valid\":%u,\"pair_id\":%llu,\"guest_cycle\":%llu,"
              "\"width\":%u,\"height\":%u,\"staged_mask\":%u,\"mode\":%u,\"presents\":%llu},\"captures\":%s}",
@@ -9286,6 +9341,13 @@ static void handle_stereo_stats(int id, const char *json) {
              (unsigned long long)s.last_failed_attempt, s.last_failed_eye,
              s.last_failed_reason ? s.last_failed_reason : "",
              (unsigned long long)s.retained_pair_id,
+             s.shedding, (unsigned long long)s.shed_streak, s.shed_streak_ms,
+             (unsigned long long)s.shed_streak_max, (unsigned long long)s.stale_frames,
+             (unsigned long long)s.budget_resets, s.budget_ms, s.budget_source,
+             (unsigned long long)s.checkpoint_saves,
+             (unsigned long long)s.checkpoint_reuses,
+             (unsigned long long)s.checkpoint_ram_bytes,
+             (unsigned long long)s.last_pair_age_ms,
              s.last_pair_ms, s.avg_pair_ms, g.valid, (unsigned long long)g.pair_id,
              (unsigned long long)g.guest_cycle, g.width, g.height, g.staged_mask,
              g.mode, (unsigned long long)g.presents, captures);
@@ -9310,6 +9372,34 @@ static void handle_render_pass_dump(int id, const char *json)
     if (!json_get_str(json, "path", dir, sizeof dir)) { send_err(id, "missing path"); return; }
     gl_renderer_pass_dump_arm(dir, count);
     send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
+}
+
+/* frame_trace [format=json|chrome] [max=<n>]: the opt-in stereo/OpenXR frame
+ * trace (frame_trace.c). Capturing requires PSX_FRAME_TRACE=1 at launch; this
+ * command only reads the ring and never runs in the frame path. `max` bounds the
+ * newest records returned (default 240). Both formats are JSON objects, so the
+ * reply embeds the export verbatim. */
+static void handle_frame_trace(int id, const char *json) {
+    char format[16] = "json";
+    int max = json_get_int(json, "max", 240);
+    (void)json_get_str(json, "format", format, sizeof format);
+    if (max < 0) max = 0;
+    int chrome = strcmp(format, "chrome") == 0;
+    int need = chrome ? psx_frame_trace_to_chrome_json(NULL, 0, (uint32_t)max)
+                      : psx_frame_trace_to_json(NULL, 0, (uint32_t)max);
+    if (need <= 0) { send_err(id, "frame trace export failed"); return; }
+    char *buf = (char *)malloc((size_t)need + 1);
+    if (!buf) { send_err(id, "out of memory"); return; }
+    if (chrome) (void)psx_frame_trace_to_chrome_json(buf, need + 1, (uint32_t)max);
+    else (void)psx_frame_trace_to_json(buf, need + 1, (uint32_t)max);
+    send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"capacity\":%u,"
+             "\"count\":%llu,\"dropped\":%llu,\"missing\":%llu,"
+             "\"format\":\"%s\",\"max\":%d,\"trace\":%s}",
+             id, psx_frame_trace_enabled(), psx_frame_trace_capacity(),
+             (unsigned long long)psx_frame_trace_committed(),
+             (unsigned long long)psx_frame_trace_dropped(),
+             (unsigned long long)psx_frame_trace_missing(), format, max, buf);
+    free(buf);
 }
 
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
@@ -16168,6 +16258,7 @@ static const CmdEntry s_commands[] = {
     { "ws_hud_mode",       handle_ws_hud_mode },
     { "ws_tag_stats",      handle_ws_tag_stats },
     { "mod_counters",      handle_mod_counters },
+    { "mod_cmd",           handle_mod_cmd },
     { "host_launch_timings", handle_host_launch_timings },
     { "resident_status",   handle_resident_status },
     { "netplay_status",    handle_netplay_status },
@@ -16231,9 +16322,11 @@ static const CmdEntry s_commands[] = {
 #endif
     { "openxr_hands", handle_openxr_hands },
 #ifndef PSX_NO_DEBUG_TOOLS
-    { "openxr_hands_override", handle_openxr_hands_override },
+    { "openxr_hands_override",    handle_openxr_hands_override },
+    { "openxr_pose_override",     handle_openxr_pose_override },
 #endif
     { "stereo_stats", handle_stereo_stats },
+    { "frame_trace", handle_frame_trace },
     { "stereo_dump", handle_stereo_dump },
     { "render_pass_dump",  handle_render_pass_dump },
     { "render_pass_refuse", handle_render_pass_refuse },

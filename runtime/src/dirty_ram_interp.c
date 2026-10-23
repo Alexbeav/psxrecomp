@@ -1973,8 +1973,11 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         {
             uint32_t vanilla = (cpu->gpr[rs] < cpu->gpr[rt]) ? 1u : 0u;
             uint32_t kept = vanilla;
-            if (!psx_ws_cull_scale_site(pc, insn, cpu->gpr[rs], cpu->gpr[rt], &kept))
-                (void)psx_ws_cull_keep_site(pc, insn, vanilla, &kept);
+            /* Same precedence as the code generator: scale and keep sites first. */
+            if (!psx_ws_cull_scale_site(pc, insn, cpu->gpr[rs], cpu->gpr[rt], &kept) &&
+                !psx_ws_cull_keep_site(pc, insn, vanilla, &kept) &&
+                psx_ws_is_cull_screen_x_site(pc))
+                kept = (uint32_t)psx_ws_cull_sltu_band(cpu->gpr[rs], cpu->gpr[rt]);
             cpu->gpr[rd] = kept;
             psx_pgxp_alu(cpu, insn, kept, 0, 0);
             cpu->gpr[0] = 0;
@@ -2092,8 +2095,11 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             /* Widescreen render-funnel LEFT-edge widen (auto_screen_x): a
              * classified funnel bltz rejects only past the revealed margin.
              * Identity at 4:3 (margin 0). Gated per-game, cheap cached scan. */
-            if (psx_ws_is_cull_bltz_site(pc) ||
-                (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc)))
+            if (psx_ws_is_cull_bltz_site(pc))
+                taken = psx_ws_cull_bltz(cpu->gpr[rs]);
+            else if (psx_ws_is_cull_screen_x_site(pc))
+                taken = psx_ws_cull_bltz_hi(cpu->gpr[rs]);
+            else if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
                 taken = psx_ws_cull_bltz(cpu->gpr[rs]);
             else
                 taken = ((int32_t)cpu->gpr[rs] <  0);
@@ -2200,6 +2206,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
                             ((uint32_t)simm + 2u *
                              (uint32_t)psx_ws_activation_margin())) ? 1u : 0u;
         }
+        else if (psx_ws_is_cull_screen_x_site(pc))
+            cpu->gpr[rt] = (uint32_t)psx_ws_cull_sltiu(cpu->gpr[rs], imm);
         else if (psx_ws_auto_cull_on() && psx_ws_is_cull_w_imm(imm) && ws_cull_site(pc))
             cpu->gpr[rt] = (uint32_t)psx_ws_cull_sltiu(cpu->gpr[rs], imm);
         else
@@ -2235,6 +2243,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x0F: /* LUI rt, imm */
         if (psx_ws_is_signed_x_bound_site(pc, insn))
             cpu->gpr[rt] = (uint32_t)psx_ws_player_x_bound((int32_t)(imm << 16));
+        else if (psx_ws_is_cull_screen_x_site(pc))
+            cpu->gpr[rt] = psx_ws_cull_lui_hi(imm);
         else
             cpu->gpr[rt] = imm << 16;
         psx_pgxp_alu(cpu, insn, cpu->gpr[rt], 0, 0);
@@ -2267,8 +2277,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             if (rd == 13) {
                 /* Cause register: only the software-interrupt pending bits
                  * [9:8] are writable; hardware IP [15:10], ExcCode [6:2] and
-                 * BD [31] are read-only from software (psx-spx, matches
-                 * PCSX-Redux/Beetle MTC0). */
+                 * BD [31] are read-only from software (PSX-SPX
+                 * cpuspecifications, "cop0r13 - CAUSE - (Read-only, except,
+                 * Bit8-9 are R/W)"). */
                 cpu->cop0[13] = (cpu->cop0[13] & ~0x0300u) | (val & 0x0300u);
             } else {
                 cpu->cop0[rd] = val;

@@ -62,6 +62,8 @@ extern "C" void gte_test_execute_reference(CPUState *cpu, uint32_t cmd);
 /* gte.cpp runtime dependencies that are irrelevant to register-transfer tests. */
 extern "C" int gpu_ws_present_native_43(void) { return 0; }
 static int g_test_precise_nclip_enabled;
+static int g_test_render_projective;
+extern "C" int gpu_render_projective_enabled(void) { return g_test_render_projective; }
 extern "C" int gpu_ws_precise_nclip_enabled(void) {
     return g_test_precise_nclip_enabled;
 }
@@ -1412,6 +1414,54 @@ int main() {
         }
     }
     gte_set_fov_scale(1,1);
+    pgxp_set_projection_tracking(0);
+    // VR homogeneous provenance spans the eye plane, including fractional MACs.
+    PSXModRenderView eye = {}; eye.struct_size=sizeof eye; eye.projection=1;
+    eye.rotation_q12[0]=eye.rotation_q12[4]=eye.rotation_q12[8]=4096;
+    eye.fx_q16=200*65536; eye.fy_q16=100*65536;
+    eye.cx_delta_q16=10*65536; eye.cy_delta_q16=-5*65536;
+    gte_render_pose_set(&eye); pgxp_set_projection_tracking(1);
+    for (int depth : {-158,-1,0,1,149,900}) {
+        GTEState native{}, enhanced{};
+        native.RT[0][0]=native.RT[1][1]=native.RT[2][2]=4096;
+        native.RT[0][1]=1; native.V0[0]=100; native.V0[1]=30;
+        native.TR[2]=depth; native.H=400;
+        native.OFX=256*65536; native.OFY=120*65536;
+        enhanced=native;
+        g_test_render_projective=0;
+        PSXRecomp::GTE::gte_rtps(&native,0x0180001u);
+        g_test_render_projective=1;
+        PSXRecomp::GTE::gte_rtps(&enhanced,0x0180001u);
+        PGXPProjection p;
+        CHECK(!std::memcmp(&native,&enhanced,sizeof native));
+        CHECK(pgxp_get_gte_projection(2,enhanced.SXY[2],&p));
+        CHECK(p.z==depth && p.near_z==1);
+        CHECK(std::fabs(p.x-(266.0*depth+(100+30.0/4096)*200))<0.02);
+        CHECK(std::fabs(p.y-(115.0*depth+3000))<0.02);
+    }
+    // A tenth of a camera unit survives even though the architectural pose rounds to zero.
+    eye.precise=1; eye.rotation[0]=eye.rotation[4]=eye.rotation[8]=1;
+    eye.translation[0]=17; // precision replaces the integer pose; never adds it twice.
+    eye.translation_precise[0]=.1; gte_render_pose_set(&eye);
+    GTEState fractional{};
+    fractional.RT[0][0]=fractional.RT[1][1]=fractional.RT[2][2]=4096;
+    fractional.V0[2]=1000; fractional.H=400;
+    PSXRecomp::GTE::gte_rtps(&fractional,0x0180001u);
+    PGXPProjection exact;
+    CHECK(pgxp_get_gte_projection(2,fractional.SXY[2],&exact));
+    CHECK(std::fabs(exact.x-(10*1000+20))<.05);
+    eye.precise=0;eye.translation[0]=0;gte_render_pose_set(&eye);
+    for (int winding : {1,-1}) {
+        GTEState face{};
+        face.RT[0][0]=face.RT[1][1]=face.RT[2][2]=4096;
+        face.V0[0]=-20*winding;face.V0[1]=10;face.V0[2]=100;
+        face.V1[0]=20*winding;face.V1[1]=10;face.V1[2]=100;
+        face.V2[1]=10;face.V2[2]=-10;face.H=400;
+        PSXRecomp::GTE::gte_rtpt(&face,0x0280030u);
+        PSXRecomp::GTE::gte_nclip(&face,0x1400006u);
+        CHECK((face.MAC0>0)-(face.MAC0<0)==winding);
+    }
+    g_test_render_projective=0; eye={}; gte_render_pose_set(&eye);
     pgxp_set_projection_tracking(0);
     std::puts("PASS: canonical GTE register helpers match GTEState transfer oracle");
     return 0;

@@ -447,6 +447,8 @@ uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w);
  * 4:3. */
 uint32_t psx_ws_cull_lui_hi(uint32_t imm);
 int  psx_ws_cull_bltz_hi(uint32_t v);
+void gpu_ws_set_cull_screen_x_sites(const uint32_t *sites, int nsites);
+int  psx_ws_is_cull_screen_x_site(uint32_t pc);
 int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm);
 /* True if a run of instruction words carries the screen-extent reject signature
  * (a width compare AND a height compare from the configured immediate sets).

@@ -1689,8 +1689,8 @@ uint32_t psx_read_word(uint32_t addr) {
 }
 /* Physical address of a CPU/DMA main-RAM access. Fold KUSEG/KSEG0/KSEG1 first
  * (0x1FFFFFFF), then fold the 2nd-4th main-RAM mirrors: real hardware mirrors the
- * 2 MB DRAM across the WHOLE 0..0x7FFFFF physical window (Beetle libretro.cpp:874
- * `A < 0x00800000` routes to main RAM; psx-spx "2048K RAM ... mirrored 4x"). A game
+ * 2 MB DRAM across the WHOLE 0..0x7FFFFF physical window (PSX-SPX memorymap,
+ * "Memory Mirrors": "2MB RAM can be mirrored to the first 8MB"). A game
  * may legitimately place its stack at the top of that window — Tsumu Light computes
  * sp = (ramtop-8)|0x80000000 with its ramtop constant 0x00800000, giving sp=0x807FFFF8
  * (top of the 4th mirror). Without this fold those accesses miss DRAM (`< RAM_SIZE`
@@ -1701,9 +1701,9 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
     /* KSEG2 cache control — before physical translation. */
     if (addr == 0xFFFE0130u) return cache_ctrl;
     /* KSEG2 (0xC0000000+): only cache control (0xFFFE0130, above where
-     * applicable) exists there. Real hardware maps NOTHING else — Beetle
-     * (cpu.cpp addr_mask[6..7]=0xFFFFFFFF) leaves KSEG2 addresses unmasked
-     * so they fall to unmapped space and the access is a no-op. Our flat
+     * applicable) exists there. PSX-SPX memorymap ("Memory Map") lists only
+     * the cache control registers at FFFE0000h in KSEG2; every other KSEG2
+     * access is unmapped and is a no-op here, as on the Beetle reference. Our flat
      * 0x1FFFFFFF masking routed KSEG2 garbage onto LIVE registers: Tomba2's
      * attract runs a BIOS bzero over a wild 0xDF80xxxx pointer, which zeroed
      * the SIO/memctrl I/O block byte-by-byte and then hit the unmapped-MMIO

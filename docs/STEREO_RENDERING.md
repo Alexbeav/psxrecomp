@@ -16,9 +16,18 @@ that must be cleared after watchdog rollback.
 
 `period_vblanks` describes the game's draw cadence (1..8). An EMA of complete-pair
 host cost is compared with 80% of that cadence, using the runtime's live NTSC/PAL
-period. Expensive work is shed as a complete pair; every thirtieth request retries
-to recover a stale estimate. This is a conservative cadence budget, not a measured
-headset idle budget. Allocating or slow initial pairs may exceed it; completed
+period, unless `PSX_STEREO_SHED_BUDGET_MS` supplies the real headset deadline (the
+VBlank cadence is a guest-budget fallback, not an OpenXR display deadline).
+Expensive work is shed as a complete pair, never as a single eye, and the previous
+complete pair is retained. Shedding is bounded both by wall clock
+(`PSX_STEREO_SHED_PROBE_MS`, default 250 ms) and by a consecutive count
+(`PSX_STEREO_SHED_MAX_STREAK`, default 8), so a stale estimate cannot suppress
+indefinitely: whichever bound trips first forces a probe, and the probe's
+measurement replaces the estimate rather than blending into it, so a single spike
+ends after one bounded streak. Recovery uses a hysteresis band
+(`PSX_STEREO_SHED_HYSTERESIS`, default 0.9) and scene/mode transitions reset the
+estimate. `PSX_STEREO_SHED=0` disables shedding entirely for a baseline
+diagnostic. Allocating or slow initial pairs may exceed the budget; completed
 guest work cannot be preempted by a host-time budget. Guest-cycle watchdogs remain
 the runaway bound.
 
@@ -59,8 +68,10 @@ sees it. `test_render_pose` covers the override together with `fov_scale`.
 TCP inspection:
 
 - `stereo_stats`: pair outcomes, eye entry cycles/state hashes under VERIFY,
-  sampled view offsets, latched failed attempt/eye/retained pair, and published
-  pair metadata. `render_pass_stats` continues to
+  sampled view offsets, latched failed attempt/eye/retained pair, published
+  pair metadata, and the shedding policy (`shedding`, `shed_streak`,
+  `shed_streak_ms`, `shed_streak_max`, `stale_frames`, `budget_resets`,
+  `last_pair_age_ms`). `render_pass_stats` continues to
   expose shared transaction checks, aborts, leaks and dropped stores; its eye
   transactions also increment pass counters.
 - `stereo_dump path=<absolute-directory> count=N`: arm dumps of the next N

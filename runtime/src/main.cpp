@@ -82,6 +82,9 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #ifndef PSX_MAX_PLAYERS
 #define PSX_MAX_PLAYERS 2
 #endif
+#ifndef PSX_MEMCARD_SLOTS
+#define PSX_MEMCARD_SLOTS 2   /* runtime.cmake MEMCARD_SLOTS */
+#endif
 #include "psx_netplay.h"
 #include "psx_stick.h"       /* radial SDL-stick -> DualShock response transform */
 #include "psx_trigger.h"     /* continuous SDL trigger -> 0..255 magnitude */
@@ -1262,6 +1265,23 @@ static int           g_video_post_aa = 0;   /* [video] antialiasing_mode / PSX_A
 static float         g_video_bloom = 0.0f;  /* [video] bloom (PSX_BLOOM overrides) */
 static std::string   g_video_post_shader;   /* [video] post_shader (PSX_POST_SHADER overrides) */
 static int           g_video_ss_milli = 1000; /* [video] supersample / PSX_SUPERSAMPLE */
+
+/* [video] match_display_max_lines (0 = none): the display height Match
+ * display, its dynamic-resolution floor and the quality detection resolve
+ * against, capped. On an 8K panel Match display x1.5 asks 27x, past the
+ * full-VRAM surface, where the high-resolution window engages and dynamic
+ * resolution cannot step; a title can cap it at, say, 4K lines. */
+static int g_video_match_max_lines = 0;
+static int g_video_ss_disable_at_lines = 0;
+static int display_supersample(SDL_Window *window) {
+    return psx_ir_display_supersample(g_video_ss_milli,
+        psx_sdl_display_pixel_height(window), g_video_ss_disable_at_lines);
+}
+static int match_display_px_h(SDL_Window *window) {
+    const int h = psx_sdl_display_pixel_height(window);
+    return (g_video_match_max_lines > 0 && h > g_video_match_max_lines)
+               ? g_video_match_max_lines : h;
+}
 /* FMV present reconstruction (VIDEO_FMV_FILTER_*), pushed to the GL renderer
  * once the config is resolved. Only consulted while g_video_aa is on. */
 static int           g_video_fmv_filter = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
@@ -1439,9 +1459,8 @@ static int effective_internal_resolution(void) {
 static void apply_internal_resolution(int display_px_h) {
     const int preset = effective_internal_resolution();
     if (preset == PSX_IR_UNSET) return;
-    g_video_scale = psx_resolve_internal_scale_ss(preset, g_video_ref_lines,
-                                                  display_px_h, video_scale_ceiling(),
-                                                  g_video_ss_milli);
+    g_video_scale = psx_resolve_internal_scale_ss_cap(preset, g_video_ref_lines,
+        display_px_h, video_scale_ceiling(), display_supersample(nullptr), g_video_match_max_lines);
 }
 
 /* The value the launcher row starts on: the preset, or the legacy factor shown
@@ -1771,6 +1790,7 @@ static int present_effective_swap_interval(void);
 static int present_should_wall_pace(void);
 static void apply_present_cadence(void);
 static void refresh_host_display_cadence(int force_log, int force_probe);
+static void log_present_cadence(void);
 
 
 /* FMV auto-skip detection hooks (cdrom.c / mdec.c). */
@@ -3939,8 +3959,14 @@ static void sync_guest_cadence_to_video_standard(void) {
                 psx_video_timing_is_pal() ? "PAL" : "NTSC",
                 1000.0 / period_ms);
 #ifndef PSX_SDL_NO_RENDER
-    if (sdl_window)
-        refresh_host_display_cadence(1, 0);
+    /* Force the probe too: the once-a-second probe throttle returns before
+     * force_log is looked at, so a standard switch inside that second (PAL
+     * boot -> NTSC title) kept the boot decision -- driver vsync off with a
+     * matching 60 Hz panel, an unsynchronised present for the whole session. */
+    if (sdl_window) {
+        refresh_host_display_cadence(1, 1);
+        log_present_cadence();
+    }
     if (g_frame_interpolation && g_gl_active)
         gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
                                       (double)g_frame_interpolation_fps,
@@ -10184,7 +10210,7 @@ static void dynres_setup(void) {
     int floor_s = psx_dynres_floor_scale(dynres_min_value(),
                                          effective_internal_resolution(),
                                          g_video_ref_lines,
-                                         psx_sdl_display_pixel_height(nullptr),
+                                         match_display_px_h(nullptr),
                                          ceiling);
     if (floor_s > ceiling) floor_s = ceiling;
     DynresParams params;
@@ -16460,7 +16486,7 @@ namespace {
     void quality_fill_game_info(RecompLauncherCGameInfo* gi) {
         if (!g_quality_offered) return;
         quality_publish_strings();
-        g_quality_display_h = psx_sdl_display_pixel_height(nullptr);
+        g_quality_display_h = match_display_px_h(nullptr);
         gi->quality_offered_mask = (int)g_quality_offered;
         gi->quality_detected = (g_quality.detected >= 0 && g_quality.detected < PSX_QUALITY_COUNT)
             ? g_quality.detected + 1 : 0;
@@ -16552,6 +16578,9 @@ namespace {
          * the generic Display -> View mode launcher row. */
         gi->widescreen_supported = 0;
         gi->num_players = game_players_n;
+#if defined(RECOMP_LAUNCHER_HAS_MEMCARD_SLOTS)
+        gi->memcard_slots = PSX_MEMCARD_SLOTS;
+#endif
 #if defined(RECOMP_LAUNCHER_HAS_SHARED_GAMEPAD) && !defined(PSX_NO_DEBUG_TOOLS)
         gi->allow_shared_gamepad = 1;
 #endif
@@ -17089,7 +17118,7 @@ static void recomp_overlay_setup(const char* argv0, const std::string& title) {
         g_ovl_q_reason = g_quality.reason;
         g_ovl_q_detected = (g_quality.detected >= 0 && g_quality.detected < PSX_QUALITY_COUNT)
             ? g_quality.detected + 1 : 0;
-        g_quality_display_h = psx_sdl_display_pixel_height(nullptr);
+        g_quality_display_h = match_display_px_h(nullptr);
         {
             std::lock_guard<std::mutex> lk(g_ovl_mu);
             g_ovl_q_sel.reset();
@@ -17834,6 +17863,8 @@ int main(int argc, char** argv) {
                 gc.runtime.video_depth24_trailing_margin;
             g_video_internal_res = gc.runtime.video_internal_resolution;
             g_video_ref_lines    = gc.runtime.video_resolution_reference_lines;
+            g_video_match_max_lines = gc.runtime.video_match_display_max_lines;
+            g_video_ss_disable_at_lines = gc.runtime.video_supersample_disable_at_lines;
             g_video_dynres       = gc.runtime.video_dynamic_resolution ? 1 : 0;
             g_video_dynres_min   = gc.runtime.video_dynamic_resolution_min;
             if (gc.runtime.video_window_width > 0) {
@@ -18139,6 +18170,9 @@ int main(int argc, char** argv) {
              * must never have its live code scanned and rewritten. */
             gpu_ws_set_auto_hooks(gc.ws_auto_screen_x_cull ? 1 : 0,
                                   gc.ws_auto_backdrop_preload ? 1 : 0);
+            gpu_ws_set_cull_screen_x_sites(
+                gc.ws_cull_screen_x_sites.data(),
+                (int)gc.ws_cull_screen_x_sites.size());
             if (!gc.ws_cull_w_imms.empty() || !gc.ws_cull_h_imms.empty())
                 gpu_ws_set_cull_imms(gc.ws_cull_w_imms.data(), (int)gc.ws_cull_w_imms.size(),
                                      gc.ws_cull_h_imms.data(), (int)gc.ws_cull_h_imms.size());
@@ -18996,7 +19030,7 @@ int main(int argc, char** argv) {
             const int ir_preset_seeded = g_video_internal_res;
             const int ir_ss_seeded = psx_ir_launcher_seed_supersampling(
                 kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
-                g_video_ref_lines, psx_sdl_display_pixel_height(nullptr));
+                g_video_ref_lines, match_display_px_h(nullptr));
             seed.supersampling = ir_ss_seeded;            seed.has_supersampling = true;
             int ir_row_result = PSX_IR_UNSET;   /* the row's pick, when it has one */
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
@@ -19872,7 +19906,7 @@ int main(int argc, char** argv) {
                     const PsxIrAdopted ir = psx_ir_adopt_launcher(
                         kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,
                         seed.supersampling, ir_row_result, g_video_ref_lines,
-                        psx_sdl_display_pixel_height(nullptr), video_scale_ceiling());
+                        match_display_px_h(nullptr), video_scale_ceiling());
                     g_video_internal_res = ir.preset;
                     g_video_scale        = ir.scale;
                     seed.supersampling   = ir.save_ss;
@@ -20324,10 +20358,11 @@ session_reboot:
         else if (!std::strcmp(e, "fxaa_hq")) g_video_post_aa = GL_POST_AA_FXAA_HQ;
         else std::fprintf(stdout, "psxrecomp: PSX_AA_MODE=%s not understood (off, fxaa, fxaa_hq)\n", e);
     }
-    if (g_video_ss_milli != 1000)
+    const int effective_ss = display_supersample(nullptr);
+    if (!g_video_ss_disable_at_lines && effective_ss != 1000)
         std::fprintf(stdout, "psxrecomp: supersample %.3gx on the internal-resolution target\n",
-                     g_video_ss_milli / 1000.0);
-    apply_internal_resolution(psx_sdl_display_pixel_height(nullptr));
+                     effective_ss / 1000.0);
+    apply_internal_resolution(match_display_px_h(nullptr));
     if (g_video_scale < 1) g_video_scale = 1;
     if (const char* e = std::getenv("PSX_DYNRES"))
         g_video_dynres_env = (*e && *e != '0') ? 1 : 0;
@@ -20715,9 +20750,12 @@ session_reboot:
     {
         std::string mc1 = memcard1_path.string();
         std::string mc2 = memcard2_path.string();
+        /* A one-slot title (MEMCARD_SLOTS 1) never reads port 2: leave it empty
+         * whatever settings.toml or the launcher stored. */
+        const bool slot2_on = memcard2_enabled && PSX_MEMCARD_SLOTS >= 2;
         const MemcardSlotConfig slots[2] = {
             { mc1.empty() ? nullptr : mc1.c_str(), memcard1_enabled ? 1 : 0 },
-            { mc2.empty() ? nullptr : mc2.c_str(), memcard2_enabled ? 1 : 0 },
+            { mc2.empty() ? nullptr : mc2.c_str(), slot2_on ? 1 : 0 },
         };
         memcard_init_slots(memcard_dir_str.c_str(), slots);
     }
@@ -20964,17 +21002,22 @@ session_reboot:
         /* Match display: the monitor's pixel height, now that the window says
          * which monitor. glb_set_scale only records the request; the hr
          * surface is allocated at context init below. */
-        if (effective_internal_resolution() == PSX_IR_DISPLAY && g_video_scale_applies) {
-            const int dh = psx_sdl_display_pixel_height(sdl_window);
-            const int s = psx_resolve_internal_scale_ss(PSX_IR_DISPLAY, g_video_ref_lines,
-                                                        dh, GL_MAX_INTERNAL_SCALE,
-                                                        g_video_ss_milli);
+        const int ir = effective_internal_resolution();
+        if (g_video_scale_applies && ir != PSX_IR_UNSET &&
+            (ir == PSX_IR_DISPLAY || g_video_ss_disable_at_lines > 0)) {
+            const int dh = match_display_px_h(sdl_window);
+            const int ss = display_supersample(sdl_window);
+            const int s = psx_resolve_internal_scale_ss_cap(ir, g_video_ref_lines,
+                dh, GL_MAX_INTERNAL_SCALE, ss, g_video_match_max_lines);
             gr_set_scale(s);
             g_video_requested_scale = s;
-            std::fprintf(stdout, "psxrecomp: internal resolution Match display: "
-                         "%d px -> %dx requested\n", dh, s);
+            const char *label = psx_ir_label_for(ir);
+            std::fprintf(stdout, "psxrecomp: internal resolution %s: "
+                         "%d px -> %dx requested (supersample %.3gx)\n",
+                         label ? label : "custom", dh, s, ss / 1000.0);
         }
         gl_renderer_set_swap_interval(present_effective_swap_interval()); /* applied at context init */
+
         /* Dynamic resolution: the surfaces are allocated at the scale above
          * (the ceiling) and the level steps under it (dynres_setup). */
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -20986,7 +21029,7 @@ session_reboot:
         if (dbg_live_scale) {
             const int ds = psx_resolve_internal_scale(
                 PSX_IR_DISPLAY, g_video_ref_lines,
-                psx_sdl_display_pixel_height(sdl_window), GL_MAX_INTERNAL_SCALE);
+                match_display_px_h(sdl_window), GL_MAX_INTERNAL_SCALE);
             if (ds > dbg_start_scale) gr_set_scale(ds);
         }
 #else
@@ -21831,7 +21874,7 @@ soft_return_lobby:
         const int ir_preset_seeded = g_video_internal_res;
         const int ir_ss_seeded = psx_ir_launcher_seed_supersampling(
             kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
-            g_video_ref_lines, psx_sdl_display_pixel_height(nullptr));
+            g_video_ref_lines, match_display_px_h(nullptr));
         ls.supersampling = ir_ss_seeded;
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
         ls.internal_resolution = internal_resolution_for_launcher();
@@ -22161,7 +22204,7 @@ soft_return_lobby:
             const PsxIrAdopted ir = psx_ir_adopt_launcher(
                 kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,
                 ls.supersampling, ir_row_result, g_video_ref_lines,
-                psx_sdl_display_pixel_height(nullptr),
+                match_display_px_h(nullptr),
                 ls.renderer == 1 ? GL_MAX_INTERNAL_SCALE : SW_MAX_INTERNAL_SCALE);
             /* Persist controller (and rematch video) choices without wiping
              * the rest of settings.toml — merge into the on-disk file. */

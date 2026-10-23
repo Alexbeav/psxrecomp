@@ -486,6 +486,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/starvation_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/guest_cycle_profile.c
     ${PSXRECOMP_ROOT}/runtime/src/latency_ring.c
+    ${PSXRECOMP_ROOT}/runtime/src/frame_trace.c
+    ${PSXRECOMP_ROOT}/runtime/src/stereo_shed_policy.c
     ${PSXRECOMP_ROOT}/runtime/src/present_image_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_timeline.c
     ${PSXRECOMP_ROOT}/runtime/src/data_shards.c
@@ -907,6 +909,13 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
                     else()
                         set(_psxrt_stale_sev WARNING)
                     endif()
+                    if(_psxrt_chk_stem MATCHES "^SCPH")
+                        set(_psxrt_stale_publish
+                            "Retail dump/generated outputs stay local and gitignored; do not commit them.")
+                    else()
+                        set(_psxrt_stale_publish
+                            "Commit the regenerated ${_psxrt_chk_stem}_*.c and .emitter.sha together.")
+                    endif()
                     message(${_psxrt_stale_sev}
                         "BIOS generated/${_psxrt_chk_stem}_*.c is STALE vs the recompiler "
                         "emitter (fingerprint mismatch).\n"
@@ -915,7 +924,7 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
                         "  The committed C may not match the current emitter source, "
                         "seeds or profile.\n"
                         "  Fix:  tools/regen_bios.sh --config bios/${_psxrt_chk_stem}.toml "
-                        "and commit generated/${_psxrt_chk_stem}_*.c + .emitter.sha\n"
+                        "\n  ${_psxrt_stale_publish}\n"
                         "  (Suppress locally: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
                 endif()
             endif()
@@ -1446,6 +1455,18 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
     endif()
 endfunction()
 
+# Memory-card slots a title uses (MEMCARD_SLOTS, default 2). 1 for games that
+# only talk to port 1: the launcher hides slot 2 and the runtime leaves it empty.
+function(psxrt_resolve_memcard_slots out_var value)
+    if(value STREQUAL "")
+        set(value 2)
+    endif()
+    if(NOT "${value}" MATCHES "^[12]$")
+        message(FATAL_ERROR "MEMCARD_SLOTS must be 1 or 2 (got ${value})")
+    endif()
+    set(${out_var} ${value} PARENT_SCOPE)
+endfunction()
+
 function(psxrecomp_add_runtime_target target)
     # PGXP: build this target's objects with -DPSX_PGXP=1 so the PGXP_*()
     # hook macros the emitter writes into ALL generated C become real calls
@@ -1472,6 +1493,7 @@ function(psxrecomp_add_runtime_target target)
         EXE_NAME
         GAME_VERSION
         MAX_PLAYERS
+        MEMCARD_SLOTS
         APP_ICON
         # The title's own mod catalog source directory -- the one shaped like
         # <repo>/mods/preloaded, holding packages/<id>/<version>/manifest.toml
@@ -2003,6 +2025,8 @@ function(psxrecomp_add_runtime_target target)
     endif()
     message(STATUS "psxrecomp ${target}: PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}")
 
+    psxrt_resolve_memcard_slots(PSXRT_MEMCARD_SLOTS "${PSXRT_MEMCARD_SLOTS}")
+
     target_compile_definitions(${target} PRIVATE
         DEFAULT_DEBUG_PORT=${PSXRT_DEBUG_PORT}
         PSX_DEFAULT_BIOS_PATH="${PSXRT_DEFAULT_BIOS_PATH}"
@@ -2018,6 +2042,7 @@ function(psxrecomp_add_runtime_target target)
         PSX_DEFAULT_GAME_CONFIG_PATH="${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
         PSX_WINDOW_TITLE="${PSXRT_WINDOW_TITLE}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
+        PSX_MEMCARD_SLOTS=${PSXRT_MEMCARD_SLOTS}
         FMT_HEADER_ONLY=1
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
@@ -2623,6 +2648,7 @@ endfunction()
 #     LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
 #     APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
 #     MAX_PLAYERS 2
+#     MEMCARD_SLOTS 1          # optional; title only uses memory card port 1
 #     ENABLE_NETPLAY_IF_PRESENT
 #     ENABLE_SETUP_WIZARD
 #     PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"

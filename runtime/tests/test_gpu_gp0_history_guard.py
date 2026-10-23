@@ -236,11 +236,6 @@ GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
 int gl_renderer_texture_banks_supported(void) { return 0; }
 int gl_renderer_select_texture_bank(uint16_t id) { return id == 0; }
 int gl_renderer_select_texture_bank_live_clut(uint16_t id) { return id == 0; }
-void gl_renderer_note_wide_triangle_recovery(int enabled) { (void)enabled; }
-int gl_renderer_projective_supported(void) { return 0; }
-void gl_renderer_draw_projected_triangle(const PSXProjectedVertex vertices[3],
-    uint16_t texpage, uint16_t clut_x, uint16_t clut_y, int raw, int semi, int perspective)
-{ (void)vertices; (void)texpage; (void)clut_x; (void)clut_y; (void)raw; (void)semi; (void)perspective; abort(); }
 uint16_t mod_texture_packet_bank(uint32_t p, const uint32_t *words, uint32_t n)
 { (void)p; (void)words; (void)n; return 0; }
 int mod_texture_packet_precision(uint32_t p, float q[3], float xy[6])
@@ -263,6 +258,12 @@ void crash_trace_note_gpu_fatal(uint32_t opcode, uint32_t word) { (void)opcode; 
 void event_ring_note_gpu_irq(uint32_t stat) { (void)stat; }
 int g_psx_vram_dirty_tracking = 0;
 int g_exec_phase = 0;
+int g_psx_render_pass_active = 0;
+int pgxp_enabled(void) { return 0; }
+int pgxp_cpu_mode(void) { return 0; }
+void pgxp_set_cpu_mode(int enabled) { if (enabled) abort(); }
+void psx_mod_counter_add(const char *name, uint32_t delta)
+{ (void)name; (void)delta; abort(); }
 void gpu_vram_dirty_mark_all(void) {}
 void gpu_vram_dirty_mark_row_impl(uint32_t row) { (void)row; }
 void gpu_vram_dirty_mark_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
@@ -273,6 +274,7 @@ void text_xlate_vram_upload(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 int ws_cull_should_keep(uint32_t addr) { (void)addr; return 1; }
 int ws_ui_group_should_keep(uint32_t addr) { (void)addr; return 1; }
 uint32_t psx_mod_gpu_dma_resolve_address(uint32_t address) { return address; }
+int psx_mod_gpu_dma_memory_contains(uint32_t addr, uint32_t len) { (void)addr; (void)len; return 0; }
 uint32_t psx_gpu_packet_key(uint32_t address) { return address & 0x001FFFFCu; }
 void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
                         int32_t display_width, int dense_menu, int in_place)
@@ -289,8 +291,14 @@ int gte_nclip_native_wide_previous_sign(int32_t mac0, int *sign)
 int pgxp_projection_tracking(void) { return 0; }
 void pgxp_set_projection_tracking(int enabled)
 { if (enabled) abort(); }
+int pgxp_projective_scope_begin(PGXPProjectiveScope *scope)
+{ (void)scope; abort(); }
+void pgxp_projective_scope_end(PGXPProjectiveScope *scope)
+{ (void)scope; abort(); }
 int pgxp_load_projection(uint32_t addr, uint32_t packed, PGXPProjection *out)
 { (void)addr; (void)packed; (void)out; abort(); }
+float pgxp_get_unclamped_depth(uint32_t addr, uint32_t packed)
+{ (void)addr; (void)packed; abort(); }
 int gl_renderer_projective_supported(void) { abort(); }
 void gl_renderer_draw_projected_triangle(const PSXProjectedVertex vertices[3],
     uint16_t texpage, uint16_t cx, uint16_t cy, int raw, int semi, int perspective)
@@ -308,10 +316,6 @@ int gte_fg_source_enabled(void) { return 0; }
 int gte_fg_source_lookup(uint32_t packed, GteFgSrc out[2])
 { (void)packed; (void)out; abort(); }
 void pgxp_set_enabled(int enabled) { (void)enabled; }
-void pgxp_set_projection_tracking(int enabled) { (void)enabled; }
-int pgxp_projection_tracking(void) { return 0; }
-int pgxp_load_projection(uint32_t addr, uint32_t packed, PGXPProjection *out)
-{ (void)addr; (void)packed; (void)out; return 0; }
 int pgxp_get_gte_sxy_checked(uint32_t slot, uint32_t packed, int require_valid,
                              int32_t *x16, int32_t *y16)
 { (void)slot; (void)packed; (void)require_valid; (void)x16; (void)y16; return 0; }
