@@ -128,6 +128,11 @@ int savestate_pending(void);
 
 /* Machine-readable lifecycle receipt for deterministic debug harnesses. */
 void savestate_status_json(char* buf, size_t cap);
+typedef struct PSXSavestateStatus {
+    uint32_t generation;
+    int pending, last_ok, last_load, last_slot;
+} PSXSavestateStatus;
+void savestate_get_status(PSXSavestateStatus* out);
 
 /* 1 once after a successful load restore (before scheduler longjmp). Clears. */
 int savestate_take_load_completed(void);

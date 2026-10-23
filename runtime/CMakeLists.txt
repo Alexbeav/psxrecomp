@@ -50,6 +50,15 @@ if(BUILD_TESTING)
     add_test(NAME debug_socket_shutdown_test COMMAND debug_socket_shutdown_test)
     set_tests_properties(debug_socket_shutdown_test PROPERTIES TIMEOUT 15)
 
+    add_executable(atomic_file_write_test tests/test_atomic_file_write.cpp)
+    target_include_directories(atomic_file_write_test PRIVATE include)
+    target_compile_features(atomic_file_write_test PRIVATE cxx_std_17)
+    add_test(NAME atomic_file_write_test COMMAND atomic_file_write_test)
+
+    add_executable(openxr_ready_state_test tests/test_openxr_ready_state.c)
+    target_include_directories(openxr_ready_state_test PRIVATE include)
+    add_test(NAME openxr_ready_state_test COMMAND openxr_ready_state_test)
+
     add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
     target_include_directories(video_texture_filter_test PRIVATE include)
     add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)

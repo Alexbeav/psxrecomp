@@ -92,3 +92,27 @@ game-specific and must be calibrated independently. This API also works without
 a headset backend; it does not enable a headset mode by default.
 
 The optional headset backend is described in [OPENXR_RENDERING.md](OPENXR_RENDERING.md).
+
+
+## Production startup and performance receipts
+
+`PSX_OPENXR_READY_FILE=<fresh-path>` requests one JSON startup receipt, including
+in builds with `PSX_DEBUG_TOOLS=OFF`. Main publishes through a same-directory
+temporary and atomic replacement, so partial JSON is never visible. An existing
+destination is refused at startup; the caller owns a fresh path and removes it
+afterward. Schema 2 records XR session generations, counters and the savestate
+receipt. When `PSX_LOAD_SLOT` is set, success requires that load to settle
+successfully and a later submission from the current XR session. A failed load
+publishes `ready:false` with `state_load_failed`; session re-init publishes a
+new receipt after its first current-session submission. An invalid, refused, or
+netplay-disabled load request also publishes `ready:false` with a specific error
+instead of being treated as if no load were requested. A game-session reboot
+starts a fresh load lifecycle, so an earlier success cannot authorize the new
+session; the newly staged `PSX_LOAD_SLOT` must settle before readiness can be
+published. Without the variable the reporter immediately becomes a no-op.
+
+`PSX_RUNTIME_PERF_DIAG=1` also prints VR pair/shed/empty/failure totals, the pair
+EMA/last milliseconds and rollback verification totals at its existing configured
+interval (`PSX_RUNTIME_PERF_DIAG_MS`). This exposes production behavior without
+per-instruction debug tracing. The pair average is an EMA, not a percentile.
+`PSX_FRAME_REPORT_MS` remains the production guest-frame cadence measurement.

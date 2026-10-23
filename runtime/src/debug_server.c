@@ -9088,6 +9088,7 @@ static void handle_openxr_stats(int id, const char *json) {
              "\"frame_open\":%u,\"result\":%d,\"stage\":\"%s\",\"runtime\":\"%s\","
              "\"last_failure\":\"%s\",\"last_failure_result\":%d,\"view_flags\":%llu,"
              "\"waits\":%llu,\"submitted\":%llu,\"empty\":%llu,\"failures\":%llu,"
+             "\"session_generation\":%llu,\"submitted_session_generation\":%llu,"
              "\"predicted_time\":%llu,\"ipd_m\":%.6f,\"origin_up_dot\":%.6f,"
              "\"origin_inversion_streak\":%u,\"origin_ambiguous\":%u,\"units_per_meter\":%.6f,"
              "\"gl_version\":%llu,\"min_gl_version\":%llu,\"max_gl_version\":%llu,\"swapchain_format\":%lld,"
@@ -9098,8 +9099,11 @@ static void handle_openxr_stats(int id, const char *json) {
              s.initialized,s.running,s.state,s.tracking,s.frame_open,s.result,
              s.stage?s.stage:"off",s.runtime,s.last_failure?s.last_failure:"",s.last_failure_result,
              (unsigned long long)s.view_flags,(unsigned long long)s.waits,
-             (unsigned long long)s.submitted,(unsigned long long)s.empty,
-              (unsigned long long)s.failures,(unsigned long long)s.predicted_time,s.ipd_m,
+              (unsigned long long)s.submitted,(unsigned long long)s.empty,
+              (unsigned long long)s.failures,
+              (unsigned long long)s.session_generation,
+              (unsigned long long)s.submitted_session_generation,
+              (unsigned long long)s.predicted_time,s.ipd_m,
               s.origin_up_dot,s.origin_inversion_streak,s.origin_ambiguous,s.units_per_meter,
              (unsigned long long)s.gl_version,(unsigned long long)s.min_gl_version,
              (unsigned long long)s.max_gl_version,(long long)s.swapchain_format,s.submitted_layer,

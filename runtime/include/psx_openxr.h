@@ -10,6 +10,7 @@ typedef struct PSXOpenXRStats {
     uint64_t view_flags;
     const char *stage;
     uint64_t waits, submitted, empty, failures, predicted_time;
+    uint64_t session_generation, submitted_session_generation;
     float ipd_m;
     float origin_up_dot;
     uint32_t origin_inversion_streak, origin_ambiguous;

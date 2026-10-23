@@ -303,6 +303,7 @@ static int initialize(void) {
     if(!binding.hDC || !binding.hGLRC){s_stats.stage="opengl_context";return 0;}
     XrSessionCreateInfo sci={XR_TYPE_SESSION_CREATE_INFO};sci.next=&binding;sci.systemId=s_system;
     if(!check(xrCreateSession(s_instance,&sci,&s_session),"session"))return 0;
+    if(++s_stats.session_generation==0)s_stats.session_generation=1;
     if(!input_initialize())return 0;
     XrReferenceSpaceCreateInfo space={XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     space.referenceSpaceType=XR_REFERENCE_SPACE_TYPE_LOCAL;space.poseInReferenceSpace.orientation.w=1;
@@ -798,6 +799,7 @@ int psx_openxr_end(int keep,PSXOpenXRCopy copy) {
                             xr_trace_us(gl_renderer_perf_ticks()-s_pose_sample_ticks));
     psx_frame_trace_xr_cadence(s_display_delta_us, complete);
     if(ok && complete) {
+        s_stats.submitted_session_generation=s_stats.session_generation;
         s_stats.submitted_surfaces=quad?0:((s_surface_mask&1)!=0)+((s_surface_mask&2)!=0);
         s_stats.submitted++;s_stats.submitted_pair_id=s_pair_id;
         s_stats.submitted_guest_cycle=s_pair_cycle;s_stats.submitted_predicted_time=(uint64_t)s_time;
