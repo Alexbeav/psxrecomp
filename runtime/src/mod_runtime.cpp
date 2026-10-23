@@ -59,6 +59,7 @@ extern "C" const char* host_launch_timing_stage_name(uint32_t stage) {
 #include <string>
 #include <system_error>
 #include <vector>
+#include <type_traits>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -110,6 +111,8 @@ bool preparation_continues(float fraction, const char* text, std::string* error)
     if (error) *error = "Preparation canceled.";
     return false;
 }
+
+bool netplay_lobby_view;
 
 struct RuntimeMods {
     struct DiscExtent { uint32_t lba, count; const uint8_t* data; };
@@ -263,32 +266,31 @@ public:
     ScopedFlag& operator=(const ScopedFlag&) = delete;
 };
 
-/* Guest calls made from an entry hook can deliver VBlank callbacks before
- * returning. Every callback owns its resource/completion context; restoring
- * only entry hooks would let VBlank erase the interrupted plugin or complete
- * a function that belongs to another callback. */
-class PluginCallbackScope {
-    RuntimeMods& runtime;
-    const ModResolution::Plugin* previous_plugin;
-    CPUState* previous_cpu;
-    bool previous_finished;
-public:
-    PluginCallbackScope(RuntimeMods& s, const ModResolution::Plugin* plugin,
-                        CPUState* cpu = nullptr)
-        : runtime(s), previous_plugin(s.current_plugin),
-          previous_cpu(s.current_function_cpu), previous_finished(s.current_function_finished) {
-        s.current_plugin = plugin;
-        s.current_function_cpu = cpu;
-        s.current_function_finished = false;
+/* Guest scheduling can longjmp out of callback frames. Keep only trivial
+ * saved state alive across invocation: a destructor-based owner scope makes
+ * that escape undefined in C++. Normal returns and C++ exceptions restore
+ * immediately; the scheduler restores its saved context after a longjmp. */
+unsigned function_entry_depth;
+template <typename Callback>
+bool invoke_plugin_callback(RuntimeMods& s, const ModResolution::Plugin* plugin,
+                            CPUState* cpu, bool entry, Callback callback) {
+    static_assert(std::is_trivially_destructible<Callback>::value,
+                  "escape-capable callback adapter must have no destructor");
+    ModFunctionEntryContext previous;
+    mod_runtime_function_entry_context_save(&previous);
+    s.current_plugin = plugin;
+    s.current_function_cpu = cpu;
+    s.current_function_finished = false;
+    if (entry) ++function_entry_depth;
+    try {
+        const bool result = callback();
+        mod_runtime_function_entry_context_restore(&previous);
+        return result;
+    } catch (...) {
+        mod_runtime_function_entry_context_restore(&previous);
+        throw;
     }
-    ~PluginCallbackScope() {
-        runtime.current_plugin = previous_plugin;
-        runtime.current_function_cpu = previous_cpu;
-        runtime.current_function_finished = previous_finished;
-    }
-    PluginCallbackScope(const PluginCallbackScope&) = delete;
-    PluginCallbackScope& operator=(const PluginCallbackScope&) = delete;
-};
+}
 
 /* Function-entry hooks of the ACTIVE plan, flattened at plugin activation into
  * one table sorted by code key (address with the segment bits stripped, so a
@@ -308,7 +310,7 @@ std::vector<ActiveFunctionEntryHook>& active_function_entry_hooks() {
     static std::vector<ActiveFunctionEntryHook> value;
     return value;
 }
-unsigned function_entry_depth;
+
 
 struct ActivePCMHook {
     PSXModPCMCallback callback;
@@ -317,8 +319,10 @@ struct ActivePCMHook {
 std::vector<ActivePCMHook> pcm_hooks;
 void mix_plugin_pcm(int16_t* stereo, uint32_t frames) {
     for (const auto& hook : pcm_hooks) {
-        PluginCallbackScope scope(state(), hook.plugin);
-        hook.callback(stereo, frames);
+        invoke_plugin_callback(state(), hook.plugin, nullptr, false, [&]() {
+            hook.callback(stereo, frames);
+            return false;
+        });
     }
 }
 
@@ -1168,6 +1172,12 @@ int provider_choice_get(void*, const char* package_id, const char* option_id,
 template <typename Callback>
 int mutate(Callback callback);
 
+bool title_lobby_feature(const std::string& package, const std::string& feature) {
+    const auto* profile = psx_mod_netplay_profile();
+    return !netplay_lobby_view || !profile || !profile->loading_plugin_id ||
+        psx_mod_netplay_loading_feature(package.c_str(), feature.c_str());
+}
+
 bool provider_feature_at(int index, const ModPackage*& package,
                          const ModFeature*& feature) {
     if (index < 0) return false;
@@ -1176,6 +1186,7 @@ bool provider_feature_at(int index, const ModPackage*& package,
         const ModPackage* selected = selected_package(package_id);
         if (!selected) continue;
         for (const ModFeature& candidate : selected->features) {
+            if (!title_lobby_feature(package_id, candidate.id)) continue;
             if (index-- == 0) {
                 package = selected;
                 feature = &candidate;
@@ -1208,7 +1219,8 @@ int provider_feature_count(void*) {
     for (const auto& [package_id, versions] : state().manager.packages()) {
         (void)versions;
         const ModPackage* package = selected_package(package_id);
-        if (package) count += (int)package->features.size();
+        if (package) for (const auto& feature : package->features)
+            if (title_lobby_feature(package_id, feature.id)) ++count;
     }
     return count;
 }
@@ -1619,6 +1631,31 @@ RecompLauncherCModProvider provider = {
 static std::optional<ModPackageManager> offline_manager_before_netplay;
 static bool netplay_content_negotiation_enabled = false;
 
+void mod_runtime_set_netplay_lobby_view(bool active) { netplay_lobby_view = active; }
+
+static ModPackageManager title_loading_selection(const ModPackageManager& source) {
+    auto selected = source;
+    const auto* profile = psx_mod_netplay_profile();
+    for (const auto& [id, versions] : source.packages()) {
+        (void)versions;
+        const auto* package = source.selected_package(id);
+        if (!package) continue;
+        if (!profile || id != profile->loading_package_id) selected.set_enabled(id, false);
+        for (const auto& feature : package->features)
+            if (!psx_mod_netplay_loading_feature(id.c_str(), feature.id.c_str()))
+                selected.set_feature_enabled(id, feature.id, false);
+    }
+    return selected;
+}
+
+static bool verify_title_loading_disc(RuntimeMods& s,
+                                      const std::filesystem::path& disc_path,
+                                      std::string* error) {
+    s.disc_path = disc_path;
+    s.disc_sha256.clear();
+    return measured_disc_digest(disc_path, s.disc_sha256, error);
+}
+
 void mod_runtime_set_netplay_content_negotiation(bool enabled) {
     netplay_content_negotiation_enabled = enabled;
 }
@@ -1652,6 +1689,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     s.disc_extents.clear();
     s.audio_tracks.clear();
     s.extent_start = 0;
+    psx_mod_clear_function_replacements();
     s.plan = {};
     s.plan_committed = false;
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
@@ -1764,6 +1802,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
 bool mod_runtime_clear_for_netplay(std::string* error) {
     mod_reset_plugin_sessions();
     psx_mod_netplay_set_active(0);
+    psx_mod_netplay_set_loading(0);
     (void)psx_mod_netplay_set_options_identity("");
     state().ticket_ready = false;
     ++state().preparation_revision;
@@ -1779,6 +1818,7 @@ bool mod_runtime_clear_for_netplay(std::string* error) {
     s.plan = {};
     s.plan_committed = true; // Explicit vanilla session, not unresolved preparation.
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
+    psx_mod_clear_function_replacements();
     s.validation = {};
     s.raw_disc_index.clear();
     s.user_disc_index.clear();
@@ -1885,6 +1925,48 @@ static bool prepare_profile_settings(const PSXModNetplayProfile* profile,
     return true;
 }
 
+/* Loader-only profiles use the existing lobby's one optional package offer.
+ * Settings-only profiles below retain their established canonical codec. */
+static bool prepare_profile_loader(const PSXModNetplayProfile* profile,
+                                    const PsxLobbyMatchCaps* caps,
+                                    const std::filesystem::path& disc_path,
+                                    ModResolution& plan, std::string& identity,
+                                    ModPackageManager& selected, bool& loading,
+                                    std::string* error) {
+    RuntimeMods& s = state();
+    selected = title_loading_selection(s.manager);
+    if (caps && caps->valid) {
+        if (caps->mod_count < 0 || caps->mod_count > 1 ||
+            (caps->mod_count == 1 &&
+             (std::strcmp(caps->mods[0].id, profile->loading_package_id) ||
+              std::strcmp(caps->mods[0].feats, profile->loading_feature_id)))) {
+            if (error) *error = "Unsupported mod in the title netplay loading plan";
+            return false;
+        }
+        if (caps->mod_count == 1 && !selected.select_version(profile->loading_package_id,
+                caps->mods[0].ver, error)) return false;
+        if (!selected.set_feature_enabled(profile->loading_package_id,
+                profile->loading_feature_id, caps->mod_count == 1, error)) return false;
+    }
+    loading = selected.feature_enabled(profile->loading_package_id, profile->loading_feature_id);
+    if (!verify_title_loading_disc(s, disc_path, error)) return false;
+    plan = selected.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
+    if (!plan.ok || !plan.writes.empty() || !plan.overlays.empty() ||
+        !plan.derived_discs.empty() || !plan.resources.empty() ||
+        plan.plugins.size() != (loading ? 1u : 0u) ||
+        (loading && (plan.plugins[0].id != profile->loading_plugin_id ||
+                     !mod_plugin_registered(profile->loading_plugin_id)))) {
+        if (error) *error = "Title loading option must resolve to its native plugin";
+        return false;
+    }
+    if (caps && caps->valid && caps->mod_count == 1 && plan.fingerprint != caps->mod_plan_fp) {
+        if (error) *error = "Title loading option differs from the host's verified plan";
+        return false;
+    }
+    identity = plan.fingerprint;
+    return true;
+}
+
 bool mod_runtime_netplay_settings_fingerprint(const PsxLobbyMatchCaps& caps,
                                                std::string& fingerprint,
                                                std::string* error) {
@@ -1911,7 +1993,12 @@ bool mod_runtime_commit_netplay(const std::filesystem::path& disc_path,
     ModResolution plan;
     std::string options_identity;
     const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
-    if (!prepare_profile_settings(profile, caps, plan, options_identity, error)) return false;
+    ModPackageManager loader_selection;
+    bool loading = false;
+    if (profile->loading_plugin_id) {
+        if (!prepare_profile_loader(profile, caps, disc_path, plan, options_identity,
+                                    loader_selection, loading, error)) return false;
+    } else if (!prepare_profile_settings(profile, caps, plan, options_identity, error)) return false;
     if (profile->settings_package_id && caps && caps->valid && caps->mod_count != 0 &&
         options_identity != caps->mod_plan_fp) {
         if (error) *error = "Title netplay settings fingerprint does not match the host offer";
@@ -1926,7 +2013,8 @@ bool mod_runtime_commit_netplay(const std::filesystem::path& disc_path,
         if (error) *error = "Title netplay renderer plugin is not registered";
         return false;
     }
-    if (!profile->settings_package_id && caps && caps->valid && caps->mod_count != 0) {
+    if (!profile->settings_package_id && !profile->loading_plugin_id &&
+        caps && caps->valid && caps->mod_count != 0) {
         if (error) *error = "Title netplay profile does not accept package mod plans";
         return false;
     }
@@ -1934,6 +2022,7 @@ bool mod_runtime_commit_netplay(const std::filesystem::path& disc_path,
         if (error) *error = "Title netplay settings identity is invalid";
         return false;
     }
+    if (profile->loading_plugin_id) psx_mod_netplay_set_loading(loading);
     plan.ok = true;
     plan.fingerprint = profile->compatibility_id;
     if (!options_identity.empty()) {
@@ -1949,7 +2038,13 @@ bool mod_runtime_commit_netplay(const std::filesystem::path& disc_path,
     s.plan = std::move(plan);
     s.plan_committed = true;
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
-    mod_runtime_set_session_plan_fp({});
+    if (profile->loading_plugin_id) {
+        if (!offline_manager_before_netplay) offline_manager_before_netplay = s.manager;
+        s.manager = std::move(loader_selection);
+        mod_runtime_set_session_plan_fp(options_identity);
+        std::fprintf(stdout, "psxrecomp: title netplay loading = %s\n",
+                     loading ? "resident assets" : "original disc loader");
+    } else mod_runtime_set_session_plan_fp({});
     psx_mod_netplay_set_active(1);
     std::fprintf(stdout, "psxrecomp: title netplay profile %s (%s)\n",
                  profile->compatibility_id, profile->plugin_id);
@@ -2306,6 +2401,7 @@ static bool install_plan(RuntimeMods& s, ModResolution plan,
     s.plan = std::move(plan);
     s.plan_committed = true;
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
+    psx_mod_clear_function_replacements();
     {
         HostLaunchTimingScope index_timing(HOST_LAUNCH_BUILD_DISC_INDEX);
         build_disc_index(s);
@@ -2441,14 +2537,23 @@ const std::string& mod_runtime_session_plan_fp() {
     return session_plan_fp();
 }
 
-std::string mod_runtime_plan_fingerprint_portable() {
+std::string mod_runtime_plan_fingerprint_portable(const std::filesystem::path& disc_path,
+                                                 std::string* error) {
     RuntimeMods& s = state();
     if (!s.initialized) return {};
-    // Portable means independent of machine-local paths, not disc identity.
-    // Exact-disc overlays must retain the source qualification used at commit.
-    ModResolution plan = s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
+    // Portable means path-independent, never independent of exact disc identity.
+    const auto* profile = psx_mod_netplay_profile();
+    const bool title_loading = profile && profile->loading_plugin_id;
+    if (title_loading && !verify_title_loading_disc(s, disc_path, error)) return {};
+    auto manager = title_loading ? title_loading_selection(s.manager) : s.manager;
+    ModResolution plan = manager.resolve(s.game_id, s.exe_sha256,
+                                         s.disc_sha256);
     if (!plan.ok || !netplay_resources_verified(plan)) return {};
     return plan.fingerprint;
+}
+
+std::string mod_runtime_plan_fingerprint_portable() {
+    return mod_runtime_plan_fingerprint_portable(state().disc_path);
 }
 
 bool mod_runtime_verify_session_plan_fp(std::string* error) {
@@ -3161,8 +3266,8 @@ extern "C" const char* mod_runtime_activation_error(void) {
 
 static int invoke_package_override(CPUState* cpu, FuncOverrideFn fn, const void* context) {
     using namespace PSXRecompV4;
-    PluginCallbackScope scope(state(),static_cast<const ModResolution::Plugin*>(context),cpu);
-    return fn(cpu);
+    return invoke_plugin_callback(state(),static_cast<const ModResolution::Plugin*>(context),
+                                  cpu,false,[&]() { return fn(cpu) != 0; });
 }
 
 extern "C" void mod_runtime_activate_plugins(void) {
@@ -3180,6 +3285,7 @@ extern "C" void mod_runtime_activate_plugins(void) {
     psx_projection_reset_session();
     gpu_ws_set_native_scene_predicate(nullptr);
     psx_ram_reset_size_request();
+    psx_mod_clear_function_replacements();
     gpu_hd_textures_shutdown();
     if (!s.initialized || !s.plan.ok) { timing.success(); return; }
     s.disc_extents.clear();
@@ -3212,8 +3318,10 @@ extern "C" void mod_runtime_activate_plugins(void) {
     for (const ModResolution::Plugin& plugin : s.plan.plugins) {
         HostLaunchTimingScope plugin_timing(HOST_LAUNCH_PLUGIN_CALLBACK,
             plugin.package_id.c_str(), plugin.feature_id.c_str());
-        PluginCallbackScope scope(s, &plugin);
-        mod_invoke_activation_plugin(plugin.id);
+        invoke_plugin_callback(s, &plugin, nullptr, false, [&]() {
+            mod_invoke_activation_plugin(plugin.id);
+            return false;
+        });
         plugin_timing.success();
     }
     psx_mod_immediate_end_activation();
@@ -3243,8 +3351,12 @@ extern "C" int mod_runtime_disc_request(int *ready) {
     RuntimeMods& s = state();
     if (!g_disc_request_provider || !s.initialized || !s.plan.ok ||
         s.netplay_view_plan || psx_netplay_active() || !psx_mod_game_started()) return 0;
-    PluginCallbackScope scope(s, g_disc_request_owner);
-    return g_disc_request_provider(ready);
+    int result = 0;
+    invoke_plugin_callback(s,g_disc_request_owner,nullptr,false,[&]() {
+        result = g_disc_request_provider(ready);
+        return false;
+    });
+    return result;
 }
 
 extern "C" void mod_runtime_on_vblank(void) {
@@ -3254,8 +3366,10 @@ extern "C" void mod_runtime_on_vblank(void) {
     /* An own-view plan never touches the shared simulation. */
     if (!s.initialized || !s.plan.ok || s.netplay_view_plan) return;
     for (const ModResolution::Plugin& plugin : s.plan.plugins) {
-        PluginCallbackScope scope(s, &plugin);
-        mod_invoke_vblank_plugin(plugin.id);
+        invoke_plugin_callback(s, &plugin, nullptr, false, [&]() {
+            mod_invoke_vblank_plugin(plugin.id);
+            return false;
+        });
     }
 }
 
@@ -3376,8 +3490,9 @@ extern "C" int psx_mod_set_option_live(const char* package_id, const char* featu
         if (plugin.package_id != package_id || plugin.feature_id != feature_id) continue;
         auto it = option_changed_plugins().find(plugin.id);
         if (it == option_changed_plugins().end()) continue;
-        PluginCallbackScope scope(s, &plugin);
-        if (it->second(option_id, value)) live = 1;
+        if (invoke_plugin_callback(s,&plugin,nullptr,false,[&]() {
+                return it->second(option_id,value) != 0;
+            })) live = 1;
     }
     if (!live) {
         if (had_prev) values[key] = prev;
@@ -3796,8 +3911,10 @@ extern "C" int psx_mod_dispatch_guest_function(CPUState* cpu, uint32_t address) 
     auto it = std::lower_bound(functions.begin(), functions.end(), key,
         [](const auto& function, uint32_t k) { return function.key < k; });
     if (it == functions.end() || it->key != key) return 0;
-    PluginCallbackScope scope(state(), it->plugin, cpu);
-    it->callback(cpu, address);
+    invoke_plugin_callback(state(), it->plugin, cpu, false, [&]() {
+        it->callback(cpu, address);
+        return false;
+    });
     cpu->pc = cpu->gpr[31];
     return 1;
 }
@@ -3817,9 +3934,11 @@ extern "C" void psx_mod_instruction(CPUState* cpu, uint32_t address, uint32_t in
                               [](const auto& h, uint32_t k) { return h.key < k; });
     for (; it != hooks.end() && it->key == key; ++it) {
         if (!it->callback || it->expected != instruction || psx_mod_read_word(address) != instruction) continue;
-        PluginCallbackScope scope(state(), it->plugin, nullptr);
         const uint32_t pc = cpu->pc;
-        it->callback(cpu, address);
+        invoke_plugin_callback(state(), it->plugin, nullptr, false, [&]() {
+            it->callback(cpu, address);
+            return false;
+        });
         if (cpu->pc != pc) std::abort();
         cpu->gpr[0] = 0;
     }
@@ -3841,8 +3960,11 @@ extern "C" uint32_t psx_mod_memory_address(const CPUState* cpu, uint32_t pc,
                               [](const auto& h, uint32_t k) { return h.key < k; });
     for (; it != hooks.end() && it->key == key; ++it) {
         if (!it->memory_address || it->expected != instruction || psx_mod_read_word(pc) != instruction) continue;
-        PluginCallbackScope scope(state(), it->plugin, nullptr);
-        const uint32_t next = it->memory_address(cpu, pc, instruction, address);
+        uint32_t next = address;
+        invoke_plugin_callback(state(),it->plugin,nullptr,false,[&]() {
+            next = it->memory_address(cpu,pc,instruction,address);
+            return false;
+        });
         if ((next ^ address) & 3u) {
             psx_mod_counter_add("mod.memory_address.bad_alignment", 1);
             continue;
@@ -3885,11 +4007,19 @@ static void run_host_output_hooks(CPUState* cpu, uint32_t address) {
         view.read_word = ho_peek_word;   view.write_word = ho_drop_word;
         view.read_half = ho_peek_half;   view.write_half = ho_drop_half;
         view.read_byte = ho_peek_byte;   view.write_byte = ho_drop_byte;
-        PluginCallbackScope scope(s, it->plugin, &view);
-        ++s_host_output_depth;
-        it->callback(&view, address);
-        --s_host_output_depth;
-        s.current_function_finished = false;
+        const int previous_depth = s_host_output_depth;
+        s_host_output_depth = previous_depth + 1;
+        try {
+            invoke_plugin_callback(s,it->plugin,&view,false,[&]() {
+                it->callback(&view,address);
+                s.current_function_finished = false;
+                return false;
+            });
+        } catch (...) {
+            s_host_output_depth = previous_depth;
+            throw;
+        }
+        s_host_output_depth = previous_depth;
     }
 }
 
@@ -3916,14 +4046,12 @@ extern "C" int psx_mod_function_entry(CPUState* cpu, uint32_t address) {
         table.begin(), table.end(), key,
         [](const ActiveFunctionEntryHook& hook, uint32_t k) { return hook.key < k; });
     for (; it != table.end() && it->key == key; ++it) {
-        PluginCallbackScope scope(s, it->plugin, cpu);
-        ++function_entry_depth;
-        if (it->callback) it->callback(cpu, address);
-        /* Either completion form skips the body: an entry callback that
-         * called psx_mod_finish_function(), or a filter returning nonzero. */
-        const bool handled = s.current_function_finished ||
-            (it->filter && it->filter(cpu, address));
-        --function_entry_depth;
+        const bool handled = invoke_plugin_callback(s, it->plugin, cpu, true, [&]() {
+            if (it->callback) it->callback(cpu, address);
+            /* Either completion form skips the body: an entry callback that
+             * called psx_mod_finish_function(), or a filter returning nonzero. */
+            return s.current_function_finished || (it->filter && it->filter(cpu, address));
+        });
         if (handled) {
             cpu->pc = cpu->gpr[31];
             return 1;
@@ -3989,11 +4117,13 @@ static int game_netplay_function_entry(CPUState* cpu, uint32_t address) {
 }
 
 extern "C" int psx_mod_function_entry_active(void) {
-    return PSXRecompV4::function_entry_depth != 0 || func_override_active();
+    return PSXRecompV4::function_entry_depth != 0 || func_override_active() ||
+        psx_mod_function_replacement_depth() != 0;
 }
 
 extern "C" void mod_runtime_function_entry_context_save(ModFunctionEntryContext *out) {
     out->depth = PSXRecompV4::function_entry_depth;
+    out->replacement_depth = psx_mod_function_replacement_depth();
     out->plugin = PSXRecompV4::state().current_plugin;
     out->cpu = PSXRecompV4::state().current_function_cpu;
     out->finished = PSXRecompV4::state().current_function_finished;
@@ -4001,6 +4131,7 @@ extern "C" void mod_runtime_function_entry_context_save(ModFunctionEntryContext 
 
 extern "C" void mod_runtime_function_entry_context_restore(const ModFunctionEntryContext *in) {
     PSXRecompV4::function_entry_depth = in->depth;
+    psx_mod_function_replacement_restore_depth(in->replacement_depth);
     PSXRecompV4::state().current_plugin =
         static_cast<const PSXRecompV4::ModResolution::Plugin *>(in->plugin);
     PSXRecompV4::state().current_function_cpu = in->cpu;

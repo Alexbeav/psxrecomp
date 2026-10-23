@@ -33,6 +33,12 @@ typedef struct PSXModNetplayProfile {
     const char *settings_feature_id;
     const char *renderer_option_id;
     const char *renderer_option_value;
+    /* Optional native loader policy. Append-only bridge fields: modern
+     * settings profiles keep their existing layout/identity semantics.
+     * A profile declares either settings or this loader feature, not both. */
+    const char *loading_package_id;
+    const char *loading_feature_id;
+    const char *loading_plugin_id;
 } PSXModNetplayProfile;
 
 int psx_mod_register_netplay_profile(const PSXModNetplayProfile *profile);
@@ -56,6 +62,9 @@ int psx_mod_netplay_requires_texture_banks(void);
 /* Runtime renderer index: 0=software, 1=OpenGL, 2=Vulkan. No profile leaves
  * existing renderer policy unchanged; call only for a netplay launch. */
 int psx_mod_netplay_renderer_allowed(int renderer);
+int psx_mod_netplay_loading_feature(const char *package_id, const char *feature_id);
+void psx_mod_netplay_set_loading(int enabled);
+int psx_mod_netplay_loading(void);
 
 #ifdef __cplusplus
 }

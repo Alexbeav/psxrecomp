@@ -94,6 +94,7 @@ extern "C" void gpu_ws_tag_feedback_rect(uint32_t) {}
 /* mod_runtime.cpp's lobby netplay commit reads the negotiated match caps.
  * No lobby match is negotiated in this test. */
 static PsxLobbyMatchCaps no_match_caps;
+extern "C" int psx_netplay_active(void) { return 0; }
 extern "C" const PsxLobbyMatchCaps* psx_lobby_match_caps(void) { return &no_match_caps; }
 
 static void check(bool ok, const char* what) {

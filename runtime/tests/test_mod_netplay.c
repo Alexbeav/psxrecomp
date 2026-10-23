@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     const int wide = argc > 1 && strcmp(argv[1], "--wide") == 0;
     const int no_banks = argc > 1 && strcmp(argv[1], "--no-banks") == 0;
     const int with_options = argc > 1 && strcmp(argv[1], "--options") == 0;
+    const int with_loading = argc > 1 && strcmp(argv[1], "--loading") == 0;
     uint32_t original_session, profile_session;
     char original_identity[65], current_identity[65];
     const char* fingerprint =
@@ -91,11 +92,24 @@ int main(int argc, char** argv) {
     invalid = profile;
     invalid.renderer_option_id = "cameras";
     assert(!psx_mod_register_netplay_profile(&invalid));
+    invalid = profile;
+    invalid.loading_package_id = "test.loading";
+    assert(!psx_mod_register_netplay_profile(&invalid));
+    invalid.loading_feature_id = "resident";
+    invalid.loading_plugin_id = "test.loader";
+    invalid.settings_package_id = "test.settings";
+    invalid.settings_feature_id = "coop";
+    assert(!psx_mod_register_netplay_profile(&invalid));
     if (wide) profile.fixed_aspect_mask = 6u;
     if (no_banks) profile.requires_retained_texture_banks = 0;
     if (with_options) {
         profile.settings_package_id = "test.package";
         profile.settings_feature_id = "coop";
+    }
+    if (with_loading) {
+        profile.loading_package_id = "test.loading";
+        profile.loading_feature_id = "resident";
+        profile.loading_plugin_id = "test.loader";
     }
     assert(psx_mod_register_netplay_profile(&profile));
     assert(psx_mod_register_netplay_profile(&profile));
@@ -112,7 +126,7 @@ int main(int argc, char** argv) {
     assert(psx_mod_netplay_aspect() == (wide ? 1 : 0));
     original_session = psx_mod_netplay_session_id(123);
     assert(psx_mod_netplay_content_identity("", original_identity) && strlen(original_identity) == 64);
-    if (!wide && !no_banks && !with_options)
+    if (!wide && !no_banks && !with_options && !with_loading)
         assert(strcmp(original_identity,
             "73ac2c5e7ad58a0463c8234dc3cbe153a410ca18f03ee5794aca8b8015f92b0a") == 0);
     assert(psx_mod_netplay_content_identity("", current_identity) &&
@@ -122,6 +136,21 @@ int main(int argc, char** argv) {
     assert(original_session != 123);
     assert(original_session == psx_mod_netplay_session_id(123));
     assert(!psx_mod_netplay_set_options_identity("invalid"));
+    if (with_loading) {
+        assert(psx_mod_netplay_loading_feature("test.loading", "resident"));
+        assert(!psx_mod_netplay_loading_feature("test.loading", "wrong"));
+        psx_mod_netplay_set_loading(1);
+        assert(psx_mod_netplay_loading());
+        assert(original_session != psx_mod_netplay_session_id(123));
+        assert(psx_mod_netplay_content_identity("", current_identity) &&
+               strcmp(original_identity, current_identity) != 0);
+        assert(psx_mod_netplay_set_options_identity(fingerprint));
+        assert(psx_mod_netplay_content_identity("", original_identity));
+        assert(psx_mod_netplay_set_options_identity(""));
+        assert(psx_mod_netplay_content_identity("", current_identity) &&
+               strcmp(original_identity, current_identity) != 0);
+        psx_mod_netplay_set_loading(0);
+    }
     if (with_options) {
         assert(psx_mod_netplay_set_options_identity(fingerprint));
         assert(psx_mod_netplay_session_id(123) == original_session);
@@ -134,7 +163,7 @@ int main(int argc, char** argv) {
         assert(original_session == psx_mod_netplay_session_id(123));
         assert(psx_mod_netplay_content_identity("", current_identity));
         assert(strcmp(original_identity, current_identity) == 0);
-    } else assert(!psx_mod_netplay_set_options_identity(fingerprint));
+    } else if (!with_loading) assert(!psx_mod_netplay_set_options_identity(fingerprint));
     assert(!psx_mod_netplay_set_aspect(-1));
     assert(!psx_mod_netplay_set_aspect(3));
     assert(!psx_mod_netplay_set_aspect(wide ? 0 : 1));
