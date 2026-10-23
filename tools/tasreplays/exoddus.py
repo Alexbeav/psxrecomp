@@ -133,7 +133,7 @@ def verify_reference(path):
 def media(cue, stem, track_bytes):
     """One disc: the admitted cue and its single raw Mode2 track."""
     require_hash(cue, SPEC['media'][stem + '.cue'])
-    lines = [x.strip() for x in cue.read_text().splitlines() if x.strip()]
+    lines = [x.strip() for x in cue.read_text(encoding='utf-8').splitlines() if x.strip()]
     match = re.fullmatch(r'FILE "([^"\r\n]+)" BINARY', lines[0]) if lines else None
     if not match or lines[1:] != ['TRACK 01 MODE2/2352', 'INDEX 01 00:00:00']:
         raise ValueError('wrong single-track %s topology' % stem)
@@ -189,9 +189,9 @@ def continuation(disc1, disc2):
 def setup(args):
     if os.name != 'nt':
         raise ValueError('Windows UCRT build required for this candidate')
-    if subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip():
+    if subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True, encoding='utf-8', errors='replace').strip():
         raise ValueError('commit source changes before building')
-    build_head = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+    build_head = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True, encoding='utf-8', errors='replace').strip()
     if not 1 <= args.jobs <= 64:
         raise ValueError('jobs must be in 1..64')
     for tool in ['gcc', 'g++', 'cmake', 'ninja', 'git']:
@@ -199,7 +199,7 @@ def setup(args):
             raise ValueError('missing tool: ' + tool)
     import media_container
     bash = media_container.find_git_bash()
-    macros = subprocess.check_output(['gcc', '-dM', '-E', '-include', '_mingw.h', '-'], input='', text=True)
+    macros = subprocess.check_output(['gcc', '-dM', '-E', '-include', '_mingw.h', '-'], input='', text=True, encoding='utf-8', errors='replace')
     if not re.search(r'^#define _UCRT\b', macros, re.M):
         raise ValueError('UCRT compiler required')
     reference_path = args.reference.resolve(strict=True)
@@ -247,7 +247,7 @@ def setup(args):
                                                   lambda: build_cache.tools_inputs(ROOT, tools_argv(project / 'tools')), build_tools, build_head)
     q = lambda p: json.dumps(p.as_posix())
     bios_profile = project / 'bios.toml'
-    profile = (ROOT / ('bios/' + BIOS_STEM + '.toml')).read_text()
+    profile = (ROOT / ('bios/' + BIOS_STEM + '.toml')).read_text(encoding='utf-8')
     for key, value in [('rom', staged_bios), ('seeds', ROOT / 'recompiler/seeds/phase2_ghidra_seeds.json'), ('out_dir', ROOT / 'generated')]:
         profile = re.sub(r'^' + key + r'\s*=.*$', lambda _, v=value: key + ' = ' + q(v), profile, flags=re.M)
     bios_profile.write_text(profile, encoding='utf8')
@@ -277,7 +277,7 @@ renderer = "software"
 
     def stamp():
         fingerprint = subprocess.check_output([str(bash), (ROOT / 'tools/bios_emitter_fingerprint.sh').as_posix(),
-                                               bios_profile.as_posix()], cwd=ROOT, text=True).strip()
+                                               bios_profile.as_posix()], cwd=ROOT, text=True, encoding='utf-8', errors='replace').strip()
         if not re.fullmatch('[0-9a-f]{64}', fingerprint):
             raise ValueError('invalid generated BIOS fingerprint')
         (ROOT / ('generated/' + BIOS_STEM + '.emitter.sha')).write_text(fingerprint + '\n')
@@ -312,8 +312,8 @@ renderer = "software"
     native_record = build_cache.stage_native(cache_root, ROOT, project, native, 'Exoddus-TAS',
         lambda: build_cache.native_inputs(ROOT, build_cache.generated_set(ROOT, BIOS_STEM, project), native_argv, bios_profile),
         build_native, build_head)
-    if (subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip()
-            or subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip() != build_head):
+    if (subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True, encoding='utf-8', errors='replace').strip()
+            or subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True, encoding='utf-8', errors='replace').strip() != build_head):
         raise ValueError('source changed during candidate build')
     files = [*discs, *tracks, bios, staged_bios, bios_profile, movie, exe, game, tape, route,
              project / 'seeds.txt', reference_path]
@@ -321,13 +321,13 @@ renderer = "software"
     generated = {str(f.relative_to(ROOT)): digest(f) for f in (ROOT / 'generated').glob(BIOS_STEM + '*') if f.is_file()}
     generated.update({str(f): digest(f) for f in (project / 'generated').glob('*') if f.is_file()})
     info = {'schema': 'exoddus-tas-candidate-v1', 'source_head': build_head,
-            'source_tree': subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+            'source_tree': subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD^{tree}'], text=True, encoding='utf-8', errors='replace').strip(),
             'reference': str(reference_path), 'bindings': [{'path': str(f), 'sha256': digest(f)} for f in files],
             'generated': generated, 'executable': str(build), 'executable_sha256': digest(build),
             'discs': [str(d) for d in discs], 'bios': str(staged_bios), 'game': str(game), 'route': str(route),
             'tape': str(tape), 'disc2_continuation': swap,
             'profile': PROFILE, 'bios_emitter_fingerprint': fingerprint,
-            'compiler': subprocess.check_output(['gcc', '--version'], text=True).splitlines()[0],
+            'compiler': subprocess.check_output(['gcc', '--version'], text=True, encoding='utf-8', errors='replace').splitlines()[0],
             'tools_build_dir': str(tools),
             'build_cache': build_cache.receipt_block(cache_root, tools_record, generated_record, native_record),
             'qualification': 'candidate only; source/native comparison pending'}
@@ -338,7 +338,7 @@ renderer = "software"
 def replay(args, returns=None, output=None):
     """One replay: full when returns is None or the endpoint, otherwise a diagnostic prefix."""
     output = (args.output if output is None else Path(output)).resolve()
-    info = json.loads(args.setup.resolve(strict=True).read_text())
+    info = json.loads(args.setup.resolve(strict=True).read_text(encoding='utf-8'))
     if info.get('schema') != 'exoddus-tas-candidate-v1':
         raise ValueError("wrong Abe's Exoddus candidate")
     for binding in info['bindings']:
@@ -425,7 +425,7 @@ def replay(args, returns=None, output=None):
 def run(args):
     check_launch_arguments(args)
     if args.ladder is not None:
-        info = json.loads(args.setup.resolve(strict=True).read_text())
+        info = json.loads(args.setup.resolve(strict=True).read_text(encoding='utf-8'))
         endpoint = source.read(Path(info['reference'])).get('observed_returns')
         if type(endpoint) is not int:
             raise ValueError('invalid source reference endpoint')

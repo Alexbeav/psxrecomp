@@ -30,13 +30,13 @@ with tempfile.TemporaryDirectory() as temp:
     disc2.write_bytes(bytes([0x22]) * 2048 * 4)
     movie = root / 'events.psxrti3'
     route(movie, (disc1, disc2))
-    success = subprocess.run([exe, 'success', movie, disc1, disc2, disc2], text=True,
+    success = subprocess.run([exe, 'success', movie, disc1, disc2, disc2], text=True, encoding='utf-8', errors='replace',
                              capture_output=True, timeout=30)
     if success.returncode:
         raise SystemExit(success.stdout + success.stderr)
     disc2.write_bytes(bytes([0x22]) * 2048 * 4)
     route(movie, (disc1, disc2))
-    mutate = subprocess.run([exe, 'mutate', movie, disc1, disc2, disc2], text=True,
+    mutate = subprocess.run([exe, 'mutate', movie, disc1, disc2, disc2], text=True, encoding='utf-8', errors='replace',
                             capture_output=True, timeout=30)
     if mutate.returncode:
         raise SystemExit(mutate.stdout + mutate.stderr)

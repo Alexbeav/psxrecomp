@@ -37,7 +37,7 @@ def run(exe, *args, markers_exit=True, extra_env=None):
     env.pop('PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS', None)
     if markers_exit:
         env['PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS'] = '1'
-    result = subprocess.run([str(exe), *map(str, args)], capture_output=True, text=True,
+    result = subprocess.run([str(exe), *map(str, args)], capture_output=True, text=True, encoding='utf-8', errors='replace',
                             env=env, timeout=120)
     return result.returncode, result.stdout, result.stderr
 
@@ -354,7 +354,7 @@ with tempfile.TemporaryDirectory() as temp:
         env.update(capture or {})
         env.update(more)
         result = subprocess.run([str(release), 'pictures', str(path), str(frames), fault],
-                                capture_output=True, text=True, env=env, timeout=120)
+                                capture_output=True, text=True, encoding='utf-8', errors='replace', env=env, timeout=120)
         return result.returncode, result.stdout, result.stderr
 
     def png_rows(path):
@@ -416,14 +416,14 @@ with tempfile.TemporaryDirectory() as temp:
         check(size == (4, 2) and rows == [[(boundary + 1, x * 16 + y, held) for x in range(4)]
                                            for y in range(2)],
               f'the picture at boundary {boundary} is the display at that boundary', str(rows))
-    rows = [json.loads(line) for line in (folder / 'checkpoints.jsonl').read_text().splitlines()]
+    rows = [json.loads(line) for line in (folder / 'checkpoints.jsonl').read_text(encoding='utf-8').splitlines()]
     check([row['frame'] for row in rows] == [0, 3, 6, 7] and
           all(row['sio_samples'] == row['frame'] and row['width'] == 4 and row['height'] == 2 and
               row['applied_words_sha256'] == row['supplied_words_sha256'] == words_sha(words[:row['frame']])
               for row in rows),
           'each checkpoint names the words delivered up to its boundary', str(rows))
-    done = json.loads((folder / 'complete.json').read_text())
-    end = json.loads((folder / 'input-end.json').read_text())
+    done = json.loads((folder / 'complete.json').read_text(encoding='utf-8'))
+    end = json.loads((folder / 'input-end.json').read_text(encoding='utf-8'))
     check(done['frame'] == end['frame'] == 7 and done['input_frames'] == 7 and
           done['neutral_tail_ticks'] == 0 and done['applied_words_sha256'] == words_sha(words),
           'the completion record covers the whole route', str(done))
@@ -463,10 +463,10 @@ with tempfile.TemporaryDirectory() as temp:
           'a PSXRTI3 route delivered to an analog pad stops the capture', out + err)
     folder, capture = shots('pictures-dual')
     code, out, err = pictures(dual, 20, capture)
-    done = json.loads((folder / 'complete.json').read_text()) if code == 0 else {}
+    done = json.loads((folder / 'complete.json').read_text(encoding='utf-8')) if code == 0 else {}
     check(code == 0 and done.get('frame') == 2 and
           done.get('applied_controller_sha256') == done.get('expected_protocol_sha256') and
-          json.loads((folder / 'initial-cards.json').read_text())['card1_present'] is False,
+          json.loads((folder / 'initial-cards.json').read_text(encoding='utf-8'))['card1_present'] is False,
           'a DualShock route is captured with its protocol check', out + err)
     folder, capture = shots('pictures-dual-card')
     code, out, err = pictures(dual, 20, capture, PSX_TEST_CARD='1')
@@ -523,14 +523,14 @@ with tempfile.TemporaryDirectory() as temp:
     check(code == 10 and 'diagnostic product' in err and not (root / 'release.psxrti3').exists(),
           'release product refuses to record', err)
 
-    main = (ROOT / 'runtime' / 'src' / 'main.cpp').read_text()
+    main = (ROOT / 'runtime' / 'src' / 'main.cpp').read_text(encoding='utf-8')
     check('input_route_session_release_port2(&p2)' in main and
           'sio_set_pad_state_slot(1, p2)' in main and
           'sio_request_pad_type(1, 0)' in main,
           'production main delivers admitted P2 buttons as a digital SIO pad')
     check('debug_server_route_port2(&p2)' in main,
           'diagnostic main delivers the debug-server P2 word to the same SIO slot')
-    debug = (ROOT / 'runtime' / 'src' / 'debug_server.c').read_text()
+    debug = (ROOT / 'runtime' / 'src' / 'debug_server.c').read_text(encoding='utf-8')
     check('input_route_session_port_count() == 2' in debug and
           'input_route_observer_port2_input(s_route_port2)' in debug and
           'input_route_observer_port2_applied(sio_get_pad_buttons_slot(1)' in debug,

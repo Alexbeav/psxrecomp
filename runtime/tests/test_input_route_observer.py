@@ -29,25 +29,25 @@ with tempfile.TemporaryDirectory() as root:
         assert run.returncode == expected, (case, run.returncode, run.stderr)
         if case in ("valid", "cpu", "video"):
             if case == "video":
-                rows=[json.loads(x) for x in (out/"video-state.jsonl").read_text().splitlines()]
+                rows=[json.loads(x) for x in (out/"video-state.jsonl").read_text(encoding='utf-8').splitlines()]
                 assert [x["frame"] for x in rows]==[0,1,2,3]
                 assert all(x["cycle"]==123456 and x["display_mode"]==100 and x["vertical_start"]==16 and x["vertical_end"]==256 and x["gpu_field"]==1 and x["lcf"]==0 and x["cycles_since_vblank"]==7 and x["next_period"]==563969 and x["profile_field"]==1 for x in rows)
             else:assert not (out/"video-state.jsonl").exists()
             if case == "cpu":
-                rows=[json.loads(x) for x in (out/"cpu-state.jsonl").read_text().splitlines()]
+                rows=[json.loads(x) for x in (out/"cpu-state.jsonl").read_text(encoding='utf-8').splitlines()]
                 assert [x["frame"] for x in rows] == [0,1,2,3]
                 assert all(x["timers"] == [dict(channel=i,counter=0xFFFF-i,mode=0x148+i,target=i,irq_line=i-1,fraction=2145-i) for i in range(3)] for x in rows)
                 assert all(x["sr"]==0x40000401 and x["cause"]==0x420 and x["epc"]==0x80012000 and x["i_stat"]==5 and x["i_mask"]==13 for x in rows)
             else:
                 assert not (out/"cpu-state.jsonl").exists()
-            done = json.loads((out / "complete.json").read_text())
-            end = json.loads((out / "input-end.json").read_text())
+            done = json.loads((out / "complete.json").read_text(encoding='utf-8'))
+            end = json.loads((out / "input-end.json").read_text(encoding='utf-8'))
             assert done["frame"] == 3 and done["input_frames"] == 2 and done["neutral_tail_ticks"] == 1
             assert end["frame"] == 2
             assert done["applied_words_sha256"] == hashlib.sha256(bytes.fromhex("f7ffffff")).hexdigest()
             assert end["applied_words_sha256"] == done["applied_words_sha256"]
-            assert json.loads((out / "device-events.json").read_text()) == []
-            watches = [json.loads(line) for line in (out / "ram-u16.jsonl").read_text().splitlines()]
+            assert json.loads((out / "device-events.json").read_text(encoding='utf-8')) == []
+            watches = [json.loads(line) for line in (out / "ram-u16.jsonl").read_text(encoding='utf-8').splitlines()]
             assert [w["frame"] for w in watches] == [0,1,2,3]
             assert all(w["ram_u16"] == {"000000":0x1234,"1FFFFE":0xABCD} for w in watches)
             assert (out / "frame-000003.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
@@ -72,12 +72,12 @@ with tempfile.TemporaryDirectory() as directory:
         source = struct.pack('<H5B', 0xFFEF, 1,0,128,255,0) + struct.pack('<H5B', 0xFFFF,129,130,131,132,0)
         protocol = struct.pack('<H5B', 0xFFEF, 1,0,128,254,0) + struct.pack('<H5B', 0xFFFF,128,129,130,131,0)
         for name in ('complete.json', 'input-end.json'):
-            record = json.loads((out / name).read_text())
+            record = json.loads((out / name).read_text(encoding='utf-8'))
             assert record['original_controller_sha256'] == hashlib.sha256(source).hexdigest()
             assert record['applied_controller_sha256'] == record['expected_protocol_sha256'] == hashlib.sha256(protocol).hexdigest()
             assert record['guest_analog_mode'] == 1
             assert 'applied_words_sha256' not in record
-        rows = [json.loads(line) for line in (out / 'checkpoints.jsonl').read_text().splitlines()]
+        rows = [json.loads(line) for line in (out / 'checkpoints.jsonl').read_text(encoding='utf-8').splitlines()]
         assert [row['frame'] for row in rows] == [0,1,2,3]
         assert [row['guest_analog_mode'] for row in rows] == [0,0,1,1]
         assert rows[2]['supplied_controller_sha256'] != rows[2]['applied_controller_sha256']
@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory() as directory:
         run = subprocess.run([str(exe),case],env=env,capture_output=True)
         assert run.returncode == (0 if case=='card_valid' else 3), (case,run.returncode,run.stderr)
         if case=='card_valid':
-            assert json.loads((out/'initial-cards.json').read_text()) == dict(card1_present=True,card2_present=False,card1_sha256=digest,bytes=131072)
+            assert json.loads((out/'initial-cards.json').read_text(encoding='utf-8')) == dict(card1_present=True,card2_present=False,card1_sha256=digest,bytes=131072)
             assert (out/'complete.json').is_file()
         else:
             assert not (out/'complete.json').exists()
@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory() as directory:
                PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0')
     result = subprocess.run([str(exe), 'resume_tail'], env=env, capture_output=True)
     assert result.returncode == 0, result.stderr
-    done = json.loads((Path(directory)/'complete.json').read_text())
+    done = json.loads((Path(directory)/'complete.json').read_text(encoding='utf-8'))
     assert done['frame'] == 4 and done['resumed_inputs'] == 3
     assert done['input_frames'] == 2 and done['neutral_tail_ticks'] == 2
     assert done['applied_controller_sha256'] == done['expected_protocol_sha256'] == hashlib.sha256(b'').hexdigest()
@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory() as directory:
             continue
         p2 = hashlib.sha256(bytes.fromhex('bfffefff')).hexdigest()
         for name in ('complete.json', 'input-end.json'):
-            record = json.loads((out / name).read_text())
+            record = json.loads((out / name).read_text(encoding='utf-8'))
             assert record['port_layout'] == 'two-digital'
             assert record['applied_port2_words_sha256'] == record['supplied_port2_words_sha256'] == p2
             assert record['applied_words_sha256'] == hashlib.sha256(bytes.fromhex('f7ffffff')).hexdigest()
