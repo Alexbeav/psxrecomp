@@ -48,8 +48,16 @@ def find_bash():
 
 
 def shell_env(bash):
-    """PATH that reaches the coreutils shipped beside `bash`."""
+    """PATH that reaches the coreutils shipped beside `bash`.
+
+    Only Windows needs it: Git Bash and MSYS2 keep their tools beside bash.exe,
+    off the PATH a test starts from. On Linux and macOS bash was found on PATH,
+    and putting its folder first (/bin, then /usr/bin) made the packager run
+    /usr/bin/python3 instead of the python3 that PATH names (PS1B-577).
+    """
     env = dict(os.environ)
+    if os.name != "nt":
+        return env
     here = os.path.dirname(bash)
     extra = [here, os.path.join(os.path.dirname(here), "bin"),
              os.path.join(os.path.dirname(here), "usr", "bin")]
@@ -191,6 +199,21 @@ def package(bash, root, emitters, *args, env=None):
     return done.returncode, (done.stdout + done.stderr).replace("\r", "")
 
 
+def shell_python_reads_toml(bash) -> bool:
+    """Whether the python the packager finds under this bash has tomllib or tomli.
+
+    The developer-mod filter (mod_channel_filter.py) needs one and, without it,
+    stops the package on purpose: unfinished work must not ship. The stock
+    python3 of macOS 13 is 3.9 with neither (PS1B-576)."""
+    seen = subprocess.run(
+        [bash, "-c", 'for c in python3 python; do command -v "$c" >/dev/null 2>&1 && exec "$c" -c '
+                     '"import importlib.util as u, sys; sys.exit(0 if u.find_spec(\'tomllib\') or '
+                     'u.find_spec(\'tomli\') else 3)"; done; exit 1'],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=shell_env(bash))
+    assert seen.returncode in (0, 3), ("no python under " + bash, seen.returncode, seen.stderr[-500:])
+    return seen.returncode == 0
+
+
 def whole_packager(bash, tmp: Path) -> str:
     """Run the packager from its first line to the zip on a stand-in set, then
     on three sources it must refuse. Every step after the host lookup is
@@ -257,11 +280,20 @@ def whole_packager(bash, tmp: Path) -> str:
     emitters = make_package_source(filtered)
     shutil.rmtree(str(filtered / "licenses"))
     code, out = package(bash, filtered, emitters, env={"EXCLUDE_DEV_MODS": "1"})
-    assert ("Wrote " in out) == zipped and "excluding developer-channel mods" in out, (code, out[-3000:])
+    assert "excluding developer-channel mods" in out, (code, out[-3000:])
     assert "this source has no licenses/ folder" in out, out[-3000:]
     assert not (filtered / "dist" / "stage-setup-linux-x64" / "licenses").exists()
-    assert not (filtered / "dist" / "stage-setup-linux-x64" / "programs" / "leon" / "mods" / "preloaded"
-                / "packages" / "dev.tool" / "1.0").exists()
+    if shell_python_reads_toml(bash):
+        assert ("Wrote " in out) == zipped, (code, out[-3000:])
+        assert not (filtered / "dist" / "stage-setup-linux-x64" / "programs" / "leon" / "mods" / "preloaded"
+                    / "packages" / "dev.tool" / "1.0").exists()
+        filter_note = ""
+    else:
+        # Without a parser the filter cannot tell a developer feature from a stable one: it refuses.
+        assert code == 1 and "no TOML parser available" in out and "developer-channel filtering failed" in out \
+            and "Wrote " not in out, (code, out[-3000:])
+        filter_note = ("; developer-mod filter: SKIP its filtering checks (the python3 under this shell has no "
+                       "tomllib or tomli, and the packager refused the filtered package, as it must)")
 
     # A program's recipe without overlay_cache is refused, and named.
     cold = tmp / "cold"
@@ -291,7 +323,7 @@ def whole_packager(bash, tmp: Path) -> str:
     pick = exe_name_pick(tmp, zipped)
     return ("to the zip" if zipped else
             "to the zip step; the zip was NOT made here (no zip under this shell), see package_setup_program_set_zip"
-            ) + "; " + gate + "; " + pick
+            ) + filter_note + "; " + gate + "; " + pick
 
 
 def zip_tool(bash) -> str:
@@ -541,6 +573,15 @@ def main() -> int:
     if bash is None:
         print("package setup program set test: text checks PASS; SKIP the runs (no bash on this machine)")
         return 0
+    shell_python = ""
+    if os.name != "nt" and shutil.which("python3"):
+        # The packager must run the python3 this test's PATH names (PS1B-577).
+        probe = 'command -v python3 && python3 -c "import sys; print(sys.version.split()[0])"'
+        seen = subprocess.run([bash, "-c", probe], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              env=shell_env(bash)).stdout.split()
+        assert len(seen) == 2 and os.path.realpath(seen[0]) == os.path.realpath(shutil.which("python3")), \
+            ("the packager would run another python3", seen, shutil.which("python3"))
+        shell_python = "; the packager's python3: %s, Python %s" % (seen[0], seen[1])
     syntax = subprocess.run([bash, "-n", to_shell_path(PACKAGER, bash)], capture_output=True, text=True,
                             env=shell_env(bash))
     assert syntax.returncode == 0, syntax.stderr
@@ -589,7 +630,7 @@ def main() -> int:
         assert code == 1 and "setup host executable 'Resident_Evil_2' not found" in out, (code, out)
 
         reached = whole_packager(bash, Path(tmp))
-    print(f"package setup program set test: PASS (whole packager run {reached})")
+    print(f"package setup program set test: PASS (whole packager run {reached}{shell_python})")
     return 0
 
 

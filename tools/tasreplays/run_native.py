@@ -55,9 +55,10 @@ AXIS_MODELS = {'nymashock-u16': 'nymashock-2.9.1-dualshock-neutral-analog',
 DEFAULT_AXIS_MODEL = 'nymashock-u16'
 # A physical MODE press in the route (the analog flag of a PSXRTI2 row) is admitted only under a named MODE model.
 # 'octoshock-2.4.2': the pad evaluates the latched button when the port's DTR falls (corpus PSX-TAS-001).
-# It needs the Octoshock axis model, and the runtime reads PSX_INPUT_ROUTE_MODE_MODEL.
-MODE_MODELS = ('none', 'octoshock-2.4.2')
-MODE_PROFILE = 'octoshock-2.4.2-dualshock-mode'
+# 'nymashock-1.29.0': the pad also evaluates it when an input arrives while its DTR is inactive.
+# Each needs the octoshock-byte axis model (a route of protocol bytes), and the runtime reads
+# PSX_INPUT_ROUTE_MODE_MODEL.
+MODE_MODELS = ('none', 'octoshock-2.4.2', 'nymashock-1.29.0')
 
 
 def two_digital_identity(data, start=0):
@@ -123,7 +124,7 @@ def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL, mode_model='non
             # Named only when not the default, so every recorded Nymashock identity is unchanged.
             identity.update(axis_model=axis_model, controller_profile=AXIS_MODELS[axis_model])
         if mode_model != 'none':
-            identity.update(mode_model=mode_model, controller_profile=MODE_PROFILE)
+            identity.update(mode_model=mode_model, controller_profile=mode_model + '-dualshock-mode')
         return identity
     if axis_model != DEFAULT_AXIS_MODEL or mode_model != 'none':
         raise ValueError('an axis or MODE model applies to a DualShock route only')
@@ -315,7 +316,7 @@ def main():
     parser.add_argument('--roster-disc', type=Path, action='append', default=[],
                         help='each disc of a PSXRTI3 route disc set, in route order; the first is --disc')
     parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
-    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1'), default='default')
+    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1','nymashock-2.8'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--speed", choices=("1", "2", "4", "8", "16", "32", "64", "max"), default="1",
@@ -382,6 +383,9 @@ def main():
     parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','nymashock-1.32.1','octoshock-2.7'),default='default',
                         help='experimental Nymashock drive head, seek, Pause and Reset timing; octoshock-2.7 is '
                              'the same drive with the MSVC order of the Reset random draws')
+    parser.add_argument('--cd-init-draw-order',choices=('default','jitter-first','floor-first'),default='default',
+                        help='order of the two Init random draws when a route has observed it; default keeps '
+                             "the drive model's own order")
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
@@ -412,7 +416,7 @@ def main():
                         help='who wrote the DualShock route axis bytes: Nymashock u16 (rescaled) or Octoshock (unscaled bytes)')
     parser.add_argument('--mode-button-model', choices=MODE_MODELS, default='none',
                         help='admit physical MODE presses in a DualShock route: the pad evaluates the latched button on the DTR falling edge; needs --axis-model octoshock-byte')
-    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock"), default="default",
+    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock", "nymashock-2.8-gamepad"), default="default",
                         help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
@@ -453,6 +457,8 @@ def main():
     if args.cd_drive_model!='default':
         if not args.cd_source_clock_tape:
             raise ValueError('source drive model requires a clock tape')
+    if args.cd_init_draw_order!='default' and args.cd_drive_model=='default':
+        raise ValueError('an Init draw order requires a source drive model')
     if args.cd_cdda_model!='default' and not args.cd_source_clock_tape:
         raise ValueError('source CDDA requires an explicit source clock tape')
     if args.mdec_source_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
@@ -513,11 +519,11 @@ def main():
         raise ValueError('a two-pad route admits no resume, save state, retiming, card or DualShock ACK model')
 
     dualshock = identity.get('format') == 'PSXRTI2'
-    if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
-        raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
+    if dualshock and (args.update_profile or args.pad_ack_model in ('octoshock-2.2.2-digital', 'nymashock-2.8-gamepad')):
+        raise ValueError('DualShock does not admit retiming, the digital Octoshock ACK model or the 2.8 plain-gamepad ACK model')
     initial_card = None
     if args.card1:
-        if args.card_model not in ('nymashock-1.29.0','nymashock-1.32.1') or args.legacy_card_repair != 'off':
+        if args.card_model not in ('nymashock-1.29.0','nymashock-1.32.1','nymashock-2.8') or args.legacy_card_repair != 'off':
             raise ValueError('card replay requires an explicit source card model and legacy repair off')
         paths['card1'] = args.card1.resolve(strict=True)
         initial_card = card_identity(paths['card1'])
@@ -625,6 +631,8 @@ def main():
         selected_env['PSX_CD_SOURCE_CLOCK_TAPE'] = clock_tape['path']
     if args.cd_drive_model!='default':
         selected_env['PSX_CD_DRIVE_MODEL']=args.cd_drive_model
+    if args.cd_init_draw_order!='default':
+        selected_env['PSX_CD_INIT_DRAW_ORDER']=args.cd_init_draw_order
     if args.cd_cdda_model!='default':
         selected_env['PSX_CD_CDDA_MODEL']=args.cd_cdda_model
     if args.mdec_source_model!='default':

@@ -12,17 +12,25 @@ Legacy …/psxrecomp/toolchains/… is still searched and migrated on ensure.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional
+
+try:
+    import fcntl
+except ImportError:     # Windows
+    fcntl = None  # type: ignore[assignment]
 
 DEFAULT_REPO = "RetroPortingToolKit/RetroPorting-Toolchains"
 PACK_ID = "cmake-clang-v1"
@@ -108,26 +116,125 @@ def _remove_pointer(path: Path) -> bool:
 
 
 # The system's error of the last rename aside that failed: winerror on Windows
-# (32 a file is open in another program, 5 access denied), errno elsewhere.
+# (32 a file is open in another program, 5 access denied), errno elsewhere
+# (EBUSY: another program holds the pack, see below).
 _aside_error = 0
+
+# A pack in use (PS1B-416). On Windows a folder with an open file cannot be
+# renamed, and that is what keeps an installer from taking a pack away from a
+# build. Linux and macOS rename it anyway, so there every program that puts a
+# pack on PATH (activate_toolchain_bin) holds a shared lock on the pack's
+# folder for as long as it runs, and an installer takes the exclusive lock
+# without waiting before it renames the folder aside. When it cannot, the pack
+# is in use and stays. The setup host does the same (host/psxrecomp_codegen_host.c).
+# On a filesystem without locks nothing is held and the rename goes on as before.
+_held_packs: dict[str, tuple[int, int, int]] = {}     # real path -> (fd, st_dev, st_ino)
+_O_DIR = getattr(os, "O_DIRECTORY", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def _hold_pack(pack_root: Path) -> None:
+    """Hold a shared lock on the pack folder until this process ends. Again
+    for the same folder: nothing; for a new folder under the same name: the
+    old hold is let go and the new folder is held."""
+    if fcntl is None:
+        return
+    real = os.path.realpath(str(pack_root))
+    for _ in range(20):
+        try:
+            st = os.stat(real)
+        except OSError:
+            time.sleep(0.05)        # set aside by an installer; the new pack takes the name next
+            continue
+        held = _held_packs.get(real)
+        if held is not None and held[1:] == (st.st_dev, st.st_ino):
+            return
+        if held is not None:
+            os.close(held[0])
+            del _held_packs[real]
+        try:
+            fd = os.open(real, os.O_RDONLY | _O_DIR)
+        except OSError:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(fd)
+            if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                time.sleep(0.05)    # an installer is renaming it this instant
+                continue
+            return                  # no locks on this filesystem
+        locked = os.fstat(fd)
+        try:
+            now = os.stat(real)
+        except OSError:
+            now = None
+        if now is not None and (now.st_dev, now.st_ino) == (locked.st_dev, locked.st_ino):
+            _held_packs[real] = (fd, locked.st_dev, locked.st_ino)
+            return
+        os.close(fd)                # renamed between the open and the lock: again
+    return
+
+
+def _let_go_of_pack(st: os.stat_result) -> None:
+    """This process's own hold on that folder, if it has one, is let go."""
+    for real, held in list(_held_packs.items()):
+        if held[1:] == (st.st_dev, st.st_ino):
+            os.close(held[0])
+            del _held_packs[real]
+
+
+def _claim_for_rename(path: Path) -> tuple[bool, Optional[int]]:
+    """(False, None): another program holds the pack. (True, fd): the
+    exclusive lock is held until fd is closed. (True, None): nothing to lock
+    (not a folder, Windows, or no locks on this filesystem)."""
+    if fcntl is None:
+        return True, None
+    try:
+        st = os.lstat(str(path))
+    except OSError:
+        return True, None
+    if not stat.S_ISDIR(st.st_mode):
+        return True, None
+    _let_go_of_pack(st)
+    try:
+        fd = os.open(str(path), os.O_RDONLY | _O_DIR | _O_NOFOLLOW)
+    except OSError:
+        return True, None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+            return False, None
+        return True, None
+    return True, fd
 
 
 def _set_aside(path: Path) -> Optional[Path]:
     """Rename a folder to .old-<pid>[.<n>]-<name> beside it. None when it
     cannot be renamed: nothing has changed then, and _aside_error holds the
-    system's error number."""
+    system's error number (EBUSY when another program holds the pack)."""
     global _aside_error
-    for n in range(100):
-        aside = path.with_name("%s%d%s-%s" % (ASIDE_PREFIX, os.getpid(), ".%d" % n if n else "", path.name))
-        if aside.exists() or _is_link(aside):
-            continue
-        try:
-            os.rename(path, aside)
-            return aside
-        except OSError as exc:
-            _aside_error = int(getattr(exc, "winerror", None) or exc.errno or 0)
-            return None
-    return None
+    free, lock_fd = _claim_for_rename(path)
+    if not free:
+        _aside_error = errno.EBUSY
+        return None
+    try:
+        for n in range(100):
+            aside = path.with_name("%s%d%s-%s" % (ASIDE_PREFIX, os.getpid(), ".%d" % n if n else "", path.name))
+            if aside.exists() or _is_link(aside):
+                continue
+            try:
+                os.rename(path, aside)
+                return aside
+            except OSError as exc:
+                _aside_error = int(getattr(exc, "winerror", None) or exc.errno or 0)
+                return None
+        return None
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
 
 
 def _aside_parse(name: str) -> Optional[tuple]:
@@ -388,6 +495,10 @@ def _rename_failed_text(error: int) -> str:
         return ("Windows refused to rename the installed toolchain folder (error "
                 "5, access denied). The toolchain was not changed. A file in it "
                 "may be open in another program, or the folder may be protected.")
+    if not sys_platform_is_windows() and error == errno.EBUSY:
+        return ("Another program is using the installed toolchain, for example a "
+                "running build. The toolchain was not changed. Wait until it ends "
+                "and try again.")
     return ("The installed toolchain folder could not be renamed (system error "
             "%d). The toolchain was not changed." % error)
 
@@ -863,6 +974,7 @@ def pack_python_exe(pack_root: Path) -> Optional[Path]:
 def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
     prefix = str(bin_dir)
     pack_root = bin_dir.parent
+    _hold_pack(pack_root)       # an installer leaves a pack in use alone (PS1B-416)
     cur = os.environ.get("PATH", "")
     parts = [p for p in (cur.split(os.pathsep) if cur else []) if p]
     # Idempotent session PATH: only prepend when missing.

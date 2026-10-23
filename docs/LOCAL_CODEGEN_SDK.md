@@ -265,13 +265,22 @@ Before this order (PS1B-410) an install over the installed tag removed that
 folder first. With builds running from it, the files they held open survived
 and the rest went.
 
-**The limit of "a pack in use" (PS1B-416).** What keeps an installer from
-taking a pack away from a build is one fact: a folder with an open file cannot
-be renamed. That is a Windows rule, and it holds only while a file is open.
-On Linux and macOS a rename always succeeds: an install over the installed
-tag, and the prune of an older tag, take the folder away from a running build
-there. On Windows a build between two compiler runs holds no file in the pack,
-and a prune can remove the older tag it uses.
+**A pack in use (PS1B-416).** On Windows what keeps an installer from taking
+a pack away from a build is that a folder with an open file cannot be renamed.
+On Linux and macOS a rename always succeeds, so there every program that puts
+a pack on PATH (the CLI by `activate_toolchain_bin`, the setup host by
+`activate_toolchain_path`) holds a shared lock (`flock`) on the pack's folder
+for as long as it runs. Before step 2 an installer, and the prune of an older
+tag, take the exclusive lock without waiting. When another program holds the
+pack, the install is refused with the sentence below and the prune keeps the
+tag whole; a program's own hold is let go first. The lock is on the folder
+itself, so it holds between two compiler runs, when no file of the pack is
+open. On a filesystem without locks nothing is held and the rename goes on as
+before. Guard: `runtime/tests/test_toolchain_pack_in_use.py`.
+
+**The limit that remains (PS1B-416, Windows).** On Windows a build between two
+compiler runs holds no file in the pack, and a prune can remove the older tag
+it uses.
 
 ### What the player reads
 
@@ -289,7 +298,10 @@ Each sentence says only what the program knows.
   Close the programs that use it, for example a running build, and try again."
   Windows error 5: "Windows refused to rename the installed toolchain folder
   (error 5, access denied). The toolchain was not changed. A file in it may be
-  open in another program, or the folder may be protected." Any other error:
+  open in another program, or the folder may be protected." On Linux and
+  macOS, another program holds the pack (EBUSY, PS1B-416): "Another program is
+  using the installed toolchain, for example a running build. The toolchain was
+  not changed. Wait until it ends and try again." Any other error:
   "The installed toolchain folder could not be renamed (system error
   `<number>`). The toolchain was not changed."
 

@@ -1,0 +1,62 @@
+/* The recompiler's branch conditions for the [widescreen.cull] branch-site
+ * lists, compiled as generated code compiles them (PS1B-520). The table is
+ * recompiler/tests/ws_branch_site_cases.h, whose text recompiler_patch_test
+ * checks against CodeGenerator::generate_branch_condition. */
+#include <stdint.h>
+#include "cpu_state.h"
+#include "gpu.h"               /* psx_ws_x_margin, psx_ws_cull_bltz: the generated code's helpers */
+#include "dirty_ram_interp.h"  /* dirty_ram_set_ws_branch_sites */
+#include "@CASES_HEADER@"
+
+#define WS_COMPILED(name, lists, word, cond, tag) \
+    static int compiled_##name(const CPUState *cpu) { return (cond); }
+WS_BRANCH_SITE_CASES(WS_COMPILED)
+#undef WS_COMPILED
+
+typedef struct {
+    const char *name;
+    unsigned lists;
+    uint32_t word;
+    int (*compiled)(const CPUState *);
+    const char *cond;
+    const char *tag;
+} WsBranchSiteRow;
+#define WS_ROW(name, lists, word, cond, tag) \
+    {#name, lists, word, compiled_##name, #cond, tag},
+static const WsBranchSiteRow rows[] = {WS_BRANCH_SITE_CASES(WS_ROW)};
+#undef WS_ROW
+
+int ws_case_count(void) { return (int)(sizeof rows / sizeof rows[0]); }
+const char *ws_case_name(int i) { return rows[i].name; }
+unsigned ws_case_lists(int i) { return rows[i].lists; }
+uint32_t ws_case_word(int i) { return rows[i].word; }
+const char *ws_case_cond(int i) { return rows[i].cond; }
+const char *ws_case_tag(int i) { return rows[i].tag; }
+int ws_case_compiled(int i, const CPUState *cpu) { return rows[i].compiled(cpu); }
+
+#ifdef WS_FIXTURE_HAVE_BRANCH_SITES
+/* Put pc on the lists the case names, as main.cpp passes game.toml's lists. */
+int ws_branch_configure(unsigned lists, uint32_t pc) {
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++)
+        dirty_ram_set_ws_branch_sites(k, &pc, ((lists >> k) & 1u) ? 1 : 0);
+    return 1;
+}
+int ws_branch_stats(int kind, uint64_t *hits, uint64_t *changed) {
+    DirtyRamWsBranchSiteStats st;
+    dirty_ram_get_ws_branch_site_stats(&st);
+    *hits = st.hits[kind];
+    *changed = st.changed[kind];
+    return 1;
+}
+#else
+/* This runtime has no way to give the interpreter the lists (the stage before
+ * PS1B-520): the sites stay where game.toml put them, in the generator only. */
+int ws_branch_configure(unsigned lists, uint32_t pc) {
+    (void)lists; (void)pc;
+    return 0;
+}
+int ws_branch_stats(int kind, uint64_t *hits, uint64_t *changed) {
+    (void)kind; *hits = *changed = 0;
+    return 0;
+}
+#endif

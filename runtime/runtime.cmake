@@ -473,6 +473,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/netplay_exit_reason.c
     ${PSXRECOMP_ROOT}/runtime/src/start_refusal.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_lan_version.c
+    ${PSXRECOMP_ROOT}/runtime/src/drawn_frames.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp
     ${PSXRECOMP_ROOT}/recompiler/src/ps1_exe_parser.cpp
     # (sljit Tier-2 in-process JIT backend removed 2026-07-15 — was disabled by
@@ -1484,6 +1485,14 @@ function(psxrecomp_add_runtime_target target)
                     -Wno-missing-profile)
                 target_link_options(${target} PRIVATE
                     "-fprofile-use=${_psx_pgo_dir}")
+                if(WIN32)
+                    # -fprofile-use turns on hot/cold function splitting. On
+                    # Windows x64 the split code breaks SEH unwinding: the
+                    # Tekken 3 build exited 0xC0000028 (STATUS_BAD_STACK) at
+                    # frame 95, and ran the route exactly without the split.
+                    target_compile_options(${target} PRIVATE
+                        -fno-reorder-blocks-and-partition)
+                endif()
             endif()
         else()
             message(FATAL_ERROR

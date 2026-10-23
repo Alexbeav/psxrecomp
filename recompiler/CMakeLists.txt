@@ -640,8 +640,9 @@ if(BUILD_TESTING)
     endif()
 
     # TAS checkpoint state I/O and the v7 identity dimensions. Both drivers compile their own
-    # C at O0 and O2 with -Werror, so they take no CMake target.
-    if(Python3_EXECUTABLE AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    # C at O0 and O2 with -Werror, so they take no CMake target. They take gcc-style flags,
+    # so they run with GCC and Clang (Apple's included), not MSVC (PS1B-581).
+    if(Python3_EXECUTABLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
         add_test(NAME tas_stateio_manifest COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_tas_stateio.py
             --cc ${CMAKE_C_COMPILER})
@@ -692,6 +693,21 @@ if(BUILD_TESTING)
     )
     target_include_directories(cli_boot_path_test PRIVATE src)
     add_test(NAME cli_boot_path_test COMMAND cli_boot_path_test)
+
+    if(PSXRECOMP_ENABLE_CHD)
+        add_executable(cli_bios_profile_retirement_test
+            tests/cli_bios_profile_retirement_test.cpp
+            src/cli_boot_path.cpp
+            src/ps1_exe_parser.cpp
+            ../runtime/src/cue_sheet.cpp
+            ../runtime/src/iso_reader.cpp
+        )
+        target_include_directories(cli_bios_profile_retirement_test PRIVATE
+            include ../runtime/include lib/fmt/include)
+        target_link_libraries(cli_bios_profile_retirement_test PRIVATE fmt chdr-static)
+        add_test(NAME cli_bios_profile_retirement_test
+            COMMAND cli_bios_profile_retirement_test)
+    endif()
 
     add_executable(ps1_exe_padding_test
         tests/ps1_exe_padding_test.cpp
@@ -1173,6 +1189,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_cmake_comments.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME audio_buffer_startup
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_audio_buffer_startup.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # A set whose discs boot different programs, set up as one folder
         # (PS1B-333): the set file, the disc check, the join, the start
         # scripts, the host project, and the unchanged single-program path.
@@ -1410,6 +1431,13 @@ if(BUILD_TESTING)
                     --self-test
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        if(NOT MSVC)
+            add_test(NAME pgxp_mod_startup
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_pgxp_mod_startup.py
+                    --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+        endif()
+
         # ---- runtime source-invariant guards --------------------------------
         # These live in runtime/tests/ but only READ runtime source, so they
         # need neither a generated BIOS nor a built runtime. Registering them
@@ -1433,6 +1461,7 @@ if(BUILD_TESTING)
                 fast_boot_notice_wiring
                 netplay_early_input_idle_wiring
                 fps_telemetry_opt_in
+                drawn_frames_wiring
                 frame_interpolation_display_rate
                 gl_swap_self_heal
                 netplay_test_input_wiring

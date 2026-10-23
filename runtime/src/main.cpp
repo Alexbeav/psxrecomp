@@ -46,6 +46,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "dirty_ram_interp.h"  /* dirty_ram_set_ws_branch_sites */
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "interrupts.h"
@@ -59,6 +60,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "../third_party/stb_image.h"
 #include "gpu_vk_renderer.h"
 #include "frame_pacing.h"
+#include "drawn_frames.h"
 #include "latency_ring.h"
 #include "sio.h"
 #ifndef PSX_MAX_PLAYERS
@@ -565,6 +567,7 @@ static int post_load_probe_env_on(void) {
 }
 static Uint64   s_fps_last_time = 0;
 static uint64_t s_fps_last_frame = 0;
+static uint64_t s_fps_last_drawn = 0;   /* game-drawn frames (PS1B-468) */
 static std::string s_fps_base_title;
 static int      s_fps_telemetry_enabled = -1; /* -1 = unread env */
 static FramePacer s_frame_pacer = { 0 };
@@ -1283,6 +1286,7 @@ static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_
  * the transient controller-port route. */
 static std::filesystem::path g_runtime_settings_path;
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
+static int           g_audio_buffer_ms = 180;
 static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 /* Local rewind is opt-in: the snap ring is whole-machine state on a frame
@@ -1364,6 +1368,8 @@ static int           g_mod_load_wall_multiplier = -1;
 static int           g_mod_load_release_frames = -1;
 static int           g_mod_disc_speed_divisor = -1;
 static int           g_mod_disc_instant_rate = -1;
+/* Activation records PGXP until GPU startup. -1 means no mod request. */
+static int           g_mod_pgxp_cpu_mode = -1;
 
 static int present_vsync_owns_cadence(void);
 static int present_effective_swap_interval(void);
@@ -1560,6 +1566,10 @@ extern "C" int psx_mod_set_bezel_artwork(const char* path) {
     std::fprintf(stdout, "psxrecomp: mod selected bezel artwork %s\n",
                  g_bezel_path.c_str());
     return 1;
+}
+
+extern "C" void psx_mod_request_pgxp(int cpu_mode) {
+    g_mod_pgxp_cpu_mode = cpu_mode ? 1 : 0;
 }
 
 extern "C" int psx_mod_set_load_acceleration(
@@ -4005,6 +4015,7 @@ struct RuntimePerfSnapshot {
     uint32_t capture_triggers = 0;
     uint64_t capture_last_dispatch_delta = 0;
     int capture_overlays = 0;
+    PsxDrawnFrameCounts drawn = {};
 };
 
 struct RuntimePerfState {
@@ -4048,6 +4059,7 @@ static void runtime_perf_init() {
     const char *enabled = std::getenv("PSX_RUNTIME_PERF_DIAG");
     g_runtime_perf.enabled = enabled && enabled[0] && enabled[0] != '0';
     if (!g_runtime_perf.enabled) return;
+    psx_drawn_frames_set_enabled(1);
 
     g_runtime_perf.frequency = SDL_GetPerformanceFrequency();
     if (!g_runtime_perf.frequency) g_runtime_perf.frequency = 1;
@@ -4109,6 +4121,7 @@ static RuntimePerfSnapshot runtime_perf_snapshot(uint64_t now) {
     overlay_autocapture_get_status(&capture_enabled, &s.capture_triggers,
                                    &s.capture_last_dispatch_delta);
     s.capture_overlays = overlay_capture_count();
+    psx_drawn_frames_get(&s.drawn);
     return s;
 }
 
@@ -4129,6 +4142,12 @@ static void runtime_perf_bench_tick(uint64_t now) {
 
     RuntimePerfSnapshot end = runtime_perf_snapshot(now);
     const RuntimePerfSnapshot &start = g_runtime_perf.bench_start;
+    /* PS1B-468: video rate, game-drawn rate and speed over the window, plus
+     * each drawn-frame signal so a title's counts can be compared. */
+    const PsxFrameRates bench_rates = psx_frame_rates(
+        end.frame - start.frame, end.drawn.drawn - start.drawn.drawn,
+        runtime_perf_ticks_ms(end.counter - start.counter) / 1000.0,
+        gpu_video_standard_is_pal());
     std::fprintf(stdout,
         "[BENCH] window=%llu:%llu frames=%llu wall_ms=%.3f "
         "guest_work_ms=%.3f pacer_ms=%.3f autocapture_main_ms=%.3f "
@@ -4138,7 +4157,10 @@ static void runtime_perf_bench_tick(uint64_t now) {
         "overlay_invalidations=+%u overlay_unregistered=+%u "
         "overlay_stale=+%llu overlay_revalidations=+%u "
         "capture_triggers=+%u capture_overlays=+%d "
-        "capture_last_dispatch_delta=%llu\n",
+        "capture_last_dispatch_delta=%llu "
+        "video_fps=%.3f drawn_fps=%.3f speed_pct=%.1f "
+        "drawn=+%llu drawn_vblanks=+%llu drawn_flips=+%llu "
+        "drawn_writes=+%llu drawn_changes=+%llu drawn_hashed=+%llu\n",
         (unsigned long long)start.frame, (unsigned long long)end.frame,
         (unsigned long long)(end.frame - start.frame),
         runtime_perf_ticks_ms(end.counter - start.counter),
@@ -4157,7 +4179,14 @@ static void runtime_perf_bench_tick(uint64_t now) {
         end.overlay_revalidations - start.overlay_revalidations,
         end.capture_triggers - start.capture_triggers,
         end.capture_overlays - start.capture_overlays,
-        (unsigned long long)end.capture_last_dispatch_delta);
+        (unsigned long long)end.capture_last_dispatch_delta,
+        bench_rates.video_fps, bench_rates.drawn_fps, bench_rates.speed_pct,
+        (unsigned long long)(end.drawn.drawn - start.drawn.drawn),
+        (unsigned long long)(end.drawn.vblanks - start.drawn.vblanks),
+        (unsigned long long)(end.drawn.flips - start.drawn.flips),
+        (unsigned long long)(end.drawn.writes - start.drawn.writes),
+        (unsigned long long)(end.drawn.changes - start.drawn.changes),
+        (unsigned long long)(end.drawn.hashed - start.drawn.hashed));
     std::fflush(stdout);
     g_runtime_perf.bench_reported = true;
 }
@@ -4237,29 +4266,48 @@ static void exit_after_tick(void) {
 static void frame_report_tick(uint64_t frames) {
     static int interval_ms = -1;
     static uint64_t first_ticks = 0, last_ticks = 0, last_frames = 0;
+    static uint64_t first_drawn = 0, last_drawn = 0, first_frames = 0;
     if (interval_ms < 0) {
         const char *e = std::getenv("PSX_FRAME_REPORT_MS");
         interval_ms = (e && e[0]) ? std::atoi(e) : 0;
         if (interval_ms < 0) interval_ms = 0;
         first_ticks = last_ticks = SDL_GetTicks();
-        last_frames = frames;
-        if (interval_ms)
+        last_frames = first_frames = frames;
+        if (interval_ms) {
+            /* PS1B-468: the line also carries the game-drawn rate. */
+            psx_drawn_frames_set_enabled(1);
+            PsxDrawnFrameCounts c;
+            psx_drawn_frames_get(&c);
+            first_drawn = last_drawn = c.drawn;
             std::fprintf(stdout, "psxrecomp: frame report every %d ms\n", interval_ms);
+        }
     }
     if (!interval_ms) return;
     const uint64_t now = SDL_GetTicks();
     if (now - last_ticks < (uint64_t)interval_ms) return;
     const double win_s = (double)(now - last_ticks) / 1000.0;
     const double all_s = (double)(now - first_ticks) / 1000.0;
+    PsxDrawnFrameCounts drawn;
+    psx_drawn_frames_get(&drawn);
+    const int pal = gpu_video_standard_is_pal();
+    const PsxFrameRates win = psx_frame_rates(frames - last_frames,
+                                              drawn.drawn - last_drawn, win_s, pal);
+    const PsxFrameRates all = psx_frame_rates(frames - first_frames,
+                                              drawn.drawn - first_drawn, all_s, pal);
+    /* fps and avg_fps stay the video (VBlank) rate, as before; drawn_fps is
+     * the frames the game drew, speed_pct the video rate against 50/59.94 Hz. */
     std::fprintf(stdout,
-                 "psxrecomp: frames=%llu elapsed_ms=%llu fps=%.1f avg_fps=%.1f\n",
+                 "psxrecomp: frames=%llu elapsed_ms=%llu fps=%.1f avg_fps=%.1f "
+                 "drawn_fps=%.1f avg_drawn_fps=%.1f speed_pct=%.1f\n",
                  (unsigned long long)frames,
                  (unsigned long long)(now - first_ticks),
                  win_s > 0.0 ? (double)(frames - last_frames) / win_s : 0.0,
-                 all_s > 0.0 ? (double)frames / all_s : 0.0);
+                 all_s > 0.0 ? (double)frames / all_s : 0.0,
+                 win.drawn_fps, all.drawn_fps, win.speed_pct);
     std::fflush(stdout);
     last_ticks = now;
     last_frames = frames;
+    last_drawn = drawn.drawn;
 }
 
 static void runtime_perf_diag_tick() {
@@ -9063,19 +9111,29 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         extern uint64_t s_frame_count;
         const Uint64 now = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
+        /* PS1B-468: "Game" is the rate the game draws new pictures, "Video"
+         * the console's VBlank rate, "Speed" Video against 50/59.94 Hz. */
+        PsxDrawnFrameCounts drawn_counts;
+        psx_drawn_frames_set_enabled(1);
+        psx_drawn_frames_get(&drawn_counts);
         if (!s_fps_last_time) {
             s_fps_last_time = now;
             s_fps_last_frame = s_frame_count;
+            s_fps_last_drawn = drawn_counts.drawn;
             if (sdl_window && s_fps_base_title.empty()) {
                 const char *title = SDL_GetWindowTitle(sdl_window);
                 if (title) s_fps_base_title = title;
             }
         } else if (frequency && now - s_fps_last_time >= frequency) {
             const double seconds = (double)(now - s_fps_last_time) / (double)frequency;
-            const double fps = (double)(s_frame_count - s_fps_last_frame) / seconds;
             /* Guest VBlanks per second against the video standard's own rate:
              * a full-speed PAL title is 50 Hz, not 0.83x of NTSC. */
-            const double speed = fps / (gpu_video_standard_is_pal() ? 50.0 : 59.94);
+            const PsxFrameRates rates = psx_frame_rates(
+                s_frame_count - s_fps_last_frame,
+                drawn_counts.drawn - s_fps_last_drawn, seconds,
+                gpu_video_standard_is_pal());
+            const double fps = rates.video_fps;
+            const double speed = rates.speed_pct / 100.0;
             double display_fps = 0.0;
             if (g_frame_interpolation && g_gl_active) {
                 display_fps = g_frame_interpolation_fps > 0
@@ -9086,11 +9144,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 char title[256];
                 if (display_fps > 0.0) {
                     snprintf(title, sizeof(title),
-                             "%s  [Game %.0f fps %.2fx | Display %.0f fps]",
-                             s_fps_base_title.c_str(), fps, speed, display_fps);
+                             "%s  [Game %.0f fps | Video %.0f fps | Speed %.0f%% | Display %.0f fps]",
+                             s_fps_base_title.c_str(), rates.drawn_fps, fps,
+                             rates.speed_pct, display_fps);
                 } else {
-                    snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
-                             s_fps_base_title.c_str(), fps, speed);
+                    snprintf(title, sizeof(title),
+                             "%s  [Game %.0f fps | Video %.0f fps | Speed %.0f%%]",
+                             s_fps_base_title.c_str(), rates.drawn_fps, fps,
+                             rates.speed_pct);
                 }
                 SDL_SetWindowTitle(sdl_window, title);
             }
@@ -9098,11 +9159,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 char osd[96];
                 if (display_fps > 0.0) {
                     snprintf(osd, sizeof(osd),
-                             "Game %.0f FPS  %.2fx | Display %.0f FPS",
-                             fps, speed, display_fps);
+                             "Game %.0f FPS | Video %.0f FPS | Speed %.0f%% | Display %.0f FPS",
+                             rates.drawn_fps, fps, rates.speed_pct, display_fps);
                 } else {
-                    snprintf(osd, sizeof(osd), "Game %.0f FPS  %.2fx",
-                             fps, speed);
+                    snprintf(osd, sizeof(osd),
+                             "Game %.0f FPS | Video %.0f FPS | Speed %.0f%%",
+                             rates.drawn_fps, fps, rates.speed_pct);
                 }
                 host_osd_set_status(osd);
             }
@@ -9125,10 +9187,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * than replay%. Pass: post-settle present_gap_p95 ≤ 33ms. */
                 netplay_present_gap_stats(&gap_p95, &gap_max);
                 std::fprintf(stderr,
-                    "[FPS] game: %.1f fps (%.2fx) | frames: %llu | "
+                    "[FPS] game: %.1f fps | video: %.1f fps (%.2fx) | frames: %llu | "
                     "guest=%.2f ms/f admit=%.2f ms/f replay=%.0f%% "
                     "present_gap_p95=%u ms max=%u ms (n=%llu)\n",
-                    fps, speed, (unsigned long long)s_frame_count,
+                    rates.drawn_fps, fps, speed, (unsigned long long)s_frame_count,
                     guest_ms, admit_ms, replay_pct,
                     (unsigned)gap_p95, (unsigned)gap_max,
                     (unsigned long long)s_np_timing_frames);
@@ -9136,12 +9198,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 s_np_guest_ticks = 0;
                 s_np_timing_frames = 0;
             } else {
-                std::fprintf(stderr, "[FPS] game: %.1f fps (%.2fx) | frames: %llu\n",
-                             fps, speed, (unsigned long long)s_frame_count);
+                std::fprintf(stderr,
+                             "[FPS] game: %.1f fps | video: %.1f fps | speed: %.0f%% | frames: %llu\n",
+                             rates.drawn_fps, fps, rates.speed_pct,
+                             (unsigned long long)s_frame_count);
             }
             std::fflush(stderr);
             s_fps_last_time = now;
             s_fps_last_frame = s_frame_count;
+            s_fps_last_drawn = drawn_counts.drawn;
         }
     }
 
@@ -15374,6 +15439,10 @@ int main(int argc, char** argv) {
         if (default_game_config.empty())
             default_game_config =
                 resolve_existing_runtime_path(PSX_DEFAULT_GAME_CONFIG_PATH, argv[0]);
+        /* A missing baked config is a load failure, not a config-free start
+         * (PS1B-427). Keep its path so the existing refusal names the file. */
+        if (default_game_config.empty())
+            default_game_config = anchor_on_exe_dir(argv[0], PSX_DEFAULT_GAME_CONFIG_PATH);
         if (!default_game_config.empty()) {
             default_game_config_storage = default_game_config.string();
             game_config_path = default_game_config_storage.c_str();
@@ -15707,6 +15776,20 @@ int main(int argc, char** argv) {
                 gc.ws_cull_plane_nx_sites.data(), (int)gc.ws_cull_plane_nx_sites.size());
             gpu_ws_set_xclip_load_sites(
                 gc.ws_cull_xclip_load_sites.data(), (int)gc.ws_cull_xclip_load_sites.size());
+            /* Branch-decision lists: the generated code widens or keeps these
+             * branches; the dirty-RAM interpreter decides them the same way
+             * (dirty_ram_branch_taken, PS1B-520). */
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_BLTZ,
+                gc.ws_cull_bltz_sites.data(), (int)gc.ws_cull_bltz_sites.size());
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_KEEP,
+                gc.ws_cull_branch_keep_sites.data(),
+                (int)gc.ws_cull_branch_keep_sites.size());
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_NCLIP_KEEP,
+                gc.ws_cull_nclip_keep_sites.data(),
+                (int)gc.ws_cull_nclip_keep_sites.size());
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_NCLIP_EXACT,
+                gc.ws_cull_nclip_exact_sites.data(),
+                (int)gc.ws_cull_nclip_exact_sites.size());
             {
                 std::vector<uint32_t> addresses, expected, results;
                 addresses.reserve(gc.ws_cull_keep_sites.size());
@@ -15796,6 +15879,7 @@ int main(int argc, char** argv) {
                 psx_ws_set_backdrop_sites(gc.ws_backdrop_x_sites.data(),
                                           (int)gc.ws_backdrop_x_sites.size());
             g_audio_spu_hq     = gc.runtime.audio_spu_hq;
+            g_audio_buffer_ms  = gc.runtime.audio_buffer_ms;
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
@@ -17579,53 +17663,6 @@ int main(int argc, char** argv) {
                 "The game cannot start with the selected mods.\n\n" + mod_error);
         }
     }
-    /* Activation callbacks are re-run after every launcher session. Clear
-     * game-owned controller overrides/policies first so disabling a package
-     * cannot leave its prior state latched across a soft return. */
-    g_mod_controller_mode_override.fill(-1);
-    for (auto& policy : g_mod_controller_policy)
-        policy = ModControllerPresentationPolicy{};
-    g_mod_load_wall_multiplier = -1;
-    g_mod_load_release_frames = -1;
-    g_mod_disc_speed_divisor = -1;
-    g_mod_disc_instant_rate = -1;
-    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
-    g_turbo_load_wall_multiplier = 0;
-    g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
-    if (!turbo_loads_offered)
-        g_turbo_loads_enabled = 0;
-    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
-    mod_runtime_activate_plugins();
-    apply_netplay_local_viewport_aspect(net_cfg.enabled);
-    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
-        if (g_mod_controller_mode_override[i] >= 0)
-            player_mode[i] = g_mod_controller_mode_override[i];
-    }
-    if (g_mod_load_wall_multiplier >= 0 && g_fast_loading_optout) {
-        std::fprintf(stdout, "psxrecomp: Fast Loading is off for this title "
-                     "(game.toml [runtime] fast_loading_optout)\n");
-    } else if (g_mod_load_wall_multiplier >= 0) {
-        g_turbo_loads_enabled = 1;
-        g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
-        g_turbo_load_release_frames = g_mod_load_release_frames;
-        /* Fast Loading advances the guest at a host rate greater than real
-         * time. Keep the canonical SPU/CD stream running, but discard the
-         * accelerated presentation-side audio until pacing resumes; otherwise
-         * the SDL bridge overflows and the load becomes observably unstable. */
-        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
-        if (g_turbo_load_wall_multiplier) {
-            std::fprintf(stdout,
-                "psxrecomp: mod selected %dx load acceleration "
-                "(%d release frames)\n",
-                g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
-        } else {
-            std::fprintf(stdout,
-                "psxrecomp: mod selected uncapped load acceleration "
-                "(%d release frames)\n",
-                g_turbo_load_release_frames);
-        }
-    }
-
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
      * settings.toml override and the launcher's choice. No-op when unchanged. */
@@ -17678,6 +17715,56 @@ int main(int argc, char** argv) {
 
 session_reboot:
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */
+    /* Activation callbacks are re-run after every launcher session. Clear
+     * game-owned controller overrides/policies first so disabling a package
+     * cannot leave its prior state latched across a soft return. */
+    g_mod_controller_mode_override.fill(-1);
+    for (auto& policy : g_mod_controller_policy)
+        policy = ModControllerPresentationPolicy{};
+    g_mod_load_wall_multiplier = -1;
+    g_mod_load_release_frames = -1;
+    g_mod_disc_speed_divisor = -1;
+    g_mod_disc_instant_rate = -1;
+    g_mod_pgxp_cpu_mode = -1;
+    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
+    g_turbo_load_wall_multiplier = 0;
+    g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
+    if (!turbo_loads_offered)
+        g_turbo_loads_enabled = 0;
+    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    mod_runtime_activate_plugins();
+    /* Frame interpolation and bezel mods select OpenGL; --renderer still wins. */
+    if (cli_renderer >= 0) g_video_renderer = cli_renderer;
+    apply_netplay_local_viewport_aspect(net_cfg.enabled);
+    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+        if (g_mod_controller_mode_override[i] >= 0)
+            player_mode[i] = g_mod_controller_mode_override[i];
+    }
+    if (g_mod_load_wall_multiplier >= 0 && g_fast_loading_optout) {
+        std::fprintf(stdout, "psxrecomp: Fast Loading is off for this title "
+                     "(game.toml [runtime] fast_loading_optout)\n");
+    } else if (g_mod_load_wall_multiplier >= 0) {
+        g_turbo_loads_enabled = 1;
+        g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
+        g_turbo_load_release_frames = g_mod_load_release_frames;
+        /* Fast Loading advances the guest at a host rate greater than real
+         * time. Keep the canonical SPU/CD stream running, but discard the
+         * accelerated presentation-side audio until pacing resumes; otherwise
+         * the SDL bridge overflows and the load becomes observably unstable. */
+        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
+        if (g_turbo_load_wall_multiplier) {
+            std::fprintf(stdout,
+                "psxrecomp: mod selected %dx load acceleration "
+                "(%d release frames)\n",
+                g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
+        } else {
+            std::fprintf(stdout,
+                "psxrecomp: mod selected uncapped load acceleration "
+                "(%d release frames)\n",
+                g_turbo_load_release_frames);
+        }
+    }
+
     static int s_emu_session = 0;
     const bool rematch_session = (++s_emu_session > 1);
     std::fprintf(stdout, "psxrecomp runtime: loading BIOS from %s%s\n",
@@ -17822,9 +17909,9 @@ session_reboot:
     const int requested_scale = g_video_scale;
     g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
     gr_set_texture_filter(g_video_texfilter);
-    /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
-     * with both off every setter below leaves the tracking caches disabled and
-     * the draw path is the faithful integer one, unchanged. */
+    /* Sub-pixel vertex precision + perspective-correct UVs. Apply saved
+     * settings and the current offline mod request after GPU initialization.
+     * With both disabled caches stay off and drawing uses integer coordinates. */
     /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
      * corrections from process start so free-running (headless) boots can be
      * measured from the first projected vertex — a TCP toggle always arrives
@@ -17835,9 +17922,12 @@ session_reboot:
         g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
     if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
         g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
-    gte_geometry_correction_set(g_video_geometry_correction);
-    gpu_texture_correction_set(g_video_perspective_texturing);
-    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
+    const bool pgxp_mod_enabled = g_mod_pgxp_cpu_mode >= 0 && !net_cfg.enabled;
+    const int pgxp_session_geometry = g_video_geometry_correction || pgxp_mod_enabled;
+    const int pgxp_session_texture = g_video_perspective_texturing || pgxp_mod_enabled;
+    gte_geometry_correction_set(pgxp_session_geometry);
+    gpu_texture_correction_set(pgxp_session_texture);
+    pgxp_set_cpu_mode(pgxp_mod_enabled ? g_mod_pgxp_cpu_mode : g_video_pgxp_cpu_mode);
     pgxp_set_tolerance(g_video_pgxp_tolerance);
     /* Scanlines: env override wins over config, same as the corrections above,
      * so a headless/free-run boot can be captured with the effect armed from the
@@ -17851,12 +17941,12 @@ session_reboot:
     }
     gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                               g_video_scanline_strength);
-    if (g_video_geometry_correction || g_video_perspective_texturing) {
+    if (pgxp_session_geometry || pgxp_session_texture) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
-                     g_video_geometry_correction ? "on" : "off",
-                     g_video_perspective_texturing ? "on" : "off",
-                     (g_video_geometry_correction && requested_scale < 2)
+                     pgxp_session_geometry ? "on" : "off",
+                     pgxp_session_texture ? "on" : "off",
+                     (pgxp_session_geometry && requested_scale < 2)
                          ? " (needs [video] supersampling >= 2 to be visible)" : "");
     }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
@@ -18312,7 +18402,12 @@ session_reboot:
                 cfg.channels    = 2;
                 cfg.source_rate = 44100.0;            /* SPU render rate */
                 cfg.host_rate   = (double)have.freq;  /* actual device rate */
-                if (rab_init(&s_drc, &cfg) == 0) s_drc_ready = true;
+                cfg.target_ms   = (double)g_audio_buffer_ms;
+                if (rab_init(&s_drc, &cfg) == 0) {
+                    s_drc_ready = true;
+                    std::fprintf(stderr, "[audio] bridge buffer_ms=%.0f source_rate=%.0f host_rate=%.0f\n",
+                                 s_drc.cfg.target_ms, s_drc.cfg.source_rate, s_drc.cfg.host_rate);
+                }
             }
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
@@ -19709,14 +19804,15 @@ soft_return_lobby:
                                    player_device[i]) <= 1) {
                         player_device[i] = "gamepad";
                     }
-                    /* Same resolution as the first launcher-exit path, and the
-                     * mod-override arm matters HERE specifically: `goto
-                     * session_reboot` re-enters the emulator BELOW the block
-                     * that applies g_mod_controller_mode_override, so a soft
-                     * return from the lobby never re-runs it. Before this
-                     * helper existed, an override survived a rematch only
-                     * because it round-tripped through ls.pad_mode[]; a bare
-                     * lock clamp here would have silently dropped it. */
+                    /* Same resolution as the first launcher-exit path, with no
+                     * mod override (-1). `goto session_reboot` now re-enters
+                     * ABOVE the override reset, plugin activation and apply
+                     * block (PS1G-66), so the rematch's own mods set the
+                     * override after this. g_mod_controller_mode_override
+                     * still holds the previous session's value here: passing
+                     * it would keep a mod's pad mode for a rematch that drops
+                     * the mod (netplay clears mods), over lock_mode, and write
+                     * it to settings.toml below. */
                     player_mode[i] =
                         PSXRecompV4::resolve_player_mode_after_launcher(
                             PSXRecompV4::launcher_pad_mode_from_launcher(
@@ -19724,7 +19820,7 @@ soft_return_lobby:
                                 kLauncherNegconMode),
                             ctrl_lock_mode,
                             ctrl_locked_mode[i],
-                            g_mod_controller_mode_override[i]);
+                            -1);
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                 }
             }

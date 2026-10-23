@@ -1,4 +1,6 @@
-/* Physical MODE under PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2 (PS1G-127, Chrono Cross 4538M, record 4442).
+/* Physical MODE under PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2 (PS1G-127, Chrono Cross 4538M, record 4442)
+ * and nymashock-1.29.0 (PS1G-126, MediEvil 4875M, record 4102). nymashock-1.29.0 also evaluates the
+ * press when an input arrives while the pad's DTR is inactive.
  * The pad only latches the button when an input arrives; the press is evaluated when the selected
  * port's DTR falls. It toggles analog once per press, a press while the mode is locked is consumed,
  * and a held button does not toggle again [ORACLE FIXTURE: corpus PSX-TAS-001].
@@ -30,6 +32,7 @@ int memcard_write_sector(int slot,int sector,const uint8_t *buf) { (void)slot;(v
 void memcard_flush(int slot) { (void)slot; }
 typedef struct { int dtr, button, previous, locked, analog; } ModelPad;
 static ModelPad model[2];
+static int on_input;
 static int failures, comparisons;
 static void check(int ok, const char *what) { if (!ok) { printf("FAIL: %s\n", what); failures++; } }
 static void put(const char *name, const char *value) {
@@ -39,13 +42,14 @@ static void put(const char *name, const char *value) {
     setenv(name, value, 1);
 #endif
 }
+static void model_check(int port) {
+    if (model[port].button && !model[port].previous && !model[port].locked) model[port].analog ^= 1;
+    model[port].previous = model[port].button;
+}
 static void model_dtr(int port, int dtr) {
     const int was = model[port].dtr;
     model[port].dtr = dtr;
-    if (was && !dtr) {
-        if (model[port].button && !model[port].previous && !model[port].locked) model[port].analog ^= 1;
-        model[port].previous = model[port].button;
-    }
+    if (was && !dtr) model_check(port);
 }
 static void compare(void) {
     for (int p = 0; p < 2; ++p) {
@@ -54,7 +58,12 @@ static void compare(void) {
     }
     ++comparisons;
 }
-static void input(int port, int pressed) { sio_set_pad_mode_button(port, pressed); model[port].button = pressed != 0; compare(); }
+static void input(int port, int pressed) {
+    sio_set_pad_mode_button(port, pressed);
+    model[port].button = pressed != 0;
+    if (on_input && !model[port].dtr) model_check(port);
+    compare();
+}
 static void ctrl(unsigned value) {
     sio_write(0x1F80104A, value);
     const unsigned next = (value & 0x40) ? 0 : value;
@@ -62,19 +71,34 @@ static void ctrl(unsigned value) {
     compare();
 }
 static void lock_mode(int port, int locked) { analog_mode_locked[port] = (uint8_t)locked; model[port].locked = locked; compare(); }
-int main(void) {
-    put("PSX_INPUT_ROUTE_MODE_MODEL", "octoshock-2.4.2");
-    put("PSX_INPUT_ROUTE_PAD_ACK_MODEL", "nymashock-1.29.0-dualshock");
+static void run(const char *name) {
+    on_input = !strcmp(name, "nymashock-1.29.0");
+    put("PSX_INPUT_ROUTE_MODE_MODEL", name);
     sio_init();
+    memset(pad_analog, 0, sizeof pad_analog); memset(analog_mode_locked, 0, sizeof analog_mode_locked);
     memset(model, 0, sizeof model);
-    input(0, 1); check(!pad_analog[0], "an input alone must not toggle");
-    ctrl(2); ctrl(0); check(pad_analog[0], "the first DTR fall toggles");
-    ctrl(2); ctrl(0); check(pad_analog[0], "a held button must not toggle twice");
-    input(0, 0); ctrl(2); ctrl(0);
-    input(0, 1); lock_mode(0, 1); ctrl(2); ctrl(0); lock_mode(0, 0); ctrl(2); ctrl(0);
-    check(pad_analog[0], "a press while locked is consumed, not queued");
-    input(1, 1); ctrl(0x2002); ctrl(2); check(pad_analog[1], "moving DTR to the other port is a fall on the first");
+    if (on_input) {
+        input(0, 1); check(pad_analog[0], "an input while deselected toggles at once");
+        ctrl(2); ctrl(0); check(pad_analog[0], "a held button must not toggle again at the DTR fall");
+        input(0, 0); ctrl(2); input(0, 1); check(pad_analog[0], "an input while selected waits");
+        ctrl(0); check(!pad_analog[0], "and toggles at the DTR fall");
+        input(0, 0); input(0, 1); lock_mode(0, 1); input(0, 0); lock_mode(0, 0);
+        check(pad_analog[0], "a release and a new press toggle at once; locking afterwards changes nothing");
+        input(0, 0); lock_mode(0, 1); input(0, 1); lock_mode(0, 0); input(0, 1);
+        check(pad_analog[0], "a press consumed while locked is not queued");
+        input(0, 0);
+    }
+    if (!on_input) {
+        input(0, 1); check(!pad_analog[0], "an input alone must not toggle");
+        ctrl(2); ctrl(0); check(pad_analog[0], "the first DTR fall toggles");
+        ctrl(2); ctrl(0); check(pad_analog[0], "a held button must not toggle twice");
+        input(0, 0); ctrl(2); ctrl(0);
+        input(0, 1); lock_mode(0, 1); ctrl(2); ctrl(0); lock_mode(0, 0); ctrl(2); ctrl(0);
+        check(pad_analog[0], "a press while locked is consumed, not queued");
+        input(1, 1); ctrl(0x2002); ctrl(2); check(pad_analog[1], "moving DTR to the other port is a fall on the first");
+    }
     ctrl(0x42); ctrl(0); check(1, "a control reset drops every DTR");
+    if (on_input) { ctrl(0x2002); input(1, 0); input(1, 1); ctrl(0x42); check(1, "a reset deselect evaluates the selected port"); }
     unsigned seed = 19;
     for (unsigned i = 0; i < 2000; ++i) {
         seed = seed * 1664525u + 1013904223u;
@@ -95,6 +119,11 @@ int main(void) {
     check(sio_snapshot_read(wire, n), "snapshot read");
     check(!memcmp(button, pad_mode_button, 2) && !memcmp(previous, pad_mode_previous, 2), "the latch survives a snapshot");
     free(wire);
+}
+int main(void) {
+    put("PSX_INPUT_ROUTE_PAD_ACK_MODEL", "nymashock-1.29.0-dualshock");
+    run("octoshock-2.4.2");
+    run("nymashock-1.29.0");
     /* Default: with no MODE model the bridge ignores the button. */
     put("PSX_INPUT_ROUTE_MODE_MODEL", "");
     sio_init();

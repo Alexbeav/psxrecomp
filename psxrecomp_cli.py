@@ -2197,6 +2197,11 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     if not config.is_file():
         progress.error(f"config not found: {config}", code=EXIT_USAGE)
         return EXIT_USAGE
+    diag_raw = (getattr(args, "diagnostic_dir", None) or "").strip()
+    diagnostic_required = bool(getattr(args, "diagnostic_required", False))
+    if diagnostic_required and not diag_raw:
+        progress.error("--diagnostic-required needs --diagnostic-dir", code=EXIT_USAGE)
+        return EXIT_USAGE
     set_tool = program_set_tool(config)
     if set_tool is not None:
         return set_tool.rebuild_set(sys.modules[__name__], args, progress)
@@ -2209,7 +2214,6 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     target = args.target or "psx-runtime"
     exe_basename = args.exe_basename or "psx-runtime"
 
-    diag_raw = (getattr(args, "diagnostic_dir", None) or "").strip()
     diag_dir = _resolve_under(project_root, diag_raw) if diag_raw else None
     diagnostic_only = bool(getattr(args, "diagnostic_only", False))
     if diagnostic_only:
@@ -2224,9 +2228,9 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                            + (f" and cannot be combined with {', '.join(clash)}" if clash else ""),
                            code=EXIT_USAGE)
             return EXIT_USAGE
-        if diag_dir == build_dir:
-            progress.error("--diagnostic-dir must differ from --build-dir", code=EXIT_USAGE)
-            return EXIT_USAGE
+    if (diagnostic_only or diagnostic_required) and diag_dir == build_dir:
+        progress.error("--diagnostic-dir must differ from --build-dir", code=EXIT_USAGE)
+        return EXIT_USAGE
 
     secs = load_sections(config)
     pgo = secs.get("pgo") or {}
@@ -2315,8 +2319,12 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if diagnostic_exe is None:
             progress.error(f"diagnostic build failed: {diagnostic_error}", code=EXIT_ERROR)
             return EXIT_ERROR
+        # PS1B-153: the result names the overlay toolchain beside the product, or null when
+        # staging failed (its WARNING line above says why) and overlays will run interpreted.
+        overlay_toolchain = Path(diagnostic_exe).parent / "overlay_toolchain"
         progress.phase("done", pct=1.0, message="Diagnostic build complete")
-        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe))
+        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe),
+                        overlay_toolchain=str(overlay_toolchain) if overlay_toolchain.is_dir() else None)
         return EXIT_OK
 
     # mute_host_audio / hide_video: default ON; game.toml / CLI can disable.
@@ -2443,9 +2451,11 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             project_root, diag_dir, target, exe_basename, cmake_extra, progress=progress
         )
 
-    progress.phase("done", pct=1.0, message="Rebuild complete")
+    ok = not diagnostic_required or diagnostic_exe is not None
+    progress.phase("done", pct=1.0,
+                   message="Rebuild complete" if ok else "Required diagnostic build failed")
     progress.result(
-        ok=True,
+        ok=ok,
         exe=str(exe),
         pgo=pgo_enabled,
         pgo_skipped=pgo_skip_reason or None,
@@ -2453,7 +2463,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         diagnostic_exe=str(diagnostic_exe) if diagnostic_exe else None,
         diagnostic_error=diagnostic_error or None,
     )
-    return EXIT_OK
+    return EXIT_OK if ok else EXIT_ERROR
 
 
 def stage_notices_for_product(project_root: Path, exe_dir: Path, progress,
@@ -3084,6 +3094,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="build only the --diagnostic-dir product; the normal product in --build-dir "
         "(including a PGO build) is not configured, compiled or pruned",
+    )
+    r.add_argument(
+        "--diagnostic-required",
+        action="store_true",
+        help="require the --diagnostic-dir product: return failure if its build fails, "
+        "while keeping the normal product",
     )
     r.set_defaults(handler=cmd_rebuild)
 

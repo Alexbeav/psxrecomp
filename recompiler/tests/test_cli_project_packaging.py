@@ -2,7 +2,12 @@
 """Regression guards for the self-contained CLI project pipeline."""
 
 from pathlib import Path
+import importlib.util
+import os
 import sys
+import tempfile
+from unittest.mock import patch
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,6 +16,54 @@ ROOT = Path(__file__).resolve().parents[2]
 def require(source: str, needle: str, message: str) -> None:
     if needle not in source:
         raise AssertionError(message)
+
+
+def check_packaged_profiles() -> None:
+    """Run the real packager with authored marker files, never BIOS images."""
+    retired_seed = "phase2_ghidra_seeds_SCPH101.json"
+    if (ROOT / "bios/SCPH101.toml").exists() or (
+            ROOT / "recompiler/seeds" / retired_seed).exists():
+        raise AssertionError("retired profile and seed must both be removed")
+    profiles = {path.name for path in (ROOT / "bios").glob("*.toml")}
+    spec = importlib.util.spec_from_file_location("build_cli", ROOT / "tools/build_cli.py")
+    package = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package)
+
+    with tempfile.TemporaryDirectory(prefix="cli-package-test-") as directory:
+        fixture = Path(directory)
+        files = [
+            "runtime/runtime.cmake", "recompiler/source-marker.txt",
+            "recompiler/seeds/phase2_ghidra_seeds.json", "tools/embed_spirv.py",
+            "bios/openbios.bin", "bios/OpenBIOS.LICENSE", ".gitignore",
+            "LICENSE", "THIRD_PARTY_ATTRIBUTION.md", "README.md",
+        ]
+        files += [f"bios/{name}" for name in profiles]
+        suffix = ".exe" if os.name == "nt" else ""
+        files += [f"build/{name}{suffix}" for name in package.TOOLS]
+        for name in files:
+            destination = fixture / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(f"authored packaging fixture: {name}\n", encoding="utf-8")
+        with patch.object(package, "ROOT", fixture), patch.object(
+                sys, "argv", ["build_cli.py", "--skip-build", "--build-dir", "build"]):
+            if package.main() != 0:
+                raise AssertionError("CLI packager failed")
+
+        archive, = (fixture / "dist").glob("*.zip")
+        with zipfile.ZipFile(archive) as packaged:
+            names = packaged.namelist()
+            actual = {
+                Path(name).name for name in names
+                if "/framework/bios/" in name and name.endswith(".toml")
+            }
+            if actual != profiles:
+                raise AssertionError(f"packaged profiles {actual} differ from source {profiles}")
+            if any(Path(name).name in {"SCPH101.toml", retired_seed} for name in names):
+                raise AssertionError("CLI package contains retired BIOS assets")
+            for name in profiles:
+                member, = (item for item in names if item.endswith(f"/framework/bios/{name}"))
+                if packaged.read(member) != (fixture / "bios" / name).read_bytes():
+                    raise AssertionError(f"CLI package changed profile {name}")
 
 
 def main() -> int:
@@ -76,6 +129,8 @@ def main() -> int:
             "psxrecomp-bios config mode lacks the ROM override")
     require(bios, 'a == "--out-dir"',
             "psxrecomp-bios config mode lacks the output override")
+
+    check_packaged_profiles()
 
     print("PASS: CLI profiles, stage order, BIOS overrides, and UI isolation agree")
     return 0

@@ -6,19 +6,48 @@ of programs (set.toml, tools/program_set.py) has one recipe per program, in
 the program's folder, and every one of them is checked. Their BIOS profile
 paths are taken from the stage root: psxrecomp/ is there once, and setup
 links it into each program's folder.
+
+A Python before 3.11 with no tomli (the stock python3 of macOS 13) reads the
+recipe with tools/program_set.py's reader, the one set.toml already uses: it
+reads the [runtime] and [recompiler] keys this check needs (PS1B-576).
 """
 import sys
 from pathlib import Path
 try:
     import tomllib
 except ModuleNotFoundError:
-    import tomli as tomllib
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
+
+
+def program_set_module():
+    tools = str(Path(__file__).resolve().parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import program_set
+    return program_set
+
+
+def load_recipe(recipe):
+    """The recipe's tables: tomllib or tomli when present, else program_set's reader."""
+    if tomllib is not None:
+        with recipe.open("rb") as handle:
+            return tomllib.load(handle)
+    tables = program_set_module().parse_toml_subset(recipe.read_text(encoding="utf-8"))
+    # That reader reads [runtime] and [recompiler] tables only. A dotted key or an
+    # inline table for them would be missed, so it stops instead of guessing.
+    for key in tables.get("", {}):
+        if key.split(".")[0].strip().strip("\"'") in ("runtime", "recompiler"):
+            raise ValueError(recipe.name + ": write " + key + " inside its [table] on a Python "
+                             "without tomllib or tomli")
+    return tables
 
 
 def recipe_assets(stage, recipe):
     """The BIOS files one recipe needs in the stage."""
-    with recipe.open("rb") as handle:
-        config = tomllib.load(handle)
+    config = load_recipe(recipe)
     openbios = config.get("runtime", {}).get("openbios", True)
     if not isinstance(openbios, bool):
         raise ValueError("runtime.openbios must be a boolean")
@@ -37,10 +66,7 @@ def recipe_assets(stage, recipe):
 
 def set_recipes(stage):
     """Each program's recipe of a staged set, in set order."""
-    tools = str(Path(__file__).resolve().parent)
-    if tools not in sys.path:
-        sys.path.insert(0, tools)
-    import program_set
+    program_set = program_set_module()
     try:
         spec = program_set.load_set(stage / program_set.SET_FILE)
     except program_set.SetError as error:

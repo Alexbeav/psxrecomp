@@ -199,6 +199,8 @@ with tempfile.TemporaryDirectory() as tmp:
     expected = hashlib.sha256(b''.join(struct.pack('<H5B', *r) for r in mode_rows)).hexdigest()
     assert got['original_controller_sha256'] == got['expected_protocol_sha256'] == expected
     assert got['controller_profile'] == 'octoshock-2.4.2-dualshock-mode' and got['mode_model'] == 'octoshock-2.4.2'
+    nyma = run_native.route_identity(path, axis_model='octoshock-byte', mode_model='nymashock-1.29.0')
+    assert nyma['controller_profile'] == 'nymashock-1.29.0-dualshock-mode' and nyma['mode_model'] == 'nymashock-1.29.0'
     assert got['frames'] == 4 and got['steps'] == 3
     # A route without a MODE press keeps its identity when the model is named (the profile names the model).
     plain = Path(tmp) / 'plain-mode.psxrti2'

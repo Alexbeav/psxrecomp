@@ -51,12 +51,43 @@ for option, suffix in (('pad-ack', '-dualshock'), ('card', ''),
             else:
                 raise AssertionError('argument reader did not stop before file access')
 
+# The 2.8 core's plain gamepad (PS1G-128): an explicit pad-ACK name and card label.
+for option, value, valid in (('pad-ack', 'nymashock-2.8-gamepad', True),
+                             ('pad-ack', 'nymashock-2.8-dualshock', False),
+                             ('pad-ack', 'nymashock-2.8', False),
+                             ('card', 'nymashock-2.8', True),
+                             ('card', 'nymashock-2.8-gamepad', False)):
+    with patch('sys.argv', ['run_native.py', *required, '--' + option + '-model', value]),          patch.object(argparse.ArgumentParser, 'parse_args', stop_after_parse),          contextlib.redirect_stderr(io.StringIO()):
+        try:
+            run_native.main()
+        except Parsed as parsed:
+            assert valid and getattr(parsed.arguments, option.replace('-', '_') + '_model') == value
+        except SystemExit as rejected:
+            assert not valid and rejected.code == 2
+        else:
+            raise AssertionError('argument reader did not stop before file access')
+
+# A DualShock (PSXRTI2) route refuses the plain-gamepad ACK name; a digital route admits it.
+for fmt, admitted in (('PSXRTI2', False), ('PSXRTI1', True)):
+    class Reached(Exception):
+        pass
+    identity = {'frames': 2, 'format': fmt} if fmt == 'PSXRTI2' else {'frames': 2}
+    with patch('sys.argv', ['run_native.py', *required, '--pad-ack-model', 'nymashock-2.8-gamepad']),          patch.object(Path, 'resolve', lambda self, strict=False: self),          patch.object(run_native, 'source_clock_identity', return_value=None),          patch.object(run_native, 'route_identity', return_value=identity),          patch.object(run_native, 'checkpoint_interval', side_effect=Reached):
+        try:
+            run_native.main()
+        except ValueError as rejected:
+            assert not admitted and 'plain-gamepad' in str(rejected), str(rejected)
+        except Exception as other:
+            assert admitted, repr(other)
+        else:
+            assert admitted
+
 # Stop the real reader at card identity, after its selector/repair guard.
 class CardAdmitted(Exception):
     pass
 
 
-for version in ('1.29.0', '1.32.1'):
+for version in ('1.29.0', '1.32.1', '2.8'):
     with patch('sys.argv', ['run_native.py', *required, '--card1', 'card',
                            '--card-model', 'nymashock-' + version,
                            '--legacy-card-repair', 'off']), \
@@ -89,4 +120,4 @@ with patch.object(megamanx4.source, 'read', return_value=receipt), \
     else:
         raise AssertionError('old receipt was silently admitted under the renamed profile')
 
-print('core selectors: four profile identities, eight valid labels, four unknown labels rejected; both card guards admit; old receipt refused')
+print('core selectors: four profile identities, eight valid labels, four unknown labels rejected; 2.8 plain-gamepad and card labels admitted, DualShock route refuses the gamepad ACK; card guards admit; old receipt refused')

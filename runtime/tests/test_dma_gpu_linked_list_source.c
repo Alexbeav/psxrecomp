@@ -61,6 +61,7 @@ uint32_t gpu_read_gpuread(void) {abort();}
 void gpu_set_gp0_source(uint32_t a) {(void)a;}
 static int ready_state=1;
 int gpu_dma_source_ll_ready(void) {return ready_state;}
+int gpu_dma_walk_ready(void) {return ready_state;}
 void gpu_write_gp0(uint32_t v) {uploaded[upload_count++]=v;}
 uint32_t gpu_dma_vram_upload_words(void) {return upload_left;}
 void gpu_ws_begin_linked_list(void) {}
@@ -182,12 +183,13 @@ int main(int argc,char **argv) {
             }
         }
     }
-    /* The default model is the event-driven DMA2 walker (dma_gpu_ll.c). The kick
-     * holds the CPU only while the device service moves the walk, and this
-     * fixture services only the source machines, so the walk stays live
-     * checkpoint state. Restoring it into a cleared controller must resume it. */
-    set_option("PSX_GPU_DMA_MODEL","");setup(6,1);try_execute(2);
-    assert(!upload_count&&!irqs&&gpu_linked_list.active);
+    /* The default model is the service-clock DMA2 walker (dma_gpu_ll.c). The kick
+     * has a lead of 64 clocks: one header (15) and 49 payload words. A 65-word
+     * node outlasts it, and this fixture services only the source machines, so
+     * the walk stays live checkpoint state. Restoring it into a cleared
+     * controller must resume it. */
+    set_option("PSX_GPU_DMA_MODEL","");setup(65,1);try_execute(2);
+    assert(upload_count==49&&!irqs&&gpu_linked_list.active);
     {
         uint8_t base[512];
         assert(dma_snapshot_bytes()<=sizeof base);

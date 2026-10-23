@@ -8,7 +8,11 @@ default stem applies) made the derivation's grep exit 1, and under
 "stage_setup_sdk: ready" with no README-SETUP.txt. The derivation lives in
 recipe_bios_hint(); this test runs it under the packager's shell options on
 the three recipe shapes the kits use.
+
+It runs on the setup tools' Python floor, 3.9 (PS1B-579).
 """
+from __future__ import annotations
+
 import os
 import shutil
 import subprocess
@@ -55,8 +59,15 @@ def shell_env(bash: str) -> dict:
     launched from a PATH without grep (PowerShell, or any build environment that
     does not add Git's usr\bin) silently takes the OPTIONAL branch for every
     recipe and this test reports a wording regression that is not there.
+
+    Only Windows needs it: Git Bash and MSYS2 keep their tools beside bash.exe,
+    off the PATH a test starts from. On Linux and macOS bash was found on PATH,
+    and putting its folder first (/bin, then /usr/bin) made the packager run
+    /usr/bin/python3 instead of the python3 that PATH names (PS1B-577).
     """
     env = dict(os.environ)
+    if os.name != "nt":
+        return env
     here = os.path.dirname(bash)
     extra = [here, os.path.join(os.path.dirname(here), "bin"),
              os.path.join(os.path.dirname(here), "usr", "bin")]
@@ -86,10 +97,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         for recipe, expect, forbid in CASES:
             toml = Path(tmp) / "game.toml"
-            toml.write_text(recipe, encoding="utf-8", newline="\n")
+            toml.write_bytes(recipe.encode("utf-8"))   # LF on every host; write_text(newline=) is 3.10+
             script = "set -euo pipefail\n" + func + '\nrecipe_bios_hint "$1"\necho "rc=$?"\n'
             run = subprocess.run([bash, "-c", script, "_", to_shell_path(toml, bash)],
-                                 capture_output=True, text=True, env=shell_env(bash))
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 env=shell_env(bash))
             out = run.stdout.replace("\r", "")
             assert run.returncode == 0, (run.returncode, out, run.stderr)
             assert out.endswith("rc=0\n"), out

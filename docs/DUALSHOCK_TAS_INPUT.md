@@ -107,3 +107,9 @@ See [the card profile](NYMASHOCK_CARD_PROFILE.md) for its separate device scope.
 These changes admit and observe the input contract. They do not make an
 unqualified core timing profile source-equivalent or establish a retail pass.
 RAM and CPU capture validation remains mandatory whenever enabled.
+
+## BizHawk 2.8 plain-gamepad ACK profile
+
+`PSX_INPUT_ROUTE_PAD_ACK_MODEL=nymashock-2.8-gamepad` gives a standalone digital pad the 64-cycle ACK delay and 32-cycle
+pulse, with the same per-port DTR session rule as the other source profiles. A DualShock route (PSXRTI2) refuses it. The
+reader for the matching movies is `nymashock28_digital_route.py`; see `NYMASHOCK_SOURCE_REPLAY.md`.

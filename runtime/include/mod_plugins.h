@@ -226,6 +226,15 @@ int psx_mod_set_auto_skip_fmv(int enabled);
 int psx_mod_set_bezel_artwork(const char* path);
 
 /*
+ * Request PGXP geometry and texture correction for this offline launch.
+ * Activation records the request; startup applies it after GPU initialization.
+ * cpu_mode selects CPU tracking (zero off, non-zero on). Every launcher
+ * session clears the previous request, so a disabled package leaves no state.
+ * The request does not change saved video settings. Netplay ignores it.
+ */
+void psx_mod_request_pgxp(int cpu_mode);
+
+/*
  * Upper bounds for the two loading-speed knobs below. Both are generous on
  * purpose: games surface them to players as free-form integers, and neither
  * can corrupt guest state (see the notes on each setter). They exist to reject

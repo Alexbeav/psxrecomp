@@ -69,6 +69,8 @@ int main(int argc, char **argv) {
 
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     printf("config=%s\n", cfg);
+    /* The driver compares this with the SHA-256 of the binary file itself. */
+    if (source_stateio_exe_sha256(a) == 1) printf("exe=%s\n", a);
     puts("PASS: v7 identity dimensions");
     return 0;
 }
