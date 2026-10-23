@@ -25,7 +25,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 9;
+constexpr uint32_t kMaxFormatVersion = 10;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -1959,6 +1959,10 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     toml::find_or<std::string>(v, "format", "file");
                 resource.required =
                     toml::find_or<bool>(v, "required", false);
+                read_conditions(v, out.options, resource.feature_id,
+                                resource.when, "resource");
+                if (!resource.when.empty() && out.format_version < 10)
+                    throw std::runtime_error("conditional resources require format_version 10");
                 if (v.contains("size") || v.contains("sha256") ||
                     resource.format == "n64-rom" || resource.format == "psx-disc" || resource.format == "psx-mode2") {
                     if (out.format_version < 8)
@@ -3318,6 +3322,18 @@ std::string ModPackageManager::feature_option_value(
         feature_id, option_id);
 }
 
+bool ModPackageManager::feature_resource_active(
+    const std::string& package_id, const std::string& feature_id,
+    const std::string& resource_id) const {
+    const auto* package = selected_package(package_id);
+    const auto* resource = package ? find_resource(*package, feature_id, resource_id) : nullptr;
+    if (!resource) return false;
+    const auto found = selections_.find(package_id);
+    const ModSelection blank;
+    return conditions_match(*package, found == selections_.end() ? blank : found->second,
+                            feature_id, resource->when);
+}
+
 fs::path ModPackageManager::feature_resource_path(
     const std::string& package_id,
     const std::string& feature_id,
@@ -3504,7 +3520,8 @@ bool ModPackageManager::prepare_resources(const std::string& game_id,
                 if (provider == media_preparers().end())
                     throw std::runtime_error(package->name + ": media preparer is not installed");
                 ModPrepareContext context{*package, feature.id, disc_path, cache_root, root_.parent_path(), {}};
-                for (const auto& r : package->resources) if (r.feature_id == feature.id && r.input_only) {
+                for (const auto& r : package->resources) if (r.feature_id == feature.id && r.input_only &&
+                        conditions_match(*package, effective[id], feature.id, r.when)) {
                     auto path = feature_resource_path(id, feature.id, r.id);
                     if (path.empty() && r.required)
                         throw std::runtime_error(package->name + ": select " + r.label);
@@ -3522,12 +3539,14 @@ bool ModPackageManager::prepare_resources(const std::string& game_id,
                 }
                 for (const auto& [name, path] : outputs) {
                     const auto* resource = find_resource(*package, feature.id, name);
-                    if (!resource || resource->input_only || resource->sha256.empty())
+                    if (!resource || resource->input_only || resource->sha256.empty() ||
+                        !conditions_match(*package, effective[id], feature.id, resource->when))
                         throw std::runtime_error("preparer returned an undeclared or unverified output");
                     pending[id].features[feature.id].resources[name] = path.u8string();
                 }
                 for (const auto& r : package->resources)
-                    if (r.feature_id == feature.id && !r.input_only && r.required && !outputs.count(r.id))
+                    if (r.feature_id == feature.id && !r.input_only && r.required &&
+                        conditions_match(*package, effective[id], feature.id, r.when) && !outputs.count(r.id))
                         throw std::runtime_error(package->name + ": preparer omitted " + r.label);
             }
         }
@@ -3969,7 +3988,8 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             const ModFeature* feature =
                 find_feature(*package, resource.feature_id);
             if (!feature ||
-                !is_feature_enabled(*package, selected, *feature))
+                !is_feature_enabled(*package, selected, *feature) ||
+                !conditions_match(*package, selected, resource.feature_id, resource.when))
                 continue;
             const fs::path path = effective_resource_path(
                 *package, selected, resource.feature_id, resource.id);
