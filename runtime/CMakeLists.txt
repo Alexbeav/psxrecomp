@@ -1400,6 +1400,7 @@ if(BUILD_TESTING)
 
     add_executable(mod_runtime_test
         src/mod_immediate.c
+        src/host_overlay.c
         tests/test_mod_runtime.cpp
         src/iso_reader_c.cpp
         src/host_span_ring.c

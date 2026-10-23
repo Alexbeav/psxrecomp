@@ -6575,6 +6575,7 @@ static void pass_resources_release(void);
 static void present_image_ring_gl_forget(void);
 void gl_renderer_shutdown(void) {
     gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
+    psx_host_set_hud_draw_cb(NULL, NULL);
     /* After the worker has stopped (it presents, and captures, on its own
      * thread) and before the context dies: forget the ring's GL names. */
     present_image_ring_gl_forget();
@@ -9947,8 +9948,10 @@ static void gl_swap_with_osd(void) {
             }
             if (ov_image(3, &px, &ow, &oh) && px)
                 gl_draw_osd_image(px, ow, oh, ww, wh, 0, 0, ww, wh);
-            /* In-game overlay provider (host_overlay.h P2), over everything
-             * the host composes; no-op unless one registered. */
+            /* The title's HUD layer, then the in-game overlay provider
+             * (host_overlay.h P2) over everything; each a no-op unless one
+             * registered. */
+            psx_host_hud_draw(ww, wh);
             psx_host_overlay_draw(ww, wh);
         }
     }

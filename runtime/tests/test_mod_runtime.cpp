@@ -1,6 +1,7 @@
 #include "mod_runtime.h"
 #include "mod_netplay.h"
 #include "host_launch_timing.h"
+#include "host_overlay.h"
 #include "host_file_identity.h"
 #include "mod_packages.h"
 #include "mod_plugins.h"
@@ -108,6 +109,8 @@ extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t, uint32_t) {
 }
 extern "C" void psx_ram_reset_size_request(void) {}
 static int hd_shutdown_calls, hd_configure_calls, hd_dump_value;
+static int hud_calls;
+static void old_session_hud(int, int, void*) { ++hud_calls; }
 static int hd_replacements_value, hd_reload_calls;
 static std::string hd_root;
 extern "C" void gpu_hd_textures_shutdown(void) { ++hd_shutdown_calls; hd_root.clear(); }
@@ -179,7 +182,18 @@ static int disabled_entry_hits;
 static int unselected_entry_hits;
 static uint32_t active_entry_last;
 static int entry_test_mode, nested_result;
+#if defined(_WIN32) && defined(__GNUC__) && !defined(__clang__)
+/* Model a guest scheduler jump which abandons native C++ scopes. Asking the
+ * Windows CRT longjmp to unwind those scopes can itself fault in SEH, before
+ * this fixture gets to verify the stranded callback-context guard. */
+static intptr_t callback_escape[5];
+#define callback_setjmp() __builtin_setjmp(callback_escape)
+#define callback_longjmp() __builtin_longjmp(callback_escape, 1)
+#else
 static std::jmp_buf callback_escape;
+#define callback_setjmp() setjmp(callback_escape)
+#define callback_longjmp() std::longjmp(callback_escape, 1)
+#endif
 static uint32_t nested_pc;
 static void test_active_entry(CPUState* cpu, uint32_t address) {
     active_entry_hits++;
@@ -206,12 +220,12 @@ static void test_active_entry(CPUState* cpu, uint32_t address) {
         cpu->gpr[2] = 0x87654321u;
     } else if (entry_test_mode == 5) {
         /* Guest scheduling/RFE can abandon the callback's C++ scope. */
-        std::longjmp(callback_escape, 1);
+        callback_longjmp();
     } else if (entry_test_mode == 6) {
         if (!psx_mod_finish_function(cpu)) failures++;
         ModFunctionEntryContext interrupted{};
         mod_runtime_function_entry_context_save(&interrupted);
-        if (setjmp(callback_escape) == 0) {
+        if (callback_setjmp() == 0) {
             CPUState nested{};
             entry_test_mode = 5;
             psx_mod_function_entry(&nested, address);
@@ -773,7 +787,10 @@ int main(int argc, char** argv) {
     psx_mod_function_entry(&entry_cpu, 0x80003000u);
     check(g_psx_mod_function_entry_hooks == 0 && active_entry_hits == 0,
           "function-entry hooks must not run before plugin activation");
+    psx_host_set_hud_draw_cb(old_session_hud, nullptr);
     mod_runtime_activate_plugins();
+    psx_host_hud_draw(64, 64);
+    check(hud_calls == 0, "activation clears the prior session HUD before resetting plugins");
     check(activation_calls == 1,
           "resolved trusted plugin must activate before runtime startup");
     entry_cpu.pc = 0x80004000u;
@@ -920,7 +937,7 @@ int main(int argc, char** argv) {
     entry_test_mode = 0;
 
     entry_test_mode = 5;
-    if (setjmp(callback_escape) == 0) {
+    if (callback_setjmp() == 0) {
         psx_mod_function_entry(&entry_cpu, 0x80003000u);
         check(false, "callback must escape without its native cleanup");
     }

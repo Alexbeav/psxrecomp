@@ -75,6 +75,29 @@ static void* life_reader(void* arg) {
     while (!atomic_load(&g_stop)) psx_host_overlay_draw(64, 64);
     return NULL;
 }
+static void* hud_life_reader(void* arg) {
+    (void)arg;
+    while (!atomic_load(&g_stop)) psx_host_hud_draw(64, 64);
+    return NULL;
+}
+static void test_hud_lifetime(void) {
+    pthread_t t;
+    atomic_store(&g_stop, 0);
+    pthread_create(&t, NULL, hud_life_reader, NULL);
+    for (int round = 0; round < 100; ++round) {
+        LifeCtx* c = (LifeCtx*)calloc(1, sizeof(*c));
+        atomic_store(&c->alive, 1);
+        psx_host_set_hud_draw_cb(life_draw, c);
+        while (atomic_load(&c->calls) < 2) {}
+        /* Also models the activation-reset / renderer-shutdown clear. */
+        psx_host_set_hud_draw_cb(NULL, NULL);
+        atomic_store(&c->alive, 0);
+        CHECK(atomic_load(&c->used_dead) == 0);
+        free(c);
+    }
+    atomic_store(&g_stop, 1);
+    pthread_join(t, NULL);
+}
 static void test_draw_lifetime(void) {
     pthread_t t;
     atomic_store(&g_stop, 0);
@@ -99,6 +122,7 @@ static void test_draw_lifetime(void) {
 }
 #else
 static void test_draw_lifetime(void) {}
+static void test_hud_lifetime(void) {}
 #endif
 
 /* Changing the callback from inside it must not deadlock. */
@@ -113,6 +137,18 @@ static void test_draw_reentrant(void) {
     psx_host_overlay_draw(64, 64);
     psx_host_overlay_draw(64, 64);
     CHECK(n == 1 && !psx_host_overlay_has_draw());
+}
+static void hud_self_unregister(int w, int h, void* p) {
+    (void)w; (void)h;
+    ++*(int*)p;
+    psx_host_set_hud_draw_cb(NULL, NULL);
+}
+static void test_hud_reentrant(void) {
+    int calls = 0;
+    psx_host_set_hud_draw_cb(hud_self_unregister, &calls);
+    psx_host_hud_draw(64, 64);
+    psx_host_hud_draw(64, 64);
+    CHECK(calls == 1);
 }
 
 static int sunk = 0;
@@ -237,6 +273,8 @@ static void test_cmdline_quote(void) {
 }
 
 int main(void) {
+    test_hud_lifetime();
+    test_hud_reentrant();
     test_draw_lifetime();
     test_draw_reentrant();
     test_cmdline_quote();
