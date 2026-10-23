@@ -3967,7 +3967,7 @@ static int host_driver_vsync_unreliable(void) {
      * changes take effect. PSX_TRUST_DRIVER_VSYNC=1 keeps driver vsync. */
     if (const char *e = std::getenv("PSX_TRUST_DRIVER_VSYNC"); e && e[0] && e[0] != '0')
         return 0;
-    return (g_video_renderer == 1 && g_gl_active && g_fullscreen != 2 &&
+    return (g_video_renderer == 1 && g_gl_active && s_window_fullscreen.mode != 2 &&
             gl_renderer_render_thread_active() &&
             gl_renderer_vendor_is_nvidia()) ? 1 : 0;
 #else
@@ -8953,9 +8953,11 @@ static bool drain_host_events() {
                                              (int)mod)) {
                 const int target = s_window_fullscreen.mode ? 0 :
                                    (g_fullscreen ? g_fullscreen : 1);
-                if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
+                if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0) {
+                    apply_present_cadence();
+                    log_present_cadence();
                     host_osd_push(target ? "Fullscreen" : "Windowed", 1500);
-                else
+                } else
                     host_osd_push("Fullscreen change failed", 1500);
             }
         }
@@ -10141,6 +10143,10 @@ static void render_thread_vblank(void) {
         gl_renderer_set_present_thread(g_present_thread, g_present_thread_slots);
         if (g_gl_active && gr_backend() == GR_BACKEND_OPENGL &&
             gl_renderer_render_thread_start(g_render_thread_frames)) {
+            /* The NVIDIA policy only becomes eligible once the worker owns
+             * GL. Update the actual driver interval at that transition. */
+            apply_present_cadence();
+            log_present_cadence();
             std::fprintf(stdout, "psxrecomp: render thread on (OpenGL, %d frame(s) in flight)\n",
                          g_render_thread_frames);
             if (g_frame_generation) {
@@ -10282,8 +10288,11 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         if (m & ~present_only) deferred = PSX_VIDEO_RESTART_NETPLAY;
         m &= present_only;
     }
-    if (m & PSX_VIDEO_LIVE_FULLSCREEN)
-        (void)psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, next->fullscreen);
+    if ((m & PSX_VIDEO_LIVE_FULLSCREEN) &&
+        psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, next->fullscreen) == 0) {
+        apply_present_cadence();
+        log_present_cadence();
+    }
     if (m & PSX_VIDEO_LIVE_TEXTURE_FILTER) {
         g_video_texfilter = psx_texture_filter_from_ui(next->texture_filter);
         if (g_mod_texfilter < 0) gr_set_texture_filter(g_video_texfilter);
