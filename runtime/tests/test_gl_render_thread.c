@@ -306,6 +306,8 @@ int main(int argc, char **argv) {
         check(gl_renderer_render_thread_active(), "render thread active");
     }
     test_live_resolution(scale);
+    GlDynresStats live_baseline;
+    gl_renderer_dynres_stats(&live_baseline);
     if (dynres) {
         check(gl_renderer_dynamic_resolution_ceiling() == scale, "dynres ceiling");
         if (threaded) gl_renderer_render_thread_measure(1);
@@ -332,8 +334,9 @@ int main(int argc, char **argv) {
         gl_renderer_render_thread_sync("test");
         GlDynresStats ds;
         gl_renderer_dynres_stats(&ds);
-        printf("dyn_steps=%llu asked=%d\n", (unsigned long long)ds.steps, nsteps);
-        check(ds.steps == (uint64_t)nsteps && ds.level == scale, "every step applied");
+        const uint64_t scripted_steps = ds.steps - live_baseline.steps;
+        printf("dyn_steps=%llu asked=%d\n", (unsigned long long)scripted_steps, nsteps);
+        check(scripted_steps == (uint64_t)nsteps && ds.level == scale, "every step applied");
         if (threaded) {
             GlRthCosts co;
             gl_renderer_render_thread_costs(&co);
