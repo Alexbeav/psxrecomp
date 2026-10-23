@@ -179,7 +179,29 @@ static void test_video(void) {
     CHECK(psx_host_video_live_changes(&a, &b) ==
           (PSX_VIDEO_LIVE_SCANLINES | PSX_VIDEO_LIVE_PRESENT_LINEAR | PSX_VIDEO_LIVE_FULLSCREEN));
     CHECK(psx_host_video_restart_bits(&a, &b) == 0);
-    b.internal_resolution = 4; b.present_thread = 1;
+    b.internal_resolution = 4; b.supersample_milli = 1500; b.present_thread = 1;
+    CHECK(psx_host_video_live_changes(&a, &b) & PSX_VIDEO_LIVE_RESOLUTION);
+    CHECK(psx_host_video_restart_bits(&a, &b) == PSX_VIDEO_RESTART_THREADS);
+    /* Live-capable GL: no relaunch for resolution. Refused / non-GL (hiw,
+     * CPU-authoritative dual, no context, software): the change waits. */
+    CHECK(psx_host_video_restart_bits_backend(&a, &b, 1) == PSX_VIDEO_RESTART_THREADS);
+    CHECK(psx_host_video_restart_bits_backend(&a, &b, 0) ==
+          (PSX_VIDEO_RESTART_RESOLUTION | PSX_VIDEO_RESTART_THREADS));
+    {
+        PsxHostVideoSettings c2 = a;
+        c2.supersample_milli = 1250;
+        CHECK(psx_host_video_restart_bits_backend(&a, &c2, 0) == PSX_VIDEO_RESTART_RESOLUTION);
+        CHECK(psx_host_video_restart_bits_backend(&a, &a, 0) == 0);
+        /* A -> B succeeded, then B -> A was refused. Boot A cannot stand in
+         * for the applied baseline B when deciding whether restart is needed. */
+        PsxHostVideoSettings applied = a;
+        applied.internal_resolution = c2.internal_resolution;
+        applied.supersample_milli = c2.supersample_milli;
+        CHECK(psx_host_video_restart_bits_backend(&applied, &a, 0) ==
+              PSX_VIDEO_RESTART_RESOLUTION);
+        CHECK(psx_host_video_restart_bits_backend(&applied, &c2, 0) == 0);
+    }
+    b.supersampling = 2;
     CHECK(psx_host_video_restart_bits(&a, &b) == (PSX_VIDEO_RESTART_RESOLUTION | PSX_VIDEO_RESTART_THREADS));
     b.renderer = 0;
     CHECK(psx_host_video_restart_bits(&a, &b) & PSX_VIDEO_RESTART_RENDERER);

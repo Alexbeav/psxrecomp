@@ -10274,6 +10274,54 @@ static void dynres_setup(void) {
 static std::filesystem::path g_overlay_settings_path;  /* settings.toml */
 static PsxHostVideoSettings g_video_boot;              /* as the session booted */
 static bool g_video_boot_valid = false;
+/* Live Internal resolution / Supersample. g_video_internal_res and
+ * g_video_ss_milli are what the player requested (shown and saved); these are
+ * what the backend last actually applied. g_video_res_live_failed holds a
+ * relaunch requirement after a live change the backend refused, and
+ * g_video_res_live_capable mirrors gl_renderer_internal_scale_live_capable()
+ * for the menu thread. */
+static int g_video_res_applied_ir = PSX_IR_UNSET;
+static int g_video_res_applied_ss = 1000;
+static std::mutex g_video_res_applied_mutex;
+static std::atomic<bool> g_video_res_live_failed{false};
+static std::atomic<bool> g_video_res_live_capable{false};
+
+static void video_res_set_applied(int ir, int ss) {
+    std::lock_guard<std::mutex> lock(g_video_res_applied_mutex);
+    g_video_res_applied_ir = ir;
+    g_video_res_applied_ss = ss;
+}
+
+static void video_res_refresh_capable(void) {
+    g_video_res_live_capable.store(g_gl_active && g_video_scale_applies &&
+                                   gl_renderer_internal_scale_live_capable() != 0);
+}
+
+/* Other restart-only settings still compare against boot. Resolution compares
+ * against its last confirmed application, including after a live A -> B. */
+static unsigned video_restart_bits(const PsxHostVideoSettings *boot,
+                                   const PsxHostVideoSettings *next) {
+    if (!boot || !next) return 0;
+    PsxHostVideoSettings applied = *boot;
+    {
+        std::lock_guard<std::mutex> lock(g_video_res_applied_mutex);
+        applied.internal_resolution = g_video_res_applied_ir;
+        applied.supersample_milli = g_video_res_applied_ss;
+    }
+    return psx_host_video_restart_bits_backend(
+        &applied, next, 0);
+}
+
+extern "C" void psx_video_resolution_applied(int *ir, int *ss_milli, int *live_capable,
+                                             int *restart_pending) {
+    {
+        std::lock_guard<std::mutex> lock(g_video_res_applied_mutex);
+        if (ir) *ir = g_video_res_applied_ir;
+        if (ss_milli) *ss_milli = g_video_res_applied_ss;
+    }
+    if (live_capable) *live_capable = g_video_res_live_capable.load() ? 1 : 0;
+    if (restart_pending) *restart_pending = g_video_res_live_failed.load() ? 1 : 0;
+}
 
 extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     if (!v) return;
@@ -10288,10 +10336,17 @@ extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     v->frame_generation = g_frame_generation ? 1 : 0;
     v->renderer = g_video_renderer;
     v->internal_resolution = g_video_internal_res;
-    v->supersampling = g_video_scale;
+    /* The legacy factor as booted: the live scale moves with the internal
+     * resolution and supersample, which apply without a relaunch. */
+    v->supersampling = g_video_boot_valid ? g_video_boot.supersampling : g_video_scale;
     v->render_thread = g_render_thread ? 1 : 0;
     v->present_thread = g_present_thread ? 1 : 0;
-    if (!g_video_boot_valid) { g_video_boot = *v; g_video_boot_valid = true; }
+    v->supersample_milli = g_video_ss_milli;
+    video_res_refresh_capable();
+    if (!g_video_boot_valid) {
+        g_video_boot = *v; g_video_boot_valid = true;
+        video_res_set_applied(v->internal_resolution, v->supersample_milli);
+    }
 }
 
 extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
@@ -10335,6 +10390,36 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         if (!g_video_dynres) g_dynres.active = false;
         else { dynres_setup(); if (!g_dynres.active && gl_renderer_dynamic_resolution_ceiling() >= 2) g_dynres.active = true; }
     }
+    if (m & PSX_VIDEO_LIVE_RESOLUTION) {
+        /* The GL owner confirms allocation/application before this returns. */
+        if (next->internal_resolution != PSX_IR_UNSET)
+            g_video_internal_res = next->internal_resolution;
+        if (next->supersample_milli >= PSX_SS_MILLI_MIN &&
+            next->supersample_milli <= PSX_SS_MILLI_MAX)
+            g_video_ss_milli = next->supersample_milli;
+        /* The request is kept (and saved) either way; the session's scale
+         * only moves when the backend takes it. Otherwise the change waits
+         * for a relaunch and the restart bits say so. */
+        const int prev_scale = g_video_scale;
+        video_res_refresh_capable();
+        int applied = 0;
+        if (g_video_res_live_capable.load()) {
+            apply_internal_resolution(match_display_px_h(sdl_window));
+            applied = gl_renderer_set_internal_scale_live(g_video_scale);
+        }
+        if (applied) {
+            std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
+            g_video_scale = applied;
+            video_res_set_applied(g_video_internal_res, g_video_ss_milli);
+            g_video_res_live_failed.store(false);
+            dynres_setup();   /* the new scale is the controller's ceiling */
+        } else {
+            g_video_scale = prev_scale;
+            g_video_res_live_failed.store(true);
+            std::fprintf(stdout, "psxrecomp: internal resolution change needs a "
+                                 "relaunch (live change unavailable)\n");
+        }
+    }
     if ((m & PSX_VIDEO_LIVE_FRAME_GEN) && g_gl_active) {
         g_frame_generation = next->frame_generation ? 1 : 0;
         gl_renderer_set_frame_generation(g_frame_generation);
@@ -10356,11 +10441,13 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
             us.render_thread = next->render_thread != 0;       us.has_render_thread = true;
             us.present_thread = next->present_thread != 0;     us.has_present_thread = true;
             us.internal_resolution = next->internal_resolution; us.has_internal_resolution = true;
+            us.supersample_milli = next->supersample_milli;
+            us.has_supersample = next->supersample_milli >= 1000;
             (void)quality_save_user_settings(g_overlay_settings_path, us);
         } catch (...) {
         }
     }
-    return psx_host_video_restart_bits(&g_video_boot, next) | deferred;
+    return video_restart_bits(&g_video_boot, next) | deferred;
 }
 
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -16935,8 +17022,13 @@ unsigned mh_restart_bits(const PsxHostVideoSettings& next) {
      * with. The live internal resolution moves under dynamic resolution, so
      * comparing with boot alone flagged edits that never touched it (an
      * in-game texture filter change relaunched the game). */
-    unsigned out = psx_host_video_restart_bits(&g_ovl_video_boot, &next) &
+    unsigned out = video_restart_bits(&g_ovl_video_boot, &next) &
                    psx_host_video_restart_bits(&now, &next);
+    /* A resolution edit the backend cannot apply live waits for a relaunch
+     * (the pure helper treats resolution as live). */
+    if ((now.internal_resolution != next.internal_resolution ||
+         now.supersample_milli != next.supersample_milli))
+        out |= video_restart_bits(&g_ovl_video_boot, &next) & PSX_VIDEO_RESTART_RESOLUTION;
     /* In a netplay match only presentation applies live (psx_video_apply_live);
      * the rest waits for the next session. */
     if (g_ovl_netplay &&
@@ -17022,6 +17114,10 @@ PsxHostVideoSettings ovl_video_from(const RecompLauncherCSettings& ls) {
     v.renderer = ls.renderer;
     v.render_thread = ls.render_thread ? 1 : 0;
     v.present_thread = ls.present_thread ? 1 : 0;
+    if (ls.internal_resolution != 0) v.internal_resolution = ls.internal_resolution;
+#if defined(RECOMP_LAUNCHER_HAS_SUPERSAMPLE)
+    if (ls.supersample_milli >= 1000) v.supersample_milli = ls.supersample_milli;
+#endif
     return v;
 }
 void mh_launcher_settings_get(RecompLauncherCSettings* out) {
@@ -17040,6 +17136,10 @@ void mh_launcher_settings_get(RecompLauncherCSettings* out) {
     ls.renderer = v.renderer;
     ls.render_thread = v.render_thread;
     ls.present_thread = v.present_thread;
+    ls.internal_resolution = internal_resolution_for_launcher();
+#if defined(RECOMP_LAUNCHER_HAS_SUPERSAMPLE)
+    ls.supersample_milli = v.supersample_milli;
+#endif
 #if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
     /* Every row a preset governs, the hidden ones included, as the player
      * selected them (main-thread snapshot): a pick's next-launch rows and
@@ -17087,6 +17187,9 @@ void mh_launcher_game_info(RecompLauncherCGameInfo* out) {
     gi.num_renderers = 2;
     gi.has_supersampling = 0;            /* restart-only; set before boot */
     gi.has_dynamic_resolution = 1;
+#if defined(RECOMP_LAUNCHER_HAS_SUPERSAMPLE)
+    gi.has_supersample = 1;              /* live with Internal resolution */
+#endif
     gi.has_render_pipeline = 1;
     gi.has_vsync = 0;
     gi.has_rewind_depth = 0;
@@ -18445,6 +18548,7 @@ int main(int argc, char** argv) {
             g_video_internal_res = PSX_IR_UNSET;
         }
         if (us.has_internal_resolution) g_video_internal_res = us.internal_resolution;
+        if (us.has_supersample) g_video_ss_milli = us.supersample_milli;
         if (us.has_dynamic_resolution) g_video_dynres = us.dynamic_resolution ? 1 : 0;
         if (us.has_dynamic_resolution_min) g_video_dynres_min = us.dynamic_resolution_min;
         if (us.has_window_width)   g_video_win_w     = us.window_width;
@@ -20242,6 +20346,12 @@ int main(int argc, char** argv) {
     DiscMenuSession disc_menu_session{};
 
 session_reboot:
+    /* A new backend/session must not inherit the prior applied settings or
+     * a refused live request. Capture its boot baseline again on first read. */
+    g_video_boot_valid = false;
+    video_res_set_applied(PSX_IR_UNSET, 1000);
+    g_video_res_live_failed.store(false);
+    g_video_res_live_capable.store(false);
     mod_runtime_set_mounted_disc_resolver(nullptr, nullptr);
     psx_disc_tray_reset_session();
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */

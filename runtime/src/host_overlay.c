@@ -177,6 +177,9 @@ unsigned psx_host_video_live_changes(const PsxHostVideoSettings *a,
     if (a->present_linear != b->present_linear) m |= PSX_VIDEO_LIVE_PRESENT_LINEAR;
     if (a->dynamic_resolution != b->dynamic_resolution) m |= PSX_VIDEO_LIVE_DYNRES;
     if (a->frame_generation != b->frame_generation) m |= PSX_VIDEO_LIVE_FRAME_GEN;
+    if (a->internal_resolution != b->internal_resolution ||
+        a->supersample_milli != b->supersample_milli)
+        m |= PSX_VIDEO_LIVE_RESOLUTION;
     return m;
 }
 
@@ -185,12 +188,24 @@ unsigned psx_host_video_restart_bits(const PsxHostVideoSettings *boot,
     unsigned m = 0;
     if (!boot || !next) return 0;
     if (boot->renderer != next->renderer) m |= PSX_VIDEO_RESTART_RENDERER;
-    if (boot->internal_resolution != next->internal_resolution ||
-        boot->supersampling != next->supersampling)
+    /* Internal resolution and supersample apply live; only the legacy
+     * integer factor still needs a relaunch. */
+    if (boot->supersampling != next->supersampling)
         m |= PSX_VIDEO_RESTART_RESOLUTION;
     if (boot->render_thread != next->render_thread ||
         boot->present_thread != next->present_thread)
         m |= PSX_VIDEO_RESTART_THREADS;
+    return m;
+}
+
+unsigned psx_host_video_restart_bits_backend(const PsxHostVideoSettings *boot,
+                                             const PsxHostVideoSettings *next,
+                                             int res_live_ok) {
+    unsigned m = psx_host_video_restart_bits(boot, next);
+    if (boot && next && !res_live_ok &&
+        (boot->internal_resolution != next->internal_resolution ||
+         boot->supersample_milli != next->supersample_milli))
+        m |= PSX_VIDEO_RESTART_RESOLUTION;
     return m;
 }
 

@@ -10700,6 +10700,46 @@ static void handle_dynres_check(int id, const char *json)
              "\"restored\":%d,\"steps\":%s}", id, (unsigned long long)h0, bad, start, out);
 }
 
+/* {"cmd":"video_set","internal_resolution":N,"supersample":M} - change the
+ * Internal resolution preset (lines, 1 native, -1 match display) and/or the
+ * supersample (thousandths, 1000..4000) through the in-game menu's live path.
+ * Invalid values are rejected without applying or saving anything. Returns
+ * the restart bits the change still needs (0 = applied live), the requested
+ * values, and the values the backend actually applied. */
+static void handle_video_set(int id, const char *json)
+{
+    extern void psx_video_current(PsxHostVideoSettings *v);
+    extern unsigned psx_video_apply_live(const PsxHostVideoSettings *next);
+    extern void psx_video_resolution_applied(int *ir, int *ss_milli, int *live_capable,
+                                             int *restart_pending);
+    const int k_absent = -1000000;
+    const int ir = json_get_int(json, "internal_resolution", k_absent);
+    const int ss = json_get_int(json, "supersample", k_absent);
+    if (ir == k_absent && ss == k_absent) {
+        send_err(id, "video_set needs internal_resolution and/or supersample");
+        return;
+    }
+    if (ir != k_absent && !(ir == 1 || ir == -1 || (ir >= 2 && ir <= 8640))) {
+        send_err(id, "invalid internal_resolution (1 native, -1 match display, 2..8640 lines)");
+        return;
+    }
+    if (ss != k_absent && (ss < 1000 || ss > 4000)) {
+        send_err(id, "invalid supersample (1000..4000 thousandths)");
+        return;
+    }
+    PsxHostVideoSettings v;
+    psx_video_current(&v);
+    if (ir != k_absent) v.internal_resolution = ir;
+    if (ss != k_absent) v.supersample_milli = ss;
+    const unsigned restart = psx_video_apply_live(&v);
+    int air = 0, ass = 0, cap = 0, pend = 0;
+    psx_video_resolution_applied(&air, &ass, &cap, &pend);
+    send_fmt("{\"id\":%d,\"ok\":true,\"restart\":%u,\"internal_resolution\":%d,"
+             "\"supersample\":%d,\"applied_internal_resolution\":%d,"
+             "\"applied_supersample\":%d,\"live_capable\":%d,\"restart_pending\":%d}\n",
+             id, restart, v.internal_resolution, v.supersample_milli, air, ass, cap, pend);
+}
+
 static void handle_video_info(int id, const char *json)
 {
     (void)json;
@@ -16518,6 +16558,7 @@ static const CmdEntry s_commands[] = {
     { "dump_buffer",       handle_dump_buffer },
     { "wide_full",         handle_wide_full },
     { "video_info",        handle_video_info },
+    { "video_set",         handle_video_set },
     { "hd_textures",       handle_hd_textures },
     { "dynres",            handle_dynres },
     { "dynres_force",      handle_dynres_force },
