@@ -105,6 +105,28 @@ static void check(int ok, const char *label) {
     checks++;
     if (!ok) { fprintf(stderr, "FAIL %s\n", label); failures++; }
 }
+/* Force the real allocation-failure branch without exhausting VRAM. The
+ * fixture includes the backend, so no production fault-injection API is needed. */
+static void (APIENTRY *saved_renderbuffer_storage)(GLenum, GLenum, GLsizei, GLsizei);
+static void APIENTRY refuse_renderbuffer_storage(GLenum target, GLenum format,
+                                                  GLsizei w, GLsizei h) {
+    (void)format;
+    saved_renderbuffer_storage(target, 0 /* invalid format */, w, h);
+}
+static void test_live_resolution(int original_scale) {
+    check(gl_renderer_set_internal_scale_live(2) == 2, "live scale A applied");
+    check(gl_renderer_set_internal_scale_live(1) == 1, "live A to B applied");
+    gl_renderer_render_thread_sync("fixture_allocation_refusal");
+    saved_renderbuffer_storage = p_glRenderbufferStorage;
+    p_glRenderbufferStorage = refuse_renderbuffer_storage;
+    check(gl_renderer_set_internal_scale_live(2) == 0, "live B to A allocation refused");
+    p_glRenderbufferStorage = saved_renderbuffer_storage;
+    check(s_hr_scale == 1 && s_req_scale == 1 && s_alloc_scale == 1,
+          "refusal preserves applied scale and ceiling");
+    check(!s_dyn_pending, "refused live request cannot apply later");
+    check(gl_renderer_set_internal_scale_live(original_scale) == original_scale,
+          "live resolution recovers after refusal");
+}
 static uint64_t fnv(const void *pp, size_t n, uint64_t h) {
     const uint8_t *p = (const uint8_t *)pp;
     for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
@@ -278,6 +300,7 @@ int main(int argc, char **argv) {
         check(gl_renderer_render_thread_start(2) == 1, "render thread started");
         check(gl_renderer_render_thread_active(), "render thread active");
     }
+    test_live_resolution(scale);
     if (dynres) {
         check(gl_renderer_dynamic_resolution_ceiling() == scale, "dynres ceiling");
         if (threaded) gl_renderer_render_thread_measure(1);

@@ -10248,27 +10248,43 @@ static bool g_video_boot_valid = false;
  * for the menu thread. */
 static int g_video_res_applied_ir = PSX_IR_UNSET;
 static int g_video_res_applied_ss = 1000;
+static std::mutex g_video_res_applied_mutex;
 static std::atomic<bool> g_video_res_live_failed{false};
 static std::atomic<bool> g_video_res_live_capable{false};
+
+static void video_res_set_applied(int ir, int ss) {
+    std::lock_guard<std::mutex> lock(g_video_res_applied_mutex);
+    g_video_res_applied_ir = ir;
+    g_video_res_applied_ss = ss;
+}
 
 static void video_res_refresh_capable(void) {
     g_video_res_live_capable.store(g_gl_active && g_video_scale_applies &&
                                    gl_renderer_internal_scale_live_capable() != 0);
 }
 
-/* psx_host_video_restart_bits plus the resolution group whenever the
- * requested resolution differs from boot and cannot be (or was not) applied
- * live on this backend. */
+/* Other restart-only settings still compare against boot. Resolution compares
+ * against its last confirmed application, including after a live A -> B. */
 static unsigned video_restart_bits(const PsxHostVideoSettings *boot,
                                    const PsxHostVideoSettings *next) {
+    if (!boot || !next) return 0;
+    PsxHostVideoSettings applied = *boot;
+    {
+        std::lock_guard<std::mutex> lock(g_video_res_applied_mutex);
+        applied.internal_resolution = g_video_res_applied_ir;
+        applied.supersample_milli = g_video_res_applied_ss;
+    }
     return psx_host_video_restart_bits_backend(
-        boot, next, g_video_res_live_capable.load() && !g_video_res_live_failed.load());
+        &applied, next, 0);
 }
 
 extern "C" void psx_video_resolution_applied(int *ir, int *ss_milli, int *live_capable,
                                              int *restart_pending) {
-    if (ir) *ir = g_video_res_applied_ir;
-    if (ss_milli) *ss_milli = g_video_res_applied_ss;
+    {
+        std::lock_guard<std::mutex> lock(g_video_res_applied_mutex);
+        if (ir) *ir = g_video_res_applied_ir;
+        if (ss_milli) *ss_milli = g_video_res_applied_ss;
+    }
     if (live_capable) *live_capable = g_video_res_live_capable.load() ? 1 : 0;
     if (restart_pending) *restart_pending = g_video_res_live_failed.load() ? 1 : 0;
 }
@@ -10295,8 +10311,7 @@ extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     video_res_refresh_capable();
     if (!g_video_boot_valid) {
         g_video_boot = *v; g_video_boot_valid = true;
-        g_video_res_applied_ir = v->internal_resolution;
-        g_video_res_applied_ss = v->supersample_milli;
+        video_res_set_applied(v->internal_resolution, v->supersample_milli);
     }
 }
 
@@ -10339,8 +10354,7 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         else { dynres_setup(); if (!g_dynres.active && gl_renderer_dynamic_resolution_ceiling() >= 2) g_dynres.active = true; }
     }
     if (m & PSX_VIDEO_LIVE_RESOLUTION) {
-        /* Internal resolution / Supersampling: the scale moves at the next
-         * frame (gl_renderer_set_internal_scale_live), no relaunch. */
+        /* The GL owner confirms allocation/application before this returns. */
         if (next->internal_resolution != PSX_IR_UNSET)
             g_video_internal_res = next->internal_resolution;
         if (next->supersample_milli >= PSX_SS_MILLI_MIN &&
@@ -10358,8 +10372,8 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         }
         if (applied) {
             std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
-            g_video_res_applied_ir = g_video_internal_res;
-            g_video_res_applied_ss = g_video_ss_milli;
+            g_video_scale = applied;
+            video_res_set_applied(g_video_internal_res, g_video_ss_milli);
             g_video_res_live_failed.store(false);
             dynres_setup();   /* the new scale is the controller's ceiling */
         } else {

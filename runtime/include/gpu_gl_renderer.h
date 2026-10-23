@@ -396,7 +396,7 @@ int  gl_renderer_request_internal_scale(int scale);
  * the next present). Never call it inside a render pass. */
 int  gl_renderer_step_internal_scale_now(int scale);
 /* Live Internal resolution / Supersampling change: the scale to step to at
- * the next frame boundary (the new ceiling). Returns the scale applied, 0 when
+ * a context-owned sync point (the new ceiling). Returns the scale applied, 0 when
  * the backend cannot change it live. */
 int  gl_renderer_set_internal_scale_live(int scale);
 /* 1 when gl_renderer_set_internal_scale_live can apply on this session (no

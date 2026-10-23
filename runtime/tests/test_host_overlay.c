@@ -156,6 +156,14 @@ static void test_video(void) {
         c2.supersample_milli = 1250;
         CHECK(psx_host_video_restart_bits_backend(&a, &c2, 0) == PSX_VIDEO_RESTART_RESOLUTION);
         CHECK(psx_host_video_restart_bits_backend(&a, &a, 0) == 0);
+        /* A -> B succeeded, then B -> A was refused. Boot A cannot stand in
+         * for the applied baseline B when deciding whether restart is needed. */
+        PsxHostVideoSettings applied = a;
+        applied.internal_resolution = c2.internal_resolution;
+        applied.supersample_milli = c2.supersample_milli;
+        CHECK(psx_host_video_restart_bits_backend(&applied, &a, 0) ==
+              PSX_VIDEO_RESTART_RESOLUTION);
+        CHECK(psx_host_video_restart_bits_backend(&applied, &c2, 0) == 0);
     }
     b.supersampling = 2;
     CHECK(psx_host_video_restart_bits(&a, &b) == (PSX_VIDEO_RESTART_RESOLUTION | PSX_VIDEO_RESTART_THREADS));
