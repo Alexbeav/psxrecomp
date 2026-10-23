@@ -91,6 +91,22 @@ typedef struct RenderStereoStats {
     uint64_t last_failed_attempt, retained_pair_id;
     int last_failed_eye;
     const char *last_failed_reason; /* latched across later successes */
+    /* Shedding/recovery policy (stereo_shed_policy.c). A shed streak is bounded
+     * by time and count; these report how the last one ended and how stale the
+     * retained pair got. */
+    uint64_t shed_streak, shed_streak_max; /* consecutive sheds now / worst seen */
+    uint32_t shed_streak_ms;               /* wall clock of the current streak */
+    uint64_t stale_frames;                 /* frames that published no new pair */
+    uint64_t budget_resets;                /* estimates reset on scene/mode change */
+    double   budget_ms;                    /* pair budget actually in use */
+    uint32_t budget_source;                /* 0 vblank (fallback), 1 headset, 2 env */
+    uint64_t last_pair_age_ms;             /* age of the retained pair, this frame */
+    int      shedding;                     /* policy is currently suppressing */
+    /* Pair-scoped baseline: how often a machine snapshot was captured, and how
+     * often a later eye of the same pair reused it instead of re-capturing. */
+    uint64_t checkpoint_saves;             /* snapshots captured */
+    uint64_t checkpoint_reuses;            /* eyes that reused the pair baseline */
+    uint64_t checkpoint_ram_bytes;         /* RAM bytes copied by those captures */
 } RenderStereoStats;
 void render_stereo_get_stats(RenderStereoStats *out);
 int render_pass_netplay_enabled(void);

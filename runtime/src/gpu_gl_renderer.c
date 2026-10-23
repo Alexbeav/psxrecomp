@@ -1816,12 +1816,15 @@ static const char *GEO_VS =
     "  float a = a_col.a, code = floor(a * 0.5), zn = 0.0, w = 1.0;\n"
     "  float m = a - 2.0 * code;\n"
     "  /* + 2*131072: the primitive is dither-eligible (GPU_GEO_DITHER_CODE). */\n"
-    "  float dth = (a >= 0.0 && code >= 131072.0) ? 1.0 : 0.0; code -= 131072.0 * dth; v_dith = int(dth);\n"
+    "  float dth = (a >= 0.0 && code >= 131072.0) ? 1.0 : 0.0; code -= 131072.0 * dth;\n"
     "  float cp = code >= 65536.0 ? 1.0 : 0.0, sz = code - 65536.0 * cp;\n"
-    "  if (a < 0.0) { m = 0.0; zn = 0.9999; sz = 0.0; cp = 0.0; }  /* inside the far plane: never clipped */\n"
+    "  bool far_code = a < -1.5;\n"
+    "  if (far_code) { uint bits = floatBitsToUint(-a); m = float(bits & 1u); cp = float((bits >> 1u) & 1u); dth = float((bits >> 2u) & 1u); sz = uintBitsToFloat(bits & 0xfffffff8u) - 2.0; }\n"
+    "  v_dith = int(dth);\n"
+    "  if (a < 0.0 && !far_code) { m = 0.0; zn = 1.0; sz = 0.0; cp = 0.0; }\n"
     "  else if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (cp > 0.5) w = sz / 1024.0; }\n"
     "  v_col = vec4(a_col.rgb, m); v_col_p = a_col.rgb; v_cp = int(cp);\n"
-    "  v_b3d = (a >= 0.0 && sz > 0.5) ? 1.0 : 0.0;\n"
+    "  v_b3d = ((a >= 0.0 || far_code) && sz > 0.5) ? 1.0 : 0.0;\n"
     "  float xb = a_pos.x;\n"
     "  if (u_xscale < 0.0) {\n"
     "    float s = -u_xscale; float h = u_xhalf / s;\n"
@@ -1918,6 +1921,7 @@ static const char *TEX_VS =
     "   * the vertex stays TEXV floats for every title. */\n"
     "  float pz = a_col.a < 0.0 ? -a_col.a : 0.0;\n"
     "  float cp = pz >= 65536.0 ? 1.0 : 0.0, sz = pz - 65536.0 * cp, zn = 0.0;\n"
+    "  if (a_col.a > 1.5) { uint bits = floatBitsToUint(a_col.a); cp = float((bits >> 1u) & 1u); sz = uintBitsToFloat(bits & 0xfffffff8u) - 2.0; }\n"
     "  if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (a_q <= 0.0 && cp > 0.5) w = sz / 1024.0; }\n"
     "  v_cp = int(cp); v_b3d = sz > 0.5 ? 1.0 : 0.0;\n"
     "  vec2 ndc = vec2((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0);\n"
@@ -4404,6 +4408,21 @@ static float pgxp_vertex_code(float sz) {
     return sz + (s_pgxp_cpersp ? 65536.0f : 0.0f);
 }
 
+/* Depth beyond the hardware SZ range cannot share its old numeric flag
+ * offsets. Keep that format byte-identical for normal vertices. Far vertices
+ * carry a finite positive float (depth+2), with three low mantissa bits for
+ * mask/colour/dither. Integer depths through 2^20 retain every depth bit;
+ * larger depths lose at most seven float ULPs. Negative GEO / positive TEX
+ * alpha distinguishes this format from legacy draws and depth-clear (-1). */
+static float pgxp_far_vertex_code(float sz, int mask, int dither) {
+    float value = sz + 2.0f;
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    bits = (bits & ~7u) | (mask ? 1u : 0u) | (s_pgxp_cpersp ? 2u : 0u) | (dither ? 4u : 0u);
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
 /* The depth buffer is cleared (beyond every SZ, over the drawing area and
  * the native-wide margins) by a colourless depth-only draw through the flat
  * batch, so every surface a draw reaches (the hr surface, the high-resolution
@@ -4523,13 +4542,14 @@ static void seam_q(const float B[3][3], float q[3]) {
     for (int k = 0; k < 3; k++) q[k] = o[k] > 1e-9f ? o[k] : q[k];
 }
 static void seam_sz(const float B[3][3], float z[3]) {
+    float limit = fmaxf(z[0], fmaxf(z[1], z[2])) > 65535.0f ? 2147483648.0f : 65535.0f;
     float o[3];
     for (int k = 0; k < 3; k++) {
         float iz = 0.0f;
         for (int i = 0; i < 3; i++) iz += B[k][i] / z[i];
         o[k] = iz > 1e-9f ? 1.0f / iz : z[k];
         if (o[k] < 1.0f) o[k] = 1.0f;
-        if (o[k] > 65535.0f) o[k] = 65535.0f;
+        if (o[k] > limit) o[k] = limit;
     }
     for (int k = 0; k < 3; k++) z[k] = o[k];
 }
@@ -4741,7 +4761,9 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             }
         }
         for (int i = 0; i < 3; i++)
-            v0[i * 6 + 5] = mask_a + 2.0f * pgxp_vertex_code(z[i]);
+            v0[i * 6 + 5] = z[i] > 65535.0f
+                ? -pgxp_far_vertex_code(z[i], ((int)mask_a & 1), mask_a >= GPU_GEO_DITHER_CODE)
+                : mask_a + 2.0f * pgxp_vertex_code(z[i]);
     }
     if (n == 3) pgxp_tri_log_tri('G', dmode, semi, v0, 6);
 }
@@ -4924,7 +4946,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             }
             for (int i = 0; i < 3; i++) {
                 const float code = pgxp_vertex_code(z[i]);
-                if (code > 0.0f) t0[i * TEXV + 7] = -code;   /* a_col.a (TEX_VS) */
+                if (z[i] > 65535.0f) t0[i * TEXV + 7] = pgxp_far_vertex_code(z[i], 0, 0);
+                else if (code > 0.0f) t0[i * TEXV + 7] = -code;   /* a_col.a (TEX_VS) */
             }
         }
         pgxp_tri_log_tri('T', tdmode, semi, &s_tb[s_tb_n * TEXV], TEXV);
@@ -5330,6 +5353,8 @@ static void native_draw_end(int previous) { sw_set_faithful_authority(previous);
 static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; s_projected_uv_valid = 0; s_pz_valid = 0; }
 
 int gl_renderer_projective_supported(void) {
+    /* Eye replay owns a separate FBO even when native-wide presentation is off. */
+    if (s_pass_active) return s_raster_ok;
     if (s_rth_on && !rt_on_render_thread() && !rt_held())
         return s_raster_ok && s_rthm_cur && !cpu_vram_authoritative();
     return s_raster_ok && g_wide_cur && !cpu_vram_authoritative();
@@ -7588,6 +7613,14 @@ uint64_t gl_renderer_perf_prim_split(double *out_tex_frac) {
     return s_scene_prims;
 }
 
+/* Cumulative scene primitives for per-frame attribution (frame_trace). Callers
+ * take deltas; these counters are never reset here. */
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured) {
+    GL_RT_SYNC("scene_prim_counts");
+    if (prims) *prims = s_scene_prims;
+    if (textured) *textured = s_scene_prims_tex;
+}
+
 int gl_renderer_perf_aggregate(int wide_filter, double out[18]) {
     GL_RT_SYNC("perf_aggregate");
     for (int i = 0; i < 18; i++) out[i] = 0.0;
@@ -8799,27 +8832,33 @@ void gl_renderer_stereo_stage_reset(void) {
     GL_RT_SYNC("stereo_stage_reset");
     s_stereo_pair[1 - s_stereo_current].mask = 0;
 }
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
-    GL_RT_SYNC("capture_readback");
-    if(eye>=2 || !rgba || !w || !h || w>1024 || h>512)return 0;
+/* Both staged eye images in one read. The blit target is double height, eye 0
+ * into its lower half and eye 1 into its upper half, so one glReadPixels
+ * returns the two height-sized planes contiguously, eye 0 first. */
+int gl_renderer_stereo_stage_readback_pair(uint32_t w,uint32_t h,uint8_t *rgba) {
+    GL_RT_SYNC("capture_readback_pair");
+    if(!rgba || !w || !h || w>1024 || h>512)return 0;
     StereoPair *pair=&s_stereo_pair[1-s_stereo_current];
-    if(!(pair->mask&(1u<<eye)))return 0;
+    if((pair->mask&3u)!=3u)return 0;
     GLint read,draw,texture,pack,pbo,row,skipr,skipp;
     GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(0x8DB9);
     glGetIntegerv(0x8CAA,&read);glGetIntegerv(0x8CA6,&draw);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);
     glGetIntegerv(GL_PACK_ALIGNMENT,&pack);glGetIntegerv(0x88ED,&pbo);glGetIntegerv(GL_PACK_ROW_LENGTH,&row);
     glGetIntegerv(GL_PACK_SKIP_ROWS,&skipr);glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipp);
     int ok=pass_make_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h,
-                              w,h,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
+                              w,h*2u,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
     if(ok) {
         glDisable(GL_SCISSOR_TEST);glDisable(0x8DB9);
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
         p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,s_capture_read_fbo);
-        p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,0,w,h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        for(uint32_t eye=0;eye<2u;eye++) {
+            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
+            p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,(GLint)(eye*h),w,(GLint)((eye+1u)*h),
+                                GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        }
         p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,s_capture_read_fbo);
         p_glBindBuffer(0x88EB,0);glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
         glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
-        glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+        glReadPixels(0,0,w,h*2u,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
     }
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,read);p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,draw);
     glBindTexture(GL_TEXTURE_2D,texture);glPixelStorei(GL_PACK_ALIGNMENT,pack);

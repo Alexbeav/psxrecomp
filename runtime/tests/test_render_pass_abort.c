@@ -215,8 +215,8 @@ int gl_renderer_stereo_end(uint32_t eye, int keep) {
     return 1;
 }
 void gl_renderer_stereo_stage_reset(void) { s_stereo_mask = 0; }
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
-    (void)eye;(void)w;(void)h;(void)rgba;return 0;
+int gl_renderer_stereo_stage_readback_pair(uint32_t w,uint32_t h,uint8_t *rgba) {
+    (void)w;(void)h;(void)rgba;return 0;
 }
 void gl_renderer_stereo_reset(void) { s_stereo_mask = 0; s_stereo_published = 0; }
 int gl_renderer_stereo_set_presentation(uint32_t mode) { return mode <= 1; }
@@ -225,6 +225,9 @@ void gte_render_view_get(int32_t xyz[3]) { memcpy(xyz, s_view, sizeof s_view); }
 void gte_render_view_set(const int32_t xyz[3]) { memcpy(s_view, xyz, sizeof s_view); }
 static PSXModRenderView s_pose;
 void gte_render_pose_get(PSXModRenderView *v) { *v = s_pose; memcpy(v->translation, s_view, sizeof s_view); }
+int gpu_render_projective_begin(void) { return 1; }
+void gpu_render_projective_end(void) {}
+void psx_mod_set_render_projective(int enabled) { (void)enabled; }
 void gte_render_pose_set(const PSXModRenderView *v) { s_pose = *v; memcpy(s_view, v->translation, sizeof s_view); }
 int gl_renderer_stereo_publish(uint64_t id, uint64_t cycle, const int32_t view[2][3]) {
     (void)cycle; (void)view;
@@ -232,6 +235,13 @@ int gl_renderer_stereo_publish(uint64_t id, uint64_t cycle, const int32_t view[2
     s_stereo_published = id;
     return 1;
 }
+/* Referenced by render_pass.c's frame tracing and stereo shedding. */
+void gl_renderer_runtime_diag(uint64_t out[6]) { memset(out, 0, 6 * sizeof *out); }
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured) {
+    if (prims) *prims = 0;
+    if (textured) *textured = 0;
+}
+uint64_t psx_host_mono_ms(void) { return 1; }
 
 /* ---- an overlay shard's cycle shim (overlay_dispatch_preamble.c.inc) --- */
 static uint32_t s_shard_pending;

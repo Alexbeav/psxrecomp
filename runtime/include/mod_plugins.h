@@ -651,14 +651,20 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
  * partially updated plugin state) across guest code, or tolerate the abort. */
 int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
                         PSXModRenderPassFn fn, void* user);
-/* Isolated draw/readback using the stereo-capable rollback transaction.
- * Never publishes an eye pair or changes presentation. Returns native-sized
- * top-to-bottom RGBA8 pixels (alpha remains the PSX mask bit, not coverage).
- * Call outside another pass. rgba_bytes must cover rect->w*rect->h*4. */
-int psx_mod_render_capture_rgba(struct CPUState *cpu,const PSXModRenderPass *rect,
-                               PSXModRenderPassFn fn,void *user,
-                               uint8_t *rgba,uint32_t rgba_bytes);
-#define PSX_MOD_RENDER_CAPTURE_RGBA 1
+/* Isolated dual-matte draw/readback using the stereo-capable rollback
+ * transaction. Draws two mattes of the same slice, the first into eye 0 of the
+ * stage surface and the second into eye 1, so both planes of a frame cost one
+ * readback instead of two. Never publishes an eye pair or changes presentation.
+ * Returns native-sized bottom-to-top RGBA8 pixels (alpha remains the PSX mask
+ * bit, not coverage). Call outside another pass. rgba_bytes must cover
+ * 2*rect->w*rect->h*4; the first matte arrives in the buffer's first half and
+ * the second in its second half. */
+int psx_mod_render_capture_rgba_pair(struct CPUState *cpu,
+                                     const PSXModRenderPass *rect,
+                                     PSXModRenderPassFn fn,void *user_first,
+                                     void *user_second,uint8_t *rgba,
+                                     uint32_t rgba_bytes);
+#define PSX_MOD_RENDER_CAPTURE_RGBA_PAIR 1
 /*
  * Why passes cannot run right now, the host-time budget aside (a plan that
  * returns 0 while this says READY was shed for time). A plugin that relies on
@@ -733,6 +739,35 @@ typedef int (*PSXModStereoFn)(struct CPUState*, void*, uint32_t eye);
 int psx_mod_render_stereo(struct CPUState *cpu, const PSXModStereoFrame *frame,
                           PSXModStereoFn fn, void *user);
 uint32_t psx_mod_render_stereo_status(void);
+/* Annotate the current frame's trace record with a short tag (scene transition,
+ * state change). Only meaningful while PSX_FRAME_TRACE is on and a traced frame
+ * is open (a headset frame, opened by psx_mod_openxr_begin); a no-op otherwise. */
+void psx_mod_frame_trace_note(const char *tag);
+/* Bracket one guest call of a stereo eye's replay with a frame-trace sub-stage,
+ * so a hitch can be aimed at the call that grew instead of at the whole eye
+ * (the PSX_TRACE_GAME_* stages in frame_trace.h). The runtime does the timing,
+ * with the same clock and conversion as the eye's own stages, so the parts sum
+ * against eye_guest. A no-op unless PSX_FRAME_TRACE is on AND the call is made
+ * inside a traced stereo eye: a HUD capture's guest draws, the flat path and
+ * anything outside the eye's callback are ignored. A begin without a matching
+ * end (or an eye aborted mid-entry) contributes nothing; the unmeasured time
+ * stays visible as the difference between eye_guest and the sub-stages.
+ * Spans may nest: each stage keeps its own start tick, so a stage bracketed
+ * inside another is timed on its own and reports a subset of the outer span's
+ * wall time rather than a sibling of it. The hook's visibility override nests
+ * inside the guest traversal it is part of (game_select in game_traverse). */
+void psx_mod_frame_trace_stage_begin(uint32_t stage);
+void psx_mod_frame_trace_stage_end(uint32_t stage);
+/* Drop the stereo shedding policy's pair-time estimate and derived budget. Call
+ * on a scene/mode transition so a new scene does not inherit the previous one's
+ * timing; cheap and idempotent. Shedding itself is unchanged. */
+void psx_mod_stereo_reset_budget(void);
+/* Set the stereo pair budget from a real headset deadline in milliseconds,
+ * pushed by the OpenXR layer from the target display period (11.1 ms at 90 Hz,
+ * 8.3 ms at 120 Hz). 0 clears it. The guest-VBlank-derived value is only a
+ * fallback: a PSX redraw budget is not an OpenXR display deadline, and the two
+ * disagree on every non-60 Hz headset. PSX_STEREO_SHED_BUDGET_MS still wins. */
+void psx_mod_stereo_set_budget_ms(double ms);
 /* 0 disables stereo output; 1 shows a complete pair side by side. Capture
  * itself does not enable presentation. Default 0; applies to this session. */
 int psx_mod_set_stereo_presentation(uint32_t mode);
@@ -755,8 +790,15 @@ typedef struct PSXModRenderView {
     uint32_t projection;
     uint32_t projection_h_ref; /* 0 absolute FOV; otherwise scale focal lengths by guest H/ref */
     int32_t fx_q16, fy_q16, cx_delta_q16, cy_delta_q16;
+    /* Optional host-only pose for projective replay. The ordinary path uses
+     * Q12/integer values; precise 1 preserves sub-unit movement inside replay. */
+    uint32_t precise;
+    double rotation[9], translation_precise[3];
 } PSXModRenderView;
 int psx_mod_render_view(const PSXModRenderView *view);
+/* Signed homogeneous projection and near clipping for replayed 3D packets.
+ * Requires intact PGXP provenance; native gameplay stays architectural. */
+void psx_mod_set_render_projective(int enabled);
 /* Begin locates both views at one predicted time. End submits only a fresh
  * complete pair; failed/shed redraws submit zero layers. */
 int psx_mod_openxr_enable(int enabled);

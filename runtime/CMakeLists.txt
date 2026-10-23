@@ -26,6 +26,10 @@ if(BUILD_TESTING)
     # Windows UTF-8 text boundary (issue #371): the helpers legacy Windows
     # relies on, and — with the shipped manifest — a UTF-8 process code page.
     if(WIN32)
+        add_executable(host_time_threads_test tests/test_host_time_threads.c src/host_time.c)
+        target_include_directories(host_time_threads_test PRIVATE include)
+        add_test(NAME host_time_threads_test COMMAND host_time_threads_test)
+        set_tests_properties(host_time_threads_test PROPERTIES TIMEOUT 15)
         add_executable(win_utf8_helpers_test tests/test_win_utf8.cpp)
         target_include_directories(win_utf8_helpers_test PRIVATE include)
         add_test(NAME win_utf8_helpers_test COMMAND win_utf8_helpers_test)
@@ -1629,6 +1633,17 @@ if(BUILD_TESTING)
     add_test(NAME present_sync_test COMMAND present_sync_test)
     target_include_directories(frame_pacing_test PRIVATE include)
     add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
+    # Opt-in stereo/OpenXR frame-trace ring (frame_trace.c): disabled-by-default,
+    # ring wrap, timestamp monotonicity, missing telemetry, export validity.
+    add_executable(frame_trace_test tests/test_frame_trace.c src/frame_trace.c)
+    target_include_directories(frame_trace_test PRIVATE include)
+    add_test(NAME frame_trace_test COMMAND frame_trace_test)
+    # Stereo shedding/recovery policy (docs/STEREO_RENDERING.md): bounded streaks,
+    # authoritative probes, hysteresis, pair age separate from the estimate.
+    add_executable(stereo_shed_policy_test tests/test_stereo_shed_policy.c
+                   src/stereo_shed_policy.c)
+    target_include_directories(stereo_shed_policy_test PRIVATE include)
+    add_test(NAME stereo_shed_policy_test COMMAND stereo_shed_policy_test)
     # Render thread core ([video] render_thread, docs/RENDER_THREAD.md):
     # ordering across ring wraps, the frame bound, stale-frame detection and
     # the drain + context hand-off sync point, against a fake executor.
@@ -1774,6 +1789,8 @@ if(BUILD_TESTING)
         add_executable(render_pass_abort_test
             tests/test_render_pass_abort.c
             src/render_pass.c
+            src/frame_trace.c
+            src/stereo_shed_policy.c
             src/psx_cycles.c)
         target_include_directories(render_pass_abort_test PRIVATE include)
         add_test(NAME render_pass_abort_test COMMAND render_pass_abort_test)
@@ -1785,6 +1802,8 @@ if(BUILD_TESTING)
     add_executable(render_pass_sandbox_test
         tests/test_render_pass_sandbox.c
         src/render_pass.c
+        src/frame_trace.c
+        src/stereo_shed_policy.c
         src/render_pass_plan.c
         src/psx_cycles.c
         src/timers.c
@@ -2042,6 +2061,11 @@ if(BUILD_TESTING)
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_memory_debug_trace_guard.py
                              --cc ${CMAKE_C_COMPILER})
+            # The frame-trace record path must stay allocation- and IO-free, or
+            # it perturbs the frame it measures and no functional test notices.
+            add_test(NAME frame_trace_guard_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_trace_guard.py)
         endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
         add_test(NAME depth24_present_hold_vblank_test

@@ -145,14 +145,13 @@ extern uint32_t i_mask;
  * again sees a pending interrupt that no longer exists and can spin in its
  * event scan forever.
  *
- * Verified against the independent Beetle oracle rather than asserted:
- * beetle-psx/mednafen/psx/irq.cpp defines
- *     #define Recalc() PSX_CPU->AssertIRQ(0, (bool)(Status & Mask))
- * and calls it from IRQ_Assert (raise), from IRQ_Write for BOTH the Status ack
- * and the Mask write, and at power-on; cpu.cpp's AssertIRQ clears bit (10+n)
- * unconditionally and re-sets it only when the level is asserted. So the line
- * is recomputed at every point (I_STAT & I_MASK) can change, which is exactly
- * the set of call sites below.
+ * PSX-SPX interrupts, "PSX specific COP0 Notes": cop0r13.bit10 "is NOT a
+ * latch, ie. it gets automatically cleared as soon as (I_STAT AND
+ * I_MASK)=zero", and "Interrupt Request / Execution": it is set while
+ * (I_STAT AND I_MASK) is nonzero. So the bit is recomputed at every point
+ * (I_STAT & I_MASK) can change: a raise, a Status ack, a Mask write and
+ * power-on, which is exactly the set of call sites below. The Beetle
+ * reference behaves the same.
  *
  * Ownership: this function is the ONLY writer of CAUSE bit 10. The delivery
  * path no longer ORs it in separately — one owner, no divergence.
@@ -173,7 +172,7 @@ void psx_irq_refresh_cause_ip2(void)
 void psx_irq_set_cause_ptr(uint32_t *p)
 {
     s_cause_ptr = p;
-    /* Power-on recompute, mirroring Beetle's IRQ_Power() -> Recalc(). Without
+    /* Power-on recompute (the Beetle reference also recomputes here). Without
      * this the first mirror only happens at the first raise/ack, so a CAUSE
      * read before any interrupt activity would show a stale bit. */
     psx_irq_refresh_cause_ip2();
