@@ -2,8 +2,9 @@
 //
 // Single source of truth for "is this the right disc?". Reads a .cue, raw
 // .bin/.iso/.img/.car, or CHD, checks for the ISO9660 PVD, extracts the volume id and the
-// PlayStation boot serial (from the actual SYSTEM.CNF directory entry, with
-// an early-image scan as fallback), derives the region from the
+// PlayStation serial (from the actual SYSTEM.CNF directory entry, with an
+// early-image scan as fallback, or from a serial-form PVD volume id that
+// exactly matches the configured expected serial), derives the region from the
 // serial prefix, and optionally compares against an expected serial / CRC32.
 //
 // Also mounts the resolved path via ISOReader to capture TOC geometry
@@ -27,8 +28,8 @@ struct DiscIdentity {
     bool        opened       = false;  // data image opened (including decoded CHD)
     bool        has_header   = false;  // ISO9660 "CD001" PVD found at a PS1 disc offset
     std::string volume_id;             // PVD volume identifier (trimmed), "" if none
-    std::string detected_serial;       // serial parsed from SYSTEM.CNF BOOT line, normalized
-                                       // to the "SCUS-94236" form; "" if not found
+    std::string detected_serial;       // serial parsed from SYSTEM.CNF BOOT, or a serial-form
+                                       // matching PVD volume id; normalized to "SCUS-94236"
     std::string region;                // "NTSC-U" | "NTSC-J" | "PAL" derived from the serial
                                        // prefix (detected first, else expected); "" if unknown
 

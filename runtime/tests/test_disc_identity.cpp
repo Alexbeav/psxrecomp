@@ -44,6 +44,56 @@ static void fixture(const fs::path& path,bool raw,const char* boot="SLPS_009.98"
     const std::string early=decoy?"BOOT = cdrom:SLUS_999.99;1\r\n":cnf;
     write(40,std::vector<uint8_t>(early.begin(),early.end()));
 }
+// King's Field has no SYSTEM.CNF and boots PSX.EXE.  Its PVD volume id is the
+// only serial-shaped identity stored in the ISO filesystem.
+static void serialless_fixture(const fs::path& path,bool raw,const char* volume) {
+    const unsigned unit=raw?2352:2048,offset=raw?24:0;
+    std::ofstream file(path,std::ios::binary);
+    file.seekp(100ull*unit-1);file.put(0);
+    auto write=[&](unsigned lba,const std::vector<uint8_t>& data) {
+        file.seekp((uint64_t)lba*unit+offset);
+        file.write((const char*)data.data(),data.size());
+    };
+    std::vector<uint8_t> pvd(2048);
+    pvd[0]=1;std::memcpy(pvd.data()+1,"CD001",5);pvd[6]=1;
+    std::memset(pvd.data()+40,' ',32);
+    std::memcpy(pvd.data()+40,volume,std::min<size_t>(std::strlen(volume),32));
+    auto* root=pvd.data()+156;root[0]=34;both32(root+2,20);both32(root+10,2048);
+    root[25]=2;root[28]=root[31]=root[32]=1;
+    write(16,pvd);
+    write(20,std::vector<uint8_t>(2048));
+    const std::string boot="PS-X EXE: PSX.EXE";
+    write(40,std::vector<uint8_t>(boot.begin(),boot.end()));
+}
+static void pvd_serial_policy(const fs::path& root) {
+    using namespace PSXRecompV4;
+    for(bool raw:{false,true}) {
+        const auto good=root/(raw?"pvd-good.bin":"pvd-good.iso");
+        serialless_fixture(good,raw,"SLPS-00017");
+        auto id=identify_disc(good,"SLPS-00017",0,false,false);
+        assert(id.opened && id.has_header && id.volume_id=="SLPS-00017");
+        assert(id.detected_serial=="SLPS-00017" && id.serial_matches);
+        assert(id.region=="NTSC-J");
+
+        id=identify_disc(good,"SLPS-99999",0,false,false);
+        assert(id.detected_serial.empty() && !id.serial_matches);
+
+        // The expected identity must be strict too.  The permissive BOOT
+        // filename normalizer truncates suffixes and ignores other
+        // punctuation, which would let a different configured identity
+        // promote this PVD serial.
+        for(const char* expected:{"SLPS-000170","SLPS-00017EXTRA","SLPS-00017/"}) {
+            id=identify_disc(good,expected,0,false,false);
+            assert(id.detected_serial.empty() && !id.serial_matches);
+        }
+
+        const auto generic=root/(raw?"pvd-generic.bin":"pvd-generic.iso");
+        serialless_fixture(generic,raw,"KINGS_FIELD");
+        id=identify_disc(generic,"SLPS-00017",0,false,false);
+        assert(id.detected_serial.empty() && !id.serial_matches);
+        fs::remove(good);fs::remove(generic);
+    }
+}
 // A mounted image as identify_disc describes it, without a file: the rule
 // reads only these fields. No .chd can be made here (libchdr only reads), so
 // the rule is exercised on the identity and the branch on a broken file.
@@ -190,6 +240,6 @@ int main() {
         auto id=PSXRecompV4::identify_disc(image,"",0,false,false);
         assert(id.opened && id.has_header && id.detected_serial=="SLPS-00998" && id.region=="NTSC-J");
     }
-    netplay_rule();broken_chd(root);sbi_row_and_warning(root);
+    pvd_serial_policy(root);netplay_rule();broken_chd(root);sbi_row_and_warning(root);
     fs::remove(root/"disc.iso");fs::remove(root/"disc.bin");fs::remove(root);
 }
