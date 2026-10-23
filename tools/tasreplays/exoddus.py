@@ -6,7 +6,7 @@ never pressed, but it is connected, so the route keeps both ports (octoshock210_
 a PSXRTI3 two-digital-pad route with those three console events and the two-disc set).
 
 The device models are Crash Bandicoot's (crash.py, BizHawk 2.7): BizHawk 2.10 carries the same
-Octoshock, and octoshock2x_admission.py admits both hosts with the same lua. Two things differ:
+Octoshock, and octoshock2x_admission_bizhawk210.py admits both hosts with the same lua. Two things differ:
 the pads are digital, so the pad ACK model is a run option measured on prefixes rather than a
 fixed profile entry (Nymashock 1.29.0 has a DualShock ACK model only), and the build is made
 from disc 1's program. Disc 2's program differs from it in one byte (RAM 0x800630C8, the disc
@@ -14,7 +14,7 @@ number the game stores), so it is a continuation of the same program and disc 1'
 the whole route.
 
 No memory card: the movie's sync settings attach none. The source reference is the one
-octoshock2x_admission.py admits. No reference is generated from a candidate, and no movie input
+octoshock2x_admission_bizhawk210.py admits. No reference is generated from a candidate, and no movie input
 is changed to correct a divergence.
 """
 import argparse
@@ -29,7 +29,9 @@ import subprocess
 import sys
 
 import build_cache
-import octoshock2x_admission as source
+# The revision of the admission tool that admitted this reference (2.10 host pinned, PS1G-43).
+# Abe's Oddysee and Crash keep the earlier revision, octoshock2x_admission.py (PS1B-593).
+import octoshock2x_admission_bizhawk210 as source
 import octoshock210_route
 import tekken3
 from observation_evidence import terminal_consistency

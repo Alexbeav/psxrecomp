@@ -61,10 +61,10 @@ HOSTS = {
             'observer_head': '2fe0a892e21d7b192a4b2bff73b77535ede7ced6'},
     '2.10': {'schema': 'octoshock2x-stock-control-v1',
              'launcher': 'source_control_octo2x.py', 'lua': 'source_control_octo2x.lua',
-             # Pinned on the first admitted 2.10 pair (Abe's Exoddus 6672M, PS1G-43): its control
-             # and observer runs bound the same lua as 2.7 and this launcher revision.
-             'lua_sha256': '5bf2ea992918bba219b31932d2cf47212c113c497e72a23b0f8db6ef3364eedf',
-             'launcher_sha256': {'dad184c05ed50010b1abef48931b06fd4ac80eeb8b85e52b4eeb0a140be07638': 'first admitted 2.10 pair'},
+             # Pinned on the first admitted 2.10 pair; until then the launcher/lua bytes are
+             # recorded in the reference's own bindings rather than checked against a constant.
+             'lua_sha256': None,
+             'launcher_sha256': None,
              'helper_dll': 'ObservationOcto2x.dll', 'helper_src': 'ObservationOcto2x.cs',
              'helper_dll_sha256': '646bd8ef541565518017f7940b3339e93d7685dc7c7625993d8a83bf463b46fe',
              'helper_src_sha256': '3da48f1741f851261d0609d3873896bedad9a0390a7b6c0af2e08e4c792335d1',
@@ -106,8 +106,8 @@ TITLES = {
         'movie': 'samtastic-oddworldabesexoddus-100p.bk2', 'movie_sha256': '5cabfa9b64b91ad93374bf1d28bbc129b05f6831e160c15de1e1c19f1aca55d7',
         'firmware': 'SCPH5501.BIN',
         # Two-disc set: the movie opens the tray at frame 179,993 and selects disc 2 at 179,996,
-        # then closes it the same frame; there is no other swap. The host loads an .m3u naming both
-        # cues; a Disc-1-only host crashed EmuHawk 2.10 with an ArgumentOutOfRangeException there.
+        # then swaps eleven more times, so the host loads an .m3u naming both cues; a Disc-1-only
+        # host crashed EmuHawk 2.10 with an ArgumentOutOfRangeException at the first swap.
         'media': {"Oddworld - Abe's Exoddus (USA) (Disc 1).bin": 'd480e3aaf66a80c9307c1f2c61fefd162d2fb9e801398f69feb6e5bcbfb7c720',
                   "Oddworld - Abe's Exoddus (USA) (Disc 1).cue": '2c7ed2c4ad10825315a7bb763c6cf0c9daf6af9d4fdab2e5d27718fa8d35f96c',
                   "Oddworld - Abe's Exoddus (USA) (Disc 2).bin": 'a9db9be897ff2e5179943e460124a86a9df4a28a9a3a81fe19d1cfe01dacf007',
