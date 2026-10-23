@@ -95,33 +95,36 @@ static void hex_hash(const uint8_t bytes[32], char text[65]) {
     text[64] = 0;
 }
 static void capture_initial_cards(void) {
-    const char *expected = getenv("PSX_INPUT_ROUTE_CARD1_SHA256");
-    if (!expected && !dualshock_mode) return;
-    if (expected) {
-        if (strlen(expected) != 64) fail("invalid initial card identity");
-        for (unsigned i=0;i<64;++i)
-            if (!((expected[i]>='0' && expected[i]<='9') ||
-                  (expected[i]>='a' && expected[i]<='f'))) fail("invalid initial card identity");
-    }
-    const int present = memcard_is_present(0) != 0;
-    if (present != (expected != NULL) || memcard_is_present(1)) fail("initial card presence differs");
-    char text[65] = {0};
-    if (present) {
-        uint8_t bytes[4096], result[32]; psx_sha256_ctx hash;
-        psx_sha256_init(&hash);
-        for (unsigned offset=0;offset<MEMCARD_SIZE;offset+=sizeof bytes) {
-            if (memcard_debug_read_buffer(0,offset,sizeof bytes,bytes)!=sizeof bytes)
-                fail("short initial card buffer read");
-            psx_sha256_update(&hash,bytes,sizeof bytes);
+    const char *expected[2] = {getenv("PSX_INPUT_ROUTE_CARD1_SHA256"), getenv("PSX_INPUT_ROUTE_CARD2_SHA256")};
+    if (!expected[0] && !expected[1] && !dualshock_mode) return;
+    int present[2]; char text[2][65] = {{0},{0}};
+    for (int slot=0; slot<2; ++slot) {
+        if (expected[slot]) {
+            if (strlen(expected[slot]) != 64) fail("invalid initial card identity");
+            for (unsigned i=0;i<64;++i)
+                if (!((expected[slot][i]>='0' && expected[slot][i]<='9') ||
+                      (expected[slot][i]>='a' && expected[slot][i]<='f'))) fail("invalid initial card identity");
         }
-        psx_sha256_final(&hash,result);hex_hash(result,text);
-        if (strcmp(text,expected)) fail("loaded initial card bytes differ");
+        present[slot] = memcard_is_present(slot) != 0;
+        if (present[slot] != (expected[slot] != NULL)) fail("initial card presence differs");
+        if (present[slot]) {
+            uint8_t bytes[4096], result[32]; psx_sha256_ctx hash;
+            psx_sha256_init(&hash);
+            for (unsigned offset=0;offset<MEMCARD_SIZE;offset+=sizeof bytes) {
+                if (memcard_debug_read_buffer(slot,offset,sizeof bytes,bytes)!=sizeof bytes)
+                    fail("short initial card buffer read");
+                psx_sha256_update(&hash,bytes,sizeof bytes);
+            }
+            psx_sha256_final(&hash,result);hex_hash(result,text[slot]);
+            if (strcmp(text[slot],expected[slot])) fail("loaded initial card bytes differ");
+        }
     }
     FILE *f=open_output("initial-cards.json");
-    fprintf(f,"{\"card1_present\":%s,\"card2_present\":false,\"card1_sha256\":",
-            present ? "true" : "false");
-    if (present) fprintf(f,"\"%s\"",text); else fputs("null",f);
-    fprintf(f,",\"bytes\":%u}\n",present ? (unsigned)MEMCARD_SIZE : 0);
+    fprintf(f,"{\"card1_present\":%s,\"card2_present\":%s,\"card1_sha256\":",
+            present[0] ? "true" : "false", present[1] ? "true" : "false");
+    if (present[0]) fprintf(f,"\"%s\"",text[0]); else fputs("null",f);
+    if (present[1]) fprintf(f,",\"card2_sha256\":\"%s\"",text[1]);
+    fprintf(f,",\"bytes\":%u}\n",(unsigned)MEMCARD_SIZE*(present[0]+present[1]));
     if (ferror(f) || fclose(f)) fail("initial card observation write");
 }
 static const char *applied_key(void) {
@@ -132,6 +135,7 @@ static const char *supplied_key(void) {
 }
 static void close_observation_json(FILE *f) {
     if (dualshock_mode) {
+        if (input_route_neutral_p2()) fputs(",\"port2_controller\":\"dualshock-neutral\"", f);
         uint8_t bytes[32]; char expected[65], supplied[65];
         psx_sha256_ctx hash = expected_protocol_hash;
         psx_sha256_final(&hash, bytes); hex_hash(bytes, expected);
@@ -392,6 +396,8 @@ void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source
 void input_route_observer_dualshock_applied(uint16_t buttons, const uint8_t sticks[4],
                                           int connected, int config_capable, int analog) {
     if (!log_file) return;
+    if (input_route_neutral_p2() && !input_route_dualshock_ports_match())
+        fail("declared neutral port 2 delivery differs");
     uint8_t row[7] = {(uint8_t)buttons, (uint8_t)(buttons >> 8),
                      sticks[1], sticks[0], sticks[3], sticks[2], (uint8_t)sio_get_pad_mode_button(0)};
     if (!dualshock_mode || !pending || !connected || !config_capable ||

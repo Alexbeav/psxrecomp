@@ -15067,9 +15067,7 @@ void debug_server_note_input_applied(void)
     if (s_dualshock_route_mode) {
         uint8_t st[4];
         sio_get_pad_sticks(0, st);
-        int connected = sio_get_pad_connected(0) && !sio_get_multitap();
-        for (int slot = 1; slot < PSX_MAX_PLAYERS; ++slot)
-            if (sio_get_pad_connected(slot)) connected = 0;
+        int connected = input_route_dualshock_ports_match();
         input_route_observer_dualshock_applied(sio_get_pad_buttons_slot(0), st,
             connected, sio_get_pad_config_capable(0), sio_get_pad_analog(0));
         return;

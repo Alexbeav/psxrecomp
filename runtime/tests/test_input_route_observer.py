@@ -57,16 +57,19 @@ with tempfile.TemporaryDirectory() as root:
             assert (out / "checkpoints.jsonl").read_bytes() == b"preserve"
 with tempfile.TemporaryDirectory() as directory:
     for case in ('ds_valid', 'ds_wrong_axis', 'ds_unconverted', 'ds_missing',
-                 'ds_disconnected', 'ds_plainpad', 'ds_tail_axis', 'ds_digital'):
+                 'ds_disconnected', 'ds_plainpad', 'ds_tail_axis', 'ds_digital',
+                 'ds_p2_valid', 'ds_p2_disconnected', 'ds_p2_plain', 'ds_p2_pressed',
+                 'ds_p2_axis', 'ds_p2_mode', 'ds_p2_multitap'):
         out = Path(directory) / case
         out.mkdir()
         env = dict(os.environ, PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1',
                    PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0',
                    PSX_INPUT_ROUTE_CPU_STATE='0', PSX_INPUT_ROUTE_VIDEO_STATE='0')
         env.pop('PSX_INPUT_ROUTE_WATCH_U16', None)
+        if case.startswith('ds_p2_'): env['PSX_INPUT_ROUTE_PORT2'] = 'dualshock-neutral'
         run = subprocess.run([str(exe), case], env=env, capture_output=True)
-        assert run.returncode == (0 if case == 'ds_valid' else 3), (case, run.returncode, run.stderr)
-        if case != 'ds_valid':
+        assert run.returncode == (0 if case in ('ds_valid', 'ds_p2_valid') else 3), (case, run.returncode, run.stderr)
+        if case not in ('ds_valid', 'ds_p2_valid'):
             assert not (out / 'complete.json').exists()
             continue
         source = struct.pack('<H5B', 0xFFEF, 1,0,128,255,0) + struct.pack('<H5B', 0xFFFF,129,130,131,132,0)
@@ -75,6 +78,7 @@ with tempfile.TemporaryDirectory() as directory:
             record = json.loads((out / name).read_text(encoding='utf-8'))
             assert record['original_controller_sha256'] == hashlib.sha256(source).hexdigest()
             assert record['applied_controller_sha256'] == record['expected_protocol_sha256'] == hashlib.sha256(protocol).hexdigest()
+            if case == 'ds_p2_valid': assert record['port2_controller'] == 'dualshock-neutral'
             assert record['guest_analog_mode'] == 1
             assert 'applied_words_sha256' not in record
         rows = [json.loads(line) for line in (out / 'checkpoints.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -133,4 +137,17 @@ with tempfile.TemporaryDirectory() as directory:
     env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
     run = subprocess.run([str(exe), 'two_dual_init'], env=env, capture_output=True)
     assert run.returncode == 0, ('a DualShock init after a two-pad init is refused', run.returncode, run.stderr)
+with tempfile.TemporaryDirectory() as directory:
+    digest = hashlib.sha256(bytes(range(256))*512).hexdigest()
+    for case in ('card2_valid', 'card2_changed', 'card2_short', 'card2_wrong_hash', 'card2_bad_hash', 'card2_undeclared'):
+        out = Path(directory)/case; out.mkdir()
+        env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1', PSX_INPUT_ROUTE_CARD1_SHA256=digest)
+        if case != 'card2_undeclared':
+            env['PSX_INPUT_ROUTE_CARD2_SHA256'] = '0'*64 if case == 'card2_wrong_hash' else 'xyz' if case == 'card2_bad_hash' else digest
+        run = subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert run.returncode == (0 if case == 'card2_valid' else 3), (case,run.returncode,run.stderr)
+        if case == 'card2_valid':
+            assert json.loads((out/'initial-cards.json').read_text()) == dict(card1_present=True,card2_present=True,card1_sha256=digest,card2_sha256=digest,bytes=262144)
+        else: assert not (out/'complete.json').exists()
 print('input_route_observer: digital, DualShock delivery, loaded-card identity and tail resume, two digital pads passed')

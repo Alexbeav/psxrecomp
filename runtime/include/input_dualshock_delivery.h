@@ -50,15 +50,37 @@ static inline void input_dualshock_protocol_sticks(const uint8_t source_ly_lx_ry
     for (unsigned i = 0; i < 4; ++i)
         protocol_lx_ly_rx_ry[i] = input_dualshock_protocol_axis(source_ly_lx_ry_rx[i ^ 1u]);
 }
-/* Preload admission for a route that declares one cold controller at P1:
- * no multitap, every other slot disconnected, P1 digital protocol mode with
- * neutral sticks. `dualshock` makes P1 config-capable (guest-owned mode). */
+/* Cold P1 is the default; a DualShock route may explicitly declare neutral
+ * DualShock P2 at physical slot 1. No multitap or other connected slot. */
+static inline int input_route_neutral_p2(void)
+{
+    const char *model = getenv("PSX_INPUT_ROUTE_PORT2");
+    return model && !strcmp(model, "dualshock-neutral");
+}
+/* Observe the declared topology and neutral P2 sample, never repair it.
+ * Analog protocol mode remains guest-owned on both pads. */
+static inline int input_route_dualshock_ports_match(void)
+{
+    if (sio_get_multitap()) return 0;
+    const int p2 = input_route_neutral_p2();
+    for (int slot = 0; slot < PSX_MAX_PLAYERS; ++slot)
+        if (!!sio_get_pad_connected(slot) != (slot == 0 || (slot == 1 && p2))) return 0;
+    if (p2) {
+        uint8_t sticks[4];
+        sio_get_pad_sticks(1, sticks);
+        if (!sio_get_pad_config_capable(1) || sio_get_pad_buttons_slot(1) != 0xFFFF ||
+            sio_get_pad_mode_button(1)) return 0;
+        for (unsigned i = 0; i < 4; ++i) if (sticks[i] != 128) return 0;
+    }
+    return 1;
+}
 static inline void input_route_admit_cold_p1(int dualshock)
 {
     sio_set_multitap(0);
     for (int slot = 0; slot < PSX_MAX_PLAYERS; ++slot) {
-        sio_set_pad_connected(slot, slot == 0);
-        sio_set_pad_config_capable(slot, dualshock && slot == 0);
+        const int connected = slot == 0 || (dualshock && slot == 1 && input_route_neutral_p2());
+        sio_set_pad_connected(slot, connected);
+        sio_set_pad_config_capable(slot, dualshock && connected);
         sio_set_pad_analog(slot, 0, 128, 128, 128, 128);
         sio_set_pad_state_slot(slot, 0xFFFF);
     }

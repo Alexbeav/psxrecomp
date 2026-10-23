@@ -67,3 +67,53 @@ with tempfile.TemporaryDirectory() as folder:
     card.write_bytes(bytes(131071));rejects(lambda:card_identity(card))
     card.write_bytes(bytes(131073));rejects(lambda:card_identity(card))
 print('Native input identity: legacy unchanged; Nymashock and Octoshock protocol identities and malformed input/card rejection pass')
+
+# Run the actual runner admission, staging and completion judgement without a
+# product process. Synthetic completion is deliberately not a native receipt.
+from unittest.mock import patch
+from types import SimpleNamespace
+import json, sys
+import run_native
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    for name in ('player.exe', 'game.toml', 'disc.bin', 'bios.bin'):
+        (root/name).write_bytes(b'fixture')
+    c1=root/'one.mcd'; c2=root/'two.mcd'
+    c1.write_bytes(bytes(131072)); c2.write_bytes(bytes([1])*131072)
+    route=root/'fixture.psxrti'
+    write_route([(0xffff,128,128,128,128,0)]*2,route)
+    ident=route_identity(route,axis_model='octoshock-byte')
+    base=['run_native.py',str(root/'out'),'--exe',str(root/'player.exe'), '--game',str(root/'game.toml'),
+          '--disc',str(root/'disc.bin'),'--bios',str(root/'bios.bin'),'--route',str(route),
+          '--pad-ack-model','nymashock-1.29.0-dualshock','--axis-model','octoshock-byte']
+    for index,(cards,p2,fault) in enumerate(((0,False,''),(1,False,''),(2,True,''),(2,True,'card2'),(2,True,'p2'))):
+        out=root/f'out{index}'; argv=base.copy(); argv[1]=str(out)
+        if cards: argv+=['--card1',str(c1),'--card-model','nymashock-1.29.0','--legacy-card-repair','off']
+        if cards==2: argv+=['--card2',str(c2)]
+        if p2: argv+=['--port2-controller','dualshock-neutral']
+        def budget(process,run,*args,**kwargs):
+            manifest=json.loads((run/'manifest.json').read_text())
+            env=manifest['psx_environment']
+            settings=(run/'settings.toml').read_text()
+            assert ('enable2 = true' in settings) == (cards==2)
+            assert ('PSX_INPUT_ROUTE_PORT2' in env)==p2
+            assert ('PSX_INPUT_ROUTE_CARD2_SHA256' in env)==(cards==2)
+            observed=dict(card1_present=bool(cards),card2_present=cards==2,
+                          card1_sha256=card_identity(c1)['sha256'] if cards else None,bytes=131072*cards)
+            if cards: assert (run/'cards/card1.mcd').read_bytes()==c1.read_bytes()
+            if cards==2:
+                assert (run/'cards/card2.mcd').read_bytes()==c2.read_bytes()
+                assert env['PSX_INPUT_ROUTE_CARD2_SHA256']==card_identity(c2)['sha256']
+                observed['card2_sha256']=card_identity(c2)['sha256'] if fault!='card2' else '0'*64
+            (run/'initial-cards.json').write_text(json.dumps(observed))
+            done=dict(frame=2,input_frames=2,neutral_tail_ticks=0,
+                      controller_profile=ident['controller_profile'],original_controller_sha256=ident['original_controller_sha256'],
+                      expected_protocol_sha256=ident['expected_protocol_sha256'],applied_controller_sha256=ident['expected_protocol_sha256'])
+            if p2 and fault!='p2': done['port2_controller']='dualshock-neutral'
+            (run/'complete.json').write_text(json.dumps(done))
+            return dict(exit_code=0,stop_reason=None,last_inventory={})
+        with patch.object(sys,'argv',argv), patch('subprocess.Popen',return_value=SimpleNamespace(pid=123)), patch('process_budget.wait_budgeted',side_effect=budget):
+            assert run_native.main()==(1 if fault else 0), (cards,p2,fault)
+    argv=base+['--card2',str(c2)]
+    with patch.object(sys,'argv',argv): rejects(run_native.main)
+print('Runner synthetic main-path checks: P1/no-card, single-card, two-card/neutral-P2 staging and independent completion failures passed; no product started')

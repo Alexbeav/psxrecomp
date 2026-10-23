@@ -74,7 +74,44 @@ static void source_profile(const char *profile) {
     check(byte_acked(0x42), "and continues the poll");
     sio_write(0x1F80104A, 0);
 }
+static void neutral_p2_topology(void) {
+    boot("nymashock-1.29.0-dualshock");
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PORT2", "dualshock-neutral");
+#else
+    setenv("PSX_INPUT_ROUTE_PORT2", "dualshock-neutral", 1);
+#endif
+    input_route_admit_cold_p1(1);
+    check(sio_get_pad_connected(1) && sio_get_pad_config_capable(1), "declared P2 is a connected DualShock");
+    check(input_route_dualshock_ports_match(), "cold neutral P2 topology matches");
+    sio_set_pad_state_slot(1, 0xFFFE);
+    check(!input_route_dualshock_ports_match(), "pressed P2 rejected");
+    sio_set_pad_state_slot(1, 0xFFFF);
+    sio_set_pad_sticks(1, 128, 127, 128, 128);
+    check(!input_route_dualshock_ports_match(), "off-centre P2 rejected");
+    sio_set_pad_sticks(1, 128, 128, 128, 128);
+    #if PSX_MAX_PLAYERS > 2
+    sio_set_pad_connected(2, 1);
+    check(!input_route_dualshock_ports_match(), "undeclared extra slot rejected");
+    sio_set_pad_connected(2, 0);
+    #endif
+    sio_set_pad_config_capable(1, 0);
+    check(!input_route_dualshock_ports_match(), "plain P2 rejected");
+    sio_set_pad_config_capable(1, 1);
+    sio_set_pad_connected(1, 0);
+    check(!input_route_dualshock_ports_match(), "missing P2 rejected");
+    input_route_admit_cold_p1(0);
+    check(!sio_get_pad_connected(1), "digital admission retains P1 only");
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PORT2", "");
+#else
+    unsetenv("PSX_INPUT_ROUTE_PORT2");
+#endif
+    input_route_admit_cold_p1(1);
+    check(!sio_get_pad_connected(1) && input_route_dualshock_ports_match(), "default remains P1 only");
+}
 int main(void) {
+    neutral_p2_topology();
     source_profile("nymashock-1.29.0-dualshock");
     source_profile("octoshock-2.2.2-digital");   /* the digital pad has the same DTR rule */
     source_profile("nymashock-2.8-gamepad");     /* and so does the 2.8 plain gamepad profile */

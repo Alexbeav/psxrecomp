@@ -262,7 +262,7 @@ def disc_roster(route, boot_disc, roster, game):
     return entries
 
 
-def settings_text(renderer, fast_boot, hle, bios, disc, card1):
+def settings_text(renderer, fast_boot, hle, bios, disc, card1, card2=False):
     """The settings.toml of one run.
 
     settings_format = 2 says that this file's fast_boot and bios_hle lines were
@@ -299,7 +299,7 @@ dir = "cards"
 card1 = "cards/card1.mcd"
 card2 = "cards/card2.mcd"
 enable1 = {str(bool(card1)).lower()}
-enable2 = false
+enable2 = {str(bool(card2)).lower()}
 [controller]
 p1_device = "keyboard"
 p1_mode = "digital"
@@ -316,6 +316,8 @@ def main():
     parser.add_argument('--roster-disc', type=Path, action='append', default=[],
                         help='each disc of a PSXRTI3 route disc set, in route order; the first is --disc')
     parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
+    parser.add_argument('--card2', type=Path, help='raw initial card2; independently copied and observed')
+    parser.add_argument('--port2-controller', choices=('none', 'dualshock-neutral'), default='none')
     parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1','nymashock-2.8'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
@@ -515,7 +517,8 @@ def main():
     completion_identity = route_identity(paths['route'], resume_inputs, args.axis_model, args.mode_button_model)
     roster = disc_roster(identity, paths['disc'], args.roster_disc, paths['game'])
     if identity.get('format') == 'PSXRTI3' and (args.resume_from or args.save_state_at or args.update_profile
-                                                or args.card1 or args.pad_ack_model.endswith('dualshock')):
+                                                or args.card1 or args.card2 or args.port2_controller != 'none'
+                                                or args.pad_ack_model.endswith('dualshock')):
         raise ValueError('a two-pad route admits no resume, save state, retiming, card or DualShock ACK model')
 
     dualshock = identity.get('format') == 'PSXRTI2'
@@ -529,6 +532,16 @@ def main():
         initial_card = card_identity(paths['card1'])
     elif args.card_model != 'default':
         raise ValueError('card model requires an explicit initial card1')
+    initial_card2 = None
+    if args.card2:
+        if not initial_card:
+            raise ValueError('card2 requires an explicit initial card1')
+        paths['card2'] = args.card2.resolve(strict=True)
+        initial_card2 = card_identity(paths['card2'])
+    if args.port2_controller != 'none' and not dualshock:
+        raise ValueError('neutral DualShock P2 requires a DualShock route')
+    if (initial_card2 or args.port2_controller != 'none') and (args.resume_from or args.save_state_at):
+        raise ValueError('two-card/neutral-P2 bridge supports cold playback without state capture')
     # The completion hook exits before the final return observer. Bind every
     # enabled RAM capture to the exact declared number of observed returns.
     ram_returns = identity['frames'] + args.neutral_tail - 1
@@ -589,6 +602,12 @@ def main():
         shutil.copyfile(paths['card1'], staged_card)
         if digest(staged_card) != initial_card['sha256']:
             raise ValueError('staged initial card differs')
+    staged_card2 = None
+    if initial_card2:
+        staged_card2 = run / 'cards/card2.mcd'
+        shutil.copyfile(paths['card2'], staged_card2)
+        if digest(staged_card2) != initial_card2['sha256']:
+            raise ValueError('staged second card differs')
     route_path = paths['route']
     if dualshock:
         route_path = run / 'input.psxrti2'
@@ -597,7 +616,7 @@ def main():
             raise ValueError('staged controller route differs')
     renderer = args.renderer
     settings = settings_text(renderer, args.fast_boot, args.hle, paths['bios'], paths['disc'],
-                             initial_card is not None)
+                             initial_card is not None, initial_card2 is not None)
     (run / "settings.toml").write_text(settings, encoding="utf-8")
     command = [str(launch_exe), "--game", str(paths["game"]),
                "--disc", str(paths["disc"]), "--bios", str(paths["bios"]),
@@ -699,6 +718,10 @@ def main():
     if initial_card:
         selected_env['PSX_INPUT_ROUTE_CARD_MODEL'] = args.card_model
         selected_env['PSX_INPUT_ROUTE_CARD1_SHA256'] = initial_card['sha256']
+    if initial_card2:
+        selected_env['PSX_INPUT_ROUTE_CARD2_SHA256'] = initial_card2['sha256']
+    if args.port2_controller != 'none':
+        selected_env['PSX_INPUT_ROUTE_PORT2'] = args.port2_controller
     if args.dma_model != "default":
         selected_env["PSX_INPUT_ROUTE_DMA_MODEL"] = args.dma_model
     if args.instruction_histogram:
@@ -759,7 +782,9 @@ def main():
         "staged_executable": {"path": str(launch_exe), "sha256": staged_sha},
         "expected_exe_sha256": args.expected_exe_sha256,
         "route": identity, "disc_roster": roster, "psx_environment": selected_env,
-        "initial_card1":initial_card,
+        "initial_card1":initial_card, "initial_card2":initial_card2,
+        "staged_card2":str(staged_card2) if staged_card2 else None,
+        "port2_controller":args.port2_controller,
         "staged_card1":str(staged_card) if staged_card else None,
         "settings_sha256": digest(run / "settings.toml"),
         "launcher_sha256": digest(Path(__file__)),
@@ -807,12 +832,16 @@ def main():
         saved = resolve_saved_states(run, args.save_state_at)
         write_json(run / 'saved-states.json', saved)
         qualified = qualified and all(item['valid'] for item in saved)
-    if initial_card or dualshock:
+    if args.port2_controller != 'none':
+        qualified = qualified and complete is not None and complete.get('port2_controller') == args.port2_controller
+    if initial_card or initial_card2 or dualshock:
         initial_path = run / 'initial-cards.json'
         actual_cards = json.loads(initial_path.read_text()) if initial_path.exists() else None
-        expected_cards = {'card1_present':bool(initial_card), 'card2_present':False,
+        expected_cards = {'card1_present':bool(initial_card), 'card2_present':bool(initial_card2),
                           'card1_sha256':initial_card['sha256'] if initial_card else None,
-                          'bytes':131072 if initial_card else 0}
+                          'bytes':131072 * (bool(initial_card) + bool(initial_card2))}
+        if initial_card2:
+            expected_cards['card2_sha256'] = initial_card2['sha256']
         qualified = qualified and actual_cards == expected_cards
     if update_profile:
         endpath=run/'update-input-end.json'

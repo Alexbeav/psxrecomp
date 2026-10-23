@@ -224,6 +224,13 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-24 (PS1G-118, source candidate):** The explicit cold-start
+  DualShock bridge can bind two initial cards and a neutral second pad.
+  Focused O0/O2 admission, MODE and session controls passed on the private
+  candidate. Current-stage integration builds and original 10,000-return
+  playback remain unrun. No timing, save-state, or title qualification follows
+  from the input-admission controls; see [the input contract](../DUALSHOCK_TAS_INPUT.md).
+
 - **2026-10-09 (PS1B-238(a), source candidate):** Loader-owned replay/netplay
   holders freeze admission as well as native execution and retain a compact
   [tier witness](../OVERLAY_TIER_WITNESS.md). Source base 015fe7a; the real-loader

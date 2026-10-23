@@ -35,8 +35,9 @@ These codec checks do not qualify native SIO, core timing or a game ending.
 Native PSXRTI2 preload rejects physical Analog presses, experimental input
 retiming and the older Octoshock digital ACK profile. Once the whole file
 and observer configuration pass, it establishes one cold P1 DualShock,
-digital mode, neutral sticks and no multitap. Card contents remain separately
-bound peripheral inputs. The ordinary input boundary consumes every record
+digital mode, neutral sticks and no multitap. An explicitly declared second
+DualShock can remain connected with neutral input; it adds no P2 movie records.
+Card contents remain separately bound peripheral inputs. The ordinary input boundary consumes every record
 once, then supplies fully neutral buttons and axes for the declared tail.
 
 Delivery updates only buttons and sticks. It bypasses the interactive
@@ -97,12 +98,26 @@ The launcher freezes PSXRTI2 bytes in its new private run directory.
 
 An explicit `--card1 RAW_CARD --card-model nymashock-1.29.0
 --legacy-card-repair off` stages a fresh writable 128 KiB card copy and enables
-only that slot. Before guest execution the observer hashes every loaded card
-buffer byte through a read-only accessor, verifies the expected hash and
-absence of card2, and records `initial-cards.json`. Without an explicit card,
-a PSXRTI2 run verifies both slots absent. Wrong size, presence, contents or a
+only that slot by default. Optional `--card2 RAW_CARD` stages a separate writable
+128 KiB copy for the second slot. It requires explicit card1, the same card
+model and disabled legacy repair. Before guest execution the observer hashes
+every loaded card buffer byte through a read-only accessor, verifies each
+expected hash and slot presence, and records `initial-cards.json`. Without
+card2 it still verifies that slot absent; without an explicit card, a PSXRTI2
+run verifies both slots absent. Wrong size, presence, contents or a
 short buffer read rejects the run; a staged file hash alone is insufficient.
 See [the card profile](NYMASHOCK_CARD_PROFILE.md) for its separate device scope.
+
+`--port2-controller dualshock-neutral` explicitly connects a config-capable
+second DualShock without a multitap. Delivery and observation require buttons
+`0xFFFF`, all four axes at 128 and no physical Analog press on P2. Guest-owned
+digital/analog mode remains untouched. Other P2 input is rejected rather than
+replaced with neutral input. The default topology remains P1 only.
+
+Explicit card2 or neutral P2 requires a cold start. These options reject resume
+and save-state capture; they do not change PSXRTI3's digital-only topology or
+admit physical Analog input. A card or controller declaration is an observed
+input contract, not source timing or retail playback qualification.
 
 These changes admit and observe the input contract. They do not make an
 unqualified core timing profile source-equivalent or establish a retail pass.

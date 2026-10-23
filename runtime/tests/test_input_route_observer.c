@@ -23,13 +23,13 @@ void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3], uint16_t target[
 static uint8_t ram[PSX_MAIN_RAM_BYTES];
 static const char *card_case = "";
 int memcard_is_present(int slot) {
-    if (!strstr(card_case,"card_")) return 0;
-    return slot == 0 ? strcmp(card_case,"card_missing") != 0 : !strcmp(card_case,"card_extra");
+    if (!strstr(card_case,"card_") && strncmp(card_case,"card2_",6)) return 0;
+    return slot == 0 ? strcmp(card_case,"card_missing") != 0 : (!strcmp(card_case,"card_extra") || !strncmp(card_case,"card2_",6));
 }
 int memcard_debug_read_buffer(int slot,uint32_t offset,uint32_t length,uint8_t *out) {
-    if (slot || (!strcmp(card_case,"card_short") && offset==4096)) return 0;
+    if ((slot && strncmp(card_case,"card2_",6)) || ((!strcmp(card_case,"card_short") || (slot && !strcmp(card_case,"card2_short"))) && offset==4096)) return 0;
     for (unsigned i=0;i<length;++i) out[i]=(uint8_t)(offset+i);
-    if (!strcmp(card_case,"card_changed") && !offset) out[0]^=1;
+    if ((!strcmp(card_case,"card_changed") || (slot && !strcmp(card_case,"card2_changed"))) && !offset) out[0]^=1;
     return (int)length;
 }
 uint8_t *g_psx_ram = ram;
@@ -61,7 +61,18 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
     (void)di; (void)x; (void)y; *r = *g = *b = 0;
 }
 /* These original observer cases deliver neutral physical MODE. */
-int sio_get_pad_mode_button(int slot) { if (slot != 0) abort(); return 0; }
+int sio_get_pad_mode_button(int slot) { return slot == 1 && !strcmp(card_case,"ds_p2_mode"); }
+int sio_get_multitap(void) { return !strcmp(card_case,"ds_p2_multitap"); }
+int sio_get_pad_connected(int slot) {
+    return slot == 0 || (slot == 1 && strcmp(card_case,"ds_p2_disconnected")) ||
+           (slot == 2 && !strcmp(card_case,"ds_p2_extra"));
+}
+int sio_get_pad_config_capable(int slot) { return !(slot == 1 && !strcmp(card_case,"ds_p2_plain")); }
+uint16_t sio_get_pad_buttons_slot(int slot) { return slot == 1 && !strcmp(card_case,"ds_p2_pressed") ? 0xFFFE : 0xFFFF; }
+void sio_get_pad_sticks(int slot, uint8_t out[4]) {
+    memset(out, 128, 4);
+    if (slot == 1 && !strcmp(card_case,"ds_p2_axis")) out[2] = 127;
+}
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
     card_case = argv[1];
