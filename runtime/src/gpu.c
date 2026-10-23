@@ -7,7 +7,7 @@
  *   - GP0 command write — ABORTS (not yet implemented)
  *   - GPUREAD — returns last latched value
  *
- * Reference: nocash PSX specs, DuckStation src/core/gpu.cpp
+ * Reference: PSX-SPX, page graphicsprocessingunitgpu (Graphics Processing Unit).
  */
 
 #include "gpu.h"
@@ -784,7 +784,20 @@ WS_EXPLICIT_LIST(bltz);
 WS_EXPLICIT_LIST(bgez);
 WS_EXPLICIT_LIST(branch_keep);
 WS_EXPLICIT_LIST(clip_edge_x_load);
+WS_EXPLICIT_LIST(screen_x);
 static uint32_t ws_clip_edge_width = 320;
+
+/* [widescreen.cull] screen_x_sites for interpreted code: native code compiles
+ * the list in (code_generator.cpp); this keeps a dirty-RAM copy of a listed
+ * site on the same semantics. */
+void gpu_ws_set_cull_screen_x_sites(const uint32_t *sites, int nsites) {
+    ws_explicit_screen_x_n = ws_explicit_store(
+        ws_explicit_screen_x_sites, sites, nsites, "screen_x_sites");
+}
+int psx_ws_is_cull_screen_x_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_screen_x_sites,
+                            ws_explicit_screen_x_n, pc);
+}
 
 void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
                                     const uint32_t *slti, int nslti,
@@ -4472,7 +4485,8 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
     out->depth24   = (int)(display_depth & 1u);
     out->disabled  = (int)display_disabled;
 
-    /* Dot-clock divider from GP1(08h) hres (psx-spx / DuckStation). */
+    /* Dot-clock divider from GP1(08h) hres (PSX-SPX graphicsprocessingunitgpu,
+     * "Horizontal Timings", Dotclocks: /10, /8, /7, /5, /4). */
     uint32_t cycles;
     uint32_t mode_w;
     if (hres2) {
@@ -4580,6 +4594,27 @@ static void parse_vertex(uint32_t word, int32_t* x, int32_t* y) {
 extern int gte_geometry_correction_enabled(void);
 static int s_texture_correction_enabled = 0;
 static int s_native_wide_projection_correction = 0;
+static PGXPProjectiveScope s_render_pgxp_scope;
+static int s_render_projective, s_render_scope;
+extern int g_psx_render_pass_active;
+int gpu_render_projective_enabled(void) {
+    return s_render_projective && s_render_scope && g_psx_render_pass_active;
+}
+int gpu_render_projective_begin(void) {
+    if (!s_render_projective || s_render_scope) return 1;
+    if (!pgxp_projective_scope_begin(&s_render_pgxp_scope)) return 0;
+    s_render_scope = 1;
+    return 1;
+}
+void gpu_render_projective_end(void) {
+    if (!s_render_scope) return;
+    pgxp_projective_scope_end(&s_render_pgxp_scope);
+    s_render_scope = 0;
+}
+void psx_mod_set_render_projective(int enabled) {
+    s_render_projective = !!enabled;
+    pgxp_set_projection_tracking(s_render_projective || s_native_wide_projection_correction);
+}
 static uint64_t s_native_wide_projection_vertices = 0;
 extern int gte_precision_load_word(uint32_t addr, uint32_t packed,
                                    int32_t *x16, int32_t *y16, uint16_t *z);
@@ -4598,7 +4633,7 @@ void psx_mod_set_native_wide_projection_correction(int enabled) {
     s_native_wide_projection_vertices = 0;
     /* Signed camera-space provenance is required for correct native-wide
      * faces, including corners behind the camera. Arm it with the mode. */
-    pgxp_set_projection_tracking(s_native_wide_projection_correction);
+    pgxp_set_projection_tracking(s_render_projective || s_native_wide_projection_correction);
     gpu_pgxp_rederive_enable();
 }
 
@@ -4756,7 +4791,7 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
     }
     const int idx[3] = { i0, i1, i2 };
     int32_t fx[3], fy[3];
-    uint16_t vz[3] = {0, 0, 0};
+    float vz[3] = {0, 0, 0};
     int any_precise = 0, n_precise = 0;
     PGXPTriRecord rec;
     memset(&rec, 0, sizeof rec);
@@ -4782,6 +4817,10 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
         /* PGXP depth (G1.14): only a value-validated dataflow shadow carries
          * SZ, also when the seam clamp kept the native position. */
         vz[i] = sz;
+        if (sz == 65535u) {
+            float full = pgxp_get_unclamped_depth(addr, word);
+            if (full > 0.0f) vz[i] = full;
+        }
         /* Native-wide edge recovery is not PGXP: it does not count in n_precise. */
         if (native_wide_projection_x(addr, word, raw_x, raw_y, &px))
             any_precise = 1;
@@ -4794,7 +4833,7 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
         rec.word[i] = word;
         rec.x16[i] = fx[i];
         rec.y16[i] = fy[i];
-        rec.z[i] = vz[i];
+        rec.z[i] = sz; /* receipt retains the hardware SZ, not the visual depth */
     }
     if (geometry) {
         pgxp_note_triangle(n_precise);   /* G1.1 crack exposure: mixed share */
@@ -4882,6 +4921,7 @@ static void prepare_texture_triangle(int i0, int i1, int i2) {
     if (gp0_cmd_source_addr == 0xFFFFFFFFu) { s_texcorr.no_source++; return; }
     int indices[3] = { i0, i1, i2 };
     uint16_t z[3];
+    float depth[3];
     for (int i = 0; i < 3; i++) {
         uint32_t addr = GPU_RAM_KEY((gp0_cmd_source_addr + (uint32_t)indices[i] * 4u));
         if (!gte_precision_load_word(addr, gp0_cmd_buf[indices[i]], NULL, NULL, &z[i]) ||
@@ -4889,8 +4929,13 @@ static void prepare_texture_triangle(int i0, int i1, int i2) {
             s_texcorr.no_depth++;
             return;
         }
+        depth[i] = z[i];
+        if (z[i] == 65535u) {
+            float full = pgxp_get_unclamped_depth(addr, gp0_cmd_buf[indices[i]]);
+            if (full > 0.0f) depth[i] = full;
+        }
     }
-    float q[3] = { 1.0f / (float)z[0], 1.0f / (float)z[1], 1.0f / (float)z[2] };
+    float q[3] = { 1.0f / depth[0], 1.0f / depth[1], 1.0f / depth[2] };
     float qmax = q[0];
     if (q[1] > qmax) qmax = q[1];
     if (q[2] > qmax) qmax = q[2];
@@ -5311,7 +5356,8 @@ static uint16_t current_texpage(void) {
  * (GPUSTAT bits 0-8) exactly like GP0(E1) bits 0-8 — the poly's own word, not
  * the last E1, decides its semi-transparency mode, and later rectangle/sprite
  * prims (which carry no texpage word) consume the state the poly left behind.
- * Beetle: SetTPage(CB[4 + ((cc>>4)&1)] >> 16) on every textured poly.
+ * PSX-SPX graphicsprocessingunitgpu, "TPage Attribute (Parameter for textured polygon
+ * commands)": bits 0-8 and 11 are the same as GP0(E1h), bits 9-10 unused.
  * Bits 9-10 (dither / draw-to-display) exist only in E1; bit 11 (texture
  * disable) only latches when GP1(09h) allowed it, which polys can't grant. */
 static void set_tpage_from_poly(uint16_t tpage_word) {
@@ -5337,16 +5383,22 @@ static void setup_textured_draw(uint32_t color24, int semi_trans, int raw_textur
  * Use only intact GTE-derived words, clip their signed homogeneous projection,
  * and submit through the normal ordered GL passes and VRAM authority path. */
 static int native_wide_projective_draw(void) {
-    if (!gpu_ws_projective_enabled() || gp0_cmd_source_addr == UINT32_MAX) return 0;
+    const int render_projective = gpu_render_projective_enabled() &&
+        gr_backend() == GR_BACKEND_OPENGL && gl_renderer_projective_supported();
+    if ((!render_projective && !gpu_ws_projective_enabled()) || gp0_cmd_source_addr == UINT32_MAX) return 0;
+    if (render_projective) psx_mod_counter_add("vr.projective.packet",1);
     const unsigned op=gp0_cmd_buf[0]>>24;
     const unsigned stride=(op&16u)?3u:2u, n=(op&8u)?4u:3u;
     PSXProjectedVertex vertices[4];
-    int needs_clip=0;
+    int needs_clip=render_projective;
     for (unsigned i=0;i<n;++i) {
         const unsigned index=1+stride*i;
         const uint32_t word=gp0_cmd_buf[index];
         PGXPProjection p;
-        if (!pgxp_load_projection(gp0_cmd_source_addr+4*index,word,&p)) return 0;
+        if (!pgxp_load_projection(gp0_cmd_source_addr+4*index,word,&p)) {
+            if (render_projective) psx_mod_counter_add(i==0 ? "vr.projective.miss0" : i==1 ? "vr.projective.miss1" : "vr.projective.miss2",1);
+            return 0;
+        }
         int32_t x,y; parse_vertex(word,&x,&y);
         needs_clip |= p.z<p.near_z || x==-1024 || x==1023 || y==-1024 || y==1023;
         const uint32_t color=gp0_cmd_buf[(op&16u)?index-1:0];
@@ -5356,16 +5408,17 @@ static int native_wide_projective_draw(void) {
             (color&255)/255.0,((color>>8)&255)/255.0,((color>>16)&255)/255.0};
     }
     if (!needs_clip) return 0;
+    if (render_projective) psx_mod_counter_add("vr.projective.draw",1);
     const uint16_t clut=gp0_cmd_buf[2]>>16;
     const uint16_t tpage=gp0_cmd_buf[2+stride]>>16;
     set_tpage_from_poly(tpage);
     const int semi=(op&2u)?(int)semi_transparency:-1;
     gl_renderer_draw_projected_triangle(vertices,tpage&0x1ff,
-        (clut&63)*16,(clut>>6)&511,op&1u,semi,s_texture_correction_enabled);
+        (clut&63)*16,(clut>>6)&511,op&1u,semi,render_projective || s_texture_correction_enabled);
     if (n==4) {
         const PSXProjectedVertex second[3]={vertices[2],vertices[1],vertices[3]};
         gl_renderer_draw_projected_triangle(second,tpage&0x1ff,
-            (clut&63)*16,(clut>>6)&511,op&1u,semi,s_texture_correction_enabled);
+            (clut&63)*16,(clut>>6)&511,op&1u,semi,render_projective || s_texture_correction_enabled);
     }
     return 1;
 }
@@ -6401,7 +6454,10 @@ static int gp0_command_word_count(uint8_t opcode) {
         case 0xE6: return 1;  /* mask bits */
 
         default:
-            /* 0x03-0x1E, 0xE7-0xEF, 0xFF: NOP (1 word) per DuckStation */
+            /* 0x03-0x1E, 0xE7-0xEF, 0xFF: NOP (1 word). PSX-SPX graphicsprocessingunitgpu,
+             * "GP0(04h..1Eh,E0h,E7h..EFh) - Mirrors of GP0(00h) - NOP (?)",
+             * lists 04h-1Eh and E7h-EFh; it calls 03h unknown and does not
+             * list FFh. This code also treats 03h and FFh as NOPs. */
             if ((opcode >= 0x03 && opcode <= 0x1E) ||
                 (opcode >= 0xE7 && opcode <= 0xEF) ||
                 opcode == 0xFF) {
@@ -7539,8 +7595,9 @@ static void gpu_write_gp0_body(uint32_t val) {
         return;
     }
 
-    /* Polyline terminator rule (Beetle mednafen/psx/gpu.c INCMD_PLINE,
-     * DuckStation gpu.cpp HandleRenderPolyLineCommand/DrawingPolyLine):
+    /* Polyline terminator rule (PSX-SPX graphicsprocessingunitgpu, "GPU Render Line
+     * Commands": at least two vertices; the terminator is tested on the
+     * first word of a vertex, the colour word when shaded):
      *
      *  1. A polyline always has at least two vertices. The words of the first
      *     two vertices are consumed unconditionally — mono [V0][V1], shaded
@@ -7804,8 +7861,10 @@ static void gp1_display_mode(uint32_t val) {
 
 static void gp1_get_info(uint32_t val) {
     /* GP1(10h): Get GPU info — writes result to GPUREAD latch.
-     * Mednafen-psx masks the subcommand to 4 bits (val & 0x0F) and
-     * services cases 2..5, 7, 8. Tomba's ResetGraph() uses param 7 to
+     * PSX-SPX graphicsprocessingunitgpu, "GP1(10h) - Read GPU internal
+     * register" (v2 GPU): indices 10h and up mirror 00h..0Fh, so the
+     * subcommand is val & 0x0F; 02h..05h, 07h and 08h return data.
+     * Tomba's ResetGraph() uses param 7 to
      * read the GPU version (must be 2) to pick its video-mode path —
      * the wrong value here lands the game on a no-draw branch. */
     uint32_t which = val & 0x0F;
@@ -7823,10 +7882,10 @@ static void gp1_get_info(uint32_t val) {
             gpuread_latch = ((uint32_t)draw_offset_x & 0x7FFu) |
                             (((uint32_t)draw_offset_y & 0x7FFu) << 11);
             break;
-        case 7: /* GPU version (real-hw + mednafen return 2) */
+        case 7: /* GPU version: PSX-SPX gives 1 or 2; this models 2 */
             gpuread_latch = 2;
             break;
-        case 8: /* unknown info index, real hw / mednafen return 0 */
+        case 8: /* unknown info index, returns 0 (PSX-SPX) */
             gpuread_latch = 0;
             break;
         default:

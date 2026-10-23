@@ -1818,12 +1818,15 @@ static const char *GEO_VS =
     "  float a = a_col.a, code = floor(a * 0.5), zn = 0.0, w = 1.0;\n"
     "  float m = a - 2.0 * code;\n"
     "  /* + 2*131072: the primitive is dither-eligible (GPU_GEO_DITHER_CODE). */\n"
-    "  float dth = (a >= 0.0 && code >= 131072.0) ? 1.0 : 0.0; code -= 131072.0 * dth; v_dith = int(dth);\n"
+    "  float dth = (a >= 0.0 && code >= 131072.0) ? 1.0 : 0.0; code -= 131072.0 * dth;\n"
     "  float cp = code >= 65536.0 ? 1.0 : 0.0, sz = code - 65536.0 * cp;\n"
-    "  if (a < 0.0) { m = 0.0; zn = 0.9999; sz = 0.0; cp = 0.0; }  /* inside the far plane: never clipped */\n"
+    "  bool far_code = a < -1.5;\n"
+    "  if (far_code) { uint bits = floatBitsToUint(-a); m = float(bits & 1u); cp = float((bits >> 1u) & 1u); dth = float((bits >> 2u) & 1u); sz = uintBitsToFloat(bits & 0xfffffff8u) - 2.0; }\n"
+    "  v_dith = int(dth);\n"
+    "  if (a < 0.0 && !far_code) { m = 0.0; zn = 1.0; sz = 0.0; cp = 0.0; }\n"
     "  else if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (cp > 0.5) w = sz / 1024.0; }\n"
     "  v_col = vec4(a_col.rgb, m); v_col_p = a_col.rgb; v_cp = int(cp);\n"
-    "  v_b3d = (a >= 0.0 && sz > 0.5) ? 1.0 : 0.0;\n"
+    "  v_b3d = ((a >= 0.0 || far_code) && sz > 0.5) ? 1.0 : 0.0;\n"
     "  float xb = a_pos.x;\n"
     "  if (u_xscale < 0.0) {\n"
     "    float s = -u_xscale; float h = u_xhalf / s;\n"
@@ -1920,6 +1923,7 @@ static const char *TEX_VS =
     "   * the vertex stays TEXV floats for every title. */\n"
     "  float pz = a_col.a < 0.0 ? -a_col.a : 0.0;\n"
     "  float cp = pz >= 65536.0 ? 1.0 : 0.0, sz = pz - 65536.0 * cp, zn = 0.0;\n"
+    "  if (a_col.a > 1.5) { uint bits = floatBitsToUint(a_col.a); cp = float((bits >> 1u) & 1u); sz = uintBitsToFloat(bits & 0xfffffff8u) - 2.0; }\n"
     "  if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (a_q <= 0.0 && cp > 0.5) w = sz / 1024.0; }\n"
     "  v_cp = int(cp); v_b3d = sz > 0.5 ? 1.0 : 0.0;\n"
     "  vec2 ndc = vec2((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0);\n"
@@ -4406,6 +4410,21 @@ static float pgxp_vertex_code(float sz) {
     return sz + (s_pgxp_cpersp ? 65536.0f : 0.0f);
 }
 
+/* Depth beyond the hardware SZ range cannot share its old numeric flag
+ * offsets. Keep that format byte-identical for normal vertices. Far vertices
+ * carry a finite positive float (depth+2), with three low mantissa bits for
+ * mask/colour/dither. Integer depths through 2^20 retain every depth bit;
+ * larger depths lose at most seven float ULPs. Negative GEO / positive TEX
+ * alpha distinguishes this format from legacy draws and depth-clear (-1). */
+static float pgxp_far_vertex_code(float sz, int mask, int dither) {
+    float value = sz + 2.0f;
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    bits = (bits & ~7u) | (mask ? 1u : 0u) | (s_pgxp_cpersp ? 2u : 0u) | (dither ? 4u : 0u);
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
 /* The depth buffer is cleared (beyond every SZ, over the drawing area and
  * the native-wide margins) by a colourless depth-only draw through the flat
  * batch, so every surface a draw reaches (the hr surface, the high-resolution
@@ -4525,13 +4544,14 @@ static void seam_q(const float B[3][3], float q[3]) {
     for (int k = 0; k < 3; k++) q[k] = o[k] > 1e-9f ? o[k] : q[k];
 }
 static void seam_sz(const float B[3][3], float z[3]) {
+    float limit = fmaxf(z[0], fmaxf(z[1], z[2])) > 65535.0f ? 2147483648.0f : 65535.0f;
     float o[3];
     for (int k = 0; k < 3; k++) {
         float iz = 0.0f;
         for (int i = 0; i < 3; i++) iz += B[k][i] / z[i];
         o[k] = iz > 1e-9f ? 1.0f / iz : z[k];
         if (o[k] < 1.0f) o[k] = 1.0f;
-        if (o[k] > 65535.0f) o[k] = 65535.0f;
+        if (o[k] > limit) o[k] = limit;
     }
     for (int k = 0; k < 3; k++) z[k] = o[k];
 }
@@ -4743,7 +4763,9 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             }
         }
         for (int i = 0; i < 3; i++)
-            v0[i * 6 + 5] = mask_a + 2.0f * pgxp_vertex_code(z[i]);
+            v0[i * 6 + 5] = z[i] > 65535.0f
+                ? -pgxp_far_vertex_code(z[i], ((int)mask_a & 1), mask_a >= GPU_GEO_DITHER_CODE)
+                : mask_a + 2.0f * pgxp_vertex_code(z[i]);
     }
     if (n == 3) pgxp_tri_log_tri('G', dmode, semi, v0, 6);
 }
@@ -4926,7 +4948,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             }
             for (int i = 0; i < 3; i++) {
                 const float code = pgxp_vertex_code(z[i]);
-                if (code > 0.0f) t0[i * TEXV + 7] = -code;   /* a_col.a (TEX_VS) */
+                if (z[i] > 65535.0f) t0[i * TEXV + 7] = pgxp_far_vertex_code(z[i], 0, 0);
+                else if (code > 0.0f) t0[i * TEXV + 7] = -code;   /* a_col.a (TEX_VS) */
             }
         }
         pgxp_tri_log_tri('T', tdmode, semi, &s_tb[s_tb_n * TEXV], TEXV);
@@ -5332,6 +5355,8 @@ static void native_draw_end(int previous) { sw_set_faithful_authority(previous);
 static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; s_projected_uv_valid = 0; s_pz_valid = 0; }
 
 int gl_renderer_projective_supported(void) {
+    /* Eye replay owns a separate FBO even when native-wide presentation is off. */
+    if (s_pass_active) return s_raster_ok;
     if (s_rth_on && !rt_on_render_thread() && !rt_held())
         return s_raster_ok && s_rthm_cur && !cpu_vram_authoritative();
     return s_raster_ok && g_wide_cur && !cpu_vram_authoritative();
@@ -7594,6 +7619,14 @@ uint64_t gl_renderer_perf_prim_split(double *out_tex_frac) {
     return s_scene_prims;
 }
 
+/* Cumulative scene primitives for per-frame attribution (frame_trace). Callers
+ * take deltas; these counters are never reset here. */
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured) {
+    GL_RT_SYNC("scene_prim_counts");
+    if (prims) *prims = s_scene_prims;
+    if (textured) *textured = s_scene_prims_tex;
+}
+
 int gl_renderer_perf_aggregate(int wide_filter, double out[18]) {
     GL_RT_SYNC("perf_aggregate");
     for (int i = 0; i < 18; i++) out[i] = 0.0;
@@ -8805,27 +8838,33 @@ void gl_renderer_stereo_stage_reset(void) {
     GL_RT_SYNC("stereo_stage_reset");
     s_stereo_pair[1 - s_stereo_current].mask = 0;
 }
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
-    GL_RT_SYNC("capture_readback");
-    if(eye>=2 || !rgba || !w || !h || w>1024 || h>512)return 0;
+/* Both staged eye images in one read. The blit target is double height, eye 0
+ * into its lower half and eye 1 into its upper half, so one glReadPixels
+ * returns the two height-sized planes contiguously, eye 0 first. */
+int gl_renderer_stereo_stage_readback_pair(uint32_t w,uint32_t h,uint8_t *rgba) {
+    GL_RT_SYNC("capture_readback_pair");
+    if(!rgba || !w || !h || w>1024 || h>512)return 0;
     StereoPair *pair=&s_stereo_pair[1-s_stereo_current];
-    if(!(pair->mask&(1u<<eye)))return 0;
+    if((pair->mask&3u)!=3u)return 0;
     GLint read,draw,texture,pack,pbo,row,skipr,skipp;
     GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(0x8DB9);
     glGetIntegerv(0x8CAA,&read);glGetIntegerv(0x8CA6,&draw);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);
     glGetIntegerv(GL_PACK_ALIGNMENT,&pack);glGetIntegerv(0x88ED,&pbo);glGetIntegerv(GL_PACK_ROW_LENGTH,&row);
     glGetIntegerv(GL_PACK_SKIP_ROWS,&skipr);glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipp);
     int ok=pass_make_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h,
-                              w,h,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
+                              w,h*2u,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
     if(ok) {
         glDisable(GL_SCISSOR_TEST);glDisable(0x8DB9);
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
         p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,s_capture_read_fbo);
-        p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,0,w,h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        for(uint32_t eye=0;eye<2u;eye++) {
+            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
+            p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,(GLint)(eye*h),w,(GLint)((eye+1u)*h),
+                                GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        }
         p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,s_capture_read_fbo);
         p_glBindBuffer(0x88EB,0);glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
         glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
-        glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+        glReadPixels(0,0,w,h*2u,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
     }
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,read);p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,draw);
     glBindTexture(GL_TEXTURE_2D,texture);glPixelStorei(GL_PACK_ALIGNMENT,pack);
@@ -11547,7 +11586,7 @@ typedef struct {
 } FgList;
 static int rp_is_car(const FgList *L, uint32_t pi);
 /* Raw triangle captured while recording a list (absolute coords). */
-typedef struct { uint32_t rec, key0, vid[3]; float x[3], y[3], p[3][3], h[3]; int area[4]; } FgRaw;
+typedef struct { uint32_t rec, key0, vid[3]; float x[3], y[3], p[3][3], h[3], pz[3]; int area[4]; } FgRaw;
 
 static int       s_fg_on = 0;                 /* configured (any thread reads) */
 static int       s_fg_force = 0;              /* PSX_FRAME_GEN_FORCE: tests */
@@ -11560,6 +11599,7 @@ static int       s_fg_older = 0, s_fg_newer = 1, s_fg_cur = 2;
 static int       s_fg_pa = -1, s_fg_pb = -1;  /* the pair a schedule draws from */
 static FgRaw    *s_fg_raw = NULL; static uint32_t s_fg_nraw = 0, s_fg_rawcap = 0;
 static int       s_fg_pc_valid = 0; static int32_t s_fg_pc[6];   /* pending PRECISE */
+static int       s_fg_dz_valid = 0; static float s_fg_dz[3];     /* pending PGXP DEPTH */
 static int       s_fg_have_last = 0, s_fg_last_dx = 0, s_fg_last_dy = 0;
 /* Display buffers seen in presents (x, y, w, h), and the one the capturing
  * list draws into: a list is one game frame's drawing into one buffer, closed
@@ -11955,9 +11995,17 @@ static void fg_capture(const RtCmd *c, const void *payload) {
         if (s_fg_pc_valid) memcpy(s_fg_pc, v + 1, sizeof s_fg_pc);
         return;
     }
+    if (c->op == RTH_DEPTH) {   /* PGXP per-vertex depth of the next triangle */
+        const int32_t *v = (const int32_t *)payload;
+        s_fg_dz_valid = v[0] != 0;
+        if (s_fg_dz_valid) memcpy(s_fg_dz, v + 1, sizeof s_fg_dz);
+        return;
+    }
     FgRaw raw;
     if (fg_tri_geom(c->op, payload, s_fg_pc_valid ? s_fg_pc : NULL, raw.x, raw.y, &raw.key0)) {
         raw.rec = (uint32_t)r;
+        for (int k = 0; k < 3; k++)
+            raw.pz[k] = (s_fg_dz_valid && s_fg_dz[k] >= 1.0f) ? s_fg_dz[k] : 0.0f;
         /* The identities belong to this triangle only if it is drawn where
          * they were looked up (a culled triangle leaves its record behind). */
         for (int k = 0; k < 3; k++) raw.vid[k] = 0;
@@ -11980,6 +12028,7 @@ static void fg_capture(const RtCmd *c, const void *payload) {
     case RTH_FLAT_TRI: case RTH_GOURAUD_TRI: case RTH_TEX_TRI:
     case RTH_SHADED_TEX_TRI: case RTH_PROJ_TRI:
         s_fg_pc_valid = 0;
+        s_fg_dz_valid = 0;
         s_fg_src_valid = 0;
         break;
     default: break;
@@ -12017,6 +12066,7 @@ static void fg_list_close(FgList *l, const int disp[4]) {
             p.vid[k] = r->vid[k];
             memcpy(p.p[k], r->p[k], sizeof p.p[k]);
             p.h[k] = r->h[k];
+            p.pz[k] = r->pz[k];
         }
         for (int k = 0; k < 3; k++) { p.x[k] = r->x[k] - (float)disp[0]; p.y[k] = r->y[k] - (float)disp[1]; }
         if (!fg_prims_add(&l->prims, &p)) { l->valid = 0; return; }
@@ -12446,12 +12496,17 @@ static void fg_compose(const FgList *b, GLuint wide_fbo, GLuint wide_tex, int li
  * allocates none of this. The object rules below (cars, needles, small
  * views) were tuned on R4 (docs/FRAME_GENERATION.md). */
 static GLuint s_rp_zprog = 0, s_rp_wprog = 0, s_rp_vao = 0, s_rp_vbo = 0, s_rp_evao = 0;
-static GLuint s_rp_ztex = 0, s_rp_zfbo = 0;
+static GLuint s_rp_ztex = 0, s_rp_zfbo = 0, s_rp_zrb = 0;   /* zrb: the depth image's own depth test */
+/* The older frame's depth image (two-frame warp): same size and format. */
+static GLuint s_rp_ztex2 = 0, s_rp_zfbo2 = 0, s_rp_zrb2 = 0;
+static int    s_rp_zw2 = 0, s_rp_zh2 = 0;
+static uint64_t s_rp_key2 = 0, s_rp_older_frames = 0;
 static int    s_rp_zw = 0, s_rp_zh = 0;
 static float *s_rp_v = NULL; static size_t s_rp_vcap = 0;
 static uint64_t s_rp_key = 0;   /* the game frame the depth image is of */
 static uint64_t s_rp_frames = 0, s_rp_fallback = 0;
 static GLint  s_rp_z_uSize = -1;
+static GLint  s_rp_w_uDbias = -1;
 static GLint  s_rp_w_uZ, s_rp_w_uZsize, s_rp_w_uZs, s_rp_w_uGrid, s_rp_w_uSize, s_rp_w_uOx,
               s_rp_w_uView, s_rp_w_uM, s_rp_w_uSrc, s_rp_w_uSrcOrg, s_rp_w_uS, s_rp_w_uDbg;
 static GLint  s_rp_r_uSrc, s_rp_r_uZ, s_rp_r_uZsize, s_rp_r_uOrg, s_rp_r_uSrcOrg, s_rp_r_uS,
@@ -12469,7 +12524,8 @@ static const char *RP_Z_VS =
     "uniform vec2 u_size;\n"
     "out float v_iz; flat out float v_id; flat out float v_view;\n"
     "void main(){ v_iz=a.z; v_id=a.w; v_view=av;\n"
-    "  gl_Position=vec4(a.x/u_size.x*2.0-1.0, a.y/u_size.y*2.0-1.0, 0.0, 1.0); }\n";
+    "  float d = a.z > 0.0 ? clamp((1.0/a.z)/262144.0, 0.0, 0.99999) : 0.0;\n"
+    "  gl_Position=vec4(a.x/u_size.x*2.0-1.0, a.y/u_size.y*2.0-1.0, d*2.0-1.0, 1.0); }\n";
 static const char *RP_Z_FS =
     "#version 330\n"
     "in float v_iz; flat in float v_id; flat in float v_view; out vec4 frag;\n"
@@ -12478,28 +12534,38 @@ static const char *RP_W_VS =
     "#version 330\n"
     "uniform sampler2D u_z; uniform ivec2 u_zsize; uniform float u_zs;\n"
     "uniform ivec2 u_grid; uniform vec2 u_size; uniform vec2 u_ox;\n"
-    "uniform vec4 u_view[4]; uniform vec4 u_M[12];\n"
+    "uniform vec4 u_view[4]; uniform vec4 u_M[12]; uniform float u_dbias;\n"
     "out vec2 v_src; out float v_bad;\n"
     "vec4 zat(ivec2 g){ return texelFetch(u_z, clamp(ivec2(vec2(g)*u_zs), ivec2(0), u_zsize-1), 0); }\n"
+    /* A grid point moved by its own depth and view: (x, y, depth). */
+    "vec3 warp(vec2 p, vec4 z){\n"
+    "  int vi=int(z.z+0.5); vec4 V=u_view[vi]; float Z=1.0/z.x; vec2 rel=p-u_ox;\n"
+    "  vec3 P=vec3((rel.x-V.x)*Z/V.z,(rel.y-V.y)*Z/V.z,Z);\n"
+    "  vec4 r0=u_M[vi*3], r1=u_M[vi*3+1], r2=u_M[vi*3+2];\n"
+    "  vec3 Pt=vec3(dot(r0.xyz,P)+r0.w, dot(r1.xyz,P)+r1.w, dot(r2.xyz,P)+r2.w);\n"
+    "  Pt.z=max(Pt.z, max(16.0, 0.25*Z));\n"
+    "  return vec3(vec2(V.z*Pt.x/Pt.z+V.x, V.z*Pt.y/Pt.z+V.y)+u_ox, Pt.z); }\n"
     "void main(){\n"
     "  int id=gl_VertexID, cell=id/6, c=id-cell*6;\n"
     "  int cw=u_grid.x-1; ivec2 base=ivec2(cell-(cell/cw)*cw, cell/cw);\n"
     "  ivec2 o = (c==0)?ivec2(0,0):(c==1||c==3)?ivec2(1,0):(c==2||c==5)?ivec2(0,1):ivec2(1,1);\n"
     "  ivec2 gp=base+o; vec2 p=vec2(gp);\n"
-    "  float zmin=1e30, zmax=0.0; float bad=0.0; float v0=-1.0;\n"
-    "  for(int k=0;k<4;k++){ vec4 q=zat(base+ivec2(k&1,k>>1));\n"
-    "    if(q.y<0.5||q.y>1.5||q.x<=0.0){bad=1.0;} else { float Z=1.0/q.x; zmin=min(zmin,Z); zmax=max(zmax,Z);\n"
-    "      if(v0<0.0) v0=q.z; else if(q.z!=v0) bad=1.0; } }\n"
-    "  if(zmax>zmin*1.06+4.0) bad=1.0;\n"
-    "  vec4 z=zat(gp); vec2 np=p; float depth=1.0;\n"
+    "  float bad=0.0; float v0=-1.0; vec4 q[4];\n"
+    "  for(int k=0;k<4;k++){ q[k]=zat(base+ivec2(k&1,k>>1));\n"
+    "    bool wk=(q[k].y>0.5&&q[k].y<1.5)||(q[k].y>3.5&&q[k].y<4.5);\n"
+    "    if(!wk||q[k].x<=0.0) bad=1.0; else if(v0<0.0) v0=q[k].z; else if(q[k].z!=v0) bad=1.0; }\n"
+    "  vec2 np=p; float depth=1.0;\n"
     "  if(bad<0.5){\n"
-    "    int vi=int(z.z+0.5); vec4 V=u_view[vi]; float Z=1.0/z.x; vec2 rel=p-u_ox;\n"
-    "    vec3 P=vec3((rel.x-V.x)*Z/V.z,(rel.y-V.y)*Z/V.z,Z);\n"
-    "    vec4 r0=u_M[vi*3], r1=u_M[vi*3+1], r2=u_M[vi*3+2];\n"
-    "    vec3 Pt=vec3(dot(r0.xyz,P)+r0.w, dot(r1.xyz,P)+r1.w, dot(r2.xyz,P)+r2.w);\n"
-    "    Pt.z=max(Pt.z, max(16.0, 0.25*Z));\n"
-    "    np=vec2(V.z*Pt.x/Pt.z+V.x, V.z*Pt.y/Pt.z+V.y)+u_ox;\n"
-    "    depth=clamp(Pt.z/262144.0, 0.0, 1.0);\n"
+    /* A cell is an edge (not drawn) only where the warp tears it: a side
+     * stretched past 1.5 native px. A depth ratio test also rejected the
+     * inside of near surfaces seen at a grazing angle, and the un-warped
+     * frame showed through them (doubled text on a passing billboard). */
+    "    vec3 w0=warp(vec2(base),q[0]), w1=warp(vec2(base+ivec2(1,0)),q[1]),\n"
+    "         w2=warp(vec2(base+ivec2(0,1)),q[2]), w3=warp(vec2(base+ivec2(1,1)),q[3]);\n"
+    "    float m=max(max(distance(w0.xy,w1.xy),distance(w0.xy,w2.xy)),max(distance(w1.xy,w3.xy),distance(w2.xy,w3.xy)));\n"
+    "    if(m>1.5) bad=1.0;\n"
+    "    vec3 w = (o==ivec2(0,0))?w0:(o==ivec2(1,0))?w1:(o==ivec2(0,1))?w2:w3;\n"
+    "    np=w.xy; depth=clamp(w.z*(1.0+u_dbias)/262144.0, 0.0, 0.99999);\n"
     "  }\n"
     "  v_bad=bad; v_src=p;\n"
     "  gl_Position=vec4(np.x/u_size.x*2.0-1.0, np.y/u_size.y*2.0-1.0, depth*2.0-1.0, 1.0);\n"
@@ -12523,7 +12589,7 @@ static const char *RP_R_FS =
     "void main(){ vec2 p=(gl_FragCoord.xy-u_org)/u_S;\n"
     "  vec4 z=texelFetch(u_z, clamp(ivec2(p*2.0), ivec2(0), u_zsize-1), 0);\n"
     "  ivec2 t=ivec2(gl_FragCoord.xy-u_org+u_srcorg*u_S);\n"    "  if(u_dbg==2){ frag=vec4(z.y==1.0?0.0:1.0, z.y==2.0?1.0:0.0, z.y==3.0?1.0:(z.y==0.0?0.5:0.0), 1.0); return; }\n"
-    "  if(z.y>2.5){ frag = u_has_prev==1 ? texelFetch(u_prev, t, 0) : texelFetch(u_src, t, 0); return; }\n"
+    "  if(z.y>2.5&&z.y<3.5){ frag = u_has_prev==1 ? texelFetch(u_prev, t, 0) : texelFetch(u_src, t, 0); return; }\n"
     "  if(z.y>0.5) discard;\n"
     "  frag=texelFetch(u_src, t, 0); }\n";
 static GLuint s_rp_rprog = 0;
@@ -12543,6 +12609,7 @@ static int rp_resources(void) {
     s_rp_w_uOx = p_glGetUniformLocation(s_rp_wprog, "u_ox");
     s_rp_w_uView = p_glGetUniformLocation(s_rp_wprog, "u_view");
     s_rp_w_uM = p_glGetUniformLocation(s_rp_wprog, "u_M");
+    s_rp_w_uDbias = p_glGetUniformLocation(s_rp_wprog, "u_dbias");
     s_rp_w_uSrc = p_glGetUniformLocation(s_rp_wprog, "u_src");
     s_rp_w_uSrcOrg = p_glGetUniformLocation(s_rp_wprog, "u_srcorg");
     s_rp_w_uS = p_glGetUniformLocation(s_rp_wprog, "u_S");
@@ -12646,6 +12713,171 @@ static int rp_is_car(const FgList *L, uint32_t pi) {
  * surface; the region is (x0, y0, W, H) native px, rel x = x - ox. */
 static double s_rp_t_snap = 0, s_rp_t_z = 0, s_rp_t_w = 0;
 static uint32_t s_rp_zn = 0;
+/* Geometry without a projection source (a game's own near-plane
+ * subdivision) is world when the renderer had its PGXP depth: the view is the
+ * fitted one of its draw area. -1 otherwise. */
+/* PGXP depth is the GTE's SZ, which a game may scale against the camera
+ * space its projected vertices carry: the scale is measured per list as the
+ * median camera-z / SZ over vertices that have both (1 when none do). */
+static float *s_rp_pzr = NULL; static size_t s_rp_pzr_cap = 0;
+static float  s_rp_pzs_last = 0.0f;   /* diagnostics: the newer list's scale */
+static int rp_float_cmp(const void *a, const void *b) {
+    const float x = *(const float *)a, y = *(const float *)b;
+    return x < y ? -1 : x > y;
+}
+static float rp_pz_scale(const FgList *L) {
+    size_t n = 0;
+    if ((size_t)L->prims.n * 3u > s_rp_pzr_cap) {
+        float *nb = (float *)realloc(s_rp_pzr, (size_t)L->prims.n * 3u * sizeof *nb);
+        if (!nb) return 1.0f;
+        s_rp_pzr = nb; s_rp_pzr_cap = (size_t)L->prims.n * 3u;
+    }
+    for (uint32_t j = 0; j < L->prims.n; j++) {
+        const FgPrim *p = &L->prims.v[j];
+        for (int k = 0; k < 3; k++)
+            if (p->vid[k] && p->p[k][2] >= 1.0f && p->pz[k] >= 1.0f) s_rp_pzr[n++] = p->p[k][2] / p->pz[k];
+    }
+    if (n < 16) return 1.0f;
+    qsort(s_rp_pzr, n, sizeof *s_rp_pzr, rp_float_cmp);
+    return s_rp_pzr[n / 2];
+}
+static int rp_pgxp_world_view(const FgPrim *p) {
+    if (p->vid[0] || p->vid[1] || p->vid[2]) return -1;
+    if (p->pz[0] < 1.0f || p->pz[1] < 1.0f || p->pz[2] < 1.0f) return -1;
+    for (uint32_t vi = 0; vi < s_fg_fit.nviews && vi < FG_MAX_VIEWS; vi++)
+        if (s_fg_fit.v[vi].view == p->view && s_fg_fit.v[vi].ok) return (int)vi;
+    return -1;
+}
+
+/* Two-frame warp: the older frame's own depth image. Its world is what the
+ * fit explains by the camera: a vertex with a projection in a fitted view,
+ * not one the fit called an object in the newer frame (cars are drawn again
+ * at their in-between position). Vertices only the older frame has (what
+ * the newer frame's nearer geometry now covers) are world too: they are what
+ * fills the newer frame's disocclusions. Nearest world depth wins, the rest
+ * keeps painter order as id 0 (not warped). */
+typedef struct { uint32_t vid; int8_t mode, view; } RpVidMode;
+static RpVidMode *s_rp_vm = NULL; static size_t s_rp_vmcap = 0;
+static int rp_vm_cmp(const void *a, const void *b) {
+    const uint32_t x = ((const RpVidMode *)a)->vid, y = ((const RpVidMode *)b)->vid;
+    return x < y ? -1 : x > y;
+}
+static int rp_build_older(const FgList *L, const FgList *O, float qox, int zw, int zh, float big) {
+    if (!O || !O->valid || !O->rec2prim) return 0;
+    /* The newer frame's placement by projection identity. */
+    size_t nvm = 0;
+    const size_t need = (size_t)L->prims.n * 3u;
+    if (need > s_rp_vmcap) {
+        RpVidMode *nv = (RpVidMode *)realloc(s_rp_vm, need * sizeof *nv);
+        if (!nv) return 0;
+        s_rp_vm = nv; s_rp_vmcap = need;
+    }
+    for (uint32_t j = 0; j < L->prims.n; j++)
+        for (int k = 0; k < 3; k++) {
+            const uint32_t vid = L->prims.v[j].vid[k];
+            if (!vid) continue;
+            const FgVert *fv = &s_fg_verts[3 * j + k];
+            s_rp_vm[nvm].vid = vid; s_rp_vm[nvm].mode = (int8_t)fv->mode; s_rp_vm[nvm].view = fv->view;
+            nvm++;
+        }
+    qsort(s_rp_vm, nvm, sizeof *s_rp_vm, rp_vm_cmp);
+    if (zw != s_rp_zw2 || zh != s_rp_zh2) {
+        if (s_rp_zfbo2) { p_glDeleteFramebuffers(1, &s_rp_zfbo2); glDeleteTextures(1, &s_rp_ztex2); }
+        if (s_rp_zrb2) { p_glDeleteRenderbuffers(1, &s_rp_zrb2); s_rp_zrb2 = 0; }
+        s_rp_ztex2 = make_tex(0x8814 /* GL_RGBA32F */, zw, zh, GL_RGBA, GL_FLOAT);
+        p_glGenRenderbuffers(1, &s_rp_zrb2);
+        p_glBindRenderbuffer(PSXGL_RENDERBUFFER, s_rp_zrb2);
+        p_glRenderbufferStorage(PSXGL_RENDERBUFFER, PSXGL_DEPTH24_STENCIL8, zw, zh);
+        p_glBindRenderbuffer(PSXGL_RENDERBUFFER, 0);
+        if (!make_fbo(&s_rp_zfbo2, s_rp_ztex2, s_rp_zrb2)) { s_rp_zfbo2 = 0; s_rp_zw2 = s_rp_zh2 = 0; return 0; }
+        s_rp_zw2 = zw; s_rp_zh2 = zh;
+    }
+    size_t n = 0;
+    const float pzs_old = rp_pz_scale(O);
+    for (uint32_t r = 0; r < O->n; r++) {
+        FgRec h;
+        memcpy(&h, O->buf + O->off[r], sizeof h);
+        const int32_t *v = (const int32_t *)(O->buf + O->off[r] + sizeof h);
+        if (h.op == RTH_FLAT_RECT || h.op == RTH_TEX_RECT || h.op == RTH_TEX_RECT_SCALED) {
+            if (!rp_push_quad(&n, ((float)(v[0] - O->disp[0]) + qox) * RP_ZS, (float)(v[1] - O->disp[1]) * RP_ZS,
+                              ((float)(v[0] - O->disp[0] + v[2]) + qox) * RP_ZS,
+                              (float)(v[1] - O->disp[1] + v[3]) * RP_ZS)) return 0;
+            continue;
+        }
+        if (h.op != RTH_FLAT_TRI && h.op != RTH_GOURAUD_TRI && h.op != RTH_TEX_TRI &&
+            h.op != RTH_SHADED_TEX_TRI && h.op != RTH_PROJ_TRI) continue;
+        const int pi = O->rec2prim[r];
+        if (pi < 0) continue;
+        const FgPrim *p = &O->prims.v[pi];
+        int world = 1, view = -1, objv = 0;
+        const int pgv = rp_pgxp_world_view(p);
+        for (int k = 0; k < 3 && pgv < 0; k++) {
+            if (!p->vid[k] || p->p[k][2] < 1.0f) { world = 0; break; }
+            RpVidMode key; key.vid = p->vid[k];
+            const RpVidMode *m = (const RpVidMode *)bsearch(&key, s_rp_vm, nvm, sizeof *s_rp_vm, rp_vm_cmp);
+            int vk = -1;
+            if (m) {
+                if (m->mode == FG_PLACE_OBJECT) { world = 0; objv = 1; break; }
+                vk = m->view;
+            } else {
+                for (uint32_t vi = 0; vi < s_fg_fit.nviews; vi++)
+                    if (s_fg_fit.v[vi].view == p->view) { vk = (int)vi; break; }
+            }
+            if (vk < 0) { world = 0; break; }
+            if (view < 0) view = vk; else if (view != vk) { world = 0; break; }
+        }
+        if (pgv >= 0) view = pgv;
+        if (world && (view < 0 || view >= FG_MAX_VIEWS || !s_fg_fit.v[view].ok)) world = 0;
+        if (world) {
+            const float *ar = s_fg_fit.v[view].area;
+            if ((ar[2] - ar[0]) * (ar[3] - ar[1]) < 0.15f * big) world = 0;
+        }
+        /* 1 world, 4 a big moving object (sky dome: warped as infinitely
+         * far), 2 a car (drawn again), 0 the rest (2D, HUD). */
+        int far_obj = 0, fview = -1;
+        if (objv) {
+            const float bw = fmaxf(p->x[0], fmaxf(p->x[1], p->x[2])) - fminf(p->x[0], fminf(p->x[1], p->x[2]));
+            const float bh = fmaxf(p->y[0], fmaxf(p->y[1], p->y[2])) - fminf(p->y[0], fminf(p->y[1], p->y[2]));
+            if (bw > 96.0f || bh > 64.0f)
+                for (uint32_t vi = 0; vi < s_fg_fit.nviews; vi++)
+                    if (s_fg_fit.v[vi].view == p->view && s_fg_fit.v[vi].ok) { fview = (int)vi; far_obj = 1; break; }
+        }
+        const float id = world ? 1.0f : far_obj ? 4.0f : objv ? 2.0f : 0.0f;
+        for (int k = 0; k < 3; k++)
+            if (!rp_push(&n, (p->x[k] + qox) * RP_ZS, p->y[k] * RP_ZS,
+                         world ? 1.0f / (pgv >= 0 ? p->pz[k] * pzs_old : p->p[k][2]) : far_obj ? 1e-6f : 0.0f, id,
+                         world ? (float)view : far_obj ? (float)fview : 0.0f)) return 0;
+    }
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_rp_zfbo2);
+    glViewport(0, 0, zw, zh);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClearDepth(1.0);
+    glDepthMask(GL_TRUE);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (n) {
+        p_glUseProgram(s_rp_zprog);
+        p_glUniform2f(s_rp_z_uSize, (float)zw, (float)zh);
+        p_glBindVertexArray(s_rp_vao);
+        p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_rp_vbo);
+        p_glBufferData(PSXGL_ARRAY_BUFFER, (GLsizeiptr)(n * 5 * sizeof(float)), s_rp_v, PSXGL_STREAM_DRAW);
+        glEnable(GL_DEPTH_TEST);
+        size_t r0 = 0;
+        while (r0 < n) {
+            const int w0 = s_rp_v[r0 * 5 + 3] == 1.0f || s_rp_v[r0 * 5 + 3] == 4.0f;
+            size_t r1 = r0 + 3;
+            while (r1 < n && (s_rp_v[r1 * 5 + 3] == 1.0f || s_rp_v[r1 * 5 + 3] == 4.0f) == w0) r1 += 3;
+            glDepthFunc(w0 ? GL_LESS : GL_ALWAYS);
+            glDepthMask(w0 ? GL_TRUE : GL_FALSE);
+            glDrawArrays(GL_TRIANGLES, (GLint)r0, (GLsizei)(r1 - r0));
+            r0 = r1;
+        }
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+        glDisable(GL_DEPTH_TEST);
+    }
+    return 1;
+}
+
 static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_fbo, GLuint src_fbo,
                         int x0, int y0, int W, int H, float ox, int S) {
     if (!rp_resources() || W <= 0 || H <= 0) return 0;
@@ -12674,15 +12906,21 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
     const int ok_ = O ? rp_snap_slot((int)(O - s_fg_l)) : -1;
     const int ok = (ok_ >= 0 && s_rp_ls_w[ok_] == W * S && s_rp_ls_h[ok_] == H * S) ? ok_ : -1;
     (void)src_fbo;
-    /* The picture under the warp: the snapshot. */
-    fg_blit2(s_rp_snap_fbo, dst_fbo, 0, 0, x0 * S, y0 * S, W * S, H * S);
+    /* The picture under the warp, where neither frame's warp is valid: the
+     * nearest real frame (never a mix). */
+    fg_blit2((t < 0.5 && ok >= 0) ? s_rp_ls_fbo[ok] : s_rp_snap_fbo, dst_fbo, 0, 0, x0 * S, y0 * S, W * S, H * S);
     const uint64_t qz = host_now_ns_rthf();
     if (key != s_rp_key || zw != s_rp_zw || zh != s_rp_zh) {
         if (zw != s_rp_zw || zh != s_rp_zh) {
             if (s_rp_zfbo) { p_glDeleteFramebuffers(1, &s_rp_zfbo); glDeleteTextures(1, &s_rp_ztex); }
+            if (s_rp_zrb) { p_glDeleteRenderbuffers(1, &s_rp_zrb); s_rp_zrb = 0; }
             fg_cost_cold(fg_cost(), 3);
             s_rp_ztex = make_tex(0x8814 /* GL_RGBA32F */, zw, zh, GL_RGBA, GL_FLOAT);
-            if (!make_fbo(&s_rp_zfbo, s_rp_ztex, 0)) { s_rp_zfbo = 0; s_rp_zw = s_rp_zh = 0; goto fail; }
+            p_glGenRenderbuffers(1, &s_rp_zrb);
+            p_glBindRenderbuffer(PSXGL_RENDERBUFFER, s_rp_zrb);
+            p_glRenderbufferStorage(PSXGL_RENDERBUFFER, PSXGL_DEPTH24_STENCIL8, zw, zh);
+            p_glBindRenderbuffer(PSXGL_RENDERBUFFER, 0);
+            if (!make_fbo(&s_rp_zfbo, s_rp_ztex, s_rp_zrb)) { s_rp_zfbo = 0; s_rp_zw = s_rp_zh = 0; goto fail; }
             s_rp_zw = zw; s_rp_zh = zh;
         }
         size_t n = 0;
@@ -12693,6 +12931,8 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
         }
         fg_hud_match(&L->prims, O ? &O->prims : NULL, 24.0f, s_rp_needle);
         s_rp_needle_n = L->prims.n;
+        const float pzs_new = rp_pz_scale(L);
+        s_rp_pzs_last = pzs_new;
         for (uint32_t r = 0; r < L->n; r++) {
             FgRec h;
             memcpy(&h, L->buf + L->off[r], sizeof h);
@@ -12715,6 +12955,9 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
                 }
                 if (world && (view < 0 || view >= FG_MAX_VIEWS || !vp[view][3] ||
                               !s_fg_fit.v[view].ok)) world = 0;
+                /* Source-less geometry with PGXP depth: world at that depth. */
+                const int pgv = world ? -1 : rp_pgxp_world_view(p);
+                if (pgv >= 0 && vp[pgv][3]) { world = 1; view = pgv; }
                 if (world) {
                     const float *ar = s_fg_fit.v[view].area;
                     if ((ar[2] - ar[0]) * (ar[3] - ar[1]) < 0.15f * big) world = 0;
@@ -12729,11 +12972,23 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
                     const float *ar = s_fg_fit.v[view].area;
                     if ((ar[2] - ar[0]) * (ar[3] - ar[1]) < 0.15f * big) obj = 0;
                 }
-                const float id = world ? 1.0f : obj ? 2.0f : s_rp_needle[pi] ? 3.0f : 0.0f;
+                /* A big object the fit moves on its own (the sky dome, a
+                 * camera-attached backdrop; cars are small, at most 96 x 64)
+                 * is warped as infinitely far: the camera's turn only. */
+                int far_obj = 0, fview = view;
+                if (!world && obj) {
+                    const float bw = fmaxf(p->x[0], fmaxf(p->x[1], p->x[2])) - fminf(p->x[0], fminf(p->x[1], p->x[2]));
+                    const float bh = fmaxf(p->y[0], fmaxf(p->y[1], p->y[2])) - fminf(p->y[0], fminf(p->y[1], p->y[2]));
+                    if (bw > 96.0f || bh > 64.0f) {
+                        for (int k = 0; k < 3 && fview < 0; k++) fview = s_fg_verts[3 * pi + k].view;
+                        far_obj = fview >= 0 && fview < FG_MAX_VIEWS && s_fg_fit.v[fview].ok && vp[fview][3] != 0.0f;
+                    }
+                }
+                const float id = world ? 1.0f : far_obj ? 4.0f : obj ? 2.0f : s_rp_needle[pi] ? 3.0f : 0.0f;
                 for (int k = 0; k < 3; k++)
                     if (!rp_push(&n, (p->x[k] + ox) * RP_ZS, p->y[k] * RP_ZS,
-                                 world ? 1.0f / p->p[k][2] : 0.0f, id,
-                                 world ? (float)view : 0.0f)) goto fail;
+                                 world ? 1.0f / (pgv >= 0 ? p->pz[k] * pzs_new : p->p[k][2]) : far_obj ? 1e-6f : 0.0f, id,
+                                 world ? (float)view : far_obj ? (float)fview : 0.0f)) goto fail;
                 break;
             }
             case RTH_FLAT_RECT: case RTH_TEX_RECT: case RTH_TEX_RECT_SCALED:
@@ -12794,18 +13049,50 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
         p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_rp_zfbo);
         glViewport(0, 0, zw, zh);
         glClearColor(0.f, 0.f, 0.f, 0.f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClearDepth(1.0);
+        glDepthMask(GL_TRUE);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         if (n) {
             p_glUseProgram(s_rp_zprog);
             p_glUniform2f(s_rp_z_uSize, (float)zw, (float)zh);
             p_glBindVertexArray(s_rp_vao);
             p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_rp_vbo);
             p_glBufferData(PSXGL_ARRAY_BUFFER, (GLsizeiptr)(n * 5 * sizeof(float)), s_rp_v, PSXGL_STREAM_DRAW);
-            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)n);
+            /* World triangles take the nearest depth, like the PGXP depth
+             * buffer the real frame was drawn with: in painter order a far
+             * section drawn after a near wall (the game's own sort, or Max
+             * Detail's far sections) left far depth on the wall's pixels,
+             * and the warp moved them as distant scenery (objects showing
+             * through walls, doubled signs, sheared lane lines). Everything
+             * else keeps painter order: it always passes and writes no depth
+             * (a backdrop under the world, a car over the road, the HUD and
+             * mirror overlay last). Drawn in runs of the same kind. */
+            glEnable(GL_DEPTH_TEST);
+            size_t r0 = 0;
+            while (r0 < n) {
+                const int w0 = s_rp_v[r0 * 5 + 3] == 1.0f || s_rp_v[r0 * 5 + 3] == 4.0f;
+                size_t r1 = r0 + 3;
+                while (r1 < n && (s_rp_v[r1 * 5 + 3] == 1.0f || s_rp_v[r1 * 5 + 3] == 4.0f) == w0) r1 += 3;
+                glDepthFunc(w0 ? GL_LESS : GL_ALWAYS);
+                glDepthMask(w0 ? GL_TRUE : GL_FALSE);
+                glDrawArrays(GL_TRIANGLES, (GLint)r0, (GLsizei)(r1 - r0));
+                r0 = r1;
+            }
+            glDepthMask(GL_TRUE);
+            glDepthFunc(GL_LESS);
+            glDisable(GL_DEPTH_TEST);
         }
         s_rp_key = key;
         s_rp_zn = (uint32_t)n;
         s_rp_t_z = (double)(host_now_ns_rthf() - qz) * 1e-6;
+    }
+    /* 1b. The older frame's depth image (two-frame warp), once per pair. */
+    int older = 0;
+    if (t < 1.0 - 1e-3 && ok >= 0 && O && O->valid && O->wide_off == L->wide_off) {
+        const uint64_t key2 = key * 8u + (uint64_t)(O - s_fg_l) + 1u;
+        if (key2 == s_rp_key2 && zw == s_rp_zw2 && zh == s_rp_zh2) older = 1;
+        else if (rp_build_older(L, O, ox, zw, zh, big)) { s_rp_key2 = key2; older = 1; }
+        else s_rp_key2 = 0;
     }
     const uint64_t qw = host_now_ns_rthf();
     /* 2. The warp. */
@@ -12853,14 +13140,78 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
         p_glUniform1f(s_rp_w_uS, (float)S);
         p_glUniform1i(s_rp_w_uDbg, s_rp_dbg);
         p_glBindVertexArray(s_rp_evao);
-        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(W * H * 6));
+        /* Both bracketing real frames are warped to the in-between camera.
+         * The frame nearer in time is drawn first and marks the stencil
+         * wherever it has a valid sample; the other frame fills only the
+         * unmarked pixels (what the nearer frame cannot show: a cell over a
+         * depth edge the camera uncovers, a pixel that is not world). The two
+         * never compete by depth: a valid sample of the nearer frame always
+         * wins (otherwise the older frame's near ceiling covered the newer
+         * frame's sky at a tunnel exit, and two copies of one surface a few
+         * px apart interleaved). Where neither is valid the nearest real
+         * frame underneath shows. Each frame keeps its own depth test. */
+        float Mo[12][4]; memset(Mo, 0, sizeof Mo);
+        if (older) {
+            for (uint32_t vi = 0; vi < s_fg_fit.nviews && vi < FG_MAX_VIEWS; vi++) {
+                float A[9], b[3];
+                if (!fg_view_affine_older(&s_fg_fit, (int)vi, t, A, b)) continue;
+                for (int r = 0; r < 3; r++) {
+                    Mo[vi * 3 + r][0] = A[3 * r]; Mo[vi * 3 + r][1] = A[3 * r + 1];
+                    Mo[vi * 3 + r][2] = A[3 * r + 2]; Mo[vi * 3 + r][3] = b[r];
+                }
+            }
+            s_rp_older_frames++;
+        }
+        p_glUniform1f(s_rp_w_uDbias, 0.0f);
+        const int older_first = older && t < 0.5;
+        glClearStencil(0);
+        glStencilMask(0xFF);
+        glClear(GL_STENCIL_BUFFER_BIT);
+        glEnable(GL_STENCIL_TEST);
+        for (int pass = 0; pass < 2; pass++) {
+            const int use_older = pass == 0 ? older_first : !older_first;
+            if (use_older && !older) continue;
+            /* At the endpoints the nearer frame underneath is exact. */
+            if (use_older && t <= 1e-3) continue;
+            if (!use_older && older && t <= 1e-3) continue;
+            p_glActiveTexture(PSXGL_TEXTURE0 + 1);
+            glBindTexture(GL_TEXTURE_2D, use_older ? s_rp_ztex2 : s_rp_ztex);
+            p_glActiveTexture(PSXGL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, use_older ? s_rp_ls_tex[ok] : s_rp_snap_tex);
+            p_glUniform4fv(s_rp_w_uM, 12, use_older ? &Mo[0][0] : &M[0][0]);
+            if (pass == 0) {
+                glStencilFunc(GL_ALWAYS, 1, 0xFF);
+                glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            } else {
+                glClear(GL_DEPTH_BUFFER_BIT);
+                glStencilFunc(GL_EQUAL, 0, 0xFF);
+                glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+            }
+            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(W * H * 6));
+        }
+        glDisable(GL_STENCIL_TEST);
+        glStencilFunc(GL_ALWAYS, 0, 0xFF);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        p_glActiveTexture(PSXGL_TEXTURE0 + 1);
+        glBindTexture(GL_TEXTURE_2D, s_rp_ztex);
+        p_glActiveTexture(PSXGL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, s_rp_snap_tex);
         glDisable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
         /* The warp's depth (nearest wins, its own scale) is not the scene's:
          * the cars drawn next test only against each other, as on a fresh
          * frame (with PGXP depth they would test LEQUAL against it). */
         glClear(GL_DEPTH_BUFFER_BIT);
-        /* 2D and HUD pixels back over the warp, where the real frame has them. */
+        /* 2D and HUD pixels back over the warp, where the nearer real frame
+         * has them (its classification and its picture: never the other
+         * frame's pixels un-warped). */
+        const int keep_older = older && t < 0.5;
+        if (keep_older) {
+            p_glActiveTexture(PSXGL_TEXTURE0 + 1);
+            glBindTexture(GL_TEXTURE_2D, s_rp_ztex2);
+            p_glActiveTexture(PSXGL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, s_rp_ls_tex[ok]);
+        }
         p_glUseProgram(s_rp_rprog);
         p_glUniform1i(s_rp_r_uSrc, 0);
         p_glUniform1i(s_rp_r_uZ, 1);
@@ -12874,7 +13225,7 @@ static int fg_reproject(const FgList *L, const FgList *O, double t, GLuint dst_f
         glBindTexture(GL_TEXTURE_2D, ok >= 0 ? s_rp_ls_tex[ok] : s_rp_snap_tex);
         p_glActiveTexture(PSXGL_TEXTURE0);
         p_glUniform1i(s_rp_r_uPrev, 2);
-        p_glUniform1i(s_rp_r_uHasPrev, ok >= 0 && !s_rp_noprev ? 1 : 0);
+        p_glUniform1i(s_rp_r_uHasPrev, ok >= 0 && !s_rp_noprev && !keep_older ? 1 : 0);
         p_glUniform1i(s_rp_r_uDbg, s_rp_dbg);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         s_rp_t_w = (double)(host_now_ns_rthf() - qw) * 1e-6;
@@ -12917,6 +13268,14 @@ static void rp_free(void) {
     }
     if (s_rp_zfbo) p_glDeleteFramebuffers(1, &s_rp_zfbo);
     if (s_rp_ztex) glDeleteTextures(1, &s_rp_ztex);
+    if (s_rp_zrb) p_glDeleteRenderbuffers(1, &s_rp_zrb);
+    s_rp_zrb = 0;
+    if (s_rp_zfbo2) p_glDeleteFramebuffers(1, &s_rp_zfbo2);
+    if (s_rp_ztex2) glDeleteTextures(1, &s_rp_ztex2);
+    if (s_rp_zrb2) p_glDeleteRenderbuffers(1, &s_rp_zrb2);
+    s_rp_zfbo2 = s_rp_ztex2 = s_rp_zrb2 = 0; s_rp_zw2 = s_rp_zh2 = 0; s_rp_key2 = 0;
+    free(s_rp_vm); s_rp_vm = NULL; s_rp_vmcap = 0;
+    free(s_rp_pzr); s_rp_pzr = NULL; s_rp_pzr_cap = 0;
     s_rp_zfbo = s_rp_ztex = 0; s_rp_zw = s_rp_zh = 0; s_rp_key = 0;
     if (s_rp_vbo) p_glDeleteBuffers(1, &s_rp_vbo);
     if (s_rp_vao) p_glDeleteVertexArrays(1, &s_rp_vao);
@@ -12934,9 +13293,56 @@ static void rp_free(void) {
 /* Tests: reprojection holds nothing (no program, surface or buffer). */
 static int rp_allocated(void) {
     int any = s_rp_zprog || s_rp_wprog || s_rp_rprog || s_rp_vao || s_rp_vbo || s_rp_evao ||
-              s_rp_zfbo || s_rp_ztex || s_rp_v || s_rp_needle;
+              s_rp_zfbo || s_rp_ztex || s_rp_v || s_rp_needle || s_rp_zfbo2 || s_rp_ztex2 || s_rp_vm;
     for (int k = 0; k < 2; k++) any |= s_rp_ls_fbo[k] || s_rp_ls_tex[k];
     return any;
+}
+
+/* Share of the main view covered by 3D geometry the generated frame cannot
+ * place: triangles drawn after the scene's projected geometry started that
+ * carry no projection source at all (a game's own near-plane subdivision
+ * computes those vertices without the GTE). Their depth is unknown, so
+ * neither a warp nor a redraw can move them with the camera; left in place
+ * they split from the moving geometry around them (doubled text on a
+ * passing billboard). Small 2D pieces (HUD) are not counted, nor geometry
+ * with PGXP depth (the depth images place it). */
+static uint64_t s_fg_skip_unplaced = 0;
+static double fg_unplaced_share(const FgList *L) {
+    if (!L || !L->valid || !L->rec2prim || !s_fg_fit.nviews) return 0.0;
+    double big = 0.0;
+    for (uint32_t vi = 0; vi < s_fg_fit.nviews; vi++) {
+        const float *ar = s_fg_fit.v[vi].area;
+        const double a = (double)(ar[2] - ar[0]) * (ar[3] - ar[1]);
+        if (a > big) big = a;
+    }
+    if (big <= 0.0) return 0.0;
+    int seen3d = 0; double area = 0.0;
+    for (uint32_t r = 0; r < L->n; r++) {
+        FgRec h;
+        memcpy(&h, L->buf + L->off[r], sizeof h);
+        if (h.op != RTH_FLAT_TRI && h.op != RTH_GOURAUD_TRI && h.op != RTH_TEX_TRI &&
+            h.op != RTH_SHADED_TEX_TRI && h.op != RTH_PROJ_TRI) continue;
+        const int pi = L->rec2prim[r];
+        if (pi < 0) continue;
+        const FgPrim *p = &L->prims.v[pi];
+        const int proj = p->vid[0] || p->vid[1] || p->vid[2];
+        if (proj) { seen3d = 1; continue; }
+        if (p->pz[0] >= 1.0f && p->pz[1] >= 1.0f && p->pz[2] >= 1.0f) continue;   /* PGXP depth */
+        if (!seen3d) continue;                    /* a backdrop under the scene */
+        const float bw = fmaxf(p->x[0], fmaxf(p->x[1], p->x[2])) - fminf(p->x[0], fminf(p->x[1], p->x[2]));
+        const float bh = fmaxf(p->y[0], fmaxf(p->y[1], p->y[2])) - fminf(p->y[0], fminf(p->y[1], p->y[2]));
+        if (bw <= 160.0f && bh <= 120.0f && (bw < 24.0f || bh < 24.0f)) continue;   /* HUD-sized */
+        area += 0.5 * fabs((double)(p->x[1] - p->x[0]) * (p->y[2] - p->y[0]) -
+                           (double)(p->x[2] - p->x[0]) * (p->y[1] - p->y[0]));
+    }
+    return area / big;
+}
+/* PSX_FG_MAX_UNPLACED: the share above which the step shows the real frame
+ * (default 0.02; 1 = never skip). */
+static double fg_max_unplaced(void) {
+    static double v = -1.0;
+    if (v < 0.0) { const char *e = getenv("PSX_FG_MAX_UNPLACED"); v = e && *e ? atof(e) : 0.02; }
+    return v;
 }
 
 static int fg_generate(double t, int swap) {
@@ -12944,6 +13350,9 @@ static int fg_generate(double t, int swap) {
     FgList *a = &s_fg_l[s_fg_pa], *b = &s_fg_l[s_fg_pb];
     if (!a->valid || !b->valid || s_hiw) return 0;
     if (b->wide && (g_wide_w <= 0 || g_wide_w != b->wide_w)) return 0;
+    /* No visible artifact first: geometry the camera cannot place covers
+     * too much of the view, so this step shows the real frame. */
+    if (s_fg_reproject && s_fg_fit.ok && fg_unplaced_share(b) > fg_max_unplaced()) { s_fg_skip_unplaced++; return 0; }
     int iw = -1;
     if (b->wide) {
         for (int i = 0; i < WIDE_MAX_SURF; i++)
@@ -13671,7 +14080,7 @@ int gl_renderer_frame_gen_json(char *out, int cap) {
         "\"real_cpu_ms\":%.3f,\"real_gpu_ms\":%.3f,\"ceiling\":%d,"
         "\"trips_late\":%u,\"trips_backed_up\":%u,\"trips_behind\":%u,"
         "\"place_camera\":%u,\"place_object\":%u,\"place_neighbour\":%u,"
-        "\"place_unchanged\":%u,\"cam_angle_deg\":%.3f,\"cam_shift\":%.1f,"
+        "\"place_unchanged\":%u,\"skip_unplaced\":%llu,\"rp_older\":%llu,\"pz_scale\":%.4f,\"cam_angle_deg\":%.3f,\"cam_shift\":%.1f,"
         "\"clamped\":%u,\"guessed\":%u,\"verdict_ok\":%d,\"rejected\":%llu,\"reject_why\":\"%s\",\"noplan_why\":\"%s\",\"rp_ms\":[%.3f,%.3f,%.3f],\"rp_zn\":%u,\"reprojected\":%llu,\"reproject_fallback\":%llu,\"reproject\":%d,\"np\":[%llu,%llu,%llu,%llu],\"end_ahead\":%llu,\"end_bp\":%llu,\"end_phase\":%llu",
         s_fg_on, s_fg_on && s_rth_on && open, s_fg_force,
         (unsigned long long)s_fg_generated, (unsigned long long)s_fg_real_presents,
@@ -13692,6 +14101,7 @@ int gl_renderer_frame_gen_json(char *out, int cap) {
         s_fg_real_ema * 1e3, s_fg_real_gpu_ema * 1e3, fg_ceil()->cap,
         s_fg_trip_late, s_fg_trip_bp, s_fg_trip_behind,
         s_fg_fit.camera, s_fg_fit.object, s_fg_fit.neighbour, s_fg_fit.unchanged,
+        (unsigned long long)s_fg_skip_unplaced, (unsigned long long)s_rp_older_frames, (double)s_rp_pzs_last,
         2.0 * acos(fmin(1.0, fabs(s_fg_fit.v[0].q[0]))) * 57.29578,
         sqrt(s_fg_fit.v[0].t[0] * s_fg_fit.v[0].t[0] + s_fg_fit.v[0].t[1] * s_fg_fit.v[0].t[1] +
              s_fg_fit.v[0].t[2] * s_fg_fit.v[0].t[2]),

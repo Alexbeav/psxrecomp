@@ -136,7 +136,7 @@ uint32_t gl_renderer_stereo_unavailable(void);
 int gl_renderer_stereo_begin(int x, int y, int w, int h, int reuse_backup);
 int gl_renderer_stereo_end(uint32_t eye, int keep);
 void gl_renderer_stereo_stage_reset(void);
-int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t width,uint32_t height,uint8_t *rgba);
+int gl_renderer_stereo_stage_readback_pair(uint32_t width,uint32_t height,uint8_t *rgba);
 int gl_renderer_stereo_publish(uint64_t pair_id, uint64_t guest_cycle,
                                 const int32_t eye_view[2][3]);
 void gl_renderer_stereo_reset(void);
@@ -164,6 +164,9 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 /* Cumulative CPU-upload diagnostics: calls, rects, pixels, conversion ticks,
  * texture-upload ticks, FBO-draw ticks. Active only with PSX_RUNTIME_PERF_DIAG. */
 void gl_renderer_runtime_diag(uint64_t out[6]);
+/* Cumulative scene primitive counters (pre double-draw): all submitted, and of
+ * those textured. Callers take deltas; the counters are never reset here. */
+void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured);
 
 /* Present an ARGB8888 image (BGRA byte order) as a letterboxed quad + swap.
  * Used for 24-bit (FMV) frames and the PSX_GL_FORCE_CPU_PRESENT diagnostic.

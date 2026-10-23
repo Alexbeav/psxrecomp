@@ -1,3 +1,4 @@
+#include <cmath>
 #include "gte.h"
 #include "gte_view.h"
 #include "cpu_state.h"
@@ -33,8 +34,8 @@ namespace GTE {
 //
 // The real PS1 GTE does NOT compute an exact H*0x20000/SZ3. It uses an
 // Unsigned Newton-Raphson (UNR) reciprocal approximation driven by a 257-entry
-// seed table (documented in PSX-SPX "GTE Division Inaccuracy"; identical to the
-// mednafen/Beetle oracle in beetle-psx/mednafen/psx/gte.cpp). Exact division
+// seed table (documented in PSX-SPX geometrytransformationenginegte, "GTE Division
+// Inaccuracy"; the Beetle reference gives the same results). Exact division
 // diverges from hardware by +/-1 (occasionally up to a few units) on ~25% of
 // inputs, which is enough to flip games' distance/intensity threshold branches
 // (e.g. Ape Escape's additive-glow CLUT semi-transparency bit). This is the
@@ -766,6 +767,7 @@ static inline int gte_sxx(int32_t p){ int v=p&0xFFFF; return v>=0x8000? v-0x1000
 static inline int gte_syy(int32_t p){ int v=(p>>16)&0xFFFF; return v>=0x8000? v-0x10000:v; }
 
 static int32_t gte_h_scaled(const GTEState* gte);
+extern "C" int gpu_render_projective_enabled(void);
 static int32_t s_render_view[3];
 static PSXModRenderView s_render_pose;
 static bool s_render_rotate;
@@ -1080,7 +1082,7 @@ static int32_t gte_h_scaled(const GTEState* gte) {
 // ---------------------------------------------------------------------------
 // RTPS — Perspective Transformation (internal, operates on given vertex V)
 //
-// Matches DuckStation/Beetle (psx-spx):
+// PSX-SPX geometrytransformationenginegte, "COP2 0180001h - 15 Cycles - RTPS":
 //   MAC1/2/3 = (TR*1000h + RT*V) SAR (sf*12)
 //   IR1/IR2  = limB(MAC, lm)
 //   IR3 FLAG = limB(MAC3_unshifted SAR 12, lm=0); stored IR3 = limB(MAC3, lm)
@@ -1091,8 +1093,10 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     const bool lm    = gte_instr_lm(instr);
 
     // Step 1: Matrix multiplication + translation
+    const bool render_projective = s_render_pose.projection && gpu_render_projective_enabled();
+    const bool precise_render = render_projective && s_render_pose.precise;
     auto dot = [&](int row, int mac_num) {
-        int64_t acc = ((int64_t)gte->TR[row] + (s_render_rotate ? 0 : s_render_view[row])) * 4096 +
+        int64_t acc = ((int64_t)gte->TR[row] + ((s_render_rotate || precise_render) ? 0 : s_render_view[row])) * 4096 +
                       (int64_t)gte->RT[row][0] * V[0];
         acc = gte_mac44_stage(gte, acc, mac_num);
         acc += (int64_t)gte->RT[row][1] * V[1];
@@ -1102,6 +1106,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     int64_t mac1 = dot(0, 1);
     int64_t mac2 = dot(1, 2);
     int64_t mac3 = dot(2, 3);
+    const int64_t render_source[3] = {mac1, mac2, mac3};
     if (s_render_rotate) {
         const int64_t v[3] = {mac1, mac2, mac3};
         int64_t result[3];
@@ -1114,6 +1119,17 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         mac1 = result[0]; mac2 = result[1]; mac3 = result[2];
     }
 
+    if (precise_render) {
+        int64_t camera[3];
+        for (int row=0;row<3;++row) {
+            double acc = s_render_pose.translation_precise[row]*4096.0;
+            for (int col=0;col<3;++col)
+                acc += render_source[col]*s_render_pose.rotation[row*3+col];
+            camera[row] = (int64_t)std::llround(acc);
+        }
+        mac1=camera[0];mac2=camera[1];mac3=camera[2];
+    }
+
     // MAC1..3 overflow flags observe the unshifted 44-bit accumulator.
     gte->check_mac_overflow(mac1, 1);
     gte->check_mac_overflow(mac2, 2);
@@ -1124,7 +1140,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
 
     gte->IR1 = gte->saturate_ir(gte->MAC1, 1, lm);
     gte->IR2 = gte->saturate_ir(gte->MAC2, 2, lm);
-    // IR3 quirk (psx-spx / DuckStation): FLAG.22 from (mac3>>12) as if lm=0;
+    // IR3 quirk (PSX-SPX, RTPS note): FLAG.22 from (mac3>>12) as if lm=0;
     // stored IR3 clamps MAC3 with the real lm bit and does not touch FLAG again.
     (void)gte->saturate_ir(static_cast<int32_t>(mac3 >> 12), 3, false);
     {
@@ -1218,6 +1234,14 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
                    ((int64_t)gte->IR2 * s_render_pose.fy_q16 / gte->SZ[3]) * h / ref;
         }
     }
+    if (render_projective && mac3 >= 4096 && shift == 12 && !lm) {
+        const double scale = s_render_pose.projection_h_ref ?
+            (double)gte_h_scaled(gte) / s_render_pose.projection_h_ref : 1.0;
+        sx16 = (int64_t)gte->OFX + s_render_pose.cx_delta_q16 +
+            (int64_t)std::llround((double)mac1*s_render_pose.fx_q16/mac3*scale);
+        sy16 = (int64_t)gte->OFY + s_render_pose.cy_delta_q16 +
+            (int64_t)std::llround((double)mac2*s_render_pose.fy_q16/mac3*scale);
+    }
     /* RTPS/RTPT reuse MAC0's overflow flags for each projected X/Y
      * accumulator before MAC0 is replaced by the depth-cue result. */
     gte->check_mac0_overflow(sx16);
@@ -1232,6 +1256,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         int64_t cx16 = sx16 < -kLim ? -kLim : (sx16 > kLim - 1 ? kLim - 1 : sx16);
         int64_t cy16 = sy16 < -kLim ? -kLim : (sy16 > kLim - 1 ? kLim - 1 : sy16);
         int32_t px16 = (int32_t)cx16, py16 = (int32_t)cy16;
+        bool unclamped_projection = false;
         /* Preserve projection precision (G1.11): shadow the exact projection
          * instead when the vertex qualifies and it lies inside the GPU's
          * truncation-agreement window; outside it the IR path's shadow is
@@ -1241,15 +1266,18 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
          * passes), where the shadow would be dropped anyway. */
         if (!proj_override && pgxp_preserve_projection() && pgxp_active()) {
             int32_t ex16, ey16;
-            if (pgxp_project_precise(mac1, mac2, mac3, shift, gte->IR1, gte->IR2,
-                                     gte->SZ[3], gte_h_scaled(gte), gte->OFX, gte->OFY,
-                                     x_num, x_den, &ex16, &ey16) &&
-                pgxp_ppp_accept(ex16, ey16, (uint32_t)gte->SXY[2])) {
+            const int precise = pgxp_project_precise(mac1, mac2, mac3, shift,
+                                     gte->IR1, gte->IR2, gte->SZ[3], gte_h_scaled(gte),
+                                     gte->OFX, gte->OFY, x_num, x_den, &ex16, &ey16);
+            if (precise == 2 || (precise == 1 &&
+                pgxp_ppp_accept(ex16, ey16, (uint32_t)gte->SXY[2]))) {
+                unclamped_projection = precise == 2;
                 px16 = ex16;
                 py16 = ey16;
             }
         }
         pgxp_gte_push_sxy(px16, py16, gte->SZ[3], (uint32_t)gte->SXY[2]);
+        if (unclamped_projection) pgxp_gte_mark_unclamped((uint32_t)(mac3 >> 12));
         if (!proj_override && pgxp_projection_tracking() && shift == 12 && !lm) {
             const double z = (double)(mac3 >> 12);
             const double h_proj = (double)gte_h_scaled(gte);
@@ -1266,6 +1294,24 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         }
     }
     geom_note((uint32_t)gte->SXY[2], sx16, sy16);
+
+    /* A replay eye can see triangles crossing the camera plane. Preserve the
+     * signed, unsaturated projection alongside the architectural SXY word so
+     * the GPU clips in homogeneous space before perspective division. */
+    if (s_render_pose.projection && gpu_render_projective_enabled() &&
+        !s_gte_replay_sandbox && pgxp_projection_tracking() && shift == 12 && !lm) {
+        const double camera[3] = {mac1/4096.0, mac2/4096.0, mac3/4096.0};
+        const double z = camera[2];
+        const double scale = s_render_pose.projection_h_ref ?
+            (double)gte_h_scaled(gte) / s_render_pose.projection_h_ref : 1.0;
+        const double fx = s_render_pose.fx_q16 / 65536.0 * scale;
+        const double fy = s_render_pose.fy_q16 / 65536.0 * scale;
+        const double cx = (gte->OFX + (double)s_render_pose.cx_delta_q16) / 65536.0;
+        const double cy = (gte->OFY + (double)s_render_pose.cy_delta_q16) / 65536.0;
+        const PGXPProjection p = {(float)(cx*z + camera[0]*fx),
+            (float)(cy*z + camera[1]*fy), (float)z, 1.0f};
+        pgxp_gte_set_projection(&p);
+    }
 
     // Step 5: Depth cueing (MAC0/IR0) — only for last vertex of RTPT or RTPS
     if (setMac0) {
@@ -1502,6 +1548,21 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
                !s_gte_replay_sandbox && s_speculative_depth == 0) {
         s_nclip_fallbacks++;
     }
+    /* Screen-coordinate saturation can reverse winding at an eye's near
+     * plane. The signed homogeneous determinant keeps the true facing even
+     * when one or two corners lie behind the eye. Scope to the render pass. */
+    if (s_render_pose.projection && gpu_render_projective_enabled()) {
+        PGXPProjection p[3];
+        if (pgxp_get_gte_projection(0, gte->SXY[0], &p[0]) &&
+            pgxp_get_gte_projection(1, gte->SXY[1], &p[1]) &&
+            pgxp_get_gte_projection(2, gte->SXY[2], &p[2])) {
+            const double det = (double)p[0].x*((double)p[1].y*p[2].z-(double)p[2].y*p[1].z)
+                -(double)p[0].y*((double)p[1].x*p[2].z-(double)p[2].x*p[1].z)
+                +(double)p[0].z*((double)p[1].x*p[2].y-(double)p[2].x*p[1].y);
+            const int sign = (det > 0) - (det < 0);
+            if (sign && sign != ((out > 0) - (out < 0))) out = sign;
+        }
+    }
     gte->MAC0 = out;
     gte->set_error_flag();
 }
@@ -1509,7 +1570,7 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
 // ---------------------------------------------------------------------------
 // AVSZ3 (0x2D) — Average Z (3 points)
 // ---------------------------------------------------------------------------
-// Hardware (psx-spx / DuckStation): MAC0 keeps ZSF3*(SZ1+SZ2+SZ3); only OTZ
+// Hardware (PSX-SPX, "AVSZ3"): MAC0 keeps ZSF3*(SZ1+SZ2+SZ3); only OTZ
 // gets MAC0/1000h. CTR NdIntroWoodEmitHelper indexes the batch OT with
 // MAC0>>17 (== OTZ>>5). Shifting MAC0 here collapsed every face into slot 0
 // (arms/trophy/chest z-fight + missing banner under later same-bucket paint).
@@ -1736,8 +1797,10 @@ void gte_mvmva(GTEState* gte, uint32_t instr) {
         case 1: std::memcpy(M, gte->L, sizeof(M)); break;
         case 2: std::memcpy(M, gte->LC, sizeof(M)); break;
         default: {
-            /* Undocumented matrix selector wiring, verified by hardware
-             * register vectors (also used by Beetle/DuckStation). */
+            /* Matrix selector 3: PSX-SPX geometrytransformationenginegte,
+             * "MVMVA": "Setting Mx=3 selects a garbage matrix" (-R*10h,
+             * +R*10h, IR0, RT13 x3, RT22 x3), verified by hardware
+             * register vectors. */
             const int16_t color = static_cast<int16_t>(
                 static_cast<uint16_t>(gte->RGBC & 0xFFu) << 4);
             M[0][0] = static_cast<int16_t>(-color);

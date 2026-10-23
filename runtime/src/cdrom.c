@@ -1220,8 +1220,9 @@ static void xa_reset_decode(void) {
 }
 
 /* CD-audio volume matrix ([data_source][output_port], 0x80 = unity) applied
- * to every decoded XA/CD-DA sample, exactly as the CD controller does on
- * real hardware (Beetle PS_CDC::ApplyVolume, cdc.cpp:524). Written via the
+ * to every decoded XA/CD-DA sample, as the CD controller does on real
+ * hardware (PSX-SPX cdromdrive, the ATV0..ATV3 volume registers and
+ * ADPCTL). Written via the
  * index-2/3 register banks and latched by the "apply changes" bit; games
  * drive it CONSTANTLY — X5 fades music between scenes with it (measured
  * 0x7E steady, ramping to 0x00 at transitions on the Beetle oracle). Not
@@ -2902,8 +2903,9 @@ uint32_t cdrom_read(uint32_t addr) {
     case 0x1F801800: {
         uint8_t s = index_reg & 0x03;
         /* Bit 2 is ADPBUSY (XA-ADPCM playback in progress), NOT "ADPCM
-         * empty" — it must idle at 0. The oracle (beetle cdc.cpp, Read
-         * A==0) never raises it. Raising it permanently made every BIOS
+         * empty" — it must idle at 0 (PSX-SPX cdromdrive, HSTS: "ADPBUSY
+         * ADPCM busy (R, 1=playing XA-ADPCM)"; the Beetle reference never
+         * raises it either). Raising it permanently made every BIOS
          * status poll see "XA busy" and steered the kernel CD driver
          * init down a different branch from real hardware. */
         if (param_count == 0) s |= (1 << 3);
@@ -2981,9 +2983,9 @@ void cdrom_write(uint32_t addr, uint32_t value) {
         if (index_reg == 2) {
             cd_pending_vol[0][1] = val;   /* Left-CD -> Right-SPU */
         } else if (index_reg == 3) {
-            /* Apply-changes latch (bit 5) copies pending -> live, exactly
-             * like Beetle cdc.cpp case 0x0B. (ADPMute bit 0 is not modeled
-             * by the Beetle oracle either.) */
+            /* Apply-changes latch (bit 5) copies pending -> live (PSX-SPX
+             * cdromdrive, ADPCTL bit 5 CHNGATV). (ADPMUTE, bit 0, is not
+             * modeled; the Beetle reference does not model it either.) */
             if (val & 0x20) {
                 memcpy(cd_decode_vol, cd_pending_vol, sizeof(cd_decode_vol));
             }

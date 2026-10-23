@@ -8,7 +8,7 @@
  *
  *   - the store: masking to physical addresses, sort, de-duplication, lookups
  *     at both ends and between entries, the 256-entry cap and its log line,
- *     empty and negative-count lists, the clip-edge width default;
+ *     empty and negative-count lists, and explicit screen-X sites;
  *   - psx_ws_cull_bgez / psx_ws_clip_edge_x through a forced margin;
  *   - real interpreted instructions (exec_one_fetched) at margin 0 and at a
  *     forced margin: BGEZ and BLTZ sites, BNE and BLEZ branch-keep sites, and
@@ -248,6 +248,17 @@ static void test_store(void) {
           !psx_ws_is_cull_slti_site(0x80030008u), "slti_sites store");
     gpu_ws_set_explicit_cull_sites(NULL, 0, NULL, 0, NULL, 0);
 
+    const uint32_t screen_x[] = { 0x80030020u, 0x00030010u, 0x80030020u };
+    gpu_ws_set_cull_screen_x_sites(screen_x, 3);
+    CHECK(ws_explicit_screen_x_n == 2, "screen_x_sites de-duplicated");
+    CHECK(psx_ws_is_cull_screen_x_site(0xA0030020u) &&
+          psx_ws_is_cull_screen_x_site(0x80030010u) &&
+          !psx_ws_is_cull_screen_x_site(0x80030018u),
+          "screen_x_sites uses physical addresses and exact lookup");
+    gpu_ws_set_cull_screen_x_sites(NULL, 0);
+    CHECK(!psx_ws_is_cull_screen_x_site(0x80030020u),
+          "empty screen_x_sites clears prior entries");
+
     /* Cap: exactly 256 is silent and complete. */
     for (int i = 0; i < 300; i++)
         big_list[i] = 0x80040000u + 4u * (uint32_t)(299 - i); /* descending */
@@ -319,6 +330,11 @@ static void test_interpreter(void) {
     const uint32_t blez_site = CODE + 0x030, blez_plain = CODE + 0x130;
     const uint32_t lh_site   = CODE + 0x040, lh_plain   = CODE + 0x140;
     const uint32_t lhu_site  = CODE + 0x050, lw_site    = CODE + 0x060;
+    const uint32_t sltiu_x_site = CODE + 0x070;
+    const uint32_t lui_x_site = CODE + 0x080;
+    const uint32_t bltz_x_site = CODE + 0x090;
+    const uint32_t sltiu_x_plain = CODE + 0x170;
+    const uint32_t sltu_x_site = CODE + 0x0A0, sltu_x_plain = CODE + 0x1A0;
 
     const uint32_t bgez = i_type(0x01, V0, 0x01, 3);  /* bgez v0,+3 */
     const uint32_t bltz = i_type(0x01, V0, 0x00, 3);  /* bltz v0,+3 */
@@ -327,16 +343,58 @@ static void test_interpreter(void) {
     const uint32_t lh   = i_type(0x21, A0, V0, 0x70); /* lh   v0,0x70(a0) */
     const uint32_t lhu  = i_type(0x25, A0, V0, 0x70); /* lhu  v0,0x70(a0) */
     const uint32_t lw   = i_type(0x23, A0, V0, 0x70); /* lw   v0,0x70(a0) */
+    const uint32_t sltiu_x = i_type(0x0B, V1, V0, 0x200);
+    const uint32_t lui_x = i_type(0x0F, 0, V1, 0x200);
+    const uint32_t sltu_x = (V1 << 21) | (A0 << 16) | (V0 << 11) | 0x2Bu; /* sltu v0,v1,a0 */
 
     const uint32_t bltz_l[] = { bltz_site }, bgez_l[] = { bgez_site };
     const uint32_t keep_l[] = { bne_site, blez_site };
     const uint32_t clip_l[] = { lh_site, lhu_site, lw_site };
+    const uint32_t screen_x_l[] = { sltiu_x_site, lui_x_site, bltz_x_site, sltu_x_site };
     gpu_ws_set_branch_cull_sites(bltz_l, 1, bgez_l, 1, keep_l, 2);
     gpu_ws_set_clip_edge_x_load_sites(clip_l, 3, 320);
+    gpu_ws_set_cull_screen_x_sites(screen_x_l, 4);
 
     for (int pass = 0; pass < 2; pass++) {
         const int m = pass ? 53 : 0;
         gpu_ws_set_margin_override(m);
+
+        cpu.gpr[V1] = (uint32_t)-53;
+        CHECK(load(&cpu, sltiu_x_site, sltiu_x) == (m > 0 ? 1u : 0u),
+              "explicit screen-X sltiu left margin, m=%d", m);
+        cpu.gpr[V1] = 564;
+        CHECK(load(&cpu, sltiu_x_site, sltiu_x) == (m > 0 ? 1u : 0u),
+              "explicit screen-X sltiu right edge, m=%d", m);
+        cpu.gpr[V1] = 565;
+        CHECK(load(&cpu, sltiu_x_site, sltiu_x) == 0u,
+              "explicit screen-X sltiu right margin, m=%d", m);
+        cpu.gpr[V1] = (uint32_t)-53;
+        CHECK(load(&cpu, sltiu_x_plain, sltiu_x) == 0u,
+              "unlisted screen-X sltiu remains vanilla, m=%d", m);
+
+        cpu.gpr[A0] = 320;
+        cpu.gpr[V1] = (uint32_t)-100;
+        (void)step(&cpu, sltu_x_site, sltu_x);
+        CHECK(cpu.gpr[V0] == (m > 0 ? 1u : 0u),
+              "explicit screen-X sltu left band, m=%d", m);
+        cpu.gpr[V1] = (uint32_t)-300;
+        (void)step(&cpu, sltu_x_site, sltu_x);
+        CHECK(cpu.gpr[V0] == 0u, "explicit screen-X sltu past left reach, m=%d", m);
+        cpu.gpr[V1] = (uint32_t)-100;
+        (void)step(&cpu, sltu_x_plain, sltu_x);
+        CHECK(cpu.gpr[V0] == 0u, "unlisted sltu remains vanilla, m=%d", m);
+
+        cpu.gpr[V1] = 0;
+        (void)step(&cpu, lui_x_site, lui_x);
+        CHECK(cpu.gpr[V1] == (uint32_t)(0x200 + m) << 16,
+              "explicit screen-X lui bound, m=%d", m);
+
+        cpu.gpr[V0] = (uint32_t)-10 << 16;
+        CHECK(branch_taken(&cpu, bltz_x_site, bltz) == (m == 0),
+              "explicit screen-X high-half bltz at -10, m=%d", m);
+        cpu.gpr[V0] = (uint32_t)-54 << 16;
+        CHECK(branch_taken(&cpu, bltz_x_site, bltz) == 1,
+              "explicit screen-X high-half bltz at -54, m=%d", m);
 
         /* bgez: x0 = -10 sits in the revealed band when m = 53. */
         cpu.gpr[V0] = (uint32_t)-10;
@@ -403,6 +461,74 @@ static void test_interpreter(void) {
     gpu_ws_set_margin_override(-1);
     gpu_ws_set_branch_cull_sites(NULL, 0, NULL, 0, NULL, 0);
     gpu_ws_set_clip_edge_x_load_sites(NULL, 0, 0);
+    gpu_ws_set_cull_screen_x_sites(NULL, 0);
+}
+
+/* A site listed in screen_x_sites and in another explicit list: the code
+ * generator returns for the other list first, so the interpreter must too. */
+static void test_screen_x_precedence(void) {
+    CPUState cpu;
+    memset(&cpu, 0, sizeof cpu);
+    memset(test_ram, 0, sizeof test_ram);
+
+    const uint32_t sltu_keep = CODE + 0x200, sltu_scale = CODE + 0x210;
+    const uint32_t sltu_only = CODE + 0x220, lui_signed = CODE + 0x230;
+    const uint32_t lui_only = CODE + 0x240;
+    const uint32_t sltu = (V1 << 21) | (A0 << 16) | (V0 << 11) | 0x2Bu; /* sltu v0,v1,a0 */
+    const uint32_t lui = i_type(0x0F, 0, V1, 0x200);
+
+    const uint32_t screen_x[] = { sltu_keep, sltu_scale, sltu_only,
+                                  lui_signed, lui_only };
+    const uint32_t keep_a[] = { sltu_keep }, keep_e[] = { sltu },
+                   keep_r[] = { 0 };
+    const uint32_t scale_a[] = { sltu_scale }, scale_e[] = { sltu },
+                   scale_o[] = { 1 }, scale_h[] = { 160 };
+    const uint32_t sb_a[] = { lui_signed }, sb_e[] = { lui };
+    gpu_ws_set_cull_screen_x_sites(screen_x, 5);
+    gpu_ws_set_cull_keep_sites(keep_a, keep_e, keep_r, 1);
+    gpu_ws_set_cull_scale_sites(scale_a, scale_e, scale_o, scale_h, 1);
+    gpu_ws_set_signed_x_bound_sites(sb_a, sb_e, 1);
+
+    for (int pass = 0; pass < 2; pass++) {
+        const int m = pass ? 53 : 0;
+        gpu_ws_set_margin_override(m);
+
+        /* -100 < 320 as unsigned is false; the band would accept it at m=53. */
+        cpu.gpr[V1] = (uint32_t)-100;
+        cpu.gpr[A0] = 320;
+        (void)step(&cpu, sltu_only, sltu);
+        CHECK(cpu.gpr[V0] == (m > 0 ? 1u : 0u),
+              "screen_x sltu alone uses the band, m=%d", m);
+
+        /* keep site (forced 0 while widened) beats the band */
+        cpu.gpr[V0] = 7;
+        (void)step(&cpu, sltu_keep, sltu);
+        CHECK(cpu.gpr[V0] == 0u, "keep site beats screen_x sltu, m=%d", m);
+
+        /* scale site beats the band: 0xFFFFFF9C < scaled(320) is false */
+        cpu.gpr[V0] = 7;
+        (void)step(&cpu, sltu_scale, sltu);
+        CHECK(cpu.gpr[V0] == 0u, "scale site beats screen_x sltu, m=%d", m);
+
+        /* signed_x_bound beats the screen_x lui edge */
+        cpu.gpr[V1] = 0;
+        (void)step(&cpu, lui_signed, lui);
+        CHECK(cpu.gpr[V1] == (uint32_t)psx_ws_player_x_bound((int32_t)(0x200u << 16)),
+              "signed_x_bound beats screen_x lui, m=%d", m);
+        CHECK(m == 0 || cpu.gpr[V1] != (uint32_t)(0x200 + m) << 16,
+              "signed_x_bound and screen_x lui differ while widened, m=%d", m);
+        cpu.gpr[V1] = 0;
+        (void)step(&cpu, lui_only, lui);
+        CHECK(cpu.gpr[V1] == (uint32_t)(0x200 + m) << 16,
+              "screen_x lui alone, m=%d", m);
+    }
+
+
+    gpu_ws_set_margin_override(-1);
+    gpu_ws_set_cull_screen_x_sites(NULL, 0);
+    gpu_ws_set_cull_keep_sites(NULL, NULL, NULL, 0);
+    gpu_ws_set_cull_scale_sites(NULL, NULL, NULL, NULL, 0);
+    gpu_ws_set_signed_x_bound_sites(NULL, NULL, 0);
 }
 
 static void test_masked_reject(void) {
@@ -473,6 +599,7 @@ int main(int argc, char **argv) {
     test_store();
     test_helpers();
     test_interpreter();
+    test_screen_x_precedence();
     test_masked_reject();
     test_wide_nclip_branches();
     if (failures) {

@@ -19,6 +19,7 @@
 #include "render_pass.h"
 
 #include <setjmp.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,8 +27,10 @@
 #include "cpu_state.h"
 #include "dirty_ram_interp.h"
 #include "dma.h"
+#include "frame_trace.h"
 #include "gpu.h"
 #include "gpu_gl_renderer.h"
+#include "host_time.h"
 #include "mod_plugins.h"
 #include "mod_runtime.h"
 #include "interrupts.h"
@@ -36,6 +39,10 @@
 #include "timers.h"
 #include "psx_video_timing.h"
 #include "gte_view.h"
+#include "stereo_shed_policy.h"
+
+extern int gpu_render_projective_begin(void);
+extern void gpu_render_projective_end(void);
 
 extern uint8_t *memory_get_ram_ptr(void);
 extern uint8_t *memory_get_scratchpad_ptr(void);
@@ -281,7 +288,36 @@ static RenderPassFailure s_attempt;
 static const char *s_checkpoint_failure;
 static RenderStereoStats s_stereo;
 static int s_pair_busy;
-static uint32_t s_pair_retry;
+/* Whole-pair shedding/recovery policy (bounded in time and count; see
+ * stereo_shed_policy.c). Replaces the old attempt counter, which could suppress
+ * many pairs after a single over-budget frame. */
+static StereoShedPolicy s_shed;
+/* Headset deadline pushed by the OpenXR layer (target display period, ms).
+ * 0 = no headset: fall back to the guest-VBlank redraw budget. */
+static double s_shed_xr_budget_ms;
+static uint32_t s_shed_period;
+/* Pair-scoped baseline (PR3). Both eyes of a stereo pair render from the same
+ * guest checkpoint: eye L captures it and the restore that ends eye L puts the
+ * live machine back to exactly that captured state, so eye R can reuse the
+ * capture instead of copying the whole live RAM a second time. Guards:
+ *   - only stereo eyes inside one pair reuse it (s_baseline_ready is cleared by
+ *     any non-stereo transaction and at the start of every pair);
+ *   - a verify mismatch while reusing it retires the optimization for the
+ *     session, falling back to a capture per eye (PSX_STEREO_BASELINE=0 does
+ *     the same up front). */
+static int s_baseline_ready;        /* live machine == captured baseline */
+static int s_baseline_enabled = -1; /* PSX_STEREO_BASELINE; -1 = not read yet */
+static int32_t s_shed_w, s_shed_h;
+static int s_shed_geom_valid;
+/* A HUD-only capture transaction reuses eye 0's slot but is not an eye draw;
+ * frame tracing must not attribute its cost to the left eye. */
+static int s_capture_only;
+/* The two transactions of one HUD capture call are a pair of their own: the
+ * second matte draws from exactly the state the restore that ended the first
+ * one put back, so it may reuse the first one's checkpoint the way a pair's
+ * right eye reuses the left's. Scoped to the capture call, so the reuse never
+ * reaches the pair that renders later in the same frame. */
+static int s_capture_pair;
 
 static int pass_refuse(const char *reason, uint32_t status) {
     /* A refusal always carries a reason: last_failure.reason == NULL means
@@ -317,6 +353,43 @@ static int verify_on(void) {
     return s_verify;
 }
 
+/* PSX_STEREO_SHED_BUDGET_MS, when set, replaces the guest-VBlank-derived budget
+ * with a real headset deadline (e.g. 11.1 at 90 Hz, 8.3 at 120 Hz). The VBlank
+ * cadence is only a fallback: it is a guest redraw budget, not an OpenXR
+ * display deadline, and conflating the two is wrong on every non-60 Hz headset.
+ * Returns 0 when unset so the caller derives the fallback. */
+static double shed_budget_override_ms(void) {
+    static double v = -1.0;
+    if (v < 0.0) {
+        const char *e = getenv("PSX_STEREO_SHED_BUDGET_MS");
+        double d = e ? atof(e) : 0.0;
+        v = (d > 0.0 && d < 1000.0) ? d : 0.0;
+    }
+    return v;
+}
+
+/* The pair budget actually used, in priority order: the explicit env override,
+ * the headset display deadline the OpenXR layer pushed, then the guest-VBlank
+ * redraw budget as a last resort. */
+static double shed_budget_ms(uint32_t period_vblanks, uint32_t *source) {
+    double ov = shed_budget_override_ms();
+    if (ov > 0.0) { if (source) *source = 2; return ov; }
+    if (s_shed_xr_budget_ms > 0.0) { if (source) *source = 1; return s_shed_xr_budget_ms; }
+    if (source) *source = 0;
+    return period_vblanks * (double)g_psx_vblank_cycles / 33868.8 * 0.8;
+}
+
+/* Pair-scoped checkpoint reuse is on by default; PSX_STEREO_BASELINE=0 forces a
+ * machine capture per eye (the pre-PR3 behavior) so the two can be compared, and
+ * a restore-verify mismatch turns it off for the rest of the session. */
+static int baseline_reuse_enabled(void) {
+    if (s_baseline_enabled < 0) {
+        const char *e = getenv("PSX_STEREO_BASELINE");
+        s_baseline_enabled = (e && e[0] == '0') ? 0 : 1;
+    }
+    return s_baseline_enabled;
+}
+
 void render_pass_get_stats(RenderPassStats *out) {
     if (!out) return;
     *out = s_stats;
@@ -327,6 +400,7 @@ void render_pass_get_stats(RenderPassStats *out) {
 int render_pass_verification_enabled(void) { return verify_on(); }
 
 void render_pass_reset_session(void) {
+    psx_mod_set_render_projective(0);
     s_netplay_allowed = 0;
     memset(&s_stats, 0, sizeof s_stats);
     memset(g_render_pass_dropped_writes, 0, sizeof g_render_pass_dropped_writes);
@@ -337,7 +411,20 @@ void render_pass_reset_session(void) {
     memset(&s_stereo, 0, sizeof s_stereo);
     s_stereo.last_eye = -1;
     s_pair_busy = 0;
-    s_pair_retry = 0;
+    /* Shedding policy: defaults, then env overrides (PSX_STEREO_SHED=0 gives the
+     * baseline diagnostic with shedding fully disabled). */
+    stereo_shed_policy_init(&s_shed);
+    stereo_shed_policy_configure_from_env(&s_shed);
+    stereo_shed_policy_reset(&s_shed);
+    s_shed_geom_valid = 0;
+    /* Pair-scoped baseline: re-read the env and start uncaptured. */
+    s_baseline_ready = 0;
+    s_baseline_enabled = -1;
+    /* Frame tracing is opt-in per session: re-read the env, install the host
+     * clock, and clear any previous session's records. */
+    psx_frame_trace_configure_from_env();
+    psx_frame_trace_set_clock(psx_host_mono_ms);
+    psx_frame_trace_reset();
     gl_renderer_stereo_reset();
     gl_renderer_pass_set_flip_shown(0);
 }
@@ -393,6 +480,14 @@ void render_stereo_get_stats(RenderStereoStats *out) { if (out) *out = s_stereo;
 int psx_mod_set_stereo_presentation(uint32_t mode) {
     return mode <= 1u ? gl_renderer_stereo_set_presentation(mode) : 0;
 }
+
+/* Game-side annotation for the frame trace (mod_plugins.h): a title hook marks
+ * a scene/state transition on the record the runtime opened for this frame. A
+ * no-op when tracing is off or no record is open. */
+void psx_mod_frame_trace_note(const char *tag) {
+    psx_frame_trace_note(tag);
+    psx_frame_trace_flag(PSX_FRAME_TRACE_SCENE_TRANSITION);
+}
 int psx_mod_render_view_offset(int32_t x, int32_t y, int32_t z) {
     int32_t xyz[3] = {x, y, z};
     if (!g_psx_render_pass_active) return 0;
@@ -403,13 +498,19 @@ int psx_mod_render_view_offset(int32_t x, int32_t y, int32_t z) {
 
 int psx_mod_render_view(const PSXModRenderView *view) {
     if (!g_psx_render_pass_active || !view || view->struct_size < sizeof *view ||
-        view->projection > 1u || view->projection_h_ref > 65535u) return 0;
+        view->projection > 1u || view->precise > 1u || view->projection_h_ref > 65535u) return 0;
     /* Bound products well inside int64. Rigid matrices are supplied by caller. */
     for (int i = 0; i < 9; ++i)
         if (view->rotation_q12[i] < -4096 || view->rotation_q12[i] > 4096) return 0;
     for (int i = 0; i < 3; ++i)
         if (view->translation[i] < -65536 || view->translation[i] > 65536) return 0;
     if (view->projection && (view->fx_q16 <= 0 || view->fy_q16 <= 0)) return 0;
+    if (view->precise) {
+        for (int i=0;i<9;++i)
+            if (!isfinite(view->rotation[i]) || fabs(view->rotation[i])>1.001) return 0;
+        for (int i=0;i<3;++i)
+            if (!isfinite(view->translation_precise[i]) || fabs(view->translation_precise[i])>65536) return 0;
+    }
     gte_render_pose_set(view);
     return 1;
 }
@@ -531,46 +632,58 @@ static uint64_t state_hash(const CPUState *cpu) {
     return h;
 }
 
-static int checkpoint_save(const CPUState *cpu) {
+/* `reuse` skips the bulk capture (RAM, scratchpad, icache, DMA, CPU, timers)
+ * when a previous eye of the same pair already captured this exact machine
+ * state. The per-eye arms are never skipped: the GPU transaction snapshot and
+ * gte_precision_checkpoint_begin() bound the pass and end with the restore. */
+static int checkpoint_save(const CPUState *cpu, int reuse) {
     uint32_t dma_len = dma_snapshot_bytes();
     /* The whole live RAM: a pass's stores fold through the same geometry
      * (render_pass_store_to), so every byte one can reach is in here. */
     uint32_t ram_bytes = memory_get_ram_bytes();
     s_checkpoint_failure = NULL;
-    if (s_ram_copy_cap < ram_bytes) {
-        uint8_t *p = (uint8_t *)realloc(s_ram_copy, ram_bytes);
-        if (!p) { s_checkpoint_failure = "checkpoint_ram"; return 0; }
-        s_ram_copy = p;
-        s_ram_copy_cap = ram_bytes;
-    }
-    if (!s_dma_copy) {
-        s_dma_copy = (uint8_t *)malloc(dma_len);
-        if (!s_dma_copy) { s_checkpoint_failure = "checkpoint_dma"; return 0; }
+    /* A reused baseline must own its buffers and describe this machine (RAM
+     * and DMA geometry cannot change inside a session). */
+    int can_reuse = reuse && s_ram_copy && s_dma_copy &&
+                    s_ck.ram_bytes == ram_bytes && s_ck.dma_len == dma_len;
+    if (!can_reuse) {
+        if (s_ram_copy_cap < ram_bytes) {
+            uint8_t *p = (uint8_t *)realloc(s_ram_copy, ram_bytes);
+            if (!p) { s_checkpoint_failure = "checkpoint_ram"; return 0; }
+            s_ram_copy = p;
+            s_ram_copy_cap = ram_bytes;
+        }
+        if (!s_dma_copy) {
+            s_dma_copy = (uint8_t *)malloc(dma_len);
+            if (!s_dma_copy) { s_checkpoint_failure = "checkpoint_dma"; return 0; }
+        }
     }
     if (!gpu_pass_checkpoint_save()) {
         s_checkpoint_failure = "checkpoint_gpu";
         return 0;
     }
-    s_ck.cpu = *cpu;
-    s_ck.ram_bytes = ram_bytes;
-    memcpy(s_ram_copy, memory_get_ram_ptr(), ram_bytes);
-    memcpy(s_ck.spad, memory_get_scratchpad_ptr(), RP_SPAD_SIZE);
-    memcpy(s_ck.icache, g_psx_icache_tv, sizeof s_ck.icache);
-    s_ck.i_stat = i_stat;
-    s_ck.i_mask = i_mask;
-    s_ck.csv = interrupts_get_cycles_since_vblank();
-    timers_get_snapshot(s_ck.t_counter, s_ck.t_mode, s_ck.t_target,
-                        s_ck.t_irq, s_ck.t_frac);
-    s_ck.dma_len = dma_len;
-    dma_snapshot_write(s_dma_copy);
-    s_ck.store_count = g_guest_store_count;
-    s_ck.mmio_count = g_mmio_access_count;
-    s_ck.last_store_pc = g_debug_last_store_pc;
-    s_ck.current_func = g_debug_current_func_addr;
-    s_ck.dispatch_depth = g_psx_dispatch_depth;
-    s_ck.call_bail = g_psx_call_bail;
-    memset(&s_ck.nest, 0, sizeof s_ck.nest);
-    nesting_save(&s_ck.nest);
+    if (!can_reuse) {
+        s_ck.cpu = *cpu;
+        s_ck.ram_bytes = ram_bytes;
+        memcpy(s_ram_copy, memory_get_ram_ptr(), ram_bytes);
+        memcpy(s_ck.spad, memory_get_scratchpad_ptr(), RP_SPAD_SIZE);
+        memcpy(s_ck.icache, g_psx_icache_tv, sizeof s_ck.icache);
+        s_ck.i_stat = i_stat;
+        s_ck.i_mask = i_mask;
+        s_ck.csv = interrupts_get_cycles_since_vblank();
+        timers_get_snapshot(s_ck.t_counter, s_ck.t_mode, s_ck.t_target,
+                            s_ck.t_irq, s_ck.t_frac);
+        s_ck.dma_len = dma_len;
+        dma_snapshot_write(s_dma_copy);
+        s_ck.store_count = g_guest_store_count;
+        s_ck.mmio_count = g_mmio_access_count;
+        s_ck.last_store_pc = g_debug_last_store_pc;
+        s_ck.current_func = g_debug_current_func_addr;
+        s_ck.dispatch_depth = g_psx_dispatch_depth;
+        s_ck.call_bail = g_psx_call_bail;
+        memset(&s_ck.nest, 0, sizeof s_ck.nest);
+        nesting_save(&s_ck.nest);
+    }
     gte_precision_checkpoint_begin();
     return 1;
 }
@@ -603,6 +716,51 @@ static double s_ms_per_tick = 0.0;
 static double ema_ms(double cur, uint64_t ticks) {
     double ms = (double)ticks * s_ms_per_tick;
     return cur > 0.0 ? cur * 0.9 + ms * 0.1 : ms;
+}
+
+/* Ticks -> microseconds for frame_trace. CPU submission time only: it is not
+ * GPU execution time. */
+static double s_us_per_tick = 0.0;
+static uint64_t trace_ticks_to_us(uint64_t ticks) {
+    if (s_us_per_tick == 0.0) {
+        double f = (double)gl_renderer_perf_frequency();
+        s_us_per_tick = f > 0.0 ? 1000000.0 / f : 1.0;
+    }
+    return (uint64_t)((double)ticks * s_us_per_tick);
+}
+
+/* ---- guest sub-stage spans (mod_plugins.h) ------------------------------
+ * The game hook brackets the guest calls it replays once per eye, and the
+ * runtime times them with its own tick clock, exactly as the eye stages are
+ * timed, so the parts sum against eye_guest. Accepted only inside a traced
+ * stereo eye (s_sub_eye): a HUD capture's guest draws and the flat path report
+ * their own stages and must not write these slots. */
+static int      s_sub_eye = -1;    /* traced eye accepting spans, -1 = none */
+/* One start tick per stage rather than one open span at a time, so a stage can
+ * be bracketed inside another: the hook's visibility override runs inside the
+ * guest traversal it is part of. The outer span keeps its own wall time, so a
+ * nested stage is a subset of it rather than a sibling. */
+static int      s_sub_open[PSX_TRACE_STAGE_COUNT];
+static uint64_t s_sub_ticks[PSX_TRACE_STAGE_COUNT];
+
+/* No span survives an eye boundary, so an eye aborted mid-entry cannot carry a
+ * start tick into the next one. */
+static void sub_spans_forget(void) {
+    memset(s_sub_open, 0, sizeof s_sub_open);
+}
+
+void psx_mod_frame_trace_stage_begin(uint32_t stage) {
+    if (s_sub_eye < 0 || stage >= PSX_TRACE_STAGE_COUNT) return;
+    s_sub_open[stage] = 1;          /* an unpaired begin restarts that span */
+    s_sub_ticks[stage] = gl_renderer_perf_ticks();
+}
+
+void psx_mod_frame_trace_stage_end(uint32_t stage) {
+    if (s_sub_eye < 0 || stage >= PSX_TRACE_STAGE_COUNT) return;
+    if (!s_sub_open[stage]) return; /* an end with no begin records nothing */
+    uint64_t now = gl_renderer_perf_ticks();
+    psx_frame_trace_add(stage, trace_ticks_to_us(now - s_sub_ticks[stage]));
+    s_sub_open[stage] = 0;
 }
 
 static void watchdog_overrun(void) {
@@ -692,6 +850,10 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_attempt.attempt = ++s_stats.pass_attempts;
     s_attempt.plan = s_plan_serial;
     s_attempt.guest_cycle = psx_cycle_count;
+    /* No guest sub-stage span may survive into this transaction: the eye that
+     * accepts them is decided below, once the trace decision is known. */
+    s_sub_eye = -1;
+    sub_spans_forget();
     if (pass) {
         s_attempt.struct_size = pass->struct_size;
         if (pass->struct_size >= sizeof *pass) {
@@ -726,6 +888,16 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         if (inv == 0.0) inv = 1000.0 / (double)gl_renderer_perf_frequency();
         s_ms_per_tick = inv;
     }
+    /* Per-eye trace sampling (opt-in): primitive counts and upload pixels are
+     * cumulative, so the eye's cost is the delta across its transaction. */
+    int trace_on = eye >= 0 && !s_capture_only && psx_frame_trace_enabled();
+    uint64_t trace_prims0 = 0, trace_tex0 = 0, trace_diag0[6] = {0,0,0,0,0,0};
+    if (trace_on) {
+        gl_renderer_scene_prim_counts(&trace_prims0, &trace_tex0);
+        gl_renderer_runtime_diag(trace_diag0);
+    }
+    /* This eye, and only this eye, accepts the hook's guest sub-stage spans. */
+    s_sub_eye = trace_on ? (int)eye : -1;
     reuse = !open && eye != RP_EYE_LOCAL && s_restored_valid &&
             s_restored_plan == s_plan_serial &&
             s_restored_cycle == psx_cycle_count &&
@@ -745,7 +917,11 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_open_generation = 0;
     s_leaks_before = gl_renderer_pass_leaks();
 
-    if (!checkpoint_save(cpu)) {
+    /* A stereo eye, or the second matte of a capture, whose machine state still
+     * equals the baseline captured for it skips re-capturing that state. */
+    int reuse_baseline = eye >= 0 && s_baseline_ready && baseline_reuse_enabled() &&
+                         (!s_capture_only || s_capture_pair);
+    if (!checkpoint_save(cpu, reuse_baseline)) {
         gl_renderer_pass_begin_diag(&s_attempt.gl);
         s_stats.checkpoint_refused++;
         /* Capture the rejection status before rolling the GL transaction back. */
@@ -753,6 +929,15 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         transaction_end(eye, 0, 0);
         return pass_refuse(s_checkpoint_failure ? s_checkpoint_failure : "checkpoint", status);
     }
+    if (eye >= 0 && !s_capture_only && !gpu_render_projective_begin()) {
+        gl_renderer_pass_begin_diag(&s_attempt.gl);
+        status = transaction_status(transaction_kind(eye));
+        transaction_end(eye, 0, 0);
+        checkpoint_restore(cpu);
+        return pass_refuse("projective_pgxp", status);
+    }
+    if (reuse_baseline) s_stereo.checkpoint_reuses++;
+    else { s_stereo.checkpoint_saves++; s_stereo.checkpoint_ram_bytes += s_ck.ram_bytes; }
     if (verify_on()) hash_before = state_hash(cpu);
 
     tb = gl_renderer_perf_ticks();
@@ -794,7 +979,13 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
                  "%s", s_abort_detail);
         ok = 0;
     }
-    s_stats.guest_cycles_last = psx_cycle_count - cycles_before;
+    /* Any span still open here was never ended by the hook, or the eye aborted
+     * mid-entry through the longjmp above. Drop them instead of closing them:
+     * the elapsed time is then not charged to an entry that never finished, and
+     * it shows up as the difference between eye_guest and the guest sub-stages. */
+    sub_spans_forget();
+    uint64_t guest_cycles = psx_cycle_count - cycles_before;
+    s_stats.guest_cycles_last = guest_cycles;
     if (eye >= 0) gte_render_view_get(s_stereo.eye_view[eye]);
     tg = gl_renderer_perf_ticks();
     s_pass_cpu = NULL;
@@ -812,6 +1003,7 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     }
     te = gl_renderer_perf_ticks();
     local_scope_set(0);
+    gpu_render_projective_end();
     checkpoint_restore(cpu);
     psx_cycle_freeze_end(&s_freeze);
     s_nesting = 0;
@@ -827,12 +1019,43 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     s_stats.avg_end_ms = ema_ms(s_stats.avg_end_ms, te - tg);
     s_stats.avg_restore_ms = ema_ms(s_stats.avg_restore_ms, tr - te);
 
+    if (trace_on) {
+        uint32_t base = eye == PSX_MOD_EYE_LEFT ? PSX_TRACE_EYE_BEGIN_L
+                                                : PSX_TRACE_EYE_BEGIN_R;
+        psx_frame_trace_add(base + 0, trace_ticks_to_us(tb - t0));
+        psx_frame_trace_add(base + 1, trace_ticks_to_us(tg - tb));
+        psx_frame_trace_add(base + 2, trace_ticks_to_us(te - tg));
+        psx_frame_trace_add(base + 3, trace_ticks_to_us(tr - te));
+        uint64_t p1 = 0, t1x = 0, diag1[6] = {0,0,0,0,0,0};
+        gl_renderer_scene_prim_counts(&p1, &t1x);
+        gl_renderer_runtime_diag(diag1);
+        psx_frame_trace_draw(eye, (uint32_t)(p1 - trace_prims0),
+                             (uint32_t)(t1x - trace_tex0));
+        psx_frame_trace_eye_cycles(eye, (uint32_t)guest_cycles);
+        /* Upload pixels -> bytes assumes the 16-bit VRAM format uploads use. */
+        psx_frame_trace_gpu((diag1[2] - trace_diag0[2]) * 2u,
+                            (uint32_t)leaks);
+        s_sub_eye = -1;
+        sub_spans_forget();
+        if (reuse_baseline) psx_frame_trace_flag(PSX_FRAME_TRACE_BASELINE_REUSED);
+    }
+
+    int verify_ok = 1;
     if (verify_on()) {
         hash_after = state_hash(cpu);
         s_stats.verify_checks++;
         if (hash_after != hash_before || !gl_renderer_pass_verify_vram()) {
+            verify_ok = 0;
             s_stats.verify_mismatch++;
             if (eye >= 0) { ok = 0; s_stereo.last_failure = "restore_verify"; }
+            /* A mismatch while the eye rendered from the pair's shared baseline
+             * is exactly what this guard is for: retire the reuse for the
+             * session and capture per eye again from here on. */
+            if (reuse_baseline && baseline_reuse_enabled()) {
+                s_baseline_enabled = 0;
+                fprintf(stderr, "psxrecomp: pair baseline reuse disabled after "
+                                "a restore-verify mismatch\n");
+            }
             if (s_stats.verify_mismatch <= 8)
                 fprintf(stderr, "psxrecomp: RENDER PASS VERIFY mismatch "
                         "(state %016llx -> %016llx)\n",
@@ -840,6 +1063,13 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
                         (unsigned long long)hash_after);
         }
     }
+    /* The restore just put the live machine back to the captured baseline, so
+     * the other eye of this pair, or the other matte of this capture, may reuse
+     * it. Anything else - a non-stereo transaction, a capture that is not part
+     * of a matte pair, a failed eye or an unverified restore - leaves nothing
+     * safe to reuse. */
+    s_baseline_ready = (eye >= 0 && ok && verify_ok &&
+                        (!s_capture_only || s_capture_pair)) ? 1 : 0;
 
     t1 = gl_renderer_perf_ticks();
     {
@@ -920,12 +1150,61 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     if (status != PSX_MOD_RENDER_PASS_READY) {
         s_stereo.refused++; s_stereo.last_failure = "status"; return 0;
     }
-    budget_ms = frame->period_vblanks * (double)g_psx_vblank_cycles /
-                33868.8 * 0.8;
-    if (s_stereo.avg_pair_ms > budget_ms && ++s_pair_retry < 30u) {
-        s_stereo.shed++; return 0;
+    /* Frame trace (opt-in). The runtime already opened this frame's record in
+     * psx_openxr_begin() when a headset is active; opening here covers the
+     * desktop stereo path, and the guest-sim gap is the host time since the
+     * previous traced frame. */
+    int trace_on = psx_frame_trace_enabled();
+    int trace_opened = trace_on ? psx_frame_trace_open() : 0;
+    uint64_t now_ms = psx_host_mono_ms();
+    if (trace_on) {
+        static uint64_t prev_ms;
+        static int prev_valid;
+        if (prev_valid)
+            psx_frame_trace_add(PSX_TRACE_GUEST_SIM, (now_ms - prev_ms) * 1000u);
+        prev_ms = now_ms; prev_valid = 1;
+        psx_frame_trace_attempt(s_stereo.attempts, 0, 0);
     }
-    s_pair_retry = 0;
+    budget_ms = shed_budget_ms(frame->period_vblanks, &s_stereo.budget_source);
+    s_stereo.budget_ms = budget_ms;
+    /* A scene/mode transition changes cadence and workload, so the previous
+     * average and budget do not carry over. */
+    if (!s_shed_geom_valid || frame->period_vblanks != s_shed_period ||
+        (int32_t)frame->w != s_shed_w || (int32_t)frame->h != s_shed_h) {
+        if (s_shed_geom_valid) s_stereo.budget_resets++;
+        s_shed_period = frame->period_vblanks;
+        s_shed_w = (int32_t)frame->w; s_shed_h = (int32_t)frame->h;
+        s_shed_geom_valid = 1;
+        stereo_shed_policy_reset(&s_shed);
+    }
+    stereo_shed_policy_set_budget(&s_shed, budget_ms);
+    {
+        int was_shedding = s_shed.shedding;
+        if (stereo_shed_policy_should_shed(&s_shed, now_ms)) {
+            s_stereo.shed++;
+            s_stereo.stale_frames++;
+            s_stereo.shed_streak = stereo_shed_policy_streak_sheds(&s_shed);
+            if (s_stereo.shed_streak > s_stereo.shed_streak_max)
+                s_stereo.shed_streak_max = s_stereo.shed_streak;
+            s_stereo.shed_streak_ms = stereo_shed_policy_streak_ms(&s_shed, now_ms);
+            s_stereo.shedding = 1;
+            if (trace_on) {
+                psx_frame_trace_attempt(s_stereo.attempts, s_stereo.shed_streak,
+                                        s_stereo.shed_streak_ms);
+                psx_frame_trace_flag(PSX_FRAME_TRACE_STALE_PAIR | PSX_FRAME_TRACE_SHED);
+                if (trace_opened) psx_frame_trace_commit();
+            }
+            return 0;
+        }
+        /* Log once per streak (not per frame), with both the skipped count and
+         * the elapsed wall clock the old attempt counter never tracked. */
+        if (was_shedding)
+            fprintf(stderr, "psxrecomp: stereo shed streak ended after %llu "
+                    "skipped, %u ms\n",
+                    (unsigned long long)s_stereo.shed_streak,
+                    s_stereo.shed_streak_ms);
+    }
+    s_stereo.shedding = s_shed.shedding;
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
     cycle = psx_cycle_count; stores = g_guest_store_count;
     mismatches = s_stats.verify_mismatch; aborted = s_stats.aborted;
@@ -939,6 +1218,10 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     call.fn = fn; call.user = user;
     s_pair_busy = 1;
     s_plan_serial++; /* separate the backup lease from any temporal plan */
+    /* The guest has run since the previous pair, so the retained snapshot no
+     * longer describes the machine: only the second eye of this pair may reuse
+     * what the first one captures. */
+    s_baseline_ready = 0;
     t0 = gl_renderer_perf_ticks();
     for (call.eye = 0; call.eye < 2u; call.eye++) {
         s_stereo.last_eye = (int)call.eye;
@@ -961,8 +1244,6 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
     elapsed = (double)(gl_renderer_perf_ticks() - t0) * 1000.0 /
               (double)gl_renderer_perf_frequency();
     s_stereo.last_pair_ms = elapsed;
-    s_stereo.avg_pair_ms = s_stereo.avg_pair_ms > 0.0
-        ? s_stereo.avg_pair_ms * 0.9 + elapsed * 0.1 : elapsed;
     if (ok && !gl_renderer_stereo_publish(s_stereo.attempts, cycle, s_stereo.eye_view)) {
         ok = 0; s_stereo.last_failure = "pair_publish";
     }
@@ -978,22 +1259,81 @@ int psx_mod_render_stereo(CPUState *cpu, const PSXModStereoFrame *frame,
         s_stereo.retained_pair_id = s_stereo.last_pair_id;
         gl_renderer_stereo_stage_reset();
     }
+    /* Fold the attempt into the policy's estimate (it owns the EMA now). A
+     * failed or aborted attempt still counts as a measurement, so a stale high
+     * average cannot outlive the condition that produced it; only a published
+     * pair refreshes the retained-pair age. Pair age is tracked separately from
+     * the compute-time estimate so "how old is the picture" never hides behind
+     * "how fast was the last attempt". */
+    stereo_shed_policy_note_pair(&s_shed, elapsed, now_ms, ok);
+    s_stereo.avg_pair_ms = stereo_shed_policy_avg_ms(&s_shed);
+    s_stereo.last_pair_age_ms = stereo_shed_policy_pair_age_ms(&s_shed, now_ms);
+    s_stereo.shedding = s_shed.shedding;
+    if (!ok) s_stereo.stale_frames++;
+    if (trace_on) {
+        psx_frame_trace_add(PSX_TRACE_PAIR_TOTAL, (uint64_t)(elapsed * 1000.0));
+        psx_frame_trace_result(ok, ok ? s_stereo.last_pair_id : 0,
+                               ok ? -1 : s_stereo.last_eye,
+                               ok ? NULL : s_stereo.last_failure);
+        if (trace_opened) psx_frame_trace_commit();
+    }
     s_pair_busy = 0;
     return ok;
 }
 
-int psx_mod_render_capture_rgba(CPUState *cpu,const PSXModRenderPass *rect,
-                               PSXModRenderPassFn fn,void *user,
-                               uint8_t *rgba,uint32_t bytes) {
-    if(s_pair_busy || !cpu || !rect || !fn || !rgba || rect->struct_size<sizeof *rect ||
+/* Game hook: a scene or mode transition invalidates the pair-time estimate and
+ * the derived budget, so the new scene does not inherit the old one's. Cheap
+ * and idempotent; safe to call on every transition. */
+void psx_mod_stereo_reset_budget(void) {
+    stereo_shed_policy_reset(&s_shed);
+    s_shed_geom_valid = 0;
+    /* The deadline came from a session that is now gone or whose cadence just
+     * changed; the OpenXR layer re-pushes it on the next frame it runs. */
+    s_shed_xr_budget_ms = 0.0;
+    s_stereo.budget_resets++;
+}
+
+void psx_mod_stereo_set_budget_ms(double ms) {
+    /* Push the headset deadline. Ignore nonsense rather than letting a bad
+     * value widen or collapse the budget. */
+    s_shed_xr_budget_ms = (ms > 0.0 && ms < 1000.0) ? ms : 0.0;
+}
+
+/* Two mattes of one slice in a single capture: the first transaction stages
+ * eye 0 and the second eye 1, so one read returns both. The two transactions
+ * are captures, not eye draws: neither publishes a pair nor samples the
+ * per-eye trace, and the checkpoint they share is their own. */
+int psx_mod_render_capture_rgba_pair(CPUState *cpu,const PSXModRenderPass *rect,
+                                    PSXModRenderPassFn fn,void *user_first,
+                                    void *user_second,uint8_t *rgba,uint32_t bytes) {
+    if(s_pair_busy || !cpu || !rect || !fn || !rgba || !user_first || !user_second ||
+       rect->struct_size<sizeof *rect ||
        !rect->w || !rect->h || rect->x+rect->w>1024 || rect->y+rect->h>512 ||
-       (uint64_t)rect->w*rect->h*4>bytes || transaction_status(1)!=PSX_MOD_RENDER_PASS_READY)return 0;
+       (uint64_t)rect->w*rect->h*8>bytes || transaction_status(1)!=PSX_MOD_RENDER_PASS_READY)return 0;
     if(g_overlay_flush_pending_cycles)g_overlay_flush_pending_cycles();
+    uint64_t trace_t0=gl_renderer_perf_ticks();
     s_pair_busy=1;s_plan_serial++;
     gl_renderer_stereo_stage_reset();
     PSXModRenderPass capture=*rect;capture.alpha_q16=0;
-    int ok=render_transaction(cpu,&capture,fn,user,0);
-    if(ok)ok=gl_renderer_stereo_stage_readback(0,rect->w,rect->h,rgba);
+    /* Start uncaptured: the ready flag carries the pair's baseline from the
+     * previous frame, which describes a machine the guest has since changed. */
+    s_capture_only=1;s_capture_pair=1;s_baseline_ready=0;
+    uint64_t cycle=psx_cycle_count,stores=g_guest_store_count;
+    int ok=render_transaction(cpu,&capture,fn,user_first,0);
+    /* The second matte must draw from the state the first one's restore put
+     * back. If the clock or the store count moved, that baseline no longer
+     * describes it, so capture the machine again instead of reusing it. */
+    if(psx_cycle_count!=cycle || g_guest_store_count!=stores)s_baseline_ready=0;
+    if(ok)ok=render_transaction(cpu,&capture,fn,user_second,1);
+    s_capture_only=0;s_capture_pair=0;s_baseline_ready=0;
+    uint64_t trace_t1=gl_renderer_perf_ticks();
+    psx_frame_trace_add(PSX_TRACE_HUD_DRAW,
+                        trace_ticks_to_us(trace_t1-trace_t0));
+    if(ok)ok=gl_renderer_stereo_stage_readback_pair(rect->w,rect->h,rgba);
+    psx_frame_trace_add(PSX_TRACE_HUD_READBACK,
+                        trace_ticks_to_us(gl_renderer_perf_ticks()-trace_t1));
     gl_renderer_stereo_stage_reset();s_pair_busy=0;
+    psx_frame_trace_add(PSX_TRACE_HUD_CAPTURE,
+                        trace_ticks_to_us(gl_renderer_perf_ticks()-trace_t0));
     return ok;
 }
