@@ -1090,6 +1090,20 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME ws_local_view_margin_test COMMAND ws_local_view_margin_test)
 
+    add_executable(ws_cull_margin_width_test
+        tests/test_ws_cull_margin_width.c
+        src/ws_ui_group.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(ws_cull_margin_width_test PRIVATE include src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ws_cull_margin_width_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(ws_cull_margin_width_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME ws_cull_margin_width_test COMMAND ws_cull_margin_width_test)
+
     # Depth24 GP1(07h) present hold (#636): hold count, upload span and the
     # staged frame agree across windowed/headless/deferred presents, rollback
     # replay and disk loads; stale trailing FMV pixels never reach a frame.

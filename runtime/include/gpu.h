@@ -316,6 +316,8 @@ int  gpu_ws_present_native_43(void);
 /* Per-side X cull-margin (screen/world units) emitted into the game's draw-
  * cull immediates by the recompiler ([widescreen.cull]); 0 unless stretching. */
 int  psx_ws_x_margin(void);
+/* The same reveal on the 320-pixel basis (ratio-style sites: angles, cones). */
+int  psx_ws_x_margin_320(void);
 /* Netplay own-view mods: while on, psx_ws_x_margin() is 0 (the stock cull)
  * except inside a sandboxed local-view render (render_pass.c sets the scope). */
 void gpu_ws_set_local_view_only(int on);
