@@ -2583,13 +2583,18 @@ static void ws_tag_stats_note_lookup(GpuWsTagStats *stats, int result) {
 }
 
 /* Positions the GTE projected this and the previous vblank (ws_gte_sxy.h).
- * Only recorded while the squash is engaged: nothing else reads it. */
+ * Opt-in: nothing is recorded (and every query answers no) until a title
+ * plugin enables it, and only while the squash is engaged, so titles that do
+ * not use the query pay nothing and see no change. */
 static WsGteSxy ws_gte_sxy;
+static int ws_gte_sxy_tracking;   /* opt-in: a title plugin turns it on */
+void gpu_ws_set_gte_sxy_tracking(int on) { ws_gte_sxy_tracking = on ? 1 : 0; }
 void gpu_ws_note_gte_sxy(int32_t x, int32_t y) {
-    if (!ws_active()) return;
+    if (!ws_gte_sxy_tracking || !ws_active()) return;
     ws_gte_sxy_note(&ws_gte_sxy, (uint32_t)s_frame_count, x, y);
 }
 int gpu_ws_gte_sxy_recent(int32_t x, int32_t y) {
+    if (!ws_gte_sxy_tracking) return 0;
     return ws_gte_sxy_recent(&ws_gte_sxy, (uint32_t)s_frame_count, x, y);
 }
 

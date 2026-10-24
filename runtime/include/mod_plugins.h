@@ -371,6 +371,10 @@ void psx_mod_anchor_hud_primitive_projected(uint32_t primitive, int edge);
  * yes was built from projected geometry (already squashed); one that does not
  * carries authored screen coordinates. Always 0 while the squash is off. */
 int psx_mod_gte_sxy_recent(int32_t x, int32_t y);
+/* Opt in to (1) or out of (0) the recent-projection record behind
+ * psx_mod_gte_sxy_recent. Off by default: until a plugin enables it nothing is
+ * recorded and the query answers 0. Call from an activation callback. */
+void psx_mod_set_gte_sxy_tracking(int enabled);
 /* Screen-space masks identified by their title's producer, P_TAG addresses.
  * Flat panels extend only their exterior boundaries. Radial flat/Gouraud
  * quads scale around the display centre for an aspect-aware iris transition.
