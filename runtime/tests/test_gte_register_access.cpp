@@ -61,6 +61,7 @@ extern "C" void gte_test_execute_reference(CPUState *cpu, uint32_t cmd);
 
 /* gte.cpp runtime dependencies that are irrelevant to register-transfer tests. */
 extern "C" int gpu_ws_present_native_43(void) { return 0; }
+extern "C" void gpu_ws_note_gte_sxy(int32_t, int32_t) {}
 static int g_test_precise_nclip_enabled;
 static int g_test_render_projective;
 extern "C" int gpu_render_projective_enabled(void) { return g_test_render_projective; }

@@ -518,6 +518,18 @@ void gpu_ws_set_adaptive_backdrop_preload(int enabled);
  * `prim` is the address of the PsyQ P_TAG word; the drawn command starts at
  * prim+4. anchor: -1 = left, 0 = center, +1 = right. */
 void gpu_ws_tag_hud_prim(uint32_t prim, int anchor);
+/* Same, for a primitive whose X the game took from GTE-projected screen
+ * coordinates, which already carry the widescreen X squash about the display
+ * centre. Projection-and-stretch translates it to the edge instead of scaling
+ * it again; native-wide behaves as for gpu_ws_tag_hud_prim. */
+void gpu_ws_tag_hud_prim_projected(uint32_t prim, int anchor);
+/* GTE-projection provenance under the widescreen squash (ws_gte_sxy.h): the
+ * GTE reports each SXY it produces; a title plugin asks whether a packet
+ * vertex is one of them, i.e. whether the game built that primitive from
+ * projected geometry (its X is already squashed) rather than authored
+ * screen coordinates. Recorded only while the squash is engaged. */
+void gpu_ws_note_gte_sxy(int32_t x, int32_t y);
+int gpu_ws_gte_sxy_recent(int32_t x, int32_t y);
 /* Stretch a trusted authored background primitive about the display center in
  * the native-wide output only (GL/SW). prim+4 is the command address, including
  * for a command embedded inside a longer DMA packet. Only opaque polygons and
