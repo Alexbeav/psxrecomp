@@ -24,17 +24,24 @@ recreation releases the decoder and all tracking.
 
 The synthetic native test covers malformed packs, decode/worker failures,
 restart, paused host time, guest-cycle advancement, a load epoch, duplicate
-source images distinguished by sector LBA, and unmatched scanout fallback.
-Windows and Mac runtime builds and the focused test passed for the initial
-guest-cycle change; the FMVHD003 extension requires a fresh Mac build.
+source images distinguished by sector LBA, seek generation, movie exit, and
+unmatched scanout fallback. Full runtime builds and the focused test passed
+on Windows and macOS with FMVHD003.
 
-Upstream review still needs a consuming-title replay with a pack built from
-that title's own movie, covering pause, skip, seek, state load, rewind and
-rollback where supported, with captured guest-cycle/frame/epoch, CD stream
-and delivered LBA, MDEC ordinal, matched movie/source/subframe, and
-synchronized audio evidence. R4's current public candidate has no `fmv_hd/`
-pack and does not pin this optional feature; a temporary synthetic pack can
-exercise the integration without changing that candidate. A pack author must
+A short R4 local-disc replay used a local 80-frame synthetic FMVHD003 pack,
+with no retail assets included here. It selected HD replacements at SetLoc
+192822 and delivered LBAs 194127–194324 with zero dispatch misses. The first
+replacement was at guest frame 1475, cycle 832608000, delivered LBA 194129,
+and MDEC ordinal 260. CD audio input and host audio output counters were
+active. A 0.5-second host pause held guest cycle, replacement count, and audio
+counters; save/load incremented execution epoch from 1 to 2 and playback
+resumed. These counters show active audio and a frozen pause timeline, but do
+not measure exact audio/video lip-sync.
+
+Upstream review still needs a consuming-title replay of skip/seek and any
+supported rewind/rollback path, plus an audio/video alignment measurement.
+R4's current public candidate has no `fmv_hd/` pack and does not pin this
+optional feature. A pack author must
 record the source-frame sector table from the title's own stream, including
 any prefetch behavior; if the table is wrong, the native scanout is the safe
 fallback.
