@@ -3469,6 +3469,9 @@ extern "C" void psx_mod_tag_hud_primitive(uint32_t primitive, int edge) {
 extern "C" void psx_mod_anchor_hud_primitive(uint32_t primitive, int edge) {
     gpu_ws_tag_hud_prim(primitive, edge);
 }
+extern "C" void psx_mod_set_gte_sxy_tracking(int enabled) {
+    gpu_ws_set_gte_sxy_tracking(enabled);
+}
 extern "C" int psx_mod_gte_sxy_recent(int32_t x, int32_t y) {
     return gpu_ws_gte_sxy_recent(x, y);
 }

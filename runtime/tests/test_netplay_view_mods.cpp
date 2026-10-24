@@ -156,6 +156,9 @@ extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
 extern "C" int fntrace_is_game_started(void) { return 1; }
 /* Widescreen tag passthroughs mod_runtime forwards to the GPU; unused here. */
 extern "C" void gpu_ws_tag_hud_primitive(uint32_t, int) {}
+extern "C" void gpu_ws_tag_hud_prim_projected(uint32_t, int) {}
+extern "C" void gpu_ws_set_gte_sxy_tracking(int) {}
+extern "C" int gpu_ws_gte_sxy_recent(int32_t, int32_t) { return 0; }
 extern "C" void gpu_ws_tag_world_primitive(uint32_t, int) {}
 extern "C" void gpu_ws_set_adaptive_backdrop_preload(int) {}
 extern "C" int gpu_ws_configured_x_reveal(void) { return 0; }

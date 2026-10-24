@@ -527,7 +527,9 @@ void gpu_ws_tag_hud_prim_projected(uint32_t prim, int anchor);
  * GTE reports each SXY it produces; a title plugin asks whether a packet
  * vertex is one of them, i.e. whether the game built that primitive from
  * projected geometry (its X is already squashed) rather than authored
- * screen coordinates. Recorded only while the squash is engaged. */
+ * screen coordinates. Opt-in (gpu_ws_set_gte_sxy_tracking) and recorded
+ * only while the squash is engaged. */
+void gpu_ws_set_gte_sxy_tracking(int on);
 void gpu_ws_note_gte_sxy(int32_t x, int32_t y);
 int gpu_ws_gte_sxy_recent(int32_t x, int32_t y);
 /* Stretch a trusted authored background primitive about the display center in

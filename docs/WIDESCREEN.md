@@ -130,7 +130,8 @@ User has visually confirmed: world geometry, characters, HUD, menus, FMVs, and
 proportions on the 16:9 stretch.
 
 **Live diagnostics (TCP debug server, committed `1e28a94`/earlier):**
-`ws_aspect num den` (toggle the GTE squash on/off in place — `1 1` = off),
+`ws_aspect num den` (set the GTE squash for a target aspect in place: `4 3` = off/identity, `16 9` = 0.75x;
+note `1 1` is NOT off, it expands X by 4/3),
 `ws_far_threshold [t]` (set the SZ depth split + read the backdrop driver's SZ
 stats so the split is data-driven), `ws_census on|off|<start> <end>` (always-on
 per-prim draw ring → CSV), `ws_margin <v|-1>` (force the cull margin), and the
