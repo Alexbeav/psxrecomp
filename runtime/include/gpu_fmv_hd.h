@@ -28,6 +28,9 @@ typedef struct FmvHdIndexHeader {
     uint32_t src_w, src_h;      /* source frame size */
     uint32_t disp_w, disp_h;    /* native PSX display the movie is shown in (e.g. 320x240) */
     int32_t  off_x, off_y;      /* movie position in that display; -1 = centred */
+    /* FMVHD003 only: inclusive SetLoc range of the movie on the mounted disc.
+     * FMVHD002 ends before these fields and remains opt-in legacy. */
+    int32_t  stream_lba_lo, stream_lba_hi;
 } FmvHdIndexHeader;
 
 typedef struct FmvHdImage {
@@ -43,6 +46,10 @@ typedef struct FmvHdTimeline {
     uint64_t cycle;
     uint64_t frame;
     uint64_t epoch;
+    uint64_t stream_generation; /* CD SetLoc/seek generation */
+    int32_t stream_lba;         /* SetLoc target naming the current stream */
+    int32_t delivered_lba;      /* last sector delivered to guest */
+    uint32_t decode_serial;     /* guest MDEC colour-decode ordinal */
 } FmvHdTimeline;
 
 /* A presented 24-bit frame (32-bit BGRA, src_w x src_h, content_w useful columns or 0).

@@ -180,7 +180,9 @@ void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured);
  * a trailing depth24 margin without changing CRTC width / stretching. */
 void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linear,
                          int force_4_3, int content_w, uint64_t guest_cycle,
-                         uint64_t guest_frame, uint64_t guest_epoch);
+                         uint64_t guest_frame, uint64_t guest_epoch,
+                         uint64_t stream_generation, int stream_lba, int delivered_lba,
+                         uint32_t decode_serial);
 
 /* Bezel art shown in the letterbox/pillarbox margins. Takes RGBA8 pixels; the
  * caller owns them and may free them on return. Passing NULL clears it.

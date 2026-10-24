@@ -10159,7 +10159,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         gl_renderer_present(sdl_pixel_buf, src_w, src_h,
                             g_video_aa ? 1 : 0,
                             pin_43 ? 1 : 0, 0 /* full width */,
-                            psx_cycle_count, s_frame_count, s_fmv_timeline_epoch);
+                            psx_cycle_count, s_frame_count, s_fmv_timeline_epoch,
+                            cdrom_get_stream_generation(), cdrom_get_stream_start_lba(),
+                            cdrom_get_delivered_lba(),
+                            mdec_get_decode_count());
         netplay_note_present();
     } else {
     if ((!sdl_renderer || !sdl_texture) && ensure_sw_sdl_present() != 0)

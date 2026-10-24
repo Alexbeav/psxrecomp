@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stddef.h>
 
 #include "psx_sdl.h"
 
@@ -42,7 +43,9 @@ typedef struct Movie {
     char dir[1024];
     FmvHdIndexHeader h;
     uint8_t *sigs;              /* frames * sig_w * sig_h */
+    int32_t *frame_lbas;        /* FMVHD003: guest sector interval per frame */
     int dy;                     /* learnt vertical offset (native lines) */
+    int bound_stream;
 } Movie;
 
 typedef struct Slot {
@@ -169,24 +172,58 @@ static void load_movie(const char *dir) {
     uint8_t *b = NULL; size_t len = 0;
     if (!read_file(path, &b, &len)) return;
     FmvHdIndexHeader h;
-    if (len < sizeof h) { free(b); return; }
-    memcpy(&h, b, sizeof h);
+    const size_t v2_size = offsetof(FmvHdIndexHeader, stream_lba_lo);
+    if (len < v2_size) { free(b); return; }
+    memset(&h, 0, sizeof h);
+    memcpy(&h, b, len >= sizeof h ? sizeof h : v2_size);
+    const int v3 = memcmp(h.magic, "FMVHD003", 8) == 0;
+    if (v3 && len < sizeof h) { free(b); return; }
+    /* Legacy indexes have no guest stream binding. Refuse by default: two
+     * movies with the same image must never select each other's HD frame. */
+    if (!v3) {
+        const char *legacy = getenv("PSX_FMV_HD_LEGACY");
+        if (!legacy || strcmp(legacy, "1") != 0) { free(b); return; }
+    }
+    const size_t header_bytes = v3 ? sizeof h : v2_size;
     const uint64_t sig = (uint64_t)h.sig_w * h.sig_h;
     const uint64_t bytes = sig * h.frames;
-    if (memcmp(h.magic, "FMVHD002", 8) != 0 || !h.frames || !h.sub ||
+    const uint64_t lba_bytes = v3 ? (uint64_t)h.frames * sizeof(int32_t) : 0;
+    if ((!v3 && memcmp(h.magic, "FMVHD002", 8) != 0) || !h.frames || !h.sub ||
+        (v3 && (h.stream_lba_lo < 0 || h.stream_lba_hi < h.stream_lba_lo)) ||
         !h.sig_w || h.sig_w > 64 || !h.sig_h || h.sig_h > 64 ||
         h.sub > INT_MAX / 2 || (uint64_t)h.frames * h.sub > INT_MAX - FMV_RING ||
         h.src_w > 8192 || h.src_h > 8192 || h.disp_w > 8192 || h.disp_h > 8192 ||
         h.off_x < -1 || h.off_x > 8192 || h.off_y < -1 || h.off_y > 8192 ||
-        bytes > FMV_FILE_MAX - sizeof h || bytes > len - sizeof h ||
-        bytes > FMV_FILE_MAX - s_index_bytes) { free(b); return; }
+        bytes > FMV_FILE_MAX - header_bytes ||
+        lba_bytes > FMV_FILE_MAX - header_bytes - bytes ||
+        bytes + lba_bytes > len - header_bytes ||
+        bytes + lba_bytes > FMV_FILE_MAX - s_index_bytes) { free(b); return; }
+    if (v3) {
+        for (uint32_t i = 0; i < h.frames; ++i) {
+            int32_t lba;
+            memcpy(&lba, b + header_bytes + (size_t)bytes + (size_t)i * sizeof lba, sizeof lba);
+            if (lba < h.stream_lba_lo || lba > h.stream_lba_hi) { free(b); return; }
+            if (i) {
+                int32_t previous;
+                memcpy(&previous, b + header_bytes + (size_t)bytes + (size_t)(i - 1) * sizeof previous,
+                       sizeof previous);
+                if (lba <= previous) { free(b); return; }
+            }
+        }
+    }
     Movie *m = &s_movies[s_nmovies];
     snprintf(m->dir, sizeof m->dir, "%s", dir);
     m->h = h;
+    m->bound_stream = v3;
     m->sigs = (uint8_t *)malloc((size_t)bytes);
     if (!m->sigs) { free(b); return; }
-    memcpy(m->sigs, b + sizeof h, (size_t)bytes);
-    s_index_bytes += (size_t)bytes;
+    memcpy(m->sigs, b + header_bytes, (size_t)bytes);
+    if (v3) {
+        m->frame_lbas = (int32_t *)malloc((size_t)lba_bytes);
+        if (!m->frame_lbas) { free(m->sigs); memset(m, 0, sizeof *m); free(b); return; }
+        memcpy(m->frame_lbas, b + header_bytes + (size_t)bytes, (size_t)lba_bytes);
+    }
+    s_index_bytes += (size_t)(bytes + lba_bytes);
     free(b);
     ++s_nmovies;
 }
@@ -254,7 +291,10 @@ void gpu_fmv_hd_shutdown(void) {
     for (int i = 0; i < FMV_RING; ++i) {
         if (s_ring[i].rgba) stbi_image_free(s_ring[i].rgba);
     }
-    for (int i = 0; i < s_nmovies; ++i) free(s_movies[i].sigs);
+    for (int i = 0; i < s_nmovies; ++i) {
+        free(s_movies[i].sigs);
+        free(s_movies[i].frame_lbas);
+    }
     memset(s_ring, 0, sizeof s_ring);
     memset(s_movies, 0, sizeof s_movies);
     if (s_cond) SDL_DestroyCond(s_cond);
@@ -321,7 +361,10 @@ int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
     init_once();
     if (!s_enabled || !bgra || src_w <= 0 || src_h <= 0 ||
         src_w > 16384 || src_h > 16384 || !out) return 0;
+    const int new_decode = !s_have_timeline ||
+        timeline.decode_serial != s_last_timeline.decode_serial;
     if (s_have_timeline && (timeline.epoch != s_last_timeline.epoch ||
+        timeline.stream_generation != s_last_timeline.stream_generation ||
         timeline.cycle < s_last_timeline.cycle || timeline.frame < s_last_timeline.frame))
         reset_tracking();
     s_last_timeline = timeline;
@@ -339,6 +382,9 @@ int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
     for (int pass = 0; pass < 2 && best_m < 0; ++pass) {
         for (int m = 0; m < s_nmovies; ++m) {
             Movie *mv = &s_movies[m];
+            if (mv->bound_stream &&
+                (timeline.stream_lba < mv->h.stream_lba_lo ||
+                 timeline.stream_lba > mv->h.stream_lba_hi)) continue;
             const size_t n = (size_t)mv->h.sig_w * mv->h.sig_h;
             if (n > sizeof sig) continue;
             int lo = 0, hi = (int)mv->h.frames - 1;
@@ -368,6 +414,9 @@ int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
                 if (y0 + fh > src_h || y0 < 0) continue;
                 signature(bgra, src_w, x0, y0, fw, fh, (int)mv->h.sig_w, (int)mv->h.sig_h, sig);
                 for (int f = lo; f <= hi; ++f) {
+                    if (mv->bound_stream && (timeline.delivered_lba < mv->frame_lbas[f] ||
+                        (f + 1 < (int)mv->h.frames && timeline.delivered_lba >= mv->frame_lbas[f + 1])))
+                        continue;
                     const unsigned d = distance(sig, mv->sigs + (size_t)f * n, n);
                     if (d < m_d) { m_d = d; m_f = f; m_dy = dy; }
                 }
@@ -381,7 +430,7 @@ int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
     if (best_m < 0) { ++s_misses; reset_tracking(); return 0; }
 
     const uint64_t now = timeline.cycle;
-    if (best_m != s_cur_movie || best_f != s_cur_src) {
+    if (best_m != s_cur_movie || best_f != s_cur_src || new_decode) {
         s_cur_movie = best_m; s_cur_src = best_f; s_cur_since = now;
         s_shown_movie = s_shown_frame = -1;
     }

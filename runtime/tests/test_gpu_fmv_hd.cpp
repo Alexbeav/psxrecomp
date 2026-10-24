@@ -39,12 +39,15 @@ int main() {
 #endif
     std::ofstream(root/"liste.txt")<<"movie\n";
     FmvHdIndexHeader header{};
-    std::memcpy(header.magic,"FMVHD002",8);
+    std::memcpy(header.magic,"FMVHD003",8);
     header.frames=header.sig_w=header.sig_h=header.sub=header.fps_den=1;
     header.fps_num=30;header.src_w=header.src_h=header.disp_w=header.disp_h=2;
     auto index=[&](FmvHdIndexHeader h) {
         std::ofstream out(root/"movie/index.bin",std::ios::binary);
         out.write(reinterpret_cast<const char*>(&h),sizeof h);out.put(0);
+        if(h.frames==2)out.put(0); /* deliberately identical source signatures */
+        const int32_t lba=0;out.write(reinterpret_cast<const char*>(&lba),sizeof lba);
+        if(h.frames==2){const int32_t next=10;out.write(reinterpret_cast<const char*>(&next),sizeof next);}
     };
     const uint8_t rgba[16]={0,0,0,255,0,0,0,255,0,0,0,255,0,0,0,255};
     FILE *image=std::fopen((root/"movie/frames/000000.png").string().c_str(),"wb");
@@ -52,7 +55,7 @@ int main() {
     if(image)std::fclose(image);
     uint32_t original[4]={0xff000000u,0xff000000u,0xff000000u,0xff000000u};
     FmvHdImage output{};
-    FmvHdTimeline timeline{1000, 1, 1};
+    FmvHdTimeline timeline{1000, 1, 1, 1, 0, 0, 1};
     auto lookup=[&]{return gpu_fmv_hd_lookup(original,2,2,2,timeline,&output);};
     for(unsigned variant=0;variant<5;++variant) {
         auto bad=header;
@@ -60,7 +63,7 @@ int main() {
         if(variant==1)bad.frames=UINT32_MAX;
         if(variant==2)bad.sub=UINT32_MAX;
         if(variant==3)bad.off_x=INT32_MAX;
-        if(variant==4)bad.frames=2; // truncated signature payload
+        if(variant==4)bad.frames=3; // truncated signature payload
         index(bad);check(!lookup(),"malformed index falls back to original");
         gpu_fmv_hd_shutdown();
     }
@@ -90,7 +93,7 @@ int main() {
     image=std::fopen((root/"movie/frames/000001.png").string().c_str(),"wb");
     check(image && png_write_rgba(image,second,2,2),"create second movie subframe");
     if(image)std::fclose(image);
-    timeline={1000,1,2};
+    timeline={1000,1,2,1,0,0,1};
     bool first=false;
     for(int i=0;i<200 && !first;++i){first=lookup() && output.rgba[0]==0;if(!first)SDL_Delay(2);}
     check(first,"first subframe decoded");
@@ -100,10 +103,21 @@ int main() {
     bool advanced=false;
     for(int i=0;i<200 && !advanced;++i){advanced=lookup() && output.rgba[0]==255;if(!advanced)SDL_Delay(2);}
     check(advanced,"guest cycles advance interpolated subframe");
-    timeline={1000,1,3};
+    timeline={1000,1,3,1,0,0,1};
     check(lookup() && output.rgba[0]==0,"state-load epoch restarts subframe");
     original[0]=0xffffffffu;
     check(!lookup(),"unrecognised movie scanout falls back to native image");
+    gpu_fmv_hd_shutdown();
+    original[0]=0xff000000u;
+    auto two=header;two.frames=2;two.stream_lba_hi=19;index(two);
+    timeline={1000,1,4,2,0,0,2};
+    bool mapped_first=false;
+    for(int i=0;i<200 && !mapped_first;++i){mapped_first=lookup() && output.rgba[0]==0;if(!mapped_first)SDL_Delay(2);}
+    check(mapped_first,"first identical source image uses first sector interval");
+    timeline.delivered_lba=10;timeline.decode_serial++;timeline.cycle+=1000;timeline.frame++;
+    bool mapped_second=false;
+    for(int i=0;i<200 && !mapped_second;++i){mapped_second=lookup() && output.rgba[0]==255;if(!mapped_second)SDL_Delay(2);}
+    check(mapped_second,"identical source image selects second HD frame by delivered sector");
     gpu_fmv_hd_shutdown();
     fs::remove_all(root);
     if(!failures)std::cout<<"PASS FMV bounds, lifecycle and guest timeline\n";
