@@ -23,6 +23,9 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(postfx_publication_test tests/test_postfx_publication.cpp)
+    target_include_directories(postfx_publication_test PRIVATE include)
+    add_test(NAME postfx_publication_test COMMAND postfx_publication_test)
     # Windows UTF-8 text boundary (issue #371): the helpers legacy Windows
     # relies on, and — with the shipped manifest — a UTF-8 process code page.
     if(WIN32)
