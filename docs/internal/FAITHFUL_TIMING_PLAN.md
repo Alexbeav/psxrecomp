@@ -213,6 +213,12 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-24 — scoped render-pass qualification.** The sandbox now compares
+  shared RAM/register/clock/interrupt digests before and after an actual
+  opted-in local temporal pass, discard, device-read abort, rollback refusal,
+  and a nonparticipating peer. The HD GL fixture separately opens a pass under
+  native authority. Consuming-title and matched-performance evidence remains
+  required for upstream promotion.
 - **2026-10-24 — render-pass HD/local-view scope.** Re-scope the fork's
   permission change onto current master without replay controls or host tracing.
   Title-level positive HD/local-view digest and abort qualification remains
