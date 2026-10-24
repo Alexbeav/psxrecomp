@@ -1929,6 +1929,11 @@ int cdrom_retry_dither_fire(int i, uint32_t *frame, int *target, int *run, int *
 }
 
 static void start_read_stream(uint8_t cmd) {
+    /* PSX-SPX Setloc/Read/Pause: without a new Setloc, repeat the last
+     * received sector. Before the first delivery, keep the original target. */
+    int resume_lba = (!s_source_clock && !setloc_pending && s_source_seek_paused &&
+                      last_sector_have_raw != GETLOCL_NO_HEADER && last_sector_lba >= 0)
+        ? last_sector_lba : -1;
     last_sector_have_raw = GETLOCL_NO_HEADER;   /* until the first data sector */
     int source_target = setloc_pending ? s_setloc_lba :
         msf_to_lba(read_min, read_sec, read_sect);
@@ -1955,6 +1960,8 @@ static void start_read_stream(uint8_t cmd) {
     if (s_source_clock) {
         lba_to_msf(source_target, 150, &read_min, &read_sec, &read_sect);
         s_source_read_start_lba = source_target;
+    } else if (resume_lba >= 0) {
+        lba_to_msf(resume_lba, 150, &read_min, &read_sec, &read_sect);
     }
     /* Spec 6.2 R1: a read start leaves the drive holding a data position. A
      * read that only continues the stream never gets here. */

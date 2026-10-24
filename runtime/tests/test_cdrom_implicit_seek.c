@@ -7,14 +7,14 @@
 uint64_t psx_cycle_count, s_frame_count;
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
 uint32_t debug_guest_ra(void) { return 0; }
-static int reads, failures, irq_raises;
+static int reads, failures, irq_raises, synthetic_xa, xa_frames;
 void psx_irq_raise(uint32_t a, uint32_t b) { (void)b; i_stat |= 1u << a; irq_raises++; }
 void event_ring_record(uint16_t a, uint8_t b) { (void)a; (void)b; }
 void event_ring_record_aux(uint16_t a, uint8_t b, uint32_t c) { (void)a; (void)b; (void)c; }
 void audio_trace_event(uint16_t a, uint32_t b, uint32_t c) { (void)a; (void)b; (void)c; }
 uint32_t interrupts_get_cycles_since_vblank(void) { return 0; }
 int dma_cdrom_transfer_active(void) { return 0; }
-void spu_cd_audio_push(const int16_t *a, int b) { (void)a; (void)b; }
+void spu_cd_audio_push(const int16_t *a, int b) { (void)a; xa_frames += b; }
 void spu_cd_audio_reset(void) {}
 int psx_netplay_active(void) { return 0; }
 int psx_netplay_cd_bisect_active(void) { return 0; }
@@ -26,7 +26,12 @@ int iso_read_sector(void *p, uint32_t lba, uint8_t *b, int n) {
     (void)p; memset(b, (int)(lba & 255u), (size_t)n); reads++; return 1;
 }
 int iso_read_raw_sector(void *p, uint32_t lba, uint8_t *b, int n) {
-    (void)p; (void)lba; (void)b; (void)n; return 0;
+    (void)p; (void)lba;
+    if (!synthetic_xa) return 0;
+    memset(b, 0, (size_t)n);
+    b[15]=2; b[16]=1; b[17]=0; b[18]=0x64; b[19]=0;
+    memcpy(b+20,b+16,4);
+    return 1;
 }
 int iso_read_subq(void *p, uint32_t lba, uint8_t *b, int n, int *v) {
     (void)p; (void)lba; (void)b; (void)n; *v=0; return 0;
@@ -78,6 +83,57 @@ static int exercise(uint8_t cmd, int origin, int dest, int observe) {
         CHECK(last_sector_lba==dest+1,"stream advances consecutively");
     }
     return deadline;
+}
+
+/* PSX-SPX a253f078, cdromdrive.md 799-814: an unconsumed Setloc wins;
+ * otherwise a paused read repeats the last received sector. Exercise the
+ * production command/sector/XA path, not a second position model. */
+static void pause_read_control(uint8_t cmd, int xa, int scenario) {
+    static const char *names[]={"resume", "new-setloc", "pending-setloc",
+                                "stop-new-setloc", "before-first", "seekl"};
+    setup(1000); synthetic_xa=xa; xa_frames=0;
+    mode_reg=xa?0xE8:0x80; filter_file=1; filter_channel=0;
+    target(1100); command(cmd); ack();
+    if (scenario!=4) {
+        advance(read_delay); ack();
+        for (int i=0;i<8;i++) { advance(CDROM_SINGLE_SPEED_SECTOR_CYCLES/2); ack(); }
+        CHECK(last_sector_lba==1108,"control advances beyond the original Setloc");
+        if (xa) CHECK(xa_frames>0,"production XA decoder reaches the SPU sink");
+    }
+    int last=last_sector_lba;
+    if (scenario==2) target(1200);
+    command(9); ack(); advance(pending_rem_cycles()); ack();
+    CHECK(!reading && s_source_seek_paused,"Pause leaves a paused stream");
+    if (scenario!=4) {
+        command(0x11);
+        int loc=msf_to_lba(bcd_to_bin(response_fifo[5]),
+                          bcd_to_bin(response_fifo[6]),bcd_to_bin(response_fifo[7]));
+        CHECK(loc==last,"GetlocP after Pause still names the last received sector");
+        ack();
+    }
+    int expected=(scenario==0)?last:((scenario==4)?1100:1200);
+    if (scenario==0) { command(9); ack(); advance(pending_rem_cycles()); ack(); }
+    if (scenario==3) {
+        command(8); ack(); advance(pending_rem_cycles()); ack();
+        CHECK(!s_source_seek_paused,"Stop ends the paused state");
+    }
+    if (scenario==1 || scenario==3 || scenario==5) target(1200);
+    if (scenario==5) {
+        command(0x15); ack(); advance(pending_rem_cycles()); ack();
+        CHECK(!s_source_seek_paused,"completed SeekL is standby, not paused");
+    }
+    int before=xa_frames;
+    command(cmd); ack(); advance(read_delay); ack();
+    printf("pause-read cmd=%02x xa=%d case=%s first_lba=%d expected=%d\n",
+           cmd,xa,names[scenario],last_sector_lba,expected);
+    CHECK(last_sector_lba==expected,"first sector after Pause follows the documented position rule");
+    if (xa) CHECK(xa_frames>before,"resumed production XA sector reaches the SPU sink");
+    int delay=read_delay, first=last_sector_lba;
+    command(cmd); ack();
+    CHECK(read_delay==delay && last_sector_lba==first,"repeated read preserves an active stream");
+    advance(CDROM_SINGLE_SPEED_SECTOR_CYCLES/2); ack();
+    CHECK(last_sector_lba==expected+1,"resumed stream then advances sequentially");
+    synthetic_xa=0;
 }
 int main(void) {
 #ifdef _WIN32
@@ -195,6 +251,10 @@ int main(void) {
               "restored standby ReadN pays no paused restart");
         free(snap);
     }
+    for (int xa=0;xa<=1;xa++)
+        for (int cmd=0;cmd<2;cmd++)
+            for (int scenario=0;scenario<6;scenario++)
+                pause_read_control(cmd?0x1B:0x06,xa,scenario);
     if(failures) { fprintf(stderr,"FAILED (%d)\n",failures); return 1; }
     puts("CD implicit seek: ALL PASS"); return 0;
 }
