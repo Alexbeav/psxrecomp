@@ -9764,7 +9764,6 @@ static int pt_cb_ctx(void *user, int current) {
 
 /* The one owned swap call: the composing thread's (direct) or the present
  * thread's. */
-static void gl_swap_stats_note(void);
 static void gl_window_swap(void) {
 #if defined(PSX_SDL3)
     psx_video_telemetry_present(SDL_GL_SwapWindow(s_win) ? 1 : 0);
@@ -9772,71 +9771,6 @@ static void gl_window_swap(void) {
     SDL_GL_SwapWindow(s_win);
     psx_video_telemetry_present(-1); // SDL2 exposes no swap result.
 #endif
-    gl_swap_stats_note();
-}
-
-/* Swap timing (debug `perf`): intervals between real swaps, i.e. what reaches
- * the screen, independent of guest vblank counting. Single writer (the swap
- * thread); the reader tolerates a torn sample. */
-#define SWAP_RING 4096
-static uint32_t s_swap_us[SWAP_RING];
-static volatile uint32_t s_swap_n;
-static uint64_t s_swap_last;
-
-static void gl_swap_stats_note(void) {
-    uint64_t now = SDL_GetPerformanceCounter();
-    if (s_swap_last) {
-        uint64_t us = (now - s_swap_last) * 1000000ull / SDL_GetPerformanceFrequency();
-        s_swap_us[s_swap_n % SWAP_RING] = us > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)us;
-        s_swap_n++;
-    }
-    s_swap_last = now;
-}
-
-static int cmp_u32(const void *a, const void *b) {
-    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-    return x < y ? -1 : x > y;
-}
-
-/* Last `window_ms` of swaps (0 = whole ring): count, mean/p50/p95/p99/max
- * interval (µs), and hitches = intervals > 1.5x the median. reset=1 drops the
- * history. */
-typedef struct { uint32_t k, mean, p50, p95, p99, max, hitch; double span_ms, fps; } SwapStats;
-static SwapStats swap_stats(int window_ms, int reset) {
-    static uint32_t tmp[SWAP_RING];
-    SwapStats r = {0};
-    uint32_t n = s_swap_n, k = 0;
-    uint64_t sum = 0;
-    if (n > SWAP_RING) n = SWAP_RING;
-    for (uint32_t i = 0; i < n; i++) {
-        uint32_t v = s_swap_us[(s_swap_n - 1 - i) % SWAP_RING];
-        if (window_ms > 0 && sum + v > (uint64_t)window_ms * 1000u) break;
-        sum += v;
-        tmp[k++] = v;
-    }
-    if (reset) { s_swap_n = 0; s_swap_last = 0; }
-    if (!k) return r;
-    qsort(tmp, k, sizeof tmp[0], cmp_u32);
-    r.k = k; r.mean = (uint32_t)(sum / k); r.p50 = tmp[k / 2];
-    r.p95 = tmp[(k - 1) * 95 / 100]; r.p99 = tmp[(k - 1) * 99 / 100]; r.max = tmp[k - 1];
-    for (uint32_t i = 0; i < k; i++) if (tmp[i] * 2 > r.p50 * 3) r.hitch++;
-    r.span_ms = sum / 1000.0;
-    r.fps = sum ? k * 1e6 / (double)sum : 0.0;
-    return r;
-}
-
-int gl_renderer_swap_stats(int window_ms, int reset, char *out, int cap) {
-    SwapStats r = swap_stats(window_ms, reset);
-    return snprintf(out, cap,
-        "\"swaps\":%u,\"span_ms\":%.1f,\"fps\":%.2f,\"mean_us\":%u,\"p50_us\":%u,"
-        "\"p95_us\":%u,\"p99_us\":%u,\"max_us\":%u,\"hitches\":%u",
-        r.k, r.span_ms, r.fps, r.mean, r.p50, r.p95, r.p99, r.max, r.hitch);
-}
-
-/* FPS telemetry title: what reached the screen over the last second. */
-void gl_renderer_swap_summary(double *fps, unsigned *hitches, unsigned *max_ms) {
-    SwapStats r = swap_stats(1000, 0);
-    *fps = r.fps; *hitches = r.hitch; *max_ms = r.max / 1000u;
 }
 
 static void *pt_cb_present(void *user, int slot, void *ready) {

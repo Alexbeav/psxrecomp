@@ -650,7 +650,6 @@ static void present_session_reset(void) {
     smooth_60_reset();
 }
 
-extern "C" void gl_renderer_swap_summary(double *fps, unsigned *hitches, unsigned *max_ms);
 static int fps_telemetry_enabled(void) {
     if (s_fps_telemetry_enabled < 0) {
         const char *e = std::getenv("PSX_FPS_TELEMETRY");
@@ -9263,11 +9262,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
                              s_fps_base_title.c_str(), fps, speed);
                 }
-                if (g_gl_active) {  /* real swaps: what the player sees */
-                    double sfps = 0; unsigned hitch = 0, worst = 0;
-                    gl_renderer_swap_summary(&sfps, &hitch, &worst);
+                {
+                    PsxPresentCadence cadence{};
+                    psx_video_telemetry_cadence(1000, 0, &cadence);
+                    const double sfps = cadence.fps;
+                    const unsigned hitch = cadence.hitches, worst = cadence.max_us / 1000;
                     size_t l = strlen(title);
-                    snprintf(title + l, sizeof(title) - l, " [Screen %.1f fps, %u hitch, max %u ms]",
+                    snprintf(title + l, sizeof(title) - l, " [Present %.1f fps, %u hitch, max %u ms]",
                              sfps, hitch, worst);
                 }
                 SDL_SetWindowTitle(sdl_window, title);
