@@ -49,7 +49,6 @@
 #include "autocompile.h"
 #include "code_provider.h"
 #include "host_span_ring.h"
-#include "input_replay.h"
 #ifdef PSX_HAS_OVERLAY_DISPATCH
 extern "C" void psx_overlay_static_get_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *);
 #endif
@@ -134,6 +133,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "mod_plugins.h"
 #include "mod_local_input_policy.h"
 #include "mod_session_baseline.h"
+#include "func_override.h"
 #include "mod_runtime.h"
 #include "video_texture_filter.h"
 #include "video_telemetry.h"
@@ -1082,10 +1082,6 @@ static void post_load_probe_on_vblank(int turbo_active, int present_reached) {
  * restored VRAM — including a blank if display was disabled in the snapshot. */
 static void savestate_input_guard_arm(void);
 extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) {
-    if (is_load && !ok && std::getenv("PSX_INPUT_REPLAY")) {
-        std::puts("psxrecomp: requested input replay savestate failed to load");
-        std::exit(1);
-    }
     char buf[64];
     const int disp = slot + 1;
     if (!is_load && ok)
@@ -1108,16 +1104,11 @@ extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) 
 
 extern "C" void psx_frontend_on_savestate_refused(int is_load, int slot,
                                                   const char *reason) {
-    if (is_load && std::getenv("PSX_INPUT_REPLAY")) {
-        std::puts(reason);
-        std::exit(1);
-    }
     (void)is_load; (void)slot;
     host_osd_push(reason, 3000);
 }
 
 extern "C" void psx_frontend_on_savestate_loaded(void) {
-    input_replay_on_load(s_frame_count + 1);
     psx_projection_reset_session();
     psx_local_mouse_reset();
     mod_runtime_on_savestate_loaded();
@@ -3889,10 +3880,6 @@ static void refresh_host_display_cadence(int force_log, int force_probe) {
         return;
     }
     g_host_refresh_last_probe_ms = now_ms ? now_ms : 1ull;
-    struct ProbeSpan {
-        uint64_t start = host_span_begin();
-        ~ProbeSpan() { host_span_end(HSPAN_DISPLAY_PROBE, start, 0); }
-    } probe_span;
 
     double host_hz = 0.0, max_hz = 0.0;
     if (disp_idx >= 0) {
@@ -4070,22 +4057,9 @@ static int present_effective_swap_interval(void) {
 }
 
 static int present_should_wall_pace(void) {
-    static const bool queued_pace = [] {
-        const char *e = std::getenv("PSX_GL_ASYNC_GUEST_PACE");
-        return !(e && e[0] == '0');
-    }();
-    /* The presenter explicitly waits for each guest-rate deadline. Bounded
-     * render/present queues carry that clock back to the guest, independently
-     * of driver vsync; a second guest timer only serializes the pipeline. */
-    if (queued_pace && g_frame_interpolation && g_gl_active &&
-        gl_renderer_render_thread_active() && !rt_held() &&
-        gl_renderer_interpolation_async_cadence())
-        return 0;
-    /* While this thread owns the GL context, temporal presentation subdivides
-     * this same interval. When rendering is asynchronous, cap the guest here:
-     * the renderer's presentation deadline belongs to its own thread. */
+    /* The single-context temporal-blend path subdivides this same stock frame
+     * interval. Do not run the outer pacer as well or guest timing doubles. */
     if (g_frame_interpolation && g_gl_active &&
-        (!gl_renderer_render_thread_active() || rt_held()) &&
         gl_renderer_interpolation_owns_cadence())
         return 0;
     /* Run the pacer even when driver vsync is SUPPOSED to own the cadence.
@@ -4830,11 +4804,7 @@ static void runtime_perf_frame_end() {
 
 class RuntimePerfFrameScope {
 public:
-    uint64_t start = host_span_begin();
-    ~RuntimePerfFrameScope() {
-        runtime_perf_frame_end();
-        host_span_end(HSPAN_FRAME_PRESENT, start, 0);
-    }
+    ~RuntimePerfFrameScope() { runtime_perf_frame_end(); }
 };
 
 static uint64_t runtime_perf_section_begin() {
@@ -4998,142 +4968,6 @@ static void openxr_ready_report_tick(uint64_t frames) {
             "psxrecomp: cannot publish OpenXR startup receipt '%s': %s\n",
             path.string().c_str(), error.c_str());
     }
-}
-
-
-/* Explicit, file-driven production benchmark. No debug server, sampler or
- * per-instruction tracing is needed. Capture outside the measured interval;
- * export the existing frame ring before requesting the normal quit path. */
-struct ReplayWorkSample { uint64_t frame, guest, pacer, queue, completed; };
-static std::vector<ReplayWorkSample> g_replay_work;
-static void input_replay_frame_completed(uint64_t frame) {
-    if (g_replay_work.empty()) return;
-    auto &sample = g_replay_work[frame % HOST_FRAME_STAMP_CAP];
-    if (sample.frame == frame) sample.completed = host_clock_us();
-}
-static void input_replay_frontend_tick(uint64_t frame) {
-    uint64_t relative = input_replay_frame(frame);
-    if (relative == UINT64_MAX) return;
-    static uint64_t stop = 0, seconds = 0, deadline_us = 0;
-    static const char *report = nullptr, *shots = nullptr;
-    static bool initialized = false, finished = false;
-    auto &work = g_replay_work;
-    if (!initialized) {
-        if (const char *e = std::getenv("PSX_INPUT_REPLAY_STOP")) stop = std::strtoull(e, nullptr, 10);
-        if (const char *e = std::getenv("PSX_INPUT_REPLAY_SECONDS")) {
-            char *end = nullptr;
-            seconds = std::strtoull(e, &end, 10);
-            if (!seconds || seconds > 60 || !end || *end || stop)
-                throw std::runtime_error("replay seconds must be 1..60, without replay stop");
-        }
-        report = std::getenv("PSX_INPUT_REPLAY_REPORT");
-        shots = std::getenv("PSX_INPUT_REPLAY_SHOTS");
-        if (report && *report) {
-            work.resize(HOST_FRAME_STAMP_CAP);
-            if (g_gl_active) gl_renderer_swap_timing_start(host_clock_us);
-        }
-        initialized = true;
-    }
-    if (finished) return;
-    if (seconds && relative >= 900 && !deadline_us)
-        deadline_us = host_clock_us() + seconds * 1000000;
-    if (deadline_us && !stop && host_clock_us() >= deadline_us) stop = relative;
-    if (report && *report) {
-        RtStats rs{};
-        rt_get_stats(&rs);
-        const uint64_t hz = SDL_GetPerformanceFrequency();
-        work[frame % HOST_FRAME_STAMP_CAP] = {frame, g_runtime_perf.guest_work_ticks * 1000000 / hz,
-                        g_runtime_perf.pacer_ticks * 1000000 / hz,
-                        (rs.backpressure_ns + rs.ring_full_ns + rs.acquire_ns) / 1000, 0};
-    }
-    if (shots && (relative == 800 || (stop > 0 && relative == stop+2))) {
-        char path[512];
-        std::snprintf(path, sizeof path, "%s-%llu.png", shots, (unsigned long long)relative);
-        present_shot_request(path);
-    }
-    if (!stop || relative < stop+10) return;
-    finished = true;
-    if (report && *report) {
-        FILE *f = std::fopen(report, "w");
-        if (!f) throw std::runtime_error("cannot write input replay frame report");
-        std::fputs("frame,relative,us,interp,checks,faults,io_kb,guest_us,pacer_us,queue_us,completed_us\n", f);
-        uint64_t total = host_frame_stamp_total();
-        uint64_t first = total > HOST_FRAME_STAMP_CAP ? total-HOST_FRAME_STAMP_CAP : 0;
-        for (uint64_t i=first; i<total; i++) {
-            uint32_t fr, ii, ck, pf, io; uint64_t us;
-            if (!host_frame_stamp_get(i, &fr, &us, &ii, &ck, &pf, &io)) continue;
-            uint64_t rel = input_replay_frame(fr);
-            if (rel == UINT64_MAX) continue;
-            const auto &w = work[fr % HOST_FRAME_STAMP_CAP];
-            if (w.frame != fr) continue;
-            std::fprintf(f, "%u,%llu,%llu,%u,%u,%u,%u,%llu,%llu,%llu,%llu\n", fr,
-                         (unsigned long long)rel, (unsigned long long)us, ii, ck, pf, io,
-                         (unsigned long long)w.guest, (unsigned long long)w.pacer,
-                         (unsigned long long)w.queue, (unsigned long long)w.completed);
-        }
-        if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay frame report");
-        std::string span_path = std::string(report) + ".spans.csv";
-        f = std::fopen(span_path.c_str(), "w");
-        if (!f) throw std::runtime_error("cannot write input replay span report");
-        std::fputs("start_us,dur_us,frame,kind,emu,arg\n", f);
-        total = host_span_total();
-        first = total > HOST_SPAN_RING_CAP ? total-HOST_SPAN_RING_CAP : 0;
-        for (uint64_t i=first; i<total; ++i) {
-            HostSpan s;
-            if (host_span_get(i, &s))
-                std::fprintf(f, "%llu,%u,%u,%s,%u,%u\n", (unsigned long long)s.t0_us,
-                             s.dur_us, s.frame, host_span_kind_name(s.kind), s.emu, s.arg);
-        }
-        if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay span report");
-        if (g_gl_active) {
-            char thread_json[8192];
-            int length = gl_renderer_render_thread_json(thread_json, sizeof thread_json);
-            if (length < 0 || length >= (int)sizeof thread_json)
-                throw std::runtime_error("render thread report exceeds its buffer");
-            std::string thread_path = std::string(report) + ".rth.json";
-            f = std::fopen(thread_path.c_str(), "w");
-            if (!f) throw std::runtime_error("cannot write input replay render thread report");
-            std::fprintf(f, "{%.*s}\n", length, thread_json);
-            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay render thread report");
-            GlRenderWorkStats stats{};
-            gl_renderer_work_stats(&stats);
-            std::vector<uint64_t> swaps(GL_SWAP_TIMING_CAP);
-            const int swap_count = gl_renderer_swap_timestamps(swaps.data(), (int)swaps.size());
-            std::string swap_path = std::string(report) + ".present.csv";
-            f = std::fopen(swap_path.c_str(), "w");
-            if (!f) throw std::runtime_error("cannot write input replay presentation report");
-            std::fputs("us\n", f);
-            for (int i=0; i<swap_count; ++i) std::fprintf(f,"%llu\n",(unsigned long long)swaps[i]);
-            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay presentation report");
-            std::string path = std::string(report) + ".render.csv";
-            f = std::fopen(path.c_str(), "w");
-            if (!f) throw std::runtime_error("cannot write input replay render report");
-            std::fputs("stat,count,total_us,max_us\n", f);
-            const char *counts[10] = {"queue_uploads", "replay_draws", "bloom_fused", "coverage_depth", "centre_pruned", "texel_cache_hits", "texel_cache_misses", "texel_cache_evictions", "hiw_copy_blits", "identity_copies"};
-            for (int i=0; i<10; ++i) std::fprintf(f, "%s,%llu,0,0\n", counts[i], (unsigned long long)stats.counts[i]);
-            const char *spans[8] = {"depth_restore", "queue_replay", "vram_copy", "interp_capture", "interp_interval", "centre_copy", "depth_gpu_sample", "colour_gpu_sample"};
-            double us = stats.frequency ? 1e6 / stats.frequency : 0;
-            for (int i=0; i<8; ++i) std::fprintf(f, "%s,%llu,%.3f,%.3f\n", spans[i],
-                (unsigned long long)stats.calls[i], stats.ticks[i]*us, stats.max_ticks[i]*us);
-            for (int i=0; i<8; ++i) std::fprintf(f, "%s_prior_drain,%llu,%.3f,%.3f\n", spans[i],
-                (unsigned long long)stats.calls[i], stats.prior_ticks[i]*us, stats.prior_max_ticks[i]*us);
-            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay render report");
-        }
-        double gpu[18];
-        if (g_gl_active && gl_renderer_perf_aggregate(-1, gpu) > 0) {
-            std::string path = std::string(report) + ".gpu.csv";
-            f = std::fopen(path.c_str(), "w");
-            if (!f) throw std::runtime_error("cannot write input replay GPU report");
-            const char *names[18] = {"samples", "total_ms", "total_max_ms", "cpu_ms",
-                "present_wall_ms", "scene_gpu_ms", "scene_gpu_max_ms", "present_gpu_ms",
-                "present_gpu_max_ms", "primitives", "mirror_gpu_ms", "mirror_gpu_max_ms",
-                "mirror_passes", "cpu_flush_ms", "cpu_wide_ms", "batches", "wide_sets", "fbo_creations"};
-            std::fputs("stat,value\n", f);
-            for (int i=0; i<18; ++i) std::fprintf(f, "%s,%.6f\n", names[i], gpu[i]);
-            if (std::fclose(f) != 0) throw std::runtime_error("cannot finish input replay GPU report");
-        }
-    }
-    SDL_Event event{}; event.type = SDL_QUIT; SDL_PushEvent(&event);
 }
 
 static void frame_report_tick(uint64_t frames) {
@@ -5350,10 +5184,6 @@ static void sdl_audio_pump_midframe(void) {
 }
 
 static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
-    struct AudioSpan {
-        uint64_t start = host_span_begin();
-        ~AudioSpan() { host_span_end(HSPAN_AUDIO_UPDATE, start, 0); }
-    } audio_span;
     {   /* Tag audio events with the vblank frame counter. */
         extern uint64_t s_frame_count;
         audio_trace_note_frame((uint32_t)s_frame_count);
@@ -9181,10 +9011,6 @@ static int debug_toggles_on(void);
 static int debug_toggle_key(int key, char *out, int cap);
 #endif
 static bool drain_host_events() {
-    struct EventSpan {
-        uint64_t start = host_span_begin();
-        ~EventSpan() { host_span_end(HSPAN_HOST_EVENTS, start, 0); }
-    } event_span;
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (psx_local_mouse_event(ev)) continue;
@@ -9379,8 +9205,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     int override = -1;
     int override_p2 = -1;
 #endif
-    int replay_override = input_replay_buttons(s_frame_count);
-    if (replay_override >= 0) override = replay_override;
     /* Always-on wall-time stamp for this guest frame (host_span_ring.h). */
     extern uint64_t s_frame_count;
     uint32_t stamp_static_checks = 0;
@@ -9402,7 +9226,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     }
     runtime_perf_frame_begin();
     RuntimePerfFrameScope runtime_perf_frame_scope;
-    input_replay_frontend_tick(s_frame_count);
     runtime_perf_diag_tick();
 
     /* Lightweight frontend telemetry from PR #13. Count simulated vblanks rather
@@ -9439,6 +9262,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 } else {
                     snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
                              s_fps_base_title.c_str(), fps, speed);
+                }
+                {
+                    PsxPresentCadence cadence{};
+                    psx_video_telemetry_cadence(1000, 0, &cadence);
+                    const double sfps = cadence.fps;
+                    const unsigned hitch = cadence.hitches, worst = cadence.max_us / 1000;
+                    size_t l = strlen(title);
+                    snprintf(title + l, sizeof(title) - l, " [Present %.1f fps, %u hitch, max %u ms]",
+                             sfps, hitch, worst);
                 }
                 SDL_SetWindowTitle(sdl_window, title);
             }
@@ -9751,11 +9583,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * frame hooks may touch guest state, so neither may depend on whether this
      * frame is presented — otherwise headless validation runs a different game
      * than the windowed build. Hooks still run after all normal input sampling. */
-    {
-        const uint64_t start = host_span_begin();
-        mod_call_frame_hooks();
-        host_span_end(HSPAN_MOD_WORK, start, 0);
-    }
+    mod_call_frame_hooks();
 
     /* Resize-driven mode updates the pending aspect during BIOS boot too, but
      * the actual wide compositor remains disengaged until game entry. No-op
@@ -10524,7 +10352,8 @@ static void render_thread_vblank(void) {
             }
         } else {
             std::fprintf(stdout, "psxrecomp: render thread requested but not started "
-                         "(needs the OpenGL backend without netplay or a 24-bit display)\n");
+                         "(needs the OpenGL backend without netplay, frame interpolation "
+                         "or a 24-bit display)\n");
             if (g_frame_generation)
                 std::fprintf(stdout, "psxrecomp: Smooth motion (frame generation) needs the render thread; off\n");
         }
@@ -11279,13 +11108,6 @@ extern "C" int psx_dynres_status_json(char *out, int cap) {
 
 
 static void sdl_vblank_present(void) {
-    extern uint64_t s_frame_count;
-    struct ReplayCompletion {
-        ~ReplayCompletion() {
-            extern uint64_t s_frame_count;
-            input_replay_frame_completed(s_frame_count);
-        }
-    } completion;
     sync_guest_cadence_to_video_standard();
     NetplayVblankEpilogue ep = sdl_vblank_present_body();
     render_thread_vblank();
@@ -18542,6 +18364,26 @@ int main(int argc, char** argv) {
                     (int)addresses.size());
             }
             {
+                // [[widescreen.cull.sxy]]: four slots per site.
+                std::vector<uint32_t> vertices, fold_addresses, fold_expected,
+                    vertex_regs, consumer_addresses, consumer_expected;
+                for (const auto& site : gc.ws_cull_sxy_sites) {
+                    vertices.push_back(site.vertices);
+                    for (size_t k = 0; k < 4; k++) {
+                        const bool used = k < site.vertices;
+                        fold_addresses.push_back(used ? site.fold_addresses[k] : 0u);
+                        fold_expected.push_back(used ? site.fold_expected[k] : 0u);
+                        vertex_regs.push_back(used ? site.vertex_regs[k] : 0u);
+                    }
+                    consumer_addresses.push_back(site.consumer_address);
+                    consumer_expected.push_back(site.consumer_expected);
+                }
+                gpu_ws_set_sxy_cull_sites(
+                    vertices.data(), fold_addresses.data(), fold_expected.data(),
+                    vertex_regs.data(), consumer_addresses.data(),
+                    consumer_expected.data(), (int)vertices.size());
+            }
+            {
                 std::vector<uint32_t> addresses, expected, masks;
                 for (const auto& site : gc.ws_cull_masked_reject_sites) {
                     addresses.push_back(site.address);
@@ -20599,6 +20441,11 @@ int main(int argc, char** argv) {
             netplay && PSXRecompV4::mod_runtime_netplay_view_active() ? 1 : 0);
         psx_mod_immediate_begin_session(netplay ? 1 : 0);
         mod_runtime_activate_plugins();
+        if (const char* error = mod_runtime_activation_error()) {
+            std::fprintf(stderr,"psxrecomp: %s\n",error);
+            return false;
+        }
+        func_override_install();
         if (!psx_mod_immediate_session_valid()) {
             std::fprintf(stderr, "psxrecomp: immediate-selector enhancements are offline-only\n");
             return false;
@@ -21253,12 +21100,6 @@ session_reboot:
         memcard_init_slots(memcard_dir_str.c_str(), slots);
     }
     if (!rematch_session) {
-        if (const char *route = std::getenv("PSX_INPUT_REPLAY")) {
-            if (psx_netplay_active() || !input_replay_load(route)) {
-                std::puts("psxrecomp: input replay requires a valid route and an offline session");
-                return 1;
-            }
-        }
         std::atexit(memcard_flush_all);
         /* Persist the game's native OPTION settings on any exit path (belt-and-
          * suspenders; save-on-change already persists them live). No-op if not yet

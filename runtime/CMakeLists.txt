@@ -23,14 +23,16 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(postfx_publication_test tests/test_postfx_publication.cpp)
+    target_include_directories(postfx_publication_test PRIVATE include)
+    add_test(NAME postfx_publication_test COMMAND postfx_publication_test)
     # Windows UTF-8 text boundary (issue #371): the helpers legacy Windows
     # relies on, and — with the shipped manifest — a UTF-8 process code page.
     if(WIN32)
         add_executable(host_time_threads_test tests/test_host_time_threads.c src/host_time.c)
         target_include_directories(host_time_threads_test PRIVATE include)
         add_test(NAME host_time_threads_test COMMAND host_time_threads_test)
-        # Four waves each have their own 10-second lost-wakeup watchdog.
-        set_tests_properties(host_time_threads_test PROPERTIES TIMEOUT 45)
+        set_tests_properties(host_time_threads_test PROPERTIES TIMEOUT 15)
         add_executable(win_utf8_helpers_test tests/test_win_utf8.cpp)
         target_include_directories(win_utf8_helpers_test PRIVATE include)
         add_test(NAME win_utf8_helpers_test COMMAND win_utf8_helpers_test)
@@ -366,30 +368,6 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-render-thread-results")
         set_tests_properties(gl_render_thread_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
-        foreach(_interp_mode normal hiw wide_quality hiw_wide_quality hiw_wide_quality_present)
-            set(_interp_args --interpolation)
-            if(_interp_mode MATCHES "wide_quality")
-                list(APPEND _interp_args --wide-present --quality)
-            endif()
-            add_test(NAME gl_render_thread_interpolation_${_interp_mode}_test
-                COMMAND "${Python3_EXECUTABLE}"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py"
-                    --cc "${CMAKE_C_COMPILER}"
-                    --sdl-include "${_gl_scale_sdl_inc}"
-                    --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
-                    ${_interp_args}
-                    --output "${CMAKE_CURRENT_BINARY_DIR}/gl-rth-interp-${_interp_mode}")
-            set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
-                PROPERTIES LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
-            if(_interp_mode MATCHES "hiw")
-                set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
-                    PROPERTIES ENVIRONMENT "PSX_GL_HIRES_WINDOW=1")
-            endif()
-            if(_interp_mode MATCHES "_present$")
-                set_tests_properties(gl_render_thread_interpolation_${_interp_mode}_test
-                    PROPERTIES ENVIRONMENT "PSX_GL_HIRES_WINDOW=1;PSX_GL_TEST_PRESENT_THREAD=1")
-            endif()
-        endforeach()
         # Frame generation ([video] frame_generation): the real presented
         # images are identical with it off and on (VRAM and native-wide
         # presents), generated frames are presented, and an in-between frame
@@ -966,11 +944,6 @@ if(BUILD_TESTING)
     target_include_directories(pgxp_test PRIVATE include)
     add_test(NAME pgxp_test COMMAND pgxp_test)
 
-    add_executable(pgxp_production_test tests/test_pgxp.cpp src/pgxp.cpp src/psx_ram_geometry.c)
-    target_include_directories(pgxp_production_test PRIVATE include)
-    target_compile_definitions(pgxp_production_test PRIVATE PSX_NO_DEBUG_TOOLS)
-    add_test(NAME pgxp_production_test COMMAND pgxp_production_test)
-
     add_executable(pgxp_word_shadow_test tests/test_pgxp_word_shadow.cpp
         src/pgxp.cpp src/psx_ram_geometry.c)
     target_include_directories(pgxp_word_shadow_test PRIVATE include)
@@ -1021,7 +994,7 @@ if(BUILD_TESTING)
     endforeach()
 
     foreach(_pgxp_isolated_test
-            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_production_test pgxp_session_test pgxp_session_hooks_test)
+            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test pgxp_session_hooks_test)
         target_sources(${_pgxp_isolated_test} PRIVATE tests/pgxp_test_mod_memory.cpp)
     endforeach()
 
@@ -1312,6 +1285,16 @@ if(BUILD_TESTING)
     target_include_directories(bios_hle_plan_test PRIVATE include)
     add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
 
+    # Every func_override failure mode is silent at runtime: a registration
+    # that is never consulted, a package override that survives clear-mods
+    # (a netplay divergence), a residency guard that corrupts instead of
+    # declining. Drives the real g_psx_func_override_hook pointer.
+    add_executable(func_override_test
+        tests/test_func_override.c
+        src/func_override.c)
+    target_include_directories(func_override_test PRIVATE include)
+    add_test(NAME func_override_test COMMAND func_override_test)
+
     # A cue, conventional raw image, or Steam .car image is a valid pick; each
     # must mount the same disc and identify off the same data track.
     add_executable(sbi_setup_test tests/test_sbi_setup.cpp src/psx_sha256.c)
@@ -1441,6 +1424,7 @@ if(BUILD_TESTING)
         src/mod_immediate.c
         src/host_overlay.c
         tests/test_mod_runtime.cpp
+        src/func_override.c
         src/iso_reader_c.cpp
         src/host_span_ring.c
         src/mod_runtime.cpp
@@ -1726,10 +1710,6 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME frame_interpolation_schedule_test
              COMMAND frame_interpolation_schedule_test)
-
-    add_executable(input_replay_test tests/test_input_replay.c src/input_replay.c)
-    target_include_directories(input_replay_test PRIVATE include)
-    add_test(NAME input_replay_test COMMAND input_replay_test "${CMAKE_CURRENT_BINARY_DIR}/input_replay_fixture.txt")
 
     add_executable(render_pass_plan_test
         tests/test_render_pass_plan.c

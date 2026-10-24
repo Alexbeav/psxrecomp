@@ -839,7 +839,7 @@ static int transaction_end(int eye, uint32_t alpha, int keep) {
 
 static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass,
                               PSXModRenderPassFn fn, void *user, int eye) {
-    uint64_t t0, t1, tv, tc, tb, tg, te, tr, hash_before = 0, hash_after = 0;
+    uint64_t t0, t1, tb, tg, te, tr, hash_before = 0, hash_after = 0;
     uint64_t cycles_before;
     uint32_t leaks;
     int ok = 0, open, reuse;
@@ -916,7 +916,6 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     }
     s_open_generation = 0;
     s_leaks_before = gl_renderer_pass_leaks();
-    tv = gl_renderer_perf_ticks();
 
     /* A stereo eye, or the second matte of a capture, whose machine state still
      * equals the baseline captured for it skips re-capturing that state. */
@@ -939,7 +938,6 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
     }
     if (reuse_baseline) s_stereo.checkpoint_reuses++;
     else { s_stereo.checkpoint_saves++; s_stereo.checkpoint_ram_bytes += s_ck.ram_bytes; }
-    tc = gl_renderer_perf_ticks();
     if (verify_on()) hash_before = state_hash(cpu);
 
     tb = gl_renderer_perf_ticks();
@@ -1081,16 +1079,6 @@ static int render_transaction(struct CPUState *cpu, const PSXModRenderPass *pass
         double ms = (double)(t1 - t0) * 1000.0 /
                     (double)gl_renderer_perf_frequency();
         s_stats.last_pass_ms = ms;
-        s_stats.timed_passes++;
-        s_stats.total_gl_begin_ms += (tv - t0) * s_ms_per_tick;
-        s_stats.total_checkpoint_ms += (tc - tv) * s_ms_per_tick;
-        s_stats.total_verify_before_ms += (tb - tc) * s_ms_per_tick;
-        s_stats.total_guest_ms += (tg - tb) * s_ms_per_tick;
-        s_stats.total_gl_end_ms += (te - tg) * s_ms_per_tick;
-        s_stats.total_restore_ms += (tr - te) * s_ms_per_tick;
-        s_stats.total_verify_after_ms += (t1 - tr) * s_ms_per_tick;
-        s_stats.total_pass_ms += ms;
-        if (ms > s_stats.max_pass_ms) s_stats.max_pass_ms = ms;
         s_stats.avg_pass_ms = s_stats.avg_pass_ms > 0.0
             ? s_stats.avg_pass_ms * 0.9 + ms * 0.1 : ms;
     }
