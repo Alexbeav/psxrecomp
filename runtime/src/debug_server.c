@@ -9485,7 +9485,7 @@ static void handle_hd_uploads(int id, const char *json) {
 static void handle_fmv_hd(int id, const char *json) {
     (void)json;
     char buf[512];
-    gpu_fmv_hd_debug_json(buf, sizeof buf);
+    gl_renderer_fmv_hd_debug_json(buf, sizeof buf);
     send_fmt("{\"id\":%d,\"ok\":true,%s}", id, buf);
 }
 
