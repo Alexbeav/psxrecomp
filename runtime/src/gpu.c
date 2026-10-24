@@ -717,6 +717,8 @@ int gpu_ws_netplay_local_viewport_width(void) {
  * unconditionally so a probe can sweep the cull margin live (0 = force 4:3
  * cull while still stretching; large = over-draw) at a fixed camera position.
  * -1 = normal computed margin. */
+static uint32_t gpu_h_display_width(void);
+static int ws_px_to_320(int px);
 static int ws_margin_override = -1;
 static int ws_cull_guard_pixels = 0;
 static int ws_activation_guard_pixels = 0;
@@ -1170,7 +1172,7 @@ void gpu_ws_set_cull_scale_sites(const uint32_t *addresses,
  * (x < half*z/H) widens to the live view by scaling the bound by
  * (half + margin) / half. 64-bit intermediate; saturates to int32. */
 int32_t psx_ws_cull_scale(int32_t bound, int32_t half_extent) {
-    const int32_t margin = psx_ws_x_margin();
+    const int32_t margin = psx_ws_x_margin_320();
     if (margin <= 0 || half_extent <= 0) return bound;
     int64_t v = (int64_t)bound * (int64_t)(half_extent + margin) / half_extent;
     if (v > INT32_MAX) v = INT32_MAX;
@@ -1226,7 +1228,7 @@ void gpu_ws_set_angle_sites(const uint32_t *addresses,
 
 uint32_t psx_ws_angle_widen(uint32_t vanilla) {
     ws_angle_calls++;
-    const int margin = psx_ws_x_margin();
+    const int margin = psx_ws_x_margin_320();
     if (margin <= 0) {
         ws_angle_43_identity++;
         return vanilla;
@@ -1449,7 +1451,7 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
 
     ws_aspect_cone_calls++;
     site->calls++;
-    const int total_margin = psx_ws_x_margin();
+    const int total_margin = psx_ws_x_margin_320();
     if (total_margin <= 0) {
         ws_aspect_cone_43_identity++;
         site->identity_43++;
@@ -1474,8 +1476,8 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
     }
 
     const int visible_margin =
-        (total_margin > ws_cull_guard_pixels)
-            ? total_margin - ws_cull_guard_pixels : 0;
+        (total_margin > ws_px_to_320(ws_cull_guard_pixels))
+            ? total_margin - ws_px_to_320(ws_cull_guard_pixels) : 0;
     const int32_t fx =
         (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 0u);
     const int32_t fz =
@@ -1494,7 +1496,7 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
         !in_visible && !in_guard && state->active &&
         psx_ws_aspect_cone_contains(
             x, z, y, fx, fz, fy, threshold,
-            total_margin + (int)ws_aspect_cone_hysteresis_pixels);
+            total_margin + ws_px_to_320((int)ws_aspect_cone_hysteresis_pixels));
 
     if (!in_visible && !in_guard && !in_hysteresis) {
         state->active = 0;
@@ -1547,6 +1549,18 @@ void gpu_ws_set_local_view_only(int on) { ws_local_view_only = on ? 1 : 0; }
 void gpu_ws_set_local_view_scope(int on) { ws_local_view_scope = on ? 1 : 0; }
 int gpu_ws_local_view_only(void) { return ws_local_view_only; }
 
+/* Half of the game's current horizontal display width (160 for 320 modes). */
+static int ws_cull_half_width(void) {
+    int src_w = 0;
+    uint32_t w;
+    if (ws_local_viewport_layout(NULL, &src_w, NULL, NULL))
+        w = (uint32_t)src_w;
+    else
+        w = gpu_h_display_width();
+    if (w < 64u) w = 320u;
+    return (int)(w / 2u);
+}
+
 int psx_ws_x_margin(void) {
     if (ws_local_view_only && !ws_local_view_scope) return 0;
     if (ws_margin_override >= 0) return ws_margin_override;
@@ -1565,8 +1579,26 @@ int psx_ws_x_margin(void) {
         return ws_nw_configured_offset() * (ws_view_camera_addr ? 2 : 1)
                + ws_cull_guard_pixels;
     if (!ws_active()) return 0;
-    return (160 * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
+    /* The reveal is a fraction of the game's own half-width: a 512-wide mode
+     * (Army Men in-game) hides 256*(1/s-1) px per side, not the 160*(1/s-1)
+     * a 320 mode does. The screen-X compares live in that mode's pixels. */
+    return (ws_cull_half_width() * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
            + ws_cull_guard_pixels;
+}
+
+/* A pixel quantity of the current display mode on the 320-pixel basis. */
+static int ws_px_to_320(int px) {
+    const int half = ws_cull_half_width();
+    return half == 160 ? px : (int)(((int64_t)px * 160 + half / 2) / half);
+}
+
+/* The same margin on the 320-pixel basis. Camera-space frustum angles, aspect
+ * cones, scaled bounds and gameplay-field scalers are ratios authored against
+ * a 160-pixel half-screen; they must not grow with the display mode. */
+int psx_ws_x_margin_320(void) {
+    const int m = psx_ws_x_margin();
+    const int half = ws_cull_half_width();
+    return half == 160 ? m : (int)(((int64_t)m * 160 + half / 2) / half);
 }
 
 int psx_ws_activation_margin(void) {
@@ -1576,7 +1608,7 @@ int psx_ws_activation_margin(void) {
 
 int32_t psx_ws_player_x_bound(int32_t vanilla)
 {
-    const int margin = psx_ws_x_margin();
+    const int margin = psx_ws_x_margin_320();
     if (margin <= 0) return vanilla;
     return (int32_t)(((int64_t)vanilla * (320 + 2 * margin)) / 320);
 }
@@ -4591,12 +4623,10 @@ int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
 }
 
-void gpu_get_display_info(GpuDisplayInfo* out) {
-    out->display_x = display_area_x;
-    out->display_y = display_area_y;
-    out->depth24   = (int)(display_depth & 1u);
-    out->disabled  = (int)display_disabled;
-
+/* Visible horizontal pixel width (GP1(08h) mode + GP1(06h) range). Shared by
+ * gpu_get_display_info and the widescreen cull margin, which is called per
+ * vertex and must not pay for the vertical layout. */
+static uint32_t gpu_h_display_width(void) {
     /* Dot-clock divider from GP1(08h) hres (PSX-SPX graphicsprocessingunitgpu,
      * "Horizontal Timings", Dotclocks: /10, /8, /7, /5, /4). */
     uint32_t cycles;
@@ -4619,6 +4649,18 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         w = ((dots / cycles) + 2u) & ~3u;
         if (w == 0u) w = 4u;
     }
+
+    if (w > 640) w = 640;
+    return w;
+}
+
+void gpu_get_display_info(GpuDisplayInfo* out) {
+    out->display_x = display_area_x;
+    out->display_y = display_area_y;
+    out->depth24   = (int)(display_depth & 1u);
+    out->disabled  = (int)display_disabled;
+
+    uint32_t w = gpu_h_display_width();
 
     /* DuckStation GetFullDisplayResolution: clamp Y1/Y2 to the broadcast
      * active region before taking the difference. Unclamped Y2 past the
@@ -4645,7 +4687,7 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
      * of the video — do not reintroduce it. Right-edge junk is a separate
      * present/filter issue, not a reason to shrink CRTC width. */
 
-    /* Clamp to sane maximums */
+    /* Clamp to sane maximums (gpu_h_display_width clamps too) */
     if (w > 640) w = 640;
     if (out->depth24) {
         if (screen_h > PSX_DISPLAY_PRESENT_MAX_HEIGHT)
