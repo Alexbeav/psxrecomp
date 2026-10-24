@@ -6779,13 +6779,15 @@ static void present_fmv_hd(const FmvHdImage *hd) {
 }
 
 void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linear,
-                         int force_4_3, int content_w) {
+                         int force_4_3, int content_w, uint64_t guest_cycle,
+                         uint64_t guest_frame, uint64_t guest_epoch) {
     GL_RT_SYNC("present");
     if (!s_ctx) return;
     if (s_present_d24) {
         FmvHdImage hd;
-        if (gpu_fmv_hd_lookup(pixels, src_w, src_h, content_w, &hd)) { present_fmv_hd(&hd); return; }
-    }
+        const FmvHdTimeline timeline = { guest_cycle, guest_frame, guest_epoch };
+        if (gpu_fmv_hd_lookup(pixels, src_w, src_h, content_w, timeline, &hd)) { present_fmv_hd(&hd); return; }
+    } else gpu_fmv_hd_reset_tracking();
     interp_reset_history();
     int ww = 0, wh = 0; SDL_GL_GetDrawableSize(s_win, &ww, &wh);
     glDisable(GL_SCISSOR_TEST);

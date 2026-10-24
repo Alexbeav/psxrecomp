@@ -8,8 +8,9 @@
  *               source_index * sub + k.
  * Every presented 24-bit frame's signature is matched against the pack (a local search
  * around the last recognised frame, then a global one); the matching HD frame, decoded
- * ahead by worker threads, is presented instead. Audio, timing and control (skipping the
- * movie) stay the game's own. No pack: no effect.
+ * ahead by worker threads, is presented instead. Subframes advance only with captured
+ * guest cycles. Unknown images and failed decodes show the native scanout. Audio, timing
+ * and control (including movie skips) stay the game's own. No pack: no effect.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -35,9 +36,22 @@ typedef struct FmvHdImage {
     uint64_t serial;        /* changes with the image: otherwise no need to upload it again */
 } FmvHdImage;
 
+/* Captured with the native scanout on the guest thread, never sampled from the
+ * presenter. epoch changes whenever a saved/rewound/rollback timeline is
+ * restored, even when the restored cycle happens to equal the previous one. */
+typedef struct FmvHdTimeline {
+    uint64_t cycle;
+    uint64_t frame;
+    uint64_t epoch;
+} FmvHdTimeline;
+
 /* A presented 24-bit frame (32-bit BGRA, src_w x src_h, content_w useful columns or 0).
  * Returns 1 and fills *out when an HD frame replaces it. Called by the presenter. */
-int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w, FmvHdImage *out);
+int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
+                      FmvHdTimeline timeline, FmvHdImage *out);
+/* Native/non-movie scanout ends the current movie; a later match starts at
+ * subframe zero even if it resembles the previous movie's first frame. */
+void gpu_fmv_hd_reset_tracking(void);
 /* Presenter owner, after its render worker has drained and before SDL teardown.
  * Joins decoders and releases pack/held-image state; the next lookup can reload. */
 void gpu_fmv_hd_shutdown(void);

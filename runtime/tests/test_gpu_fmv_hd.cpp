@@ -52,7 +52,8 @@ int main() {
     if(image)std::fclose(image);
     uint32_t original[4]={0xff000000u,0xff000000u,0xff000000u,0xff000000u};
     FmvHdImage output{};
-    auto lookup=[&]{return gpu_fmv_hd_lookup(original,2,2,2,&output);};
+    FmvHdTimeline timeline{1000, 1, 1};
+    auto lookup=[&]{return gpu_fmv_hd_lookup(original,2,2,2,timeline,&output);};
     for(unsigned variant=0;variant<5;++variant) {
         auto bad=header;
         if(variant==0)bad.sig_w=UINT32_MAX;
@@ -82,7 +83,29 @@ int main() {
               "valid frame decodes after failure or session restart");
         gpu_fmv_hd_shutdown();gpu_fmv_hd_shutdown();
     }
+    /* Host sleep must not advance the movie. Only captured guest cycles may
+     * select the second HD subframe; loading an earlier timeline restarts it. */
+    auto interpolated=header; interpolated.sub=2; index(interpolated);
+    const uint8_t second[16]={255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255};
+    image=std::fopen((root/"movie/frames/000001.png").string().c_str(),"wb");
+    check(image && png_write_rgba(image,second,2,2),"create second movie subframe");
+    if(image)std::fclose(image);
+    timeline={1000,1,2};
+    bool first=false;
+    for(int i=0;i<200 && !first;++i){first=lookup() && output.rgba[0]==0;if(!first)SDL_Delay(2);}
+    check(first,"first subframe decoded");
+    SDL_Delay(50);
+    check(lookup() && output.rgba[0]==0,"pause holds guest subframe despite host time");
+    timeline.cycle+=600000; timeline.frame++;
+    bool advanced=false;
+    for(int i=0;i<200 && !advanced;++i){advanced=lookup() && output.rgba[0]==255;if(!advanced)SDL_Delay(2);}
+    check(advanced,"guest cycles advance interpolated subframe");
+    timeline={1000,1,3};
+    check(lookup() && output.rgba[0]==0,"state-load epoch restarts subframe");
+    original[0]=0xffffffffu;
+    check(!lookup(),"unrecognised movie scanout falls back to native image");
+    gpu_fmv_hd_shutdown();
     fs::remove_all(root);
-    if(!failures)std::cout<<"PASS FMV bounds, allocation/thread failure, real decode, joined shutdown and restart\n";
+    if(!failures)std::cout<<"PASS FMV bounds, lifecycle and guest timeline\n";
     return failures?1:0;
 }

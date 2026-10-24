@@ -179,7 +179,8 @@ void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured);
  * (left-aligned in the letterbox; the rest stays cleared black). Used to hide
  * a trailing depth24 margin without changing CRTC width / stretching. */
 void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linear,
-                         int force_4_3, int content_w);
+                         int force_4_3, int content_w, uint64_t guest_cycle,
+                         uint64_t guest_frame, uint64_t guest_epoch);
 
 /* Bezel art shown in the letterbox/pillarbox margins. Takes RGBA8 pixels; the
  * caller owns them and may free them on return. Passing NULL clears it.

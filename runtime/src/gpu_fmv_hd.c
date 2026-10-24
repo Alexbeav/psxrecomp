@@ -4,6 +4,7 @@
  * compared (mean absolute difference) around the last recognised frame first, then over
  * the whole pack when tracking is lost. Decoding: worker threads read and decode the
  * JPEG/PNG of the upcoming frames ahead into a small ring of RGBA images.
+ * Playback uses the guest cycle captured with each scanout, never host time.
  */
 #include "gpu_fmv_hd.h"
 
@@ -30,7 +31,7 @@ extern SDL_Thread *fmv_hd_test_start_thread(SDL_ThreadFunction, void *);
 #define FMV_WORKERS      6
 #define FMV_FILE_MAX     (64u * 1024u * 1024u)
 #define FMV_DECODE_MAX   (256u * 1024u * 1024u)
-#define FMV_HOLD_S       0.5    /* hold of the last HD frame (not recognised / not ready) */
+#define FMV_GUEST_HZ     33868800ull
 #define FMV_LOCAL_BACK   3
 #define FMV_LOCAL_AHEAD  16
 #define FMV_ACCEPT_LOCAL 14     /* mean difference accepted near the last frame */
@@ -65,25 +66,22 @@ static size_t s_decoded_bytes;
 static size_t s_index_bytes;
 static uint64_t s_clock = 0;
 static int s_cur_movie = -1, s_cur_src = -1;
-static uint64_t s_cur_since = 0;          /* performance counter at the last frame change */
+static uint64_t s_cur_since = 0;          /* guest cycle at the last source-frame change */
+static FmvHdTimeline s_last_timeline;
+static int s_have_timeline;
 static uint64_t s_hd_frames = 0, s_queries = 0, s_misses = 0;
 static uint8_t *s_shown = NULL;           /* copy of the presented HD frame */
 static size_t s_shown_cap = 0;
 static int s_shown_w = 0, s_shown_h = 0;
-static uint64_t s_shown_at = 0, s_held = 0; /* time of the last HD frame; frames held */
 static int s_shown_movie = -1, s_shown_frame = -1;
 static uint64_t s_shown_serial = 0;
 
-/* Mid-movie, falling back to the original frame (4:3 framing, another size) for a single
- * frame makes the screen jump: the last HD frame is held while it is recent. */
-static int hold_last(FmvHdImage *out) {
-    if (!s_shown || !s_shown_w || !s_shown_at) return 0;
-    const double age = (double)(SDL_GetPerformanceCounter() - s_shown_at) / (double)SDL_GetPerformanceFrequency();
-    if (age > FMV_HOLD_S) return 0;
-    out->rgba = s_shown; out->w = s_shown_w; out->h = s_shown_h; out->serial = s_shown_serial;
-    ++s_held;
-    return 1;
+static void reset_tracking(void) {
+    s_cur_movie = s_cur_src = s_shown_movie = s_shown_frame = -1;
+    s_cur_since = 0;
 }
+
+void gpu_fmv_hd_reset_tracking(void) { reset_tracking(); }
 
 static int read_file(const char *path, uint8_t **out, size_t *len) {
     FILE *f = fopen(path, "rb");
@@ -266,7 +264,9 @@ void gpu_fmv_hd_shutdown(void) {
     s_shown_cap = s_decoded_bytes = s_index_bytes = 0;
     s_shown_w = s_shown_h = s_nmovies = s_init = s_stopping = 0;
     s_cur_movie = s_cur_src = s_shown_movie = s_shown_frame = -1;
-    s_cur_since = s_shown_at = s_shown_serial = s_clock = 0;
+    s_cur_since = s_shown_serial = s_clock = 0;
+    s_have_timeline = 0;
+    memset(&s_last_timeline, 0, sizeof s_last_timeline);
 }
 
 static void signature(const uint32_t *bgra, int src_w, int x0, int y0, int w, int h,
@@ -316,10 +316,16 @@ static Slot *slot_for(int movie, int frame, int request) {
 static unsigned s_dbg_best = ~0u;
 static int s_dbg_src_w, s_dbg_src_h, s_dbg_frame = -1;
 
-int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w, FmvHdImage *out) {
+int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
+                      FmvHdTimeline timeline, FmvHdImage *out) {
     init_once();
     if (!s_enabled || !bgra || src_w <= 0 || src_h <= 0 ||
         src_w > 16384 || src_h > 16384 || !out) return 0;
+    if (s_have_timeline && (timeline.epoch != s_last_timeline.epoch ||
+        timeline.cycle < s_last_timeline.cycle || timeline.frame < s_last_timeline.frame))
+        reset_tracking();
+    s_last_timeline = timeline;
+    s_have_timeline = 1;
     ++s_queries;
     s_dbg_src_w = src_w; s_dbg_src_h = src_h; s_dbg_best = ~0u;
     const int cw = (content_w > 0 && content_w < src_w) ? content_w : src_w;
@@ -372,16 +378,17 @@ int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
             }
         }
     }
-    if (best_m < 0) { ++s_misses; s_cur_movie = -1; s_cur_src = -1; return hold_last(out); }
+    if (best_m < 0) { ++s_misses; reset_tracking(); return 0; }
 
-    const uint64_t now = SDL_GetPerformanceCounter();
+    const uint64_t now = timeline.cycle;
     if (best_m != s_cur_movie || best_f != s_cur_src) {
         s_cur_movie = best_m; s_cur_src = best_f; s_cur_since = now;
+        s_shown_movie = s_shown_frame = -1;
     }
     const Movie *mv = &s_movies[best_m];
     int k = 0;
     if (mv->h.sub > 1 && mv->h.fps_num) {
-        const double t = (double)(now - s_cur_since) / (double)SDL_GetPerformanceFrequency();
+        const double t = (double)(now - s_cur_since) / (double)FMV_GUEST_HZ;
         const double phase = t * mv->h.fps_num / (mv->h.fps_den ? mv->h.fps_den : 1) * mv->h.sub;
         if (phase >= mv->h.sub) k = (int)mv->h.sub - 1;
         else if (phase > 0) k = (int)phase;
@@ -416,12 +423,11 @@ int gpu_fmv_hd_lookup(const uint32_t *bgra, int src_w, int src_h, int content_w,
         }
         if (ok) {
             out->rgba = s_shown; out->w = s_shown_w; out->h = s_shown_h; out->serial = s_shown_serial;
-            s_shown_at = now;
         }
     }
     SDL_UnlockMutex(s_mutex);
     if (ok) { ++s_hd_frames; return 1; }
-    return hold_last(out);
+    return 0;
 }
 
 void gpu_fmv_hd_stats(uint64_t *hd_frames, uint64_t *queries, uint64_t *misses) {
@@ -434,8 +440,10 @@ int gpu_fmv_hd_debug_json(char *out, size_t cap) {
     return snprintf(out, cap,
         "\"init\":%d,\"enabled\":%d,\"movies\":%d,\"queries\":%llu,\"hd_frames\":%llu,"
         "\"misses\":%llu,\"last_src\":[%d,%d],\"last_best_dist\":%u,\"last_best_frame\":%d,"
-        "\"cur_src\":%d,\"dy\":%d,\"held\":%llu",
+        "\"cur_src\":%d,\"dy\":%d,\"guest_cycle\":%llu,\"epoch\":%llu",
         s_init, s_enabled, s_nmovies, (unsigned long long)s_queries, (unsigned long long)s_hd_frames,
         (unsigned long long)s_misses, s_dbg_src_w, s_dbg_src_h, s_dbg_best, s_dbg_frame, s_cur_src,
-        s_cur_movie >= 0 ? s_movies[s_cur_movie].dy : 0, (unsigned long long)s_held);
+        s_cur_movie >= 0 ? s_movies[s_cur_movie].dy : 0,
+        (unsigned long long)s_last_timeline.cycle,
+        (unsigned long long)s_last_timeline.epoch);
 }
