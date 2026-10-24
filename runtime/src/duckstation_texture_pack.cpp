@@ -1,5 +1,6 @@
 #include "duckstation_texture_pack.h"
 #include "texture_image_decode.h"
+#include "texture_pack_preload.hpp"
 #define XXH_INLINE_ALL
 #include "../third_party/xxhash.h"
 #include "png_write.h"
@@ -183,6 +184,7 @@ struct Decode {
     std::string path;
     std::shared_ptr<Image> image;
     uint64_t use = 0;
+    bool pinned = false;   /* preloaded: never evicted */
 };
 struct Dump { fs::path path; std::shared_ptr<Image> image; };
 struct DumpHistory { std::unordered_set<std::string> names; std::deque<std::string> order; };
@@ -231,6 +233,7 @@ struct Worker {
     size_t dump_bytes = 0;
     uint64_t tick = 0;
     uint64_t decoded_images = 0, decode_evictions = 0;
+    size_t pinned_count = 0;   /* preloaded entries: outside the 512-entry cap */
     bool stop = false;
     bool dump_busy = false;
     std::string dump_error;
@@ -243,7 +246,7 @@ struct Worker {
         while (used + incoming > budget) {
             auto candidate = decoded.end();
             for (auto it = decoded.begin(); it != decoded.end(); ++it)
-                if (it->second.status == DecodeStatus::Ready &&
+                if (it->second.status == DecodeStatus::Ready && !it->second.pinned &&
                     (candidate == decoded.end() || it->second.use < candidate->second.use)) candidate = it;
             if (candidate == decoded.end()) break;
             used -= candidate->second.image->rgba.size();
@@ -827,6 +830,29 @@ void duck_texture_pack_invalidate(DuckTexturePack* p, uint16_t x, uint16_t y, ui
     const unsigned w0 = std::min(unsigned(w), 1024 - px), h0 = std::min(unsigned(h), 512 - py);
     const std::array<Rect, 4> regions{{{px,py,w0,h0},{0,py,unsigned(w)-w0,h0},
                                     {px,0,w0,unsigned(h)-h0},{0,0,unsigned(w)-w0,unsigned(h)-h0}}};
+    /* Under HD authority every native draw lands here, almost always on the
+     * frame buffer, which no tracked texture overlaps: leave without touching
+     * (or allocating) anything when no residency or cache entry intersects. */
+    const auto touches = [&](const Rect& x) {
+        for (const auto& r : regions) if (r.w && r.h && intersects(x,r)) return true;
+        return false;
+    };
+    bool hit = false;
+    for (const auto& upload : p->uploads) if (touches(upload.active)) { hit = true; break; }
+    if (!hit) for (const auto& page : p->pages) {
+        if (touches(page.source->rect)) { hit = true; break; }
+        for (const auto& record : page.source->records)
+            if (record.depth < 2 && touches({record.clut_x,record.clut_y,record.palette_size,1})) { hit = true; break; }
+        if (hit) break;
+    }
+    if (!hit) for (const auto& v : p->rect_cache) if (touches(v.rect)) { hit = true; break; }
+    if (!hit) for (const auto& c : p->match_cache) {
+        const auto& q = c.query;
+        const Rect page{q.page_x,q.page_y,256 / expansion(q.depth),256};
+        const Rect clut{q.clut_x,q.clut_y,std::min(q.depth == 0 ? 16u : 256u,1024u-q.clut_x),1};
+        if (touches(page) || (q.depth < 2 && touches(clut))) { hit = true; break; }
+    }
+    if (!hit) return;
     ++p->revision;
     bool released = false;   /* a residency record dropped or split */
     for (const auto& r : regions) if (r.w && r.h) {
@@ -1118,11 +1144,11 @@ int duck_texture_pack_request_decode(DuckTexturePack* p, uint64_t id) {
         }
         if (!w.budget) return HD_TEXTURE_LOOKUP_ERROR;
         if (w.decode_queue.size() >= kMaxDecodeQueue) return HD_TEXTURE_LOOKUP_NONE;
-        if (w.decoded.size() >= 512) {
+        if (w.decoded.size() - w.pinned_count >= 512) {
             auto victim = w.decoded.end();
             for (auto item = w.decoded.begin(); item != w.decoded.end(); ++item)
                 if ((item->second.status == DecodeStatus::Ready || item->second.status == DecodeStatus::Failed) &&
-                    (victim == w.decoded.end() || item->second.use < victim->second.use)) victim = item;
+                    !item->second.pinned && (victim == w.decoded.end() || item->second.use < victim->second.use)) victim = item;
             if (victim == w.decoded.end()) return HD_TEXTURE_LOOKUP_NONE;
             if (victim->second.image) w.used -= victim->second.image->rgba.size();
             w.decoded.erase(victim);
@@ -1131,6 +1157,105 @@ int duck_texture_pack_request_decode(DuckTexturePack* p, uint64_t id) {
         w.decoded[id].path = p->entries[id-1].path; w.decode_queue.push_back(id);
         w.wake.notify_one(); return HD_TEXTURE_LOOKUP_NONE;
     } catch (...) { return HD_TEXTURE_LOOKUP_ERROR; }
+}
+int duck_texture_pack_preload(DuckTexturePack* p, size_t max_bytes, unsigned max_threads,
+                              HdTexturePreloadResult* out) {
+    HdTexturePreloadResult r{};
+    if (out) *out = r;
+    if (!p) return -1;
+    try {
+        namespace tp = psx_texpreload;
+        Worker& w = p->worker;
+        std::vector<uint64_t> ids;
+        size_t per_image = 0;
+        {
+            std::lock_guard<std::mutex> lock(w.mutex);
+            per_image = w.budget;
+            /* The cap and result describe the pack's total pinned residency,
+             * including earlier successful calls or publication prefixes. */
+            for (const auto& item : w.decoded)
+                if (item.second.pinned && item.second.image)
+                    r.bytes += item.second.image->rgba.size();
+            for (size_t i = 0; i < p->entries.size(); ++i) {
+                if (p->entries[i].ambiguous) continue;
+                ++r.requested;
+                const auto it = w.decoded.find(i + 1);
+                if (it != w.decoded.end() && it->second.pinned) ++r.loaded;
+            }
+            if (r.bytes > max_bytes) {
+                r.failed = r.requested - r.loaded;
+                if (out) *out = r;
+                return -1;  /* A smaller cap cannot discard live pinned data. */
+            }
+            for (size_t i = 0; i < p->entries.size(); ++i) {
+                if (p->entries[i].ambiguous) continue;
+                const auto it = w.decoded.find(i + 1);
+                if (it == w.decoded.end() || !it->second.pinned) ids.push_back(i + 1);
+            }
+        }
+        std::vector<std::shared_ptr<Image>> images(ids.size());
+        std::vector<unsigned char> status(ids.size(), tp::kPending);
+        tp::Budget budget(max_bytes - r.bytes);
+        r.worker_errors = static_cast<int>(tp::run(ids.size(), max_threads, [&](size_t k) {
+            status[k] = tp::kFailed;
+            const std::string& path = p->entries[ids[k] - 1].path;
+            std::ifstream input(fs::u8path(path), std::ios::binary | std::ios::ate);
+            const auto length = input ? input.tellg() : std::streampos(-1);
+            if (length <= 0 || static_cast<uint64_t>(length) > kMaxEncoded) return;
+            std::vector<uint8_t> encoded(static_cast<size_t>(length));
+            input.seekg(0);
+            if (!input.read(reinterpret_cast<char*>(encoded.data()), length)) return;
+            TextureImageProbe probe; std::string error;
+            if (!texture_image_probe(encoded.data(), encoded.size(), per_image, probe, error)) return;
+            const size_t need = static_cast<size_t>(probe.width) * probe.height * 4u;
+            if (!budget.reserve(need)) { status[k] = tp::kOverBudget; return; }
+            struct Reservation {
+                tp::Budget& b; size_t n; bool keep = false;
+                ~Reservation() { if (!keep) b.release(n); }
+            } reservation{budget, need};
+            DecodedTextureImage decoded;
+            if (!texture_image_decode(encoded.data(), encoded.size(), need, decoded, error) ||
+                decoded.rgba.size() != need) return;
+            auto image = std::make_shared<Image>(); image->w = decoded.width; image->h = decoded.height;
+            image->rgba = std::move(decoded.rgba);
+            images[k] = std::move(image);
+            reservation.keep = true;
+            status[k] = tp::kLoaded;
+        }));
+        std::lock_guard<std::mutex> lock(w.mutex);
+        for (size_t k = 0; k < ids.size(); ++k) {
+            if (status[k] == tp::kOverBudget) { ++r.over_budget; continue; }
+            if (status[k] != tp::kLoaded) continue;
+            auto it = w.decoded.find(ids[k]);
+            if (it != w.decoded.end()) {
+                /* Already pinned, or an on-demand decode in flight: leave it. */
+                if (it->second.pinned || it->second.status == DecodeStatus::Queued ||
+                    it->second.status == DecodeStatus::Loading) continue;
+            }
+            const size_t previous_bytes = it != w.decoded.end() && it->second.image
+                ? it->second.image->rgba.size() : 0;
+            Decode entry;
+            /* Prepare throwing metadata before touching an existing entry. */
+            entry.path = p->entries[ids[k] - 1].path;
+            entry.image = std::move(images[k]); entry.status = DecodeStatus::Ready;
+            entry.pinned = true; entry.use = ++w.tick;
+            const size_t bytes = entry.image->rgba.size();
+            if (it == w.decoded.end()) w.decoded.emplace(ids[k], std::move(entry));
+            else it->second = std::move(entry);
+            w.used -= previous_bytes;
+            r.bytes += bytes;
+            ++w.pinned_count; ++r.loaded;
+            ++w.decoded_images;
+            tp::after_publish(r.loaded);
+        }
+        r.failed = r.requested - r.loaded - r.over_budget;
+        if (out) *out = r;
+        return r.loaded == r.requested ? 1 : 0;
+    } catch (...) {
+        r.failed = r.requested - r.loaded - r.over_budget;
+        if (out) *out = r;  /* Account the pinned prefix even on publication failure. */
+        return -1;
+    }
 }
 int duck_texture_pack_acquire_decoded(DuckTexturePack* p, uint64_t id, DuckTexturePixels* out) {
     if (out) *out = {};
