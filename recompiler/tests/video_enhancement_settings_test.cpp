@@ -176,12 +176,21 @@ static void test_user_settings_round_trip() {
     out.perspective_texturing = true; out.has_perspective_texturing = true;
     out.audio_freq = 48000;           out.has_audio_freq = true;
     out.volume = 35;                  out.has_volume = true;
+    out.supersampling = 4;            out.has_supersampling = true;
+    out.renderer = 1;                 out.has_renderer = true;
+    out.window_width = 1280;          out.has_window_width = true;
 
     fs::path p = fs::temp_directory_path() / "psxrecomp_pgxp_roundtrip.toml";
     check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes");
 
     auto back = PSXRecompV4::load_user_settings(p);
     check(!back.parse_error, "written settings.toml re-parses");
+    check(back.has_supersampling && back.supersampling == 4,
+          "4x supersampling survives a save/load round trip");
+    check(back.has_renderer && back.renderer == 1,
+          "OpenGL survives a save/load round trip");
+    check(back.has_window_width && back.window_width == 1280,
+          "window width remains independent of internal scale");
     check(back.has_geometry_correction && back.geometry_correction,
           "geometry_correction survives a save/load round trip");
     check(back.has_perspective_texturing && back.perspective_texturing,

@@ -69,6 +69,38 @@ std::string normalize_serial(const std::string& raw) {
     return s.substr(0, 4) + "-" + s.substr(4, 5);
 }
 
+// A few early Japanese discs boot PSX.EXE and have no SYSTEM.CNF, but put the
+// product id in the ISO9660 volume identifier.  Treat that field as a serial
+// only when the whole value is serial-shaped; normalize_serial() is
+// deliberately more permissive because BOOT filenames may carry a suffix.
+std::string normalize_volume_serial(const std::string& raw) {
+    std::string compact;
+    for (char c : raw) {
+        if (std::isalnum((unsigned char)c)) {
+            compact += (char)std::toupper((unsigned char)c);
+        } else if (c != '_' && c != '.' && c != '-') {
+            return std::string();
+        }
+    }
+    if (compact.size() != 9) return std::string();
+    for (int i = 0; i < 4; ++i)
+        if (!std::isalpha((unsigned char)compact[i])) return std::string();
+    for (int i = 4; i < 9; ++i)
+        if (!std::isdigit((unsigned char)compact[i])) return std::string();
+    return compact.substr(0, 4) + "-" + compact.substr(4, 5);
+}
+
+void promote_matching_volume_serial(DiscIdentity& id,
+                                    const std::string& expected_serial) {
+    if (!id.detected_serial.empty() || expected_serial.empty()) return;
+    const std::string volume_serial = normalize_volume_serial(id.volume_id);
+    const std::string expected = normalize_volume_serial(expected_serial);
+    if (!volume_serial.empty() && volume_serial == expected) {
+        id.detected_serial = volume_serial;
+        id.serial_matches = true;
+    }
+}
+
 // Scan the SYSTEM.CNF text region for the BOOT serial. PSX SYSTEM.CNF holds a
 // line like `BOOT = cdrom:\SCUS_942.36;1`. We look for "cdrom:" and read the
 // following filename token, then normalize it.
@@ -321,6 +353,7 @@ DiscIdentity identify_disc(const fs::path& path,
         } else {
             v.detail = "The CHD header is present, but its data track could not be scanned.";
         }
+        promote_matching_volume_serial(v, expected_serial);
         v.region = region_from_serial(
             !v.detected_serial.empty() ? v.detected_serial : expected_serial);
         if (compute_crc) {
@@ -404,6 +437,8 @@ DiscIdentity identify_disc(const fs::path& path,
     } else {
         v.detail = "The ISO header is present, but the image could not be scanned.";
     }
+
+    promote_matching_volume_serial(v, expected_serial);
 
     // Region: prefer the disc's own serial, fall back to the expected one.
     v.region = region_from_serial(!v.detected_serial.empty() ? v.detected_serial

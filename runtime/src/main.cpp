@@ -17161,10 +17161,11 @@ int main(int argc, char** argv) {
 #endif
 
             /* The launcher hands back the player's edits on Quit as well as on
-             * Play (recomp_launcher.h: "*io still holds the edits"), so both
-             * fold them into seed. Disc choice stays Play-only: Quit launches
-             * nothing. */
-            if (lr == 0 || lr == 1) {
+             * Play and Rebuild (recomp_launcher.h: "*io still holds the edits").
+             * Fold all three into seed. Disc choice stays Play-only: Quit and
+             * Rebuild do not launch the selected disc here. */
+            if (lr == 0 || lr == 1 ||
+                lr == RECOMP_LAUNCHER_RESULT_RELAUNCH) {
                 seed.netplay_player_name = ls.netplay_player_name;
                 seed.has_netplay_player_name = true;
                 if (lr == 0 && rui_out_disc[0]) {
@@ -17452,6 +17453,10 @@ int main(int argc, char** argv) {
             }
 #if defined(PSX_HAS_CODEGEN_SETUP_HOST)
             if (lr == RECOMP_LAUNCHER_RESULT_RELAUNCH) {
+                /* The returned edits have been folded into seed above. Save
+                 * before the helper exits or forwards to the new product. */
+                PSXRecompV4::save_user_settings(
+                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
                 const char* disc_for_relaunch =
                     rui_out_disc[0] ? rui_out_disc
                                     : (rui_initial_disc.empty()

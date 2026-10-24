@@ -32,7 +32,7 @@ int recomp_launcher_relaunch_exe(char* o, size_t c) { (void)o; (void)c; return 0
 int main(int argc, char** argv) {
     if (argc != 3) return 2;
     snprintf(g_project_root, sizeof(g_project_root), "%s", argv[1]);
-    sync_project_disc_cfg_to_product(argv[2]);
+    persist_relaunch_sidecars(argv[2], NULL);
     return 0;
 }
 """
@@ -77,7 +77,7 @@ def main() -> int:
              "-I", str(ROOT / "host"),
              "-I", str(ROOT / "runtime" / "include"),
              "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if build.returncode != 0:
             print("FAIL: could not build probe\n" + build.stderr[-2000:])
             return 1
@@ -104,7 +104,7 @@ def main() -> int:
             if product is not None:
                 (build_dir / "disc.cfg").write_bytes(product.encode("utf-8"))
             run = subprocess.run([str(exe), str(proj), str(build_dir / "Game.exe")],
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace")
             target = build_dir / "disc.cfg"
             got = target.read_text(encoding="utf-8") if target.is_file() else None
             if got is not None:
@@ -114,6 +114,35 @@ def main() -> int:
                 failures += 1
             else:
                 print("ok: %s" % why)
+        # The same relaunch sidecar path must seed executable-adjacent settings.
+        settings = b'\xef\xbb\xbf[video]\r\nrenderer="opengl"\r\nsupersampling=4\r\n' + b'# retained comment\n' * 1100
+        for index, (source, product, expected, why) in enumerate([
+            (settings, None, settings, "relaunch carries all settings bytes including BOM/comments"),
+            (settings, b'[video]\nsupersampling=2\n', b'[video]\nsupersampling=2\n', "relaunch preserves existing product settings"),
+            (settings, b'', b'', "relaunch preserves even an empty product file"),
+            (None, None, None, "relaunch invents no settings when setup has none"),
+        ]):
+            proj = tmp / f"settings {index}"
+            build_dir = proj / "build-release"
+            build_dir.mkdir(parents=True)
+            if source is not None: (proj / "settings.toml").write_bytes(source)
+            if product is not None: (build_dir / "settings.toml").write_bytes(product)
+            run = subprocess.run([str(exe), str(proj), str(build_dir / "Game.exe")],
+                                 cwd=proj, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            target = build_dir / "settings.toml"
+            got = target.read_bytes() if target.is_file() else None
+            if run.returncode != 0 or got != expected:
+                print("FAIL: " + why); failures += 1
+            else: print("ok: " + why)
+        # A blocked temporary path is not ours to remove or overwrite.
+        proj = tmp / "settings blocked"; build_dir = proj / "build-release"
+        build_dir.mkdir(parents=True); (proj / "settings.toml").write_bytes(settings)
+        sentinel = build_dir / "settings.toml.setup.tmp"; sentinel.write_bytes(b"foreign sentinel")
+        run = subprocess.run([str(exe), str(proj), str(build_dir / "Game.exe")],
+                             cwd=proj, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if os.name != "nt" and ((build_dir / "settings.toml").exists() or sentinel.read_bytes() != b"foreign sentinel"):
+            print("FAIL: pre-existing temporary settings preserved"); failures += 1
+        else: print("ok: pre-existing temporary settings preserved")
         if failures:
             return 1
 

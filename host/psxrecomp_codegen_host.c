@@ -2162,12 +2162,57 @@ static void sync_project_disc_cfg_to_product(const char* near_exe) {
     write_line_file(dst, body);
 }
 
+/* The setup and product have separate executable-adjacent settings stores.
+ * Seed the product once, before either handoff; never replace a product pick.
+ * Publish complete bytes only, without replacing a concurrently created file. */
+static void sync_project_user_settings_to_product(const char* near_exe) {
+    char dir[1100], src[1200], dst[1200];
+    if (!near_exe || !near_exe[0] || !g_project_root[0] ||
+        !dirname_copy(dir, sizeof(dir), near_exe) ||
+        !join_path(src, sizeof(src), g_project_root, "settings.toml") ||
+        !join_path(dst, sizeof(dst), dir, "settings.toml") ||
+        host_paths_same_file(src, dst) || !path_is_file(src) || path_is_file(dst))
+        return;
+#if defined(_WIN32)
+    /* TRUE refuses an existing destination, including a concurrent pick. */
+    if (!CopyFileA(src, dst, TRUE) && GetLastError() != ERROR_FILE_EXISTS &&
+        GetLastError() != ERROR_ALREADY_EXISTS)
+        fprintf(stderr, "psxrecomp-codegen: could not hand settings to product\n");
+#else
+    char temporary[1240];
+    unsigned char buffer[16384];
+    FILE *in, *out;
+    size_t n;
+    int ok = 1;
+    if ((size_t)snprintf(temporary, sizeof(temporary), "%s.setup.tmp", dst) >=
+        sizeof(temporary))
+        return;
+    in = fopen(src, "rb");
+    if (!in) return;
+    /* Do not remove or overwrite a pre-existing temporary file. */
+    out = fopen(temporary, "wbx");
+    if (!out) { fclose(in); return; }
+    while ((n = fread(buffer, 1, sizeof(buffer), in)) != 0) {
+        if (fwrite(buffer, 1, n, out) != n) { ok = 0; break; }
+    }
+    if (ferror(in)) ok = 0;
+    if (fclose(in) != 0) ok = 0;
+    if (fclose(out) != 0) ok = 0;
+    /* link fails if dst exists; rename would overwrite it on POSIX. */
+    if (ok && link(temporary, dst) != 0 && errno != EEXIST) ok = 0;
+    remove(temporary);  /* only the temporary file this call created */
+    if (!ok)
+        fprintf(stderr, "psxrecomp-codegen: could not hand settings to product\n");
+#endif
+}
+
 static void persist_relaunch_sidecars(const char* near_exe,
                                       const char* disc_path) {
     char bios_line[1100];
     char project_sidecar[1200];
     char abs_bios[1100];
 
+    sync_project_user_settings_to_product(near_exe);
     if (disc_path && disc_path[0]) {
         write_sidecar_near_exe(near_exe, "disc.cfg", disc_path);
         write_line_file("disc.cfg", disc_path);
@@ -5923,6 +5968,7 @@ void psxrecomp_codegen_host_forward_if_built(
             "psxrecomp-codegen: setup host forwarding to product build:\n  %s\n",
             g_exe_path);
     sync_project_disc_cfg_to_product(g_exe_path);
+    sync_project_user_settings_to_product(g_exe_path);
 
 #if defined(_WIN32)
     {
