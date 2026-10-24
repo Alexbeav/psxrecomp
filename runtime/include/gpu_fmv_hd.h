@@ -2,13 +2,16 @@
 /* gpu_fmv_hd -- high-definition replacement of FMV movies (24-bit MDEC frames).
  *
  * A pack (<exe>/fmv_hd, or PSX_FMV_HD_DIR) holds one folder per movie:
- *   index.bin   a FmvHdIndexHeader, then for every source frame a sig_w x sig_h
- *               luminance signature (u8, the mean of each cell of the original frame);
+ *   index.bin   FMVHD003 header, then one sig_w x sig_h luminance signature
+ *               per source frame (u8, mean of each cell), then one LE int32
+ *               starting sector LBA per source frame (strictly increasing);
  *   frames/NNNNNN.jpg  HD frames, `sub` per source frame (interpolation), numbered
  *               source_index * sub + k.
  * Every presented 24-bit frame's signature is matched against the pack (a local search
  * around the last recognised frame, then a global one); the matching HD frame, decoded
- * ahead by worker threads, is presented instead. Subframes advance only with captured
+ * ahead by worker threads, is presented instead. The guest CD SetLoc range
+ * selects the movie and delivered-sector intervals select its source frame
+ * before matching signatures. Subframes advance only with captured
  * guest cycles. Unknown images and failed decodes show the native scanout. Audio, timing
  * and control (including movie skips) stay the game's own. No pack: no effect.
  */

@@ -103,6 +103,11 @@ int main() {
     bool advanced=false;
     for(int i=0;i<200 && !advanced;++i){advanced=lookup() && output.rgba[0]==255;if(!advanced)SDL_Delay(2);}
     check(advanced,"guest cycles advance interpolated subframe");
+    timeline.decode_serial++;
+    check(lookup() && output.rgba[0]==0,
+          "new guest MDEC decode restarts phase on identical source image");
+    timeline.cycle+=600000;
+    check(lookup() && output.rgba[0]==255,"phase advances again within same MDEC decode");
     timeline={1000,1,3,1,0,0,1};
     check(lookup() && output.rgba[0]==0,"state-load epoch restarts subframe");
     original[0]=0xffffffffu;

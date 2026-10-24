@@ -489,10 +489,15 @@ int gpu_fmv_hd_debug_json(char *out, size_t cap) {
     return snprintf(out, cap,
         "\"init\":%d,\"enabled\":%d,\"movies\":%d,\"queries\":%llu,\"hd_frames\":%llu,"
         "\"misses\":%llu,\"last_src\":[%d,%d],\"last_best_dist\":%u,\"last_best_frame\":%d,"
-        "\"cur_src\":%d,\"dy\":%d,\"guest_cycle\":%llu,\"epoch\":%llu",
+        "\"cur_src\":%d,\"dy\":%d,\"guest_cycle\":%llu,\"epoch\":%llu,"
+        "\"stream_generation\":%llu,\"stream_lba\":%d,\"delivered_lba\":%d,"
+        "\"decode_serial\":%u",
         s_init, s_enabled, s_nmovies, (unsigned long long)s_queries, (unsigned long long)s_hd_frames,
         (unsigned long long)s_misses, s_dbg_src_w, s_dbg_src_h, s_dbg_best, s_dbg_frame, s_cur_src,
         s_cur_movie >= 0 ? s_movies[s_cur_movie].dy : 0,
         (unsigned long long)s_last_timeline.cycle,
-        (unsigned long long)s_last_timeline.epoch);
+        (unsigned long long)s_last_timeline.epoch,
+        (unsigned long long)s_last_timeline.stream_generation,
+        s_last_timeline.stream_lba, s_last_timeline.delivered_lba,
+        s_last_timeline.decode_serial);
 }
