@@ -1,4 +1,5 @@
 #include "mod_runtime.h"
+#include "func_override.h"
 #include "mod_netplay.h"
 #include "host_launch_timing.h"
 #include "host_overlay.h"
@@ -32,6 +33,9 @@ namespace fs = std::filesystem;
 static std::array<uint8_t, 2 * 1024 * 1024> ram;
 static int failures;
 static int activation_calls;
+static int override_activation_calls;
+static void override_activate() { ++override_activation_calls; }
+static int override_body(CPUState*) { return 1; }
 static int plugin_calls;
 static int restore_calls;
 static int option_renderer_activations;
@@ -540,6 +544,7 @@ int main(int argc, char** argv) {
     const fs::path root = fs::temp_directory_path() / "psxrecomp-mod-runtime-test";
 #endif
     std::error_code ec;
+
     fs::remove_all(root, ec);
     const std::vector<uint8_t> stock(8 * 2352, 0);
     std::vector<uint8_t> overlay(3000);
@@ -2437,6 +2442,50 @@ int main(int argc, char** argv) {
         const auto missing_plan = legacy.resolve("SLUS-PORTABLE");
         check(missing_plan.resources.size() == 1 && missing_plan.resources[0].path == external,
               "resolver preserves missing selection for existing downstream validation");
+    }
+
+    {
+        const auto base = root/"function-overrides";
+        write_text(base/"bundled/override.test/1.0.0/manifest.toml", R"toml(
+format_version = 5
+id = "override.test"
+version = "1.0.0"
+name = "Overrides"
+resolver = "declarative"
+save_compatibility = "shared"
+[[target]]
+game_id = "SLUS-OVERRIDE"
+[[feature]]
+id = "replace"
+name = "Replace"
+default_enabled = true
+[[plugin]]
+feature = "replace"
+id = "override.test"
+)toml");
+        check(PSXRecompV4::mod_register_activation_plugin("override.test",override_activate),"register override activation");
+        check(psx_mod_register_function_override("override.test:first",0x80006004,override_body,nullptr,0,0),"queue first override");
+        check(psx_mod_register_function_override("override.test:second",0x80006000,override_body,nullptr,0,0),"queue second override");
+        check(!psx_mod_register_function_override("override.test:bad",0x80006001,override_body,nullptr,0,0),"reject misaligned override");
+        check(PSXRecompV4::mod_runtime_initialize(base,"SLUS-OVERRIDE",0x80002000,{},&error),error.c_str());
+        check(PSXRecompV4::mod_runtime_commit({},&error),error.c_str());
+        mod_runtime_activate_plugins();
+        check(!mod_runtime_activation_error() && func_override_count()==2 && override_activation_calls==1,"selected overrides arm together");
+        mod_runtime_activate_plugins();
+        check(!mod_runtime_activation_error() && func_override_count()==2 && override_activation_calls==2,"session reactivation replaces entries without duplicates");
+        check(PSXRecompV4::mod_runtime_clear_for_netplay(&error),error.c_str());
+        check(func_override_count()==0,"cleared plan disarms all package entries");
+        override_activation_calls=0;
+        check(func_override_add("direct",0x80006000,override_body,0)==FO_OK,"register colliding direct override");
+        check(PSXRecompV4::mod_runtime_initialize(base,"SLUS-OVERRIDE",0x80002000,{},&error),error.c_str());
+        check(PSXRecompV4::mod_runtime_commit({},&error),error.c_str());
+        mod_runtime_activate_plugins();
+        check(mod_runtime_activation_error()!=nullptr && override_activation_calls==0,
+              "late collision rejects launch before callbacks");
+        check(func_override_count()==1,"collision rolls back all package entries and preserves direct entry");
+        check(PSXRecompV4::mod_runtime_clear_for_netplay(&error),error.c_str());
+        mod_runtime_activate_plugins();
+        check(!mod_runtime_activation_error() && func_override_count()==1,"vanilla session clears failure and retains direct tier");
     }
 
     fs::remove_all(root, ec);

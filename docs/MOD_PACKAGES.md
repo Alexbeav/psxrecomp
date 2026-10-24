@@ -1182,3 +1182,10 @@ existing post-commit path, not the preparation worker.
 The `prepare_resources` method is separate from read-only `resolve`, so editing
 launcher settings does not trigger conversions. Runtime activation still sees
 only fully verified immutable resources.
+
+Function-override package arming is transactional and runs before activation
+callbacks. Address collisions or capacity failures reject the launch through
+`mod_runtime_activation_error()` and remove all package entries, retaining
+always-on direct implementations. Every session rearms its selected plan.
+Replacement overrides cannot be selected as netplay local-view plugins: they
+change shared execution rather than only sandboxed presentation.

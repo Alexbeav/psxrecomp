@@ -20412,6 +20412,10 @@ int main(int argc, char** argv) {
             netplay && PSXRecompV4::mod_runtime_netplay_view_active() ? 1 : 0);
         psx_mod_immediate_begin_session(netplay ? 1 : 0);
         mod_runtime_activate_plugins();
+        if (const char* error = mod_runtime_activation_error()) {
+            std::fprintf(stderr,"psxrecomp: %s\n",error);
+            return false;
+        }
         func_override_install();
         if (!psx_mod_immediate_session_valid()) {
             std::fprintf(stderr, "psxrecomp: immediate-selector enhancements are offline-only\n");
