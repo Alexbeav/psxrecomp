@@ -2,6 +2,7 @@
 #include "host_launch_timing.h"
 #include "host_overlay.h"
 #include "cpu_state.h"
+#include "spu.h"
 
 #include "disc_path.h"
 #include "host_file_identity.h"
@@ -308,6 +309,18 @@ std::vector<ActiveFunctionEntryHook>& active_function_entry_hooks() {
 }
 unsigned function_entry_depth;
 
+struct ActivePCMHook {
+    PSXModPCMCallback callback;
+    const ModResolution::Plugin* plugin;
+};
+std::vector<ActivePCMHook> pcm_hooks;
+void mix_plugin_pcm(int16_t* stereo, uint32_t frames) {
+    for (const auto& hook : pcm_hooks) {
+        PluginCallbackScope scope(state(), hook.plugin);
+        hook.callback(stereo, frames);
+    }
+}
+
 std::vector<ActiveFunctionEntryHook>& active_guest_functions() {
     static std::vector<ActiveFunctionEntryHook> value;
     return value;
@@ -342,6 +355,8 @@ void update_function_entry_count() {
 }
 
 void clear_function_entry_hooks() {
+    spu_set_pcm_overlay(nullptr);
+    pcm_hooks.clear();
     active_function_entry_hooks().clear();
     update_function_entry_count();
     active_guest_functions().clear();
@@ -377,6 +392,10 @@ void build_function_entry_hooks(const RuntimeMods& s) {
     std::stable_sort(instructions.begin(), instructions.end(),
                     [](const auto& a, const auto& b) { return a.key < b.key; });
     g_psx_mod_instruction_hooks = (uint32_t)instructions.size();
+    for (const auto& plugin : s.plan.plugins)
+        if (auto callback = mod_pcm_callback(plugin.id))
+            pcm_hooks.push_back({callback, &plugin});
+    if (!pcm_hooks.empty()) spu_set_pcm_overlay(mix_plugin_pcm);
 }
 
 /* Function overrides queue here at constructor time and are ARMED into the
