@@ -246,6 +246,9 @@ static int reading;
 static int read_min, read_sec, read_sect;
 static uint8_t mode_reg;
 static uint8_t read_cmd;
+/* Bit 0 of s_source_seek_paused retains paused/standby timing. Bit 1 records
+ * a default data-read pause in the same snapshot byte; source clocks use bit 0. */
+#define CD_PAUSED_READ_VALID 2u
 static int read_delay;
 
 /* ---- Sector deadline/exposure telemetry (L1.5, passive) -----------------
@@ -1931,8 +1934,9 @@ int cdrom_retry_dither_fire(int i, uint32_t *frame, int *target, int *run, int *
 static void start_read_stream(uint8_t cmd) {
     /* PSX-SPX Setloc/Read/Pause: without a new Setloc, repeat the last
      * received sector. Before the first delivery, keep the original target. */
-    int resume_lba = (!s_source_clock && !setloc_pending && s_source_seek_paused &&
-                      last_sector_have_raw != GETLOCL_NO_HEADER && last_sector_lba >= 0)
+    int resume_lba = (!s_source_clock && !setloc_pending &&
+                      (s_source_seek_paused & CD_PAUSED_READ_VALID) &&
+                      !getlocl_no_header() && last_sector_lba >= 0)
         ? last_sector_lba : -1;
     last_sector_have_raw = GETLOCL_NO_HEADER;   /* until the first data sector */
     int source_target = setloc_pending ? s_setloc_lba :
@@ -3019,9 +3023,13 @@ static void exec_command(uint8_t cmd) {
          * "Pause"). The default path keeps its own response. */
         uint8_t source_ack_status = stat_reg;
         int preserve_source_audio=source_cdda.enabled && cdda_playing;
+        int paused_data = !s_source_clock && !cdda_playing &&
+            (reading || (s_source_seek_paused & CD_PAUSED_READ_VALID)) &&
+            !getlocl_no_header() && last_sector_lba >= 0;
         int complete_delay = pause_complete_delay_cycles();
         stop_read_stream();
         stop_cdda_playback();
+        if (paused_data) s_source_seek_paused |= CD_PAUSED_READ_VALID;
         if(!preserve_source_audio){xa_reset_decode();spu_cd_audio_reset();}
         stat_reg &= ~(CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK);
         response_push(s_source_clock ? source_ack_status : stat_reg);

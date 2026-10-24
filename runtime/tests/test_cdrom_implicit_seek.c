@@ -7,7 +7,7 @@
 uint64_t psx_cycle_count, s_frame_count;
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
 uint32_t debug_guest_ra(void) { return 0; }
-static int reads, failures, irq_raises, synthetic_xa, xa_frames;
+static int reads, failures, irq_raises, synthetic_xa, xa_frames, synthetic_audio;
 void psx_irq_raise(uint32_t a, uint32_t b) { (void)b; i_stat |= 1u << a; irq_raises++; }
 void event_ring_record(uint16_t a, uint8_t b) { (void)a; (void)b; }
 void event_ring_record_aux(uint16_t a, uint8_t b, uint32_t c) { (void)a; (void)b; (void)c; }
@@ -38,10 +38,10 @@ int iso_read_subq(void *p, uint32_t lba, uint8_t *b, int n, int *v) {
 }
 int iso_has_subq_replacements(void *p) { (void)p; return 0; }
 uint32_t iso_sector_count(void *p) { (void)p; return 333000; }
-int iso_track_count(void *p) { (void)p; return 1; }
-uint32_t iso_track_start_lba(void *p, int t) { (void)p; (void)t; return 0; }
-uint32_t iso_track_pregap_lba(void *p, int t) { (void)p; (void)t; return 0; }
-int iso_track_is_audio(void *p, int t) { (void)p; (void)t; return 0; }
+int iso_track_count(void *p) { (void)p; return synthetic_audio ? 2 : 1; }
+uint32_t iso_track_start_lba(void *p, int t) { (void)p; return t==2 ? 2000 : 0; }
+uint32_t iso_track_pregap_lba(void *p, int t) { (void)p; return t==2 ? 2000 : 0; }
+int iso_track_is_audio(void *p, int t) { (void)p; return synthetic_audio && t==2; }
 
 #define CHECK(c, m) do { if (!(c)) { fprintf(stderr,"FAIL: %s\n",m); failures++; } } while(0)
 static void ack(void) {
@@ -90,8 +90,9 @@ static int exercise(uint8_t cmd, int origin, int dest, int observe) {
  * production command/sector/XA path, not a second position model. */
 static void pause_read_control(uint8_t cmd, int xa, int scenario) {
     static const char *names[]={"resume", "new-setloc", "pending-setloc",
-                                "stop-new-setloc", "before-first", "seekl"};
-    setup(1000); synthetic_xa=xa; xa_frames=0;
+                                "stop-new-setloc", "before-first", "seekl", "seekl-pause",
+                                "play-pause", "stop-pause", "saved-resume", "legacy-paused"};
+    setup(1000); synthetic_xa=xa; xa_frames=0; synthetic_audio=(scenario==7);
     mode_reg=xa?0xE8:0x80; filter_file=1; filter_channel=0;
     target(1100); command(cmd); ack();
     if (scenario!=4) {
@@ -111,16 +112,54 @@ static void pause_read_control(uint8_t cmd, int xa, int scenario) {
         CHECK(loc==last,"GetlocP after Pause still names the last received sector");
         ack();
     }
-    int expected=(scenario==0)?last:((scenario==4)?1100:1200);
+    int expected=(scenario==0 || scenario==9)?last:
+        ((scenario==4 || scenario==7 || scenario==8 || scenario==10)?1100:1200);
     if (scenario==0) { command(9); ack(); advance(pending_rem_cycles()); ack(); }
     if (scenario==3) {
         command(8); ack(); advance(pending_rem_cycles()); ack();
         CHECK(!s_source_seek_paused,"Stop ends the paused state");
     }
-    if (scenario==1 || scenario==3 || scenario==5) target(1200);
-    if (scenario==5) {
+    if (scenario==1 || scenario==3 || scenario==5 || scenario==6) target(1200);
+    if (scenario==5 || scenario==6) {
         command(0x15); ack(); advance(pending_rem_cycles()); ack();
         CHECK(!s_source_seek_paused,"completed SeekL is standby, not paused");
+    }
+    if (scenario==6) {
+        command(9); ack(); advance(pending_rem_cycles()); ack();
+        CHECK(s_source_seek_paused,"Pause after SeekL marks the drive paused");
+        CHECK(last_sector_have_raw==GETLOCL_SEEK_DONE,"Pause preserves the completed-seek marker");
+        CHECK(last_sector_lba==last,"completed seek has not delivered another sector");
+    }
+    if (scenario==7) {
+        cdrom_write(0x1f801802,2); command(3); ack();
+        CHECK(cdda_playing && cdda_lba==2000,"Play selects the authored audio track");
+        CHECK(s_source_seek_paused==0,"Play clears data-resume eligibility and preserves legacy timing state");
+        advance(CDROM_SINGLE_SPEED_SECTOR_CYCLES); ack();
+        CHECK(cdda_lba==2001,"audio playback advances away from the data sector");
+        command(9); ack(); advance(pending_rem_cycles()); ack();
+        CHECK(!cdda_playing,"Pause stops audio playback");
+        /* Preserve the parent's default no-Setloc target here. This is a
+         * stale-data regression guard, not a hardware audio-position oracle. */
+    }
+    if (scenario==8) {
+        command(8); ack(); advance(pending_rem_cycles()); ack();
+        command(9); ack(); advance(pending_rem_cycles()); ack();
+    }
+    if (scenario==9 || scenario==10) {
+        /* Old snapshots carry only the original paused boolean. Do not infer
+         * a data-read origin that their wire state never recorded. */
+        if (scenario==10) s_source_seek_paused=1;
+        uint32_t len=cdrom_snapshot_bytes();
+        uint8_t *state=malloc(len);
+        CHECK(state!=NULL,"controller snapshot allocation");
+        if (!state) return;
+        uint8_t paused=s_source_seek_paused;
+        cdrom_snapshot_write(state);
+        s_source_seek_paused=0;
+        CHECK(cdrom_snapshot_read(state,len),"paused controller snapshot restores");
+        CHECK(s_source_seek_paused==paused,"paused read eligibility survives the existing wire format");
+        CHECK(cdrom_snapshot_bytes()==len,"paused read state keeps the snapshot size");
+        free(state);
     }
     int before=xa_frames;
     command(cmd); ack(); advance(read_delay); ack();
@@ -133,7 +172,7 @@ static void pause_read_control(uint8_t cmd, int xa, int scenario) {
     CHECK(read_delay==delay && last_sector_lba==first,"repeated read preserves an active stream");
     advance(CDROM_SINGLE_SPEED_SECTOR_CYCLES/2); ack();
     CHECK(last_sector_lba==expected+1,"resumed stream then advances sequentially");
-    synthetic_xa=0;
+    synthetic_xa=0; synthetic_audio=0;
 }
 int main(void) {
 #ifdef _WIN32
@@ -241,8 +280,9 @@ int main(void) {
         unsigned snap_size=cdrom_snapshot_bytes(); uint8_t *snap=malloc(snap_size);
         cdrom_snapshot_write(snap);
         command(6); ack(); advance(read_delay); ack(); command(9); ack(); advance(100000000); ack();
-        CHECK(s_source_seek_paused==1,"abandoned timeline ends paused");
+        CHECK(s_source_seek_paused==3,"abandoned timeline retains paused timing and data-read eligibility");
         CHECK(cdrom_snapshot_read(snap,snap_size),"standby snapshot restores");
+        CHECK(s_source_seek_paused==0,"standby restore clears both paused-state bits");
         /* PS1B-118: the restored standby drive sits on the SeekL target (read
          * cursor, PSX-SPX SeekL/GetlocP); that is the implicit seek origin. */
         target(1200); int origin=msf_to_lba(read_min,read_sec,read_sect); command(6);
@@ -253,7 +293,7 @@ int main(void) {
     }
     for (int xa=0;xa<=1;xa++)
         for (int cmd=0;cmd<2;cmd++)
-            for (int scenario=0;scenario<6;scenario++)
+            for (int scenario=0;scenario<11;scenario++)
                 pause_read_control(cmd?0x1B:0x06,xa,scenario);
     if(failures) { fprintf(stderr,"FAILED (%d)\n",failures); return 1; }
     puts("CD implicit seek: ALL PASS"); return 0;
