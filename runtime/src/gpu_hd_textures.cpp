@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <vector>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,11 @@ constexpr size_t kCompositionBudget = 64u * 1024u * 1024u;
 constexpr size_t kCompositionCount = 256;
 constexpr uint32_t kCompositionDimension = 8192;
 constexpr size_t kMaxParts = 64;
+/* Elective full preload of an installed pack: at most this much decoded RGBA
+ * pinned across both formats, decoded by at most this many threads. Anything
+ * beyond decodes on demand under the normal budget. */
+constexpr size_t kPreloadMaxBytes = size_t{512} * 1024u * 1024u;
+constexpr unsigned kPreloadThreads = 4;
 struct Composition {
     std::vector<uint64_t> signature;
     std::vector<uint8_t> rgba;
@@ -289,6 +295,32 @@ extern "C" int gpu_hd_textures_configure(const char* root, int replacements,
             std::filesystem::create_directories(directory / "dumps");
         }
         if (!duck_texture_pack_create(root, &next->duck, error, capacity)) return 0;
+        if (next->replacements) {
+            /* Replacements decoded and resident before the game draws, within
+             * kPreloadMaxBytes; the rest stays on the budgeted async path. */
+            const auto t0 = std::chrono::steady_clock::now();
+            HdTexturePreloadResult dr{}, br{};
+            const int dstatus = duck_texture_pack_preload(next->duck, kPreloadMaxBytes,
+                                                          kPreloadThreads, &dr);
+            int bstatus = 1;
+            if (next->beetle) {
+                const size_t left = dr.bytes < kPreloadMaxBytes ? kPreloadMaxBytes - dr.bytes : 0;
+                bstatus = hd_texture_pack_preload(next->beetle, left, kPreloadThreads, &br);
+            }
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            const int requested = dr.requested + br.requested;
+            if (requested > 0 || dstatus < 0 || bstatus < 0)
+                std::fprintf(stdout, "psxrecomp: texture pack: preloaded %d/%d images (%.1f MiB) in %lld ms"
+                             "%s; %d over the %u MiB preload cap, %d failed (%d worker errors);"
+                             " the rest decode on demand\n",
+                             dr.loaded + br.loaded, requested, (dr.bytes + br.bytes) / 1048576.0,
+                             static_cast<long long>(ms),
+                             (dstatus < 0 || bstatus < 0) ? " (preload error)" :
+                             (dstatus == 1 && bstatus == 1) ? " (complete)" : " (partial)",
+                             dr.over_budget + br.over_budget, static_cast<unsigned>(kPreloadMaxBytes / (1024u * 1024u)),
+                             dr.failed + br.failed, dr.worker_errors + br.worker_errors);
+        }
         /* Quiesce renderer users (GL render thread: dump_draw appends to the
          * old session's sources) before flushing its dumps or reading its
          * residency; the cache is rebuilt from the new session. */
@@ -395,6 +427,10 @@ extern "C" void gpu_hd_textures_get_diag(GpuHdTextureDiag* out) {
     if (session->diagnostics.empty() || session->diagnostics.back() != diagnostic)
         session->diagnostics.push_back(std::move(diagnostic));
     out->diagnostic = session->diagnostics.back().c_str();
+}
+extern "C" int gpu_hd_textures_debug_uploads_at(int x, int y, char* out, size_t cap) {
+    if (out && cap) out[0] = '\0';
+    return session ? hd_texture_pack_debug_uploads_at(session->beetle, (unsigned)x, (unsigned)y, out, cap) : 0;
 }
 extern "C" void gpu_hd_textures_note_applied(void) { if (session) ++session->diag.applied_draws; }
 extern "C" void gpu_hd_textures_note_gl_cache(int eviction) {
@@ -557,7 +593,7 @@ static int acquire_draw(uint16_t tp, uint16_t cx, uint16_t cy,
         image->origin_u = query.u_first - (match.source_word_x * pixels_per_word + (query.u_first % pixels_per_word));
         image->origin_v = query.v_first - match.source_y;
         image->cache_key = (static_cast<uint64_t>(match.entry.texture_hash) << 32) | match.entry.palette_hash;
-        image->alpha_mode = 1;
+        image->alpha_mode = match.entry.palette_hash == HD_TEXTURE_PALETTE_INDEXED ? 5 : 1;
     } else {
         try {
             std::array<DuckTextureMatch,kMaxParts> matches{}; size_t count = 0;

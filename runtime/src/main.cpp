@@ -136,6 +136,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "mod_plugins.h"
 #include "mod_local_input_policy.h"
 #include "mod_session_baseline.h"
+#include "func_override.h"
 #include "mod_runtime.h"
 #include "video_texture_filter.h"
 #include "video_telemetry.h"
@@ -9306,6 +9307,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
                              s_fps_base_title.c_str(), fps, speed);
                 }
+                {
+                    PsxPresentCadence cadence{};
+                    psx_video_telemetry_cadence(1000, 0, &cadence);
+                    const double sfps = cadence.fps;
+                    const unsigned hitch = cadence.hitches, worst = cadence.max_us / 1000;
+                    size_t l = strlen(title);
+                    snprintf(title + l, sizeof(title) - l, " [Present %.1f fps, %u hitch, max %u ms]",
+                             sfps, hitch, worst);
+                }
                 SDL_SetWindowTitle(sdl_window, title);
             }
             if (!g_headless) {
@@ -18443,6 +18453,26 @@ int main(int argc, char** argv) {
                     (int)addresses.size());
             }
             {
+                // [[widescreen.cull.sxy]]: four slots per site.
+                std::vector<uint32_t> vertices, fold_addresses, fold_expected,
+                    vertex_regs, consumer_addresses, consumer_expected;
+                for (const auto& site : gc.ws_cull_sxy_sites) {
+                    vertices.push_back(site.vertices);
+                    for (size_t k = 0; k < 4; k++) {
+                        const bool used = k < site.vertices;
+                        fold_addresses.push_back(used ? site.fold_addresses[k] : 0u);
+                        fold_expected.push_back(used ? site.fold_expected[k] : 0u);
+                        vertex_regs.push_back(used ? site.vertex_regs[k] : 0u);
+                    }
+                    consumer_addresses.push_back(site.consumer_address);
+                    consumer_expected.push_back(site.consumer_expected);
+                }
+                gpu_ws_set_sxy_cull_sites(
+                    vertices.data(), fold_addresses.data(), fold_expected.data(),
+                    vertex_regs.data(), consumer_addresses.data(),
+                    consumer_expected.data(), (int)vertices.size());
+            }
+            {
                 std::vector<uint32_t> addresses, expected, masks;
                 for (const auto& site : gc.ws_cull_masked_reject_sites) {
                     addresses.push_back(site.address);
@@ -20536,6 +20566,11 @@ int main(int argc, char** argv) {
             netplay && PSXRecompV4::mod_runtime_netplay_view_active() ? 1 : 0);
         psx_mod_immediate_begin_session(netplay ? 1 : 0);
         mod_runtime_activate_plugins();
+        if (const char* error = mod_runtime_activation_error()) {
+            std::fprintf(stderr,"psxrecomp: %s\n",error);
+            return false;
+        }
+        func_override_install();
         if (!psx_mod_immediate_session_valid()) {
             std::fprintf(stderr, "psxrecomp: immediate-selector enhancements are offline-only\n");
             return false;
