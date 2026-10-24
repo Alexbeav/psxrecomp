@@ -8785,7 +8785,9 @@ static void handle_post_shader(int id, const char *json)
     char path[512];
     if (json_get_str(json, "path", path, sizeof path)) gl_renderer_set_post_shader(path);
     char info[1536];
-    gl_renderer_post_shader_debug(info, (int)sizeof info);
+    if (!gl_renderer_post_shader_debug(info, (int)sizeof info)) {
+        send_err(id, "post shader diagnostics exceed response capacity"); return;
+    }
     send_fmt("{\"id\":%d,\"ok\":true,\"loaded\":%d,%s}", id, gl_renderer_post_shader_loaded(), info);
 }
 

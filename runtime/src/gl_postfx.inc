@@ -1,3 +1,5 @@
+#include "gte_postfx_projection.h"
+#include "postfx_debug_json.h"
 /* ---- Post-effect pipeline (docs/POST_EFFECTS.md) ---------------------------
  * One executor for every post effect on the composed game image: chains of
  * full-screen fragment passes (postfx_chain.h). Three stages, in order, each
@@ -95,17 +97,18 @@ static uint64_t s_pfx_t0 = 0;              /* u_time origin */
  * (psx_host_set_post_uniform, host_overlay.h): a live value replaces the
  * preset default of the same name in every pass that declares it. */
 enum { PFX_LIVE_MAX = 16 };
-typedef struct { char name[PFX_NAME]; float v[4]; } PfxLive;
+typedef PfxDebugLive PfxLive;
 static PfxLive s_pfx_live[PFX_LIVE_MAX];
 static int s_pfx_nlive = 0;
 static SDL_SpinLock s_pfx_live_lock = 0;
 void psx_host_set_post_uniform(const char *name, float x, float y, float z, float w) {
-    if (!name || !name[0] || strlen(name) >= PFX_NAME) return;
+    if (!name || !name[0] || strlen(name) >= sizeof s_pfx_live[0].name ||
+        !isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(w)) return;
     SDL_LockSpinlock(&s_pfx_live_lock);
     int i = 0;
     while (i < s_pfx_nlive && strcmp(s_pfx_live[i].name, name)) i++;
     if (i == s_pfx_nlive && s_pfx_nlive < PFX_LIVE_MAX) {
-        snprintf(s_pfx_live[i].name, PFX_NAME, "%s", name);
+        snprintf(s_pfx_live[i].name, sizeof s_pfx_live[i].name, "%s", name);
         s_pfx_nlive++;
     }
     if (i < s_pfx_nlive) {
@@ -123,7 +126,7 @@ static int pfx_live_get(const char *name, float out[4]) {
     SDL_UnlockSpinlock(&s_pfx_live_lock);
     return found;
 }
-extern volatile int32_t g_gte_last_h, g_gte_last_ofx, g_gte_last_ofy;   /* gte.cpp */
+
 static int    s_mask_w = 0, s_mask_h = 0;
 
 static int pfx_stage_on(int i) {
@@ -161,6 +164,7 @@ static void pfx_stage_unload(PfxStage *st) {
 
 /* Which stages read the mask decides whether draws keep it. */
 static void pfx_mask_wanted_update(void) {
+    gte_postfx_projection_enable(postfx_active());
     int want = 0;
     for (int i = 0; i < PFX_NSTAGES; i++) {
         if (!pfx_stage_on(i)) continue;
@@ -544,8 +548,10 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
             /* u_proj: x/z = (uv.x - y) * w * x, y/z = (uv.y - z) * x for a view-space
              * point at depth sz (240-line reference, same scale on both axes). */
             const float aspect = (float)lw / (float)(lh > 0 ? lh : 1);
-            const float H = g_gte_last_h > 0 ? (float)g_gte_last_h : 256.0f;
-            const float ofx = (float)g_gte_last_ofx / 65536.0f, ofy = (float)g_gte_last_ofy / 65536.0f;
+            GtePostfxProjection projection = {256, 160 * 65536, 120 * 65536};
+            (void)gte_postfx_projection_read(&projection);
+            const float H = projection.h > 0 ? (float)projection.h : 256.0f;
+            const float ofx = (float)projection.ofx / 65536.0f, ofy = (float)projection.ofy / 65536.0f;
             p_glUniform4f(L->proj, 240.0f / H, 0.5f + (ofx - 160.0f) / (240.0f * aspect),
                           1.0f - (ofy > 0.0f ? ofy : 120.0f) / 240.0f, aspect);
         }
@@ -684,6 +690,7 @@ static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int l
 
 /* Objects died with the context. */
 static void postfx_release(void) {
+    gte_postfx_projection_enable(0);
     for (int i = 0; i < PFX_NSTAGES; i++) {
         for (int k = 0; k < PFX_MAX_PASSES; k++) {
             s_pfx[i].prog[k] = s_pfx[i].tex[k] = s_pfx[i].fbo[k] = 0;
@@ -725,19 +732,12 @@ void gl_renderer_set_post_shader(const char *path) {
 }
 /* Debug: the user chain's last load outcome and the live uniforms, as JSON members. */
 int gl_renderer_post_shader_debug(char *out, int cap) {
-    char chemin[sizeof s_pfx_user_path];
-    snprintf(chemin, sizeof chemin, "%s", s_pfx_user_path);
-    for (char *q = chemin; *q; q++) if (*q == 92 || *q == 34) *q = '/';   /* JSON-safe */
-    int k = snprintf(out, (size_t)cap, "\"path\":\"%s\",\"status\":\"%s\",\"uniforms\":{",
-                     chemin, s_pfx_user_status);
+    GL_RT_SYNC("post_shader_debug");
+    PfxLive live[PFX_LIVE_MAX]; int count;
     SDL_LockSpinlock(&s_pfx_live_lock);
-    for (int i = 0; i < s_pfx_nlive && k < cap - 96; i++)
-        k += snprintf(out + k, (size_t)(cap - k), "%s\"%s\":[%.4f,%.4f,%.4f,%.4f]", i ? "," : "",
-                      s_pfx_live[i].name, s_pfx_live[i].v[0], s_pfx_live[i].v[1], s_pfx_live[i].v[2],
-                      s_pfx_live[i].v[3]);
+    count = s_pfx_nlive; memcpy(live,s_pfx_live,sizeof live);
     SDL_UnlockSpinlock(&s_pfx_live_lock);
-    if (k < cap - 2) k += snprintf(out + k, (size_t)(cap - k), "}");
-    return k;
+    return pfx_debug_json(out,cap,s_pfx_user_path,s_pfx_user_status,live,count);
 }
 
 int gl_renderer_post_shader_loaded(void) {
