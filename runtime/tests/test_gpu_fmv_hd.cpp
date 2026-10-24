@@ -114,7 +114,9 @@ int main() {
     check(!lookup(),"unrecognised movie scanout falls back to native image");
     gpu_fmv_hd_shutdown();
     original[0]=0xff000000u;
-    auto two=header;two.frames=2;two.stream_lba_hi=19;index(two);
+    /* A SetLoc target identifies the stream, while its delivered frame
+     * sectors naturally lie later on disc. */
+    auto two=header;two.frames=2;two.stream_lba_hi=0;index(two);
     timeline={1000,1,4,2,0,0,2};
     bool mapped_first=false;
     for(int i=0;i<200 && !mapped_first;++i){mapped_first=lookup() && output.rgba[0]==0;if(!mapped_first)SDL_Delay(2);}

@@ -202,7 +202,9 @@ static void load_movie(const char *dir) {
         for (uint32_t i = 0; i < h.frames; ++i) {
             int32_t lba;
             memcpy(&lba, b + header_bytes + (size_t)bytes + (size_t)i * sizeof lba, sizeof lba);
-            if (lba < h.stream_lba_lo || lba > h.stream_lba_hi) { free(b); return; }
+            /* SetLoc names the stream start; decoded frames arrive at later
+             * delivered sectors, potentially far beyond that target. */
+            if (lba < 0 || lba > (1 << 30)) { free(b); return; }
             if (i) {
                 int32_t previous;
                 memcpy(&previous, b + header_bytes + (size_t)bytes + (size_t)(i - 1) * sizeof previous,
