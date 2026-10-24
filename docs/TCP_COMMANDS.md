@@ -737,6 +737,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `pc_probe_arm` | ✓ |  |  |
 | `pc_probe_clear` | ✓ |  |  |
 | `pc_probe_dump` | ✓ |  |  |
+| `perf` | ✓ |  |  |
 | `pgxp` | ✓ |  | ✓ |
 | `pgxp_miss_ring` | ✓ |  |  |
 | `pgxp_shadow` | ✓ |  |  |
