@@ -586,20 +586,31 @@ $SeedCount = 0
 if ($DiscBasename -match '\.cue$') {
     Write-Host "== Probing disc (identity + seeds + TOC fp) =="
     try {
-        & $Python $ProbeDisc $ProbeCue `
-            --json-out (Join-Path $Root "disc_probe.json") `
-            --write-game-toml (Join-Path $Root "game.toml") `
-            --write-catalog (Join-Path $Root "catalog_identity.json") `
-            --write-seeds (Join-Path $Root "seeds\ghidra_funcs.txt") `
-            --write-boot-exe $DiscOut `
-            --disc-rel $DiscTomlPath `
-            --out-dir disc `
-            --players $Players `
-            --display-name $GameName `
-            --description $Description `
-            --publisher $Publisher `
-            --year $Year `
-            --region $Region
+        # Windows PowerShell 5.1 drops empty-string arguments to native
+        # commands, so an empty value would leave its flag without one and
+        # argparse would reject the whole call. Pass marketing flags only
+        # when they carry a value.
+        $ProbeArgs = @(
+            $ProbeDisc, $ProbeCue,
+            "--json-out", (Join-Path $Root "disc_probe.json"),
+            "--write-game-toml", (Join-Path $Root "game.toml"),
+            "--write-catalog", (Join-Path $Root "catalog_identity.json"),
+            "--write-seeds", (Join-Path $Root "seeds\ghidra_funcs.txt"),
+            "--write-boot-exe", $DiscOut,
+            "--disc-rel", $DiscTomlPath,
+            "--out-dir", "disc",
+            "--players", $Players
+        )
+        foreach ($Pair in @(
+                @("--display-name", $GameName),
+                @("--description", $Description),
+                @("--publisher", $Publisher),
+                @("--year", $Year),
+                @("--region", $Region))) {
+            if (-not [string]::IsNullOrWhiteSpace($Pair[1])) { $ProbeArgs += $Pair }
+        }
+        & $Python @ProbeArgs
+        if ($LASTEXITCODE -ne 0) { throw "probe_disc.py exited $LASTEXITCODE" }
         $Probed = $true
         $SeedCount = (Select-String -Path (Join-Path $Root "seeds\ghidra_funcs.txt") -Pattern '^0x').Count
         $BootFromToml = & $Python -c @"
