@@ -213,6 +213,10 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-24 — render-pass HD/local-view scope.** Re-scope the fork's
+  permission change onto current master without replay controls or host tracing.
+  Title-level positive HD/local-view digest and abort qualification remains
+  required before upstream promotion.
 - **2026-10-23 — VR upstream split.** Precise projective replay reconstructed on
   current master; six focused runtime regressions and the GPU-history guard pass.
   Prior fork/headset acceptance remains historical. Other VR features are
