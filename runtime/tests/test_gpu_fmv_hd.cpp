@@ -110,6 +110,10 @@ int main() {
     check(lookup() && output.rgba[0]==255,"phase advances again within same MDEC decode");
     timeline={1000,1,3,1,0,0,1};
     check(lookup() && output.rgba[0]==0,"state-load epoch restarts subframe");
+    timeline.cycle+=600000;
+    check(lookup() && output.rgba[0]==255,"post-load guest time advances subframe");
+    timeline.epoch++;timeline.cycle=1000;
+    check(lookup() && output.rgba[0]==0,"rollback epoch restarts subframe");
     original[0]=0xffffffffu;
     check(!lookup(),"unrecognised movie scanout falls back to native image");
     gpu_fmv_hd_shutdown();

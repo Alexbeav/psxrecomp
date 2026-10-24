@@ -11341,11 +11341,15 @@ void gl_renderer_host_ledger(GlHostLedger *out) {
 
 void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
                               int force_4_3) {
+    /* The 15-bit display path bypasses gl_renderer_present(). A skipped movie
+     * must not leave its HD source frame active while regular VRAM presents. */
+    gpu_fmv_hd_reset_tracking();
     present_vram_impl(disp_x, disp_y, w, h, linear, force_4_3);
     dyn_after_present();
 }
 
 int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear) {
+    gpu_fmv_hd_reset_tracking();
     int r = present_wide_fbo_impl(disp_x, disp_y, disp_h, linear);
     dyn_after_present();
     return r;
