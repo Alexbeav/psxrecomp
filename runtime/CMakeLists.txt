@@ -1027,6 +1027,11 @@ if(BUILD_TESTING)
     target_include_directories(ws_hud_anchor_test PRIVATE include)
     add_test(NAME ws_hud_anchor_test COMMAND ws_hud_anchor_test)
 
+    add_executable(ws_gte_sxy_test
+        tests/test_ws_gte_sxy.c)
+    target_include_directories(ws_gte_sxy_test PRIVATE include)
+    add_test(NAME ws_gte_sxy_test COMMAND ws_gte_sxy_test)
+
     add_executable(gpu_textured_dot_nw_shift_exec_test
         tests/test_gpu_textured_dot_nw_shift_exec.c
         src/psx_video_timing.c

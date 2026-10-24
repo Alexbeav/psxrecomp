@@ -3469,6 +3469,12 @@ extern "C" void psx_mod_tag_hud_primitive(uint32_t primitive, int edge) {
 extern "C" void psx_mod_anchor_hud_primitive(uint32_t primitive, int edge) {
     gpu_ws_tag_hud_prim(primitive, edge);
 }
+extern "C" int psx_mod_gte_sxy_recent(int32_t x, int32_t y) {
+    return gpu_ws_gte_sxy_recent(x, y);
+}
+extern "C" void psx_mod_anchor_hud_primitive_projected(uint32_t primitive, int edge) {
+    gpu_ws_tag_hud_prim_projected(primitive, edge);
+}
 extern "C" void psx_mod_tag_screen_mask_quad(uint32_t primitive) {
     gpu_ws_tag_screen_mask_quad(primitive);
 }

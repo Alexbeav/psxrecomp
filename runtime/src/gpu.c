@@ -43,6 +43,7 @@
 #include "ws_backdrop_extent.h"
 #include "ws_prepass_guard.h"
 #include "ws_hud_anchor.h"
+#include "ws_gte_sxy.h"
 #include "ws_repeat_rect.h"
 #include "ws_feedback_rect.h"
 #include "ws_screen_mask.h"
@@ -2581,7 +2582,18 @@ static void ws_tag_stats_note_lookup(GpuWsTagStats *stats, int result) {
     }
 }
 
-void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
+/* Positions the GTE projected this and the previous vblank (ws_gte_sxy.h).
+ * Only recorded while the squash is engaged: nothing else reads it. */
+static WsGteSxy ws_gte_sxy;
+void gpu_ws_note_gte_sxy(int32_t x, int32_t y) {
+    if (!ws_active()) return;
+    ws_gte_sxy_note(&ws_gte_sxy, (uint32_t)s_frame_count, x, y);
+}
+int gpu_ws_gte_sxy_recent(int32_t x, int32_t y) {
+    return ws_gte_sxy_recent(&ws_gte_sxy, (uint32_t)s_frame_count, x, y);
+}
+
+static void ws_tag_hud_prim(uint32_t prim, int anchor, int projected) {
     ws_hud_tag_stats.tag_calls++;
     uint32_t command_addr = prim + 4u;
     uint32_t words[12];
@@ -2595,10 +2607,22 @@ void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
 
     WsPrepassPacketGuard guard =
         ws_prepass_packet_guard(words, word_count);
-    ws_hud_anchor_insert(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE,
-                         GPU_RAM_KEY(command_addr), anchor, &guard,
-                         (uint32_t)s_frame_count);
+    if (projected)
+        ws_hud_anchor_insert_projected(ws_hud_anchor_tags,
+                                       WS_HUD_ANCHOR_TABLE_SIZE,
+                                       GPU_RAM_KEY(command_addr), anchor,
+                                       &guard, (uint32_t)s_frame_count);
+    else
+        ws_hud_anchor_insert(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE,
+                             GPU_RAM_KEY(command_addr), anchor, &guard,
+                             (uint32_t)s_frame_count);
     ws_hud_tag_stats.last_tag_frame = (uint32_t)s_frame_count;
+}
+void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
+    ws_tag_hud_prim(prim, anchor, 0);
+}
+void gpu_ws_tag_hud_prim_projected(uint32_t prim, int anchor) {
+    ws_tag_hud_prim(prim, anchor, 1);
 }
 
 void gpu_ws_tag_background_prim(uint32_t prim) {
@@ -2730,7 +2754,7 @@ static int ws_nw_radial_mask_transform(int32_t x[4], int32_t y[4]) {
     return 1;
 }
 
-static int ws_explicit_hud_anchor(int *out_anchor) {
+static int ws_explicit_hud_anchor_ex(int *out_anchor, int *out_projected) {
     if (gp0_cmd_source_addr == 0xFFFFFFFFu)
         return 0;
     if (gp0_words_needed <= 0 || gp0_words_needed > 12)
@@ -2739,16 +2763,20 @@ static int ws_explicit_hud_anchor(int *out_anchor) {
     if ((command_addr & 3u) ||
         (command_addr >= psx_ram_live_bytes() &&
          !psx_mod_gpu_dma_memory_contains(command_addr, 4u))) return 0;
-    int anchor = 0;
-    int result = ws_hud_anchor_lookup_result(
+    int anchor = 0, projected = 0;
+    int result = ws_hud_anchor_lookup_result_ex(
         ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE, GPU_RAM_KEY(command_addr),
         gp0_cmd_buf, (uint32_t)gp0_words_needed, (uint32_t)s_frame_count,
-        &anchor);
+        &anchor, &projected);
     ws_tag_stats_note_lookup(&ws_hud_tag_stats, result);
     if (result != WS_HUD_ANCHOR_HIT)
         return 0;
     if (out_anchor) *out_anchor = anchor;
+    if (out_projected) *out_projected = projected;
     return 1;
+}
+static int ws_explicit_hud_anchor(int *out_anchor) {
+    return ws_explicit_hud_anchor_ex(out_anchor, NULL);
 }
 
 static int ws_nw_explicit_hud_delta(int32_t *out_delta) {
@@ -2764,19 +2792,36 @@ static int ws_nw_explicit_hud_delta(int32_t *out_delta) {
 /* A title can identify one widget whose pieces arrive in separate DMA lists.
  * Per-list auto grouping cannot see that ownership. Use the same guarded
  * edge/centre role as native-wide, expressed as a squash pivot here. */
-static int ws_projection_hud_anchor(int32_t *out_anchor) {
+static int ws_projection_hud_anchor_ex(int32_t *out_anchor, int *out_projected) {
     if (!ws_active()) return 0;
-    int edge;
-    if (!ws_explicit_hud_anchor(&edge)) return 0;
+    int edge, projected = 0;
+    if (!ws_explicit_hud_anchor_ex(&edge, &projected)) return 0;
+    if (out_projected) *out_projected = projected;
     if (out_anchor)
         *out_anchor = ws_disp_x() + (edge < 0 ? 0 : edge > 0 ? ws_disp_w() : ws_disp_w() / 2);
     return 1;
 }
 
+static int ws_projection_hud_anchor(int32_t *out_anchor) {
+    return ws_projection_hud_anchor_ex(out_anchor, NULL);
+}
+
+/* Shift that takes an X already squashed about the display centre to where
+ * scaling it about the anchor would have put it: (anchor - centre) * (1 - s). */
+static int32_t ws_projected_hud_shift(int32_t anchor) {
+    return ws_scale_about(0, anchor) - ws_scale_about(0, ws_disp_x() + ws_disp_w() / 2);
+}
+
 static int ws_projection_hud_transform(int32_t *x, int count) {
     int32_t anchor;
-    if (!ws_projection_hud_anchor(&anchor)) return 0;
-    for (int i = 0; i < count; i++) x[i] = ws_scale_about(x[i], anchor);
+    int projected = 0;
+    if (!ws_projection_hud_anchor_ex(&anchor, &projected)) return 0;
+    if (projected) {
+        const int32_t shift = ws_projected_hud_shift(anchor);
+        for (int i = 0; i < count; i++) x[i] += shift;
+    } else {
+        for (int i = 0; i < count; i++) x[i] = ws_scale_about(x[i], anchor);
+    }
     return 1;
 }
 
@@ -3279,9 +3324,14 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], int32_t vy[4]) {
 static int ws_auto_ui_transform_rect(int32_t *x, int32_t *y, int *w, int *h) {
     if (!x || !y || !w || !h || *w <= 0) return 0;
     int32_t explicit_anchor;
-    if (ws_projection_hud_anchor(&explicit_anchor)) {
-        *x = ws_scale_about(*x, explicit_anchor);
-        *w = (int)ws_scale_len(*w);
+    int explicit_projected = 0;
+    if (ws_projection_hud_anchor_ex(&explicit_anchor, &explicit_projected)) {
+        if (explicit_projected) {
+            *x += ws_projected_hud_shift(explicit_anchor);
+        } else {
+            *x = ws_scale_about(*x, explicit_anchor);
+            *w = (int)ws_scale_len(*w);
+        }
         return 1;
     }
     if (ws_nw_explicit_hud_delta(NULL) || psx_ws_prim_is_tagged())
