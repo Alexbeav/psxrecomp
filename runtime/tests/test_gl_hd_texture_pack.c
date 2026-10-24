@@ -359,8 +359,9 @@ static void composition_scene(const char* root) {
     check(sample(20,8)[0]>200 && sample(20,8)[2]<20,"composed all-zero ST cutout retains destination");
     check(sample(24,8)[0]>200 && sample(24,8)[1]<20,"native transparent hole remains cutout");
     check(sample(32,8)[0]<20 && sample(32,8)[2]>200,"uncovered native opaque texel retains native color");
+    /* Textured draws preserve the source STP bit in canonical guest VRAM. */
     uint16_t output[8];gr_vram_transfer_out(2,2,8,1,output);
-    check(output[0]==0x03e0 && output[2]==0x03ff && output[6]==0x7c00,
+    check(output[0]==0x03e0 && output[2]==0x83ff && output[6]==0x7c00,
           "composition does not change guest native draw or STP behavior");
     GpuHdTextureImage first={0},again={0};
     check(gpu_hd_textures_acquire_draw(tp,0,0,bounds,0,1,&first),"composed cache acquire");
@@ -468,6 +469,40 @@ static void cache_eviction_scene(const char* root) {
     pack_config(root,0);check(gpu_hd_textures_reload(error,sizeof(error)),"eviction fixture cleanup reload");
     state();gr_vram_transfer_in(512,0,4,4,source_words);wait_ready(0);wait_ready(1);
 }
+
+/* Indexed replacements choose a live CLUT entry rather than a baked RGB
+ * palette. Exercise the real upload/match/decode/shader path. */
+static void indexed_palette_scene(const char* root) {
+    char dir[2048],path[2304],error[256]={0};
+    snprintf(dir,sizeof dir,"%s/beetle",root);
+    uint16_t words[16],palette[16]={0};
+    for(int n=0;n<16;++n) words[n]=0x1111;
+    palette[1]=0x03e0; palette[2]=0x7c00;
+    snprintf(path,sizeof path,"%s/demo-texture-replacements/%x-index.png",dir,
+        hd_texture_crc32_words_le(words,16));
+    uint8_t rgba[64*16*4];
+    for(int n=0;n<64*16;++n) {
+        rgba[n*4]=2; rgba[n*4+1]=rgba[n*4+2]=0; rgba[n*4+3]=255;
+    }
+    FILE* f=fopen(path,"wb");check(f!=NULL,"indexed GPU fixture opens");
+    if(f){check(png_write_rgba(f,rgba,64,16),"indexed GPU fixture writes");fclose(f);}
+    check(gpu_hd_textures_configure(dir,1,0,error,sizeof error),"indexed GPU session opens");
+    state();gr_vram_transfer_in(0,300,16,1,palette);gr_vram_transfer_in(512,0,4,4,words);
+    const int bounds[4]={0,0,7,3};GpuHdTextureImage image={0};int ready=0;
+    for(int n=0;n<2000&&!ready;++n) {
+        ready=gpu_hd_textures_acquire_draw(8u,0,300,bounds,0,0,&image) && image.alpha_mode==5;
+        gpu_hd_textures_release_image(&image);if(!ready)SDL_Delay(1);
+    }
+    check(ready,"indexed GPU path selects decoded palette-independent replacement");
+    gr_fill_rect(0,0,16,16,0x001f);gr_draw_textured_rect(2,2,8,4,0,0,0,300,8u);capture();
+    check(sample(8,8)[2]>200&&sample(8,8)[1]<20,"indexed shader uses replacement index and live blue CLUT entry");
+    gr_vram_write(2,300,0x001f);
+    gr_draw_textured_rect(2,2,8,4,0,0,0,300,8u);capture();
+    check(sample(8,8)[0]>200&&sample(8,8)[2]<20,"indexed shader follows live CLUT change without changing replacement");
+    uint16_t native[8];gr_vram_transfer_out(2,2,8,1,native);
+    check(native[0]==0x03e0,"indexed presentation preserves native source-index RGB");
+}
+
 int main(int argc,char** argv) {
     if(argc==2 && !strcmp(argv[1],"--native-baseline")) {
         char* native_args[]={"hd-baseline","4","twin","1"};
@@ -602,7 +637,7 @@ int main(int argc,char** argv) {
     gr_fill_rect(0,0,16,16,0x03e0);
     gr_draw_textured_rect(4,4,2,4,5,0,0,0,texture_page); capture();
     check(sample(16,16)[2]>200 && sample(16,16)[0]<20,"Beetle partial draw keeps upload-relative UV origin");
-    check(vram[4*1024+4]==0x03e0 && vram[517]==0x83e0,
+    check(vram[4*1024+4]==0x83e0 && vram[517]==0x83e0,
           "Beetle image preserves native draw RGB and source STP");
     gr_draw_textured_rect(8,4,4,4,4,0,0,0,texture_page); capture();
     check(sample(44,16)[1]>200,"Beetle native transparent zero still cuts out replacement");
@@ -862,6 +897,7 @@ int main(int argc,char** argv) {
             check(fg_gen_hud_hd>0 && fg_gen_hud_bad==0,"Smooth motion + HD: generated HUD is the HD replacement");
         }
     }
+    indexed_palette_scene(argv[1]);
     memcpy(reference,vram,sizeof(vram));
     gl_renderer_set_cpu_auth_dual(1);
     gpu_hd_textures_shutdown();
