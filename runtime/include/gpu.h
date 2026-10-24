@@ -377,6 +377,7 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t *queue_guards,
                             int nsites,
                             uint32_t forward_addr,
+                            const uint32_t forward_offsets[3],
                             uint32_t object_type_offset,
                             uint32_t hysteresis_pixels,
                             uint32_t queue_reserve,
@@ -420,6 +421,10 @@ uint32_t psx_ws_cull_sxy_and(uint32_t acc, uint32_t sxy);
 extern int g_psx_ws_sxy_cull_n;
 uint32_t psx_ws_sxy_cull_vertex_reg(uint32_t pc, uint32_t instr,
                                     uint32_t (*read_word)(uint32_t phys));
+void gpu_ws_set_packed_x_sites(const uint32_t *addresses,
+                              const uint32_t *expected, int count);
+int psx_ws_cull_packed_x_site(uint32_t pc, uint32_t instr, uint32_t x,
+                              uint32_t width, uint32_t *out);
 uint32_t psx_ws_angle_widen(uint32_t vanilla);
 int psx_ws_angle_site(uint32_t pc, uint32_t instr, uint32_t *out);
 /* bound * (half_extent + margin) / half_extent; identity at 4:3. */

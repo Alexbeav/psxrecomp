@@ -221,7 +221,8 @@ them.
 
 ### Guarded packed-coordinate rejection
 
-Some polygon funnels combine packed SXY flags and reject on `BNE flags,zero`.
+Some polygon funnels combine packed SXY flags and reject on `BNE flags,zero`,
+or read the GTE error summary with `BLTZ flags`.
 The native-wide GPU can clip horizontal overflow while the game retains its
 vertical rejection bits. Declare only verified render rejection branches:
 
@@ -238,8 +239,29 @@ wide gameplay only the specified flag bits participate in the predicate; guest
 registers, the branch delay slot, vertical/depth/backface tests and timing remain
 intact. Adapters must provide sufficient bounded primitive/capture capacity.
 Changing a site, guard or mask changes the overlay configuration fingerprint.
+For a verified GTE `BLTZ` consumer, mask the underlying error bits rather than
+bit 31 itself. For example, `0x7F87A000` preserves the hardware error constituents
+except horizontal SX saturation. Positive non-summary flags retain their original
+acceptance at 4:3. Link branches and other REGIMM forms are not supported.
 
 ### Guarded widescreen participation comparisons
+
+`[[widescreen.cull.packed_x]]` handles a proven mesh screen-X predicate
+expressed as `SLTU rd, (SX << 16), (width << 16)`:
+
+```toml
+[[widescreen.cull.packed_x]]
+address = "0x801466A0"
+expected = "0x0079C02B"
+```
+
+The complete instruction guards native overlays and the interpreter. While
+wide, X must lie in `[-margin, width + margin)`; both sides widen together.
+At 4:3 the original unsigned comparison is exact. Nonzero low-half operands,
+zero width, and widths above 1024 retain the original comparison. It changes
+only the predicate, preserving GPR operands, vertical, backface, depth and
+ordering-table limits. Sites affect the overlay cache identity; regenerate
+main/native overlays after changing them. Empty lists are inert.
 
 Games may disable a proven object/model cull verdict in widened world views
 without changing true 4:3 behavior:
@@ -308,12 +330,13 @@ A model-list or per-child cosine rejection can use a horizontal-only envelope:
 
 ```toml
 [widescreen.cull.aspect_cone]
-forward_addr = "0x1F8000E8" # signed Q12 X/Z/Y halfwords
+forward_addr = "0x1F8000E8" # three signed Q12 halfwords
+forward_offsets = [0, 4, 2] # byte offsets for X/Z/Y; this title stores X/Y/Z
 object_type_offset = 12
 object_reg = 19
 x_reg = 16
-z_reg = 17
-y_reg = 18
+z_reg = 18
+y_reg = 17
 hysteresis_pixels = 24
 queue_reserve = 4
 queue_count_addrs = ["0x1F800144", "0x1F800150", "0x1F80015C"]
@@ -330,8 +353,8 @@ expected = "0x0082202A" # signed SLT reject predicate
 cosine_threshold = 856  # required for SLT; Q10
 object_reg = 20         # optional per-site register overrides
 x_reg = 19
-z_reg = 18
-y_reg = 17
+z_reg = 17
+y_reg = 18
 queue_guard = false     # this lower-level predicate appends to no fixed queue
 ```
 
@@ -340,6 +363,12 @@ queue_guard = false     # this lower-level predicate appends to no fixed queue
 - An `SLTI` site derives its Q10 cosine threshold from the immediate unless
   `cosine_threshold` is given. An `SLT` site requires it explicitly.
 - A vanilla keep is always preserved. Only a vanilla rejection is retested.
+- `x_reg`/`z_reg` describe the world ground plane; `y_reg` is world vertical.
+  `forward_offsets` maps the corresponding X/Z/Y forward components from the
+  three halfwords at `forward_addr`. It must be a permutation of `[0, 2, 4]`.
+  Omitting it preserves the legacy `[0, 2, 4]` order. Match both register and
+  forward mappings to the actual camera basis; the title's coordinate names
+  alone are not sufficient evidence.
 - Horizontal reach follows the current client aspect. Vertical reach,
   near/far checks, type dispatch, and the game’s queue-capacity branches are
   unchanged.

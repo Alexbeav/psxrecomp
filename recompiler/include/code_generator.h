@@ -180,6 +180,7 @@ struct CodeGenConfig {
     // [[widescreen.cull.sxy]] packed-SXY AND folds (left edge widened).
     std::vector<PSXRecompV4::WidescreenSxyCullSite> ws_cull_sxy_sites;
     std::vector<PSXRecompV4::WidescreenMaskedRejectSite> ws_cull_masked_reject_sites;
+    std::vector<PSXRecompV4::WidescreenPackedXSite> ws_cull_packed_x_sites;
     std::vector<PSXRecompV4::WidescreenCullScaleSite> ws_cull_scale_sites;
 
     // Exact `addi[u] rt,zero,imm` 12-bit angular half-extents. The runtime

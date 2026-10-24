@@ -26,6 +26,7 @@
 #include "crash_trace.h"
 #include "debug_server.h"
 #include "cpu_state.h"
+#include "gte_nclip_stats.h"
 #include "event_ring.h"
 #include "psx_video_timing.h"
 #include "color_lut.h"
@@ -1017,6 +1018,7 @@ int psx_ws_masked_reject(uint32_t flags, uint32_t mask) {
 }
 int psx_ws_masked_reject_site(uint32_t pc, uint32_t instr,
     uint32_t flags, int vanilla) {
+    if (psx_ws_x_margin() <= 0) return vanilla;
     for (int i = 0; i < ws_masked_reject_n; ++i) {
         const WsMaskedRejectSite *s = &ws_masked_reject_sites[i];
         if (s->address == (pc & 0x1FFFFFFFu) && s->expected == instr)
@@ -1028,8 +1030,25 @@ int psx_ws_masked_reject_site(uint32_t pc, uint32_t instr,
 static WsMaskedRejectSite ws_nclip_sites[WS_EXPLICIT_CULL_SITES_MAX];
 static uint8_t ws_nclip_previous[WS_EXPLICIT_CULL_SITES_MAX];
 static int ws_nclip_site_count;
+static WsMaskedRejectSite ws_nclip_zero_sites[WS_EXPLICIT_CULL_SITES_MAX];
+static int ws_nclip_zero_site_count;
 static uint64_t ws_nclip_rescues;
 uint64_t gpu_ws_native_wide_nclip_rescues(void) { return ws_nclip_rescues; }
+void psx_mod_set_native_wide_nclip_zero_sites(const uint32_t* addresses,
+    const uint32_t* expected, int count) {
+    if (count < 0 || count > WS_EXPLICIT_CULL_SITES_MAX ||
+        (count && (!addresses || !expected))) abort();
+    for (int i = 0; i < count; ++i) {
+        /* Only BLEZ rs,reject is proved here; positive/negative nonzero
+         * winding and all other branch shapes retain their native result. */
+        if ((addresses[i] & 3u) || expected[i] >> 26 != 6u ||
+            ((expected[i] >> 16) & 31u) != 0u ||
+            ((expected[i] >> 21) & 31u) == 0u) abort();
+        ws_nclip_zero_sites[i].address = addresses[i] & 0x1FFFFFFFu;
+        ws_nclip_zero_sites[i].expected = expected[i];
+    }
+    ws_nclip_zero_site_count = count;
+}
 void psx_mod_set_native_wide_nclip_sites(const uint32_t* addresses,
     const uint32_t* expected, int count) {
     if (count < 0 || count > WS_EXPLICIT_CULL_SITES_MAX) abort();
@@ -1057,6 +1076,15 @@ extern int gte_nclip_native_wide_sign(int32_t mac0, int* sign);
 extern int gte_nclip_native_wide_previous_sign(int32_t mac0, int* sign);
 int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla) {
     if (psx_ws_x_margin() <= 0 || !gpu_ws_precise_nclip_enabled()) return vanilla;
+    for (int i = 0; i < ws_nclip_zero_site_count; ++i) {
+        if (ws_nclip_zero_sites[i].address != (pc & 0x1FFFFFFFu) ||
+            ws_nclip_zero_sites[i].expected != instr) continue;
+        if (mac0 == 0 && gte_nclip_zero_positive(mac0, pc)) {
+            ++ws_nclip_rescues;
+            return 0;
+        }
+        return vanilla;
+    }
     for (int i = 0; i < ws_nclip_site_count; ++i) {
         if (ws_nclip_sites[i].address != (pc & 0x1FFFFFFFu) ||
             ws_nclip_sites[i].expected != instr) continue;
@@ -1079,6 +1107,29 @@ typedef struct {
     uint32_t expected;
     uint32_t result;
 } WsCullKeepSite;
+typedef struct { uint32_t address, expected; } WsPackedXSite;
+static WsPackedXSite ws_packed_x_sites[WS_EXPLICIT_CULL_SITES_MAX];
+static int ws_packed_x_n;
+void gpu_ws_set_packed_x_sites(const uint32_t *addresses,
+                              const uint32_t *expected, int count) {
+    if (count < 0) count = 0;
+    if (count > WS_EXPLICIT_CULL_SITES_MAX) count = WS_EXPLICIT_CULL_SITES_MAX;
+    ws_packed_x_n = count;
+    for (int i = 0; i < count; ++i) {
+        ws_packed_x_sites[i].address = addresses[i] & 0x1FFFFFFFu;
+        ws_packed_x_sites[i].expected = expected[i];
+    }
+}
+int psx_ws_cull_packed_x_site(uint32_t pc, uint32_t instr, uint32_t x,
+                              uint32_t width, uint32_t *out) {
+    for (int i = 0; i < ws_packed_x_n; ++i) {
+        if (ws_packed_x_sites[i].address != (pc & 0x1FFFFFFFu) ||
+            ws_packed_x_sites[i].expected != instr) continue;
+        if (out) *out = psx_ws_cull_packed_x_value(x, width, psx_ws_x_margin());
+        return 1;
+    }
+    return 0;
+}
 static WsCullKeepSite ws_cull_keep_sites[WS_EXPLICIT_CULL_SITES_MAX];
 static int ws_cull_keep_n = 0;
 void gpu_ws_set_cull_keep_sites(const uint32_t *addresses,
@@ -1304,6 +1355,7 @@ typedef struct {
 static WsAspectConeSite ws_aspect_cone_sites[WS_EXPLICIT_CULL_SITES_MAX];
 static int ws_aspect_cone_n = 0;
 static uint32_t ws_aspect_cone_forward_addr = 0;
+static uint32_t ws_aspect_cone_forward_offsets[3] = {0u, 2u, 4u};
 static uint32_t ws_aspect_cone_object_type_offset = 0;
 static uint32_t ws_aspect_cone_hysteresis_pixels = 0;
 static uint32_t ws_aspect_cone_queue_reserve = 0;
@@ -1332,6 +1384,7 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t *queue_guards,
                             int nsites,
                             uint32_t forward_addr,
+                            const uint32_t forward_offsets[3],
                             uint32_t object_type_offset,
                             uint32_t hysteresis_pixels,
                             uint32_t queue_reserve,
@@ -1360,6 +1413,9 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
             (uint8_t)(!queue_guards || queue_guards[i] != 0);
     }
     ws_aspect_cone_forward_addr = forward_addr;
+    for (int i = 0; i < 3; i++)
+        ws_aspect_cone_forward_offsets[i] =
+            forward_offsets ? forward_offsets[i] : (uint32_t)i * 2u;
     ws_aspect_cone_object_type_offset = object_type_offset;
     ws_aspect_cone_hysteresis_pixels = hysteresis_pixels;
     ws_aspect_cone_queue_reserve = queue_reserve;
@@ -1498,11 +1554,14 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
         (total_margin > ws_cull_guard_pixels)
             ? total_margin - ws_cull_guard_pixels : 0;
     const int32_t fx =
-        (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 0u);
+        (int16_t)psx_read_half(ws_aspect_cone_forward_addr +
+                             ws_aspect_cone_forward_offsets[0]);
     const int32_t fz =
-        (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 2u);
+        (int16_t)psx_read_half(ws_aspect_cone_forward_addr +
+                             ws_aspect_cone_forward_offsets[1]);
     const int32_t fy =
-        (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 4u);
+        (int16_t)psx_read_half(ws_aspect_cone_forward_addr +
+                             ws_aspect_cone_forward_offsets[2]);
     const uint32_t threshold = site->cosine_threshold;
 
     const int in_visible =
@@ -2654,13 +2713,18 @@ int gpu_ws_background_stretch_active(void) {
            frame - ws_background_tag_frame <= WS_HUD_ANCHOR_FRESH_FRAMES;
 }
 
+/* Legacy title opt-ins also change background sampling inside the original
+ * viewport. Keep their wide composite intact, just like explicit packet tags. */
+static int ws_nw_phase_backdrop = 0;
+static int ws_nw_flat_backdrop = 0;
 int gpu_ws_background_requires_full_composite(void) {
     /* Freshness governs reuse of a packet address, not the lifetime of the
      * pixels it produced. A slow game frame or a held display buffer can keep
      * those pixels on screen indefinitely. Conservatively keep full mirroring
      * once a composite has been tagged; GPU reset/snapshot restore clears the
      * latch together with the tags. Never modify the packet freshness guard. */
-    return ws_background_tags_used && ws_native_wide_configured();
+    return ws_native_wide_configured() &&
+           (ws_background_tags_used || ws_nw_phase_backdrop || ws_nw_flat_backdrop);
 }
 
 static int ws_nw_explicit_background(void) {
@@ -2929,7 +2993,6 @@ static int ws_tagged_anchor(int32_t *out_ax) {
  * flower-field tiles — the 3D rock/foreground is untagged AND has narrow prims,
  * so tag/narrow heuristics alone mis-stretch and tear it. */
 uint32_t g_ws_backdrop_lo = 0, g_ws_backdrop_hi = 0;
-static int ws_nw_phase_backdrop = 0;
 void gpu_ws_set_nw_phase_backdrop(int on) { ws_nw_phase_backdrop = on ? 1 : 0; }
 static int ws_nw_textured_edges = 0;
 int g_ws_tex_edge_pct = 0;
@@ -3507,7 +3570,6 @@ static void ws_nw_hud_shift_vertices(int32_t *vx, int count) {
  * Transforms vx[0..3] IN PLACE (pre-draw_offset); returns 1 if it applied. */
 static int ws_nw_backdrop = 0;
 void gpu_ws_set_nw_backdrop(int on) { ws_nw_backdrop = on ? 1 : 0; }
-static int ws_nw_flat_backdrop = 0;
 void gpu_ws_set_nw_flat_backdrop(int on) { ws_nw_flat_backdrop = on ? 1 : 0; }
 int gpu_ws_nw_flat_backdrop_enabled(void) { return ws_nw_flat_backdrop; }
 static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {

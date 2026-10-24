@@ -197,7 +197,10 @@ struct WidescreenAspectConeSite {
 
 struct WidescreenAspectConeConfig {
     std::vector<WidescreenAspectConeSite> sites;
-    uint32_t forward_addr = 0;       // three signed Q12 halfwords: X,Z,Y
+    uint32_t forward_addr = 0;       // three signed Q12 halfwords
+    // Byte offsets for semantic X,Z,Y. Y is world vertical; legacy configs
+    // stored the forward vector in X,Z,Y order.
+    std::array<uint32_t, 3> forward_offsets{0u, 2u, 4u};
     uint32_t object_type_offset = 0;
     uint32_t object_reg = 0;
     uint32_t x_reg = 0;
@@ -1035,6 +1038,11 @@ struct QualityPreset {
     std::vector<std::string> keys;     // the [video] keys this preset sets
 };
 
+struct WidescreenPackedXSite {
+    uint32_t address = 0;
+    uint32_t expected = 0;
+};
+
 struct GameConfig {
     std::filesystem::path config_path;
     std::filesystem::path project_root;
@@ -1553,6 +1561,8 @@ struct GameConfig {
     std::vector<QualityPreset> quality_presets;
     // [[mod_immediate.sites]]: run-time-selectable immediates (ModImmediateSite).
     std::vector<ModImmediateSite> mod_immediate_sites;
+    // Guarded SLTU on SX<<16 against screen width<<16; both wide edges.
+    std::vector<WidescreenPackedXSite> ws_cull_packed_x_sites;
 };
 
 // Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.

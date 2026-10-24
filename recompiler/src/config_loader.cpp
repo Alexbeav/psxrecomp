@@ -65,6 +65,18 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
 
     h.words("sprite_tag_funcs", c.ws_sprite_tag_funcs);
     h.words("mod_function_entry_funcs", c.mod_function_entry_funcs);
+    if (!c.ws_cull_packed_x_sites.empty()) {
+        h.tag("cull_packed_x");
+        auto sites = c.ws_cull_packed_x_sites;
+        std::sort(sites.begin(), sites.end(), [](const auto& a, const auto& b) {
+            return (a.address & 0x1FFFFFFFu) < (b.address & 0x1FFFFFFFu);
+        });
+        h.u32((uint32_t)sites.size());
+        for (const auto& site : sites) {
+            h.u32(site.address & 0x1FFFFFFFu);
+            h.u32(site.expected);
+        }
+    }
     if (!c.ws_cull_masked_reject_sites.empty()) {
         h.tag("cull_masked_reject");
         auto sites = c.ws_cull_masked_reject_sites;
@@ -235,6 +247,12 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(site.queue_guard ? 1u : 0u);
     }
     h.u32(c.ws_aspect_cone.forward_addr);
+    // Preserve cache identities for titles using the existing component order.
+    // A non-default order changes runtime participation and needs a new key.
+    if (c.ws_aspect_cone.forward_offsets != std::array<uint32_t, 3>{0u, 2u, 4u}) {
+        h.u32(0x41584953u); // AXIS
+        for (uint32_t value : c.ws_aspect_cone.forward_offsets) h.u32(value);
+    }
     h.u32(c.ws_aspect_cone.object_type_offset);
     h.u32(c.ws_aspect_cone.object_reg);
     h.u32(c.ws_aspect_cone.x_reg);
@@ -2501,6 +2519,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenSxyCullSite> ws_cull_sxy_sites;
     std::vector<WidescreenMaskedRejectSite> ws_cull_masked_reject_sites;
+    std::vector<WidescreenPackedXSite> ws_cull_packed_x_sites;
     std::vector<WidescreenCullScaleSite> ws_cull_scale_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -2558,15 +2577,38 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                                               "widescreen.cull.masked_reject.expected");
                     site.reject_mask = parse_hex(toml::find<std::string>(item, "reject_mask"),
                                                  "widescreen.cull.masked_reject.reject_mask");
-                    if ((site.address & 3u) || (site.expected >> 26) != 5u ||
+                    const uint32_t opcode = site.expected >> 26;
+                    const bool supported = opcode == 5u || opcode == 1u;
+                    if ((site.address & 3u) || !supported ||
                         ((site.expected >> 16) & 31u) != 0u ||
                         ((site.expected >> 21) & 31u) == 0u || !site.reject_mask)
-                        throw std::runtime_error("masked_reject needs aligned BNE reg,zero and nonzero reject_mask");
+                        throw std::runtime_error("masked_reject needs aligned BNE reg,zero or BLTZ reg and nonzero reject_mask");
                     if (!seen.insert(site.address & 0x1FFFFFFFu).second)
                         throw std::runtime_error("duplicate masked_reject address");
                     ws_cull_masked_reject_sites.push_back(site);
                     if (ws_cull_masked_reject_sites.size() > 256)
                         throw std::runtime_error("masked_reject supports at most 256 sites");
+                }
+            }
+            if (cull.contains("packed_x")) {
+                std::set<uint32_t> seen;
+                for (const auto& item : toml::find<toml::array>(cull, "packed_x")) {
+                    WidescreenPackedXSite site;
+                    site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                             "widescreen.cull.packed_x.address");
+                    site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                              "widescreen.cull.packed_x.expected");
+                    if ((site.address & 3u) || (site.expected >> 26) != 0u ||
+                        (site.expected & 0x7FFu) != 0x2Bu ||
+                        ((site.expected >> 21) & 31u) == 0u ||
+                        ((site.expected >> 16) & 31u) == 0u ||
+                        ((site.expected >> 11) & 31u) == 0u)
+                        throw std::runtime_error("packed_x needs aligned SLTU rd,rs,rt with nonzero registers");
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error("duplicate packed_x address");
+                    ws_cull_packed_x_sites.push_back(site);
+                    if (ws_cull_packed_x_sites.size() > 256)
+                        throw std::runtime_error("packed_x supports at most 256 sites");
                 }
             }
             if (cull.contains("keep")) {
@@ -2761,6 +2803,18 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                             out[i] = (uint32_t)values[i];
                         }
                     };
+                if (cone.contains("forward_offsets")) {
+                    load_cone_int_array("forward_offsets",
+                                        ws_aspect_cone.forward_offsets);
+                    auto offsets = ws_aspect_cone.forward_offsets;
+                    std::sort(offsets.begin(), offsets.end());
+                    if (offsets != std::array<uint32_t, 3>{0u, 2u, 4u})
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "forward_offsets must be a permutation of [0, 2, 4] "
+                            "for X, Z, Y (Y is world vertical)",
+                            config_path.string()));
+                }
                 load_cone_hex_array("queue_count_addrs",
                                     ws_aspect_cone.queue_count_addrs);
                 load_cone_int_array("queue_capacities",
@@ -3109,6 +3163,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         std::move(ws_cull_clip_edge_x_load_sites);
     loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
     loaded.ws_cull_masked_reject_sites = std::move(ws_cull_masked_reject_sites);
+    loaded.ws_cull_packed_x_sites = std::move(ws_cull_packed_x_sites);
     loaded.draw_distance_clamp_sites =
         parse_draw_distance_clamps(cfg, config_path);
     loaded.quality_presets = parse_quality_presets(cfg, root, config_path);

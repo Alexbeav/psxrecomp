@@ -2024,8 +2024,10 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         {
             uint32_t vanilla = (cpu->gpr[rs] < cpu->gpr[rt]) ? 1u : 0u;
             uint32_t kept = vanilla;
-            /* Same precedence as the code generator: scale and keep sites first. */
-            if (!psx_ws_cull_scale_site(pc, insn, cpu->gpr[rs], cpu->gpr[rt], &kept) &&
+            /* Same precedence as the code generator: packed-X, scale and keep
+             * sites first. */
+            if (!psx_ws_cull_packed_x_site(pc, insn, cpu->gpr[rs], cpu->gpr[rt], &kept) &&
+                !psx_ws_cull_scale_site(pc, insn, cpu->gpr[rs], cpu->gpr[rt], &kept) &&
                 !psx_ws_cull_keep_site(pc, insn, vanilla, &kept) &&
                 psx_ws_is_cull_screen_x_site(pc))
                 kept = (uint32_t)psx_ws_cull_sltu_band(cpu->gpr[rs], cpu->gpr[rt]);
@@ -2191,6 +2193,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         default: return abort_unsupported(pc, insn, "REGIMM rt");
         }
         taken = ws_branch_keep(pc, taken);
+        taken = psx_ws_masked_reject_site(pc, insn, cpu->gpr[rs], taken);
         taken = psx_ws_nclip_branch(pc, insn, (int32_t)cpu->gpr[rs], taken);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
