@@ -1,0 +1,6 @@
+# PS1G-135 launcher provider update
+Framework parent: a6c8ff0f8c42c881914f48ef2ecd0581606ffffc.
+UI parent f998b0a77558d660dc35f507ee2e93eade0f12c6 moves to e85b3f126d277c15943bf6387b15de294c3ccd06 (tree fd28e185908a2ec9c4c7656b71f00ff8466e1bcd).
+Reason: Dino Crisis launcher default is Analog despite stock title Digital metadata; preserve explicit Analog and display the approved note. Other titles keep their existing policy. Only tools/ci/recomp_ui_pin.txt moves a provider record. No qualified-hunk, codegen hash, replay profile or route-source record moves.
+Same real-model fixture ed7bbd89d04bfd022427144a213dc131db425bd9df1cd46a089b7fac31643f79 compiles on both; stock model exits 1 with initial=1 assigned=1 expected=2, candidate exits 0 with initial=2 assigned=2 expected=2. Candidate 32 model checks pass. The final renderer correction is Dino-only and compiles. Full integration gates remain pending; this record is not a landing or trial result.
+Evidence: Evidence/PS1G-135/PS1G-135-approved-default-20261024; implementation 7-10749, before/after 7-10750, renderer correction 7-10753.
