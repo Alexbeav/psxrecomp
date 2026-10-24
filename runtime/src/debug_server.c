@@ -8780,6 +8780,19 @@ static void handle_bloom(int id, const char *json)
              bi.gen_us_mean, (unsigned long long)bi.reused);
 }
 
+/* post_shader: {"cmd":"post_shader"} reads the user chain (path, load outcome, live
+ * uniforms); "path" sets it, "" turns it off, the same path reloads it (shader edits). */
+static void handle_post_shader(int id, const char *json)
+{
+    char path[512];
+    if (json_get_str(json, "path", path, sizeof path)) gl_renderer_set_post_shader(path);
+    char info[1536];
+    if (!gl_renderer_post_shader_debug(info, (int)sizeof info)) {
+        send_err(id, "post shader diagnostics exceed response capacity"); return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"loaded\":%d,%s}", id, gl_renderer_post_shader_loaded(), info);
+}
+
 static void handle_post_aa(int id, const char *json)
 {
     int mode = json_get_int(json, "mode", -1);
@@ -9449,6 +9462,25 @@ static void handle_ws_aspect(int id, const char *json)
 }
 
 extern int psx_debug_display_aspect(int num, int den, int adaptive);
+/* perf: host API completion cadence across the active presentation backend. */
+extern int psx_video_telemetry_cadence_json(int window_ms, int reset, char *out, int cap);
+static void handle_perf(int id, const char *json) {
+    char buf[512];
+    psx_video_telemetry_cadence_json(json_get_int(json, "window_ms", 0), json_get_int(json, "reset", 0),
+                           buf, sizeof buf);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, buf);
+}
+
+/* hd_uploads x=<vram x> y=<vram y> -- texture uploads covering that VRAM
+ * point (newest first): hash, size, fragment, whether the pack replaces it. */
+extern int gpu_hd_textures_debug_uploads_at(int x, int y, char *out, size_t cap);
+static void handle_hd_uploads(int id, const char *json) {
+    static char buf[16384];
+    int n = gpu_hd_textures_debug_uploads_at(json_get_int(json, "x", 0), json_get_int(json, "y", 0),
+                                             buf, sizeof buf);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d,\"uploads\":[%s]}", id, n, buf);
+}
+
 static void handle_display_aspect(int id, const char *json) {
     int num=json_get_int(json,"num",-1), den=json_get_int(json,"den",-1);
     int adaptive=json_get_int(json,"adaptive",0);
@@ -11225,6 +11257,61 @@ static void handle_wide_full(int id, const char *json)
     if (!ok) { send_err(id, "png encode failed"); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d}",
              id, path, W, H);
+}
+
+/* Function-override tier introspection (func_override.h): count + per-entry
+ * {id, addr, calls, guard_misses}. calls == 0 = never reached (wrong address
+ * or path never ran); guard_misses = consults declined by the residency
+ * guard. */
+static void handle_func_override(int id, const char *json)
+{
+    extern int func_override_count(void);
+    extern int func_override_get_ex(int index, char *id_out, size_t id_cap,
+                                    uint32_t *addr_out, uint64_t *calls_out,
+                                    uint64_t *guard_misses_out,
+                                    int *guarded_out, int32_t *credit_out);
+    (void)json;
+    char buf[16 * 1024];
+    int n = snprintf(buf, sizeof(buf),
+                     "{\"id\":%d,\"ok\":true,\"count\":%d,\"overrides\":[",
+                     id, func_override_count());
+    for (int i = 0; i < func_override_count(); i++) {
+        char oid[64];
+        uint32_t addr = 0;
+        uint64_t calls = 0, misses = 0;
+        int guarded = 0;
+        int32_t credit = 0;
+        char creditstr[16];
+        if (!func_override_get_ex(i, oid, sizeof(oid), &addr, &calls,
+                                  &misses, &guarded, &credit))
+            break;
+        /* credit: the declared cycle policy — a number (fixed per-call
+         * charge) or the string "self" (the body charges its own). */
+        if (credit < 0)
+            snprintf(creditstr, sizeof(creditstr), "\"self\"");
+        else
+            snprintf(creditstr, sizeof(creditstr), "%d", credit);
+        /* Clamp before advancing: snprintf returns the length it WOULD have
+         * written, so on truncation an unclamped n exceeds sizeof(buf) and
+         * the next sizeof(buf) - n underflows to a huge size_t. The 256-byte
+         * headroom check below keeps that unreachable at today's caps, but
+         * raising FO_MAX_ID or FO_MAX_OVERRIDES must not silently turn this
+         * into an overflow. */
+        const int w = snprintf(buf + n, sizeof(buf) - (size_t)n,
+                      "%s{\"id\":\"%s\",\"addr\":\"0x%08X\",\"calls\":%llu,"
+                      "\"guard_misses\":%llu,\"guarded\":%d,\"credit\":%s}",
+                      i ? "," : "", oid, addr,
+                      (unsigned long long)calls, (unsigned long long)misses,
+                      guarded, creditstr);
+        if (w < 0) break;
+        n += w;
+        if ((size_t)n >= sizeof(buf) - 256) {
+            n = (int)(sizeof(buf) - 256);
+            break;
+        }
+    }
+    snprintf(buf + n, sizeof(buf) - (size_t)n, "]}");
+    send_fmt("%s", buf);
 }
 
 static void handle_vram_peek(int id, const char *json)
@@ -16326,6 +16413,8 @@ static const CmdEntry s_commands[] = {
     { "kernel_bless",      handle_kernel_bless },
     { "ws_aspect",         handle_ws_aspect },
     { "display_aspect",    handle_display_aspect },
+    { "perf",              handle_perf },
+    { "hd_uploads",        handle_hd_uploads },
     { "window_size",       handle_window_size },
     { "ws_nw",             handle_ws_nw },
     { "debug_key",         handle_debug_key },
@@ -16350,6 +16439,7 @@ static const CmdEntry s_commands[] = {
     { "mmx6_freshfix",     handle_mmx6_freshfix },
     { "mem_words",         handle_mem_words },
     { "vram_peek",         handle_vram_peek },
+    { "func_override",     handle_func_override },
     { "gl_coh_ring",       handle_gl_coh_ring },
     { "gl_present_ring",   handle_gl_present_ring },
     { "present_ring",      handle_present_ring },
@@ -16358,6 +16448,7 @@ static const CmdEntry s_commands[] = {
     { "frame_perf",        handle_frame_perf },
     { "batch_sites",       handle_batch_sites },
     { "post_aa",           handle_post_aa },
+    { "post_shader",       handle_post_shader },
     { "fmv_chroma",        handle_fmv_chroma },
     { "texture_lod",       handle_texture_lod },
     { "accurate_blending", handle_accurate_blending },

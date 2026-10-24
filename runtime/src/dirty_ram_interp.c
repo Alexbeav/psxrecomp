@@ -576,6 +576,12 @@ static inline uint32_t fetch_word(uint32_t phys) {
          | ((uint32_t)ram[phys + 3] << 24);
 }
 
+/* Word reader for the [[widescreen.cull.sxy]] whole-fold check: the fold
+ * words around an interpreted PC are in main RAM like the PC itself. */
+static uint32_t sxy_fold_word(uint32_t phys) {
+    return phys < 0x00800000u ? fetch_word(phys) : 0xFFFFFFFFu;
+}
+
 /* Widescreen render-funnel cull detection for the interpreter ([widescreen.cull]
  * auto_screen_x). A `sltiu …,0x140/0x141` is widened ONLY when its enclosing
  * render function also carries a `sltiu …,0xE0/0xF1` (the GTE per-vertex trivial-
@@ -1137,7 +1143,13 @@ enum { XSITE_INTERP = 0, XSITE_DD = 1 };
 /* XOP_RES path codes (in the `site` field). */
 enum { XRES_EC_BAIL = 2, XRES_EC_PC = 3, XRES_EC_CONTRACT = 4, XRES_EC_RET = 5,
        XRES_OV_BAIL = 6, XRES_OV_PC = 7, XRES_OV_CONTRACT = 8, XRES_OV_RET = 9,
-       XRES_NONLOCAL = 10, XRES_PCCHAIN = 11, XRES_UNDECODABLE = 12 };
+       XRES_NONLOCAL = 10, XRES_PCCHAIN = 11, XRES_UNDECODABLE = 12,
+       /* Appended, NOT slotted into consult order: unlike CRES (which had a
+        * reserved gap at 6) this enum is dense, so inserting would renumber
+        * the codes above and invalidate every previously captured xprobe
+        * trace. The override tier is consulted FIRST at both call sites; the
+        * wire value carries no ordering meaning. */
+       XRES_OVERRIDE = 13 };
 
 int g_mixed_depth = 0;   /* best-effort interp→compiled nesting depth; reset per frame */
 
@@ -1786,6 +1798,37 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
                 cpu->pc = target;
                 CRET(CRES_PCCHAIN, 1);
             }
+            /* Function-override tier (func_override.h): consulted BEFORE
+             * every game code backend, matching psx_dispatch_impl. It must
+             * precede interp_enter_compiled, not follow it: that tier calls
+             * psx_dispatch_game_compiled -> entry->fn(cpu) directly and
+             * never re-enters psx_dispatch_impl, so a hook consulted after
+             * it is unreachable for any override on a statically-compiled
+             * function called from interpreted code. Registration would
+             * still succeed and the func_override inventory would still
+             * list the entry, so the miss is invisible — the same
+             * registration-is-not-coverage failure the overlay-native and
+             * pc-chain tiers below already had. Handled => the override
+             * completed against guest state; same call contract as a
+             * compiled callee. */
+            {
+                extern int (*g_psx_func_override_hook)(CPUState *cpu,
+                                                       uint32_t phys);
+                if (g_psx_func_override_hook) {
+                    cpu->pc = 0;
+                    if (g_psx_func_override_hook(cpu, target & 0x1FFFFFFFu)) {
+                        if (g_psx_call_bail) CRET(CRES_OVERRIDE, 1);
+                        if (cpu->pc != 0) CRET(CRES_OVERRIDE, 1);
+                        if (rd == 0 || rd == 31) {
+                            if (psx_call_contract(cpu, return_pc, site_sp))
+                                CRET(CRES_OVERRIDE, 1);
+                        }
+                        { int _r = dirty_ram_finish_call_return(cpu, return_pc,
+                                                                next_pc_out);
+                          CRET(CRES_OVERRIDE | (_r ? 0x100u : 0u), _r); }
+                    }
+                }
+            }
 #ifdef PSX_HAS_GAME_DISPATCH
             cpu->pc = 0;
             if (interp_enter_compiled(cpu, target)) {
@@ -1930,7 +1973,15 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         }
         case 0x24: { /* AND */
             uint32_t a = cpu->gpr[rs], b = cpu->gpr[rt];
-            cpu->gpr[rd] = a & b;
+            /* [[widescreen.cull.sxy]] fold AND: the same helper and the same
+             * whole-fold word check as the recompiled emit. */
+            const uint32_t sxy_v = g_psx_ws_sxy_cull_n > 0
+                ? psx_ws_sxy_cull_vertex_reg(pc, insn, sxy_fold_word) : 0u;
+            if (sxy_v != 0u)
+                cpu->gpr[rd] = psx_ws_cull_sxy_and(rs == sxy_v ? b : a,
+                                                   cpu->gpr[sxy_v]);
+            else
+                cpu->gpr[rd] = a & b;
             psx_pgxp_alu(cpu, insn, cpu->gpr[rd], a, b);
             cpu->gpr[0] = 0;
             return 0;
@@ -2017,6 +2068,27 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         /* slice / lockstep-replay / guest span: plain transfer, never execute the
          * callee (a span's runner calls it with the full trampoline). */
         if (g_precise_mode || g_ls_replay_active || span_forced(pc & 0x1FFFFFFFu)) { cpu->pc = target; return 1; }
+        /* Function-override tier: same placement and contract as the JALR
+         * site above — BEFORE interp_enter_compiled, so an override on a
+         * statically-compiled callee is reachable from interpreted code
+         * (reserved CRES_OVERRIDE slot). */
+        {
+            extern int (*g_psx_func_override_hook)(CPUState *cpu,
+                                                   uint32_t phys);
+            if (g_psx_func_override_hook) {
+                cpu->pc = 0;
+                if (g_psx_func_override_hook(cpu, target & 0x1FFFFFFFu)) {
+                    if (g_psx_call_bail) { XRES(XRES_OVERRIDE); return 1; }
+                    if (cpu->pc != 0)    { XRES(XRES_OVERRIDE); return 1; }
+                    if (psx_call_contract(cpu, return_pc, site_sp)) {
+                        XRES(XRES_OVERRIDE); return 1;
+                    }
+                    XRES(XRES_OVERRIDE);
+                    return dirty_ram_finish_call_return(cpu, return_pc,
+                                                        next_pc_out);
+                }
+            }
+        }
 #ifdef PSX_HAS_GAME_DISPATCH
         cpu->pc = 0;
         if (interp_enter_compiled(cpu, target)) {
@@ -2169,6 +2241,10 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[rt] = kept;
         else if (psx_ws_is_cull_depth_site(pc))
             cpu->gpr[rt] = ((int32_t)cpu->gpr[rs] < psx_ws_depth_bound(simm)) ? 1u : 0u;
+        /* screen_x_sites on `slti rt, x, 0` with `x = SX << 16`: the bltz
+         * sign test as a flag (same order as the recompiled emit). */
+        else if (imm == 0u && psx_ws_is_cull_screen_x_site(pc))
+            cpu->gpr[rt] = (uint32_t)psx_ws_cull_bltz_hi(cpu->gpr[rs]);
         /* Widescreen render-funnel RIGHT-edge widen (auto_screen_x) for the
          * signed min/max funnel idiom (`slti v, minSX, W`) — the paired left
          * edge is the bltz above. Identity at 4:3 (margin 0). */

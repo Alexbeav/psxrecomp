@@ -23,6 +23,9 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(postfx_publication_test tests/test_postfx_publication.cpp)
+    target_include_directories(postfx_publication_test PRIVATE include)
+    add_test(NAME postfx_publication_test COMMAND postfx_publication_test)
     # Windows UTF-8 text boundary (issue #371): the helpers legacy Windows
     # relies on, and — with the shipped manifest — a UTF-8 process code page.
     if(WIN32)
@@ -1289,6 +1292,16 @@ if(BUILD_TESTING)
     target_include_directories(bios_hle_plan_test PRIVATE include)
     add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
 
+    # Every func_override failure mode is silent at runtime: a registration
+    # that is never consulted, a package override that survives clear-mods
+    # (a netplay divergence), a residency guard that corrupts instead of
+    # declining. Drives the real g_psx_func_override_hook pointer.
+    add_executable(func_override_test
+        tests/test_func_override.c
+        src/func_override.c)
+    target_include_directories(func_override_test PRIVATE include)
+    add_test(NAME func_override_test COMMAND func_override_test)
+
     # A cue, conventional raw image, or Steam .car image is a valid pick; each
     # must mount the same disc and identify off the same data track.
     add_executable(sbi_setup_test tests/test_sbi_setup.cpp src/psx_sha256.c)
@@ -1425,6 +1438,7 @@ if(BUILD_TESTING)
         src/mod_immediate.c
         src/host_overlay.c
         tests/test_mod_runtime.cpp
+        src/func_override.c
         src/iso_reader_c.cpp
         src/host_span_ring.c
         src/mod_runtime.cpp

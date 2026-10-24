@@ -572,8 +572,15 @@ static int psx_change_thread_fiber(CPUState* cpu, uint32_t target_tcb)
 
     HostThreadFiber* current = psx_bind_current_host_thread(cpu, current_tcb);
     int saved_current_context = 0;
-    if (psx_tcb_state(cpu, current_tcb) == 0x4000u) {
+    /* SYS03 saves the outgoing register context before changing the PCB,
+     * including CloseTh(current); ChangeTh(other): CloseTh only marks the TCB
+     * free and does not suppress the exception handler's register stores.
+     * OpenTh initializes PC/SP/FP/GP but keeps the other saved registers when
+     * it reuses the TCB. Saving never reopens the closed TCB. */
+    const uint32_t outgoing_state = psx_tcb_state(cpu, current_tcb);
+    if (outgoing_state == 0x4000u || outgoing_state == 0x1000u)
         psx_save_context_to_tcb(cpu, current_tcb, cpu->gpr[31]);
+    if (outgoing_state == 0x4000u) {
         saved_current_context = 1;
     } else {
         /* 0x1000 is the BIOS closed/free state and must retire the host fiber.
@@ -681,9 +688,13 @@ static int psx_request_thread_switch(CPUState* cpu, uint32_t target_tcb)
     }
     /* Commit the yielding thread's context so it can be re-dispatched later.
      * resume PC = its return address (resume right after the ChangeThread call).
-     * Only a still-running (0x4000) thread keeps a live context; a closed/free
-     * (0x1000) thread is being torn down and must not be saved. */
-    if (psx_tcb_state(cpu, current_tcb) == 0x4000u) {
+     * A closed/free (0x1000) thread is still the current thread until SYS03
+     * switches the PCB, and the BIOS exception handler stores its registers
+     * regardless: CloseTh(current); ChangeTh(other) keeps those stores. OpenTh
+     * initializes PC/SP/FP/GP but keeps the other saved registers when it
+     * reuses the TCB. Saving never reopens the closed TCB. */
+    const uint32_t outgoing_state = psx_tcb_state(cpu, current_tcb);
+    if (outgoing_state == 0x4000u || outgoing_state == 0x1000u) {
         psx_save_context_to_tcb(cpu, current_tcb, cpu->gpr[31]);
     }
     psx_set_current_tcb(cpu, target_tcb);
