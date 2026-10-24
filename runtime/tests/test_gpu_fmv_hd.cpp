@@ -125,6 +125,10 @@ int main() {
     bool mapped_second=false;
     for(int i=0;i<200 && !mapped_second;++i){mapped_second=lookup() && output.rgba[0]==255;if(!mapped_second)SDL_Delay(2);}
     check(mapped_second,"identical source image selects second HD frame by delivered sector");
+    timeline.stream_generation++;timeline.delivered_lba=0;timeline.cycle+=1000;
+    check(lookup() && output.rgba[0]==0,"CD seek generation restarts the same movie frame");
+    gpu_fmv_hd_reset_tracking();
+    check(lookup() && output.rgba[0]==0,"movie end/skip clears held frame identity");
     gpu_fmv_hd_shutdown();
     fs::remove_all(root);
     if(!failures)std::cout<<"PASS FMV bounds, lifecycle and guest timeline\n";
