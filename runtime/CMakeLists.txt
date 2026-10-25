@@ -2051,6 +2051,10 @@ if(BUILD_TESTING)
     add_test(NAME spu_end_without_repeat_test
              COMMAND spu_end_without_repeat_test)
 
+    add_executable(spu_silent_fetch_test tests/test_spu_silent_fetch.c)
+    target_include_directories(spu_silent_fetch_test PRIVATE include)
+    add_test(NAME spu_silent_fetch_test COMMAND spu_silent_fetch_test)
+
     add_executable(spu_pitch_zero_test
         tests/test_spu_pitch_zero.c)
     target_include_directories(spu_pitch_zero_test PRIVATE include)
