@@ -510,6 +510,31 @@ int main(void)
         }
     }
 
+    /* A quiet native menu may never accumulate 16K block checks before its
+     * attract timer expires. Staged host requests must poll at the next edge,
+     * including the no-IRQ and masked-IRQ fast paths. */
+    {
+        extern int g_psx_savestate_pending;
+        extern unsigned g_test_savestate_polls;
+        extern uint32_t g_test_savestate_pc;
+        static CPUState cpu;
+        for (int masked = 0; masked < 2; ++masked) {
+            Program p = game;
+            reset_machine(&cpu, &p);
+            i_mask = 1;
+            i_stat = masked ? 1 : 0;
+            cpu.cop0[C0_SR] = masked ? 0 : (SR_IEC | SR_IM2);
+            unsigned before = g_test_savestate_polls;
+            g_psx_savestate_pending = 1;
+            psx_check_interrupts_at(&cpu, p.base);
+            if (g_test_savestate_polls != before + 1 ||
+                g_test_savestate_pc != p.base || g_psx_savestate_pending) {
+                fprintf(stderr, "pending snapshot missed %s fast edge\n",
+                        masked ? "masked IRQ" : "no IRQ");
+                fail = 1;
+            }
+        }
+    }
     if (fail) { puts("restore_edge_irq_replay_test: FAIL"); return 1; }
     puts("restore_edge_irq_replay_test: PASS");
     return 0;
