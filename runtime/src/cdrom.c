@@ -3271,6 +3271,81 @@ int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
 }
 
+int cdrom_resident_complete_read(uint32_t lba, uint32_t sectors,
+    const uint8_t* last_user_data, int (*commit)(void*), void* context) {
+    uint8_t raw[RAW_SECTOR_SIZE];
+    CDROMSectorDelivery delivery;
+    uint32_t last;
+    int next_m, next_s, next_f;
+    CdSectorBuf* slot;
+    /* Only the already-ACKed, untouched first sector of a normal ReadN can
+     * be replaced. An interrupt, DMA or arriving sector keeps full ownership
+     * on the original path. No defaults or ordinary CD timings change. */
+    if (!commit || !last_user_data || !sectors || !has_disc() ||
+        lba >= iso_sector_count(iso_handle) || lba > 0x7FFFFF00u ||
+        sectors > 0x7FFFFF00u - lba ||
+        sectors > iso_sector_count(iso_handle) - lba ||
+        !reading || read_cmd != 0x06 ||
+        (mode_reg != 0x80u && mode_reg != 0xA0u) ||
+        xa_stream_active || cdda_playing ||
+        s_setloc_lba != (int)lba || setloc_pending ||
+        msf_to_lba(read_min, read_sec, read_sect) != (int)lba ||
+        irq_flag || pending.pending ||
+        queued_cmd.pending || pending_dataready || pending_present_due ||
+        param_count || (response_read < response_count) ||
+        dma_cdrom_transfer_active() || rb_available())
+        return 0;
+    last = lba + sectors - 1u;
+    if (!iso_read_raw_sector(iso_handle, last, raw, sizeof raw) ||
+        raw[15] != CDROM_SECTOR_MODE2 ||
+        memcmp(raw + 16, raw + 20, 4) || !(raw[18] & 0x08u) ||
+        (raw[18] & 0x66u) || /* audio, video, Form2, real-time */
+        memcmp(raw + RAW_USER_DATA_OFFSET, last_user_data, SECTOR_SIZE))
+        return 0;
+    /* RAM delivery validates its entire destination before writing. Neither
+     * it nor overlay-capture bookkeeping executes guest code, so the guarded
+     * controller ownership cannot change before this atomic commit. */
+    if (!commit(context)) return 0;
+    delivery = classify_raw_sector(raw, 1);
+    delivery.data_delivered = 1;
+    stop_read_stream();
+    clear_sector_buffer();
+    s_ring_read = s_ring_write = (int)(sectors % CDROM_NUM_SECTOR_BUFFERS);
+    slot = &s_sector_ring[s_ring_write];
+    if (mode_reg & 0x20u) {
+        memcpy(slot->data, raw + WHOLE_SECTOR_OFFSET, WHOLE_SECTOR_SIZE);
+        slot->size = WHOLE_SECTOR_SIZE;
+    } else {
+        memcpy(slot->data, raw + RAW_USER_DATA_OFFSET, SECTOR_SIZE);
+        slot->size = SECTOR_SIZE;
+    }
+    slot->pos = slot->size;
+    s_data_fifo = *slot;
+    /* PsyQ consumes 12 header/subheader bytes before the 2048 user bytes in
+     * whole-sector mode. Retain the ECC tail and BFRD latch just as that
+     * transfer does; a later explicit BFRD can reload the retained sector. */
+    s_data_fifo.pos = (mode_reg & 0x20u) ? 12 + SECTOR_SIZE : SECTOR_SIZE;
+    request_reg |= CDROM_REQUEST_BFRD;
+    memcpy(last_sector_buffer, slot->data, (size_t)slot->size);
+    last_sector_lba = (int)last;
+    last_sector_size = slot->size;
+    last_sector_frame = (uint32_t)s_frame_count;
+    last_sector_mode = mode_reg;
+    last_sector_have_raw = 1;
+    last_sector_raw_mode = delivery.raw_mode;
+    last_sector_xa_file = delivery.xa_file;
+    last_sector_xa_channel = delivery.xa_channel;
+    last_sector_xa_submode = delivery.xa_submode;
+    last_sector_xa_coding = delivery.xa_coding;
+    lba_to_msf((int)(lba + sectors), 150, &next_m, &next_s, &next_f);
+    read_min = next_m; read_sec = next_s; read_sect = next_f;
+    setloc_pending = 0;
+    if (subq_replacements_active) update_last_valid_subq(last);
+    record_sector_history((int)last, slot->size, mode_reg, 1, slot->data, &delivery);
+    trace_cdrom('H', lba, sectors, 0);
+    return 1;
+}
+
 /* Savestate post-load: authentic CD second-response delays (ReadTOC ~30M
  * cycles, Init ~1.1M, far seeks, etc.) leave the restored frame on screen
  * for up to ~1s+ of wall time. Clamp those timers so the next cdrom_advance
