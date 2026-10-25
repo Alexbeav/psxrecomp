@@ -1092,7 +1092,6 @@ if(BUILD_TESTING)
 
     add_executable(ws_cull_margin_width_test
         tests/test_ws_cull_margin_width.c
-        src/ws_ui_group.c
         src/psx_video_timing.c
         src/gpu_timeline.c)
     target_include_directories(ws_cull_margin_width_test PRIVATE include src)
