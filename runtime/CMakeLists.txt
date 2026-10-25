@@ -1097,7 +1097,6 @@ if(BUILD_TESTING)
 
     add_executable(ws_cull_margin_width_test
         tests/test_ws_cull_margin_width.c
-        src/ws_ui_group.c
         src/psx_video_timing.c
         src/gpu_timeline.c)
     target_include_directories(ws_cull_margin_width_test PRIVATE include src)
@@ -1537,6 +1536,9 @@ if(BUILD_TESTING)
 
     add_executable(mod_resident_test
         tests/test_mod_resident.cpp
+        src/mod_immediate.c
+        src/host_overlay.c
+        src/func_override.c
         src/mod_resident.cpp
         src/mod_runtime.cpp
         src/mod_netplay.c
