@@ -122,10 +122,51 @@ static void test_gate_and_rewind(void) {
           "a rewound guest clock re-anchors without rendering");
 }
 
+static uint32_t pcm_frames;
+static void pcm_overlay_test(int16_t* stereo, uint32_t frames) {
+    pcm_frames += frames;
+    for (uint32_t i = 0; i < frames * 2u; ++i) stereo[i] = 1234;
+}
+
+static void test_pcm_overlay_uses_guest_clock(void) {
+    g_cycle = 0;
+    spu_init();
+    spu_set_pcm_overlay(pcm_overlay_test);
+    spu_catch_up();
+    g_cycle += 768u * 3u;
+    spu_catch_up();
+    CHECK(pcm_frames == 3u && spu_output_available() == 3u,
+          "PCM overlay advances with guest samples while the native SPU is off");
+    int16_t output[8];
+    CHECK(spu_output_pop(output, 4u) == 3u && output[0] == 1234 &&
+              output[5] == 1234 && pcm_frames == 3u,
+          "host output consumption neither skips nor advances mod playback");
+    spu_set_output_gate(suppressed);
+    s_suppress = 1;
+    g_cycle += 768u * 2u;
+    spu_catch_up();
+    CHECK(pcm_frames == 5u && spu_output_available() == 0u,
+          "suppressed output still advances deterministic mod PCM state");
+    s_suppress = 0;
+    spu_set_output_gate(NULL);
+    spu_write(0x1F801DAAu, 0x8000u);
+    g_cycle += 768u * 4u;
+    spu_catch_up();
+    CHECK(pcm_frames == 9u && spu_output_available() == 4u,
+          "native voice-free fast path advances the same mod PCM clock");
+    spu_set_pcm_overlay(NULL);
+    spu_output_flush();
+    g_cycle += 768u;
+    spu_catch_up();
+    CHECK(pcm_frames == 9u && spu_output_pop(output, 4u) == 1u && output[0] == 0,
+          "unbinding restores native silence without advancing mod playback");
+}
+
 int main(void) {
     test_envelope_rises_between_accesses();
     test_snapshot_keeps_clock_phase();
     test_gate_and_rewind();
+    test_pcm_overlay_uses_guest_clock();
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     puts("spu_guest_clock_test: ok");
     return 0;
