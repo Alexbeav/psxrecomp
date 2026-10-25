@@ -10,6 +10,7 @@
 
 static PsxHostEnhRequests s_req;
 static PsxHostEnhApplier s_applier;
+static PsxHostEnhResolutionApplier s_resolution_applier;
 
 void psx_host_enh_reset(void) {
     memset(&s_req, 0, sizeof s_req);
@@ -39,6 +40,11 @@ void psx_host_enh_request_rewind(int depth, int interval) {
     s_req.rewind_interval = interval;
 }
 
+void psx_host_enh_request_resolution(int value) {
+    s_req.resolution = 1;
+    s_req.resolution_value = value;
+}
+
 void psx_host_enh_requests(PsxHostEnhRequests* out) {
     if (out) *out = s_req;
 }
@@ -51,6 +57,14 @@ int psx_host_enh_apply_live(void) {
     if (!s_applier) return 0;
     s_applier();
     return 1;
+}
+
+void psx_host_enh_set_resolution_applier(PsxHostEnhResolutionApplier fn) {
+    s_resolution_applier = fn;
+}
+
+int psx_host_enh_apply_resolution_live(void) {
+    return s_resolution_applier ? (s_resolution_applier() ? 1 : 0) : 0;
 }
 
 static int is(const char* a, const char* b) {
@@ -110,6 +124,14 @@ int psx_host_enh_parse_rewind_depth(const char* text) {
     const int v = parse_int(text, PSX_HOST_ENH_REWIND_DEPTH_DEFAULT);
     return v == 50 || v == 100 || v == 150 || v == 200
         ? v : PSX_HOST_ENH_REWIND_DEPTH_DEFAULT;
+}
+
+/* Only the preset ids: a manifest choice is never a raw line count. */
+int psx_host_enh_parse_internal_resolution(const char* text) {
+    if (!text || is(text, "default")) return PSX_IR_UNSET;
+    for (int i = 0; i < PSX_IR_PRESET_COUNT; i++)
+        if (is(text, k_psx_ir_presets[i].id)) return k_psx_ir_presets[i].value;
+    return PSX_IR_UNSET;
 }
 
 int psx_host_enh_parse_rewind_interval(const char* text) {

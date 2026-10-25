@@ -1562,20 +1562,11 @@ struct UserSettings {
 
     // [video]
     bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
-    bool has_supersampling  = false; int  supersampling  = 1; // 1..32 (runtime clamps per backend)
-    // Internal resolution preset (RuntimeConfig::video_internal_resolution
-    // encoding). Written as a stable id ("4k") or a line count; when present
-    // it wins over supersampling, which is still written (capped at 4) so an
-    // older runtime reading the same file degrades gracefully.
-    bool has_internal_resolution = false; int internal_resolution = 0;
-    // Supersampling on top of the internal resolution, in thousandths
-    // (1000 off .. 4000), the player's pick of [video] supersample.
-    bool has_supersample = false; int supersample_milli = 1000;
-    // There is no dynamic-resolution key: internal_resolution = "auto"
-    // (PSX_IR_AUTO) is dynamic resolution, and a fixed value is not. A file
-    // from before that change is read once: dynamic_resolution = true becomes
-    // "auto" (load_user_settings). The floor is the title's
-    // [video] dynamic_resolution_min.
+    // No supersampling / internal_resolution / supersample /
+    // dynamic_resolution keys: the built-in Internal Resolution mod
+    // (psx.enhancement.internal-resolution) owns the internal resolution,
+    // Auto (dynamic resolution) included, over the title's [video]
+    // baseline (runtime/include/host_enhancements.h). Old keys are ignored.
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960
@@ -1647,8 +1638,9 @@ struct UserSettings {
     bool has_fast_forward_speed = false; double fast_forward_speed = 4.0;
     bool has_fast_forward_mode = false; bool fast_forward_toggle_mode = false;
     bool has_hotkey_pad_fast_forward_toggle = false; int hotkey_pad_fast_forward_toggle = 0; /* unbound */
-    // [audio] (the high-quality SPU is the built-in Enhanced Audio mod)
-    bool has_audio_freq     = false; int  audio_freq     = 44100;
+    // [audio]: no player keys. The output sample rate is the runtime's
+    // built-in rate (the old `frequency` key is ignored) and the
+    // high-quality SPU is the built-in Enhanced Audio mod.
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;

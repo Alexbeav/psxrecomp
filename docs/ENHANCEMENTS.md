@@ -438,9 +438,11 @@ want stable geometry without changing texture mapping. Settable per-game in
 launcher row; since then the player's switch is the PGXP Precision mod, see
 S1 below.)
 
-`geometry_correction` needs `supersampling >= 2`: at native resolution the
-corrected position rounds back to the pixel it started on, so there is nothing
-to see. The runtime prints a note at startup when it is on at scale 1.
+`geometry_correction` needs an internal scale of 2x or more (720p and up at
+240 lines; the title's `internal_resolution`/`supersampling`, or the Internal
+Resolution mod): at native resolution the corrected position rounds back to
+the pixel it started on, so there is nothing to see. The runtime prints a note
+at startup when it is on at scale 1.
 
 ### How it works
 
@@ -1324,8 +1326,8 @@ image there.
 ## S1 — Enhancement settings become built-in mods (2026-10-24, beads-eio.3.398)
 
 The launcher's Settings page keeps PC/system controls only (window size,
-fullscreen, renderer, VSync, internal resolution, audio rate and volume,
-hotkeys, BIOS, multitap). The game's look moved to four framework built-in
+fullscreen, renderer, VSync, audio volume, hotkeys, BIOS, multitap; recomp-ui
+docs/SETTINGS_STANDARD.md). The game's look moved to five framework built-in
 mods, all default-off, all `game_id = "*"`, all host-only
 (`[[plugin]] netplay = "host_only"`: never in the plan fingerprint, the
 player's own in netplay):
@@ -1336,26 +1338,34 @@ player's own in netplay):
 | Image Filtering (`psx.enhancement.image-filtering`) | Antialiasing (linear present), Texture filtering, FMV filtering rows | Smoothing, Texture filtering, FMV filtering |
 | Enhanced Audio (`psx.enhancement.enhanced-audio`) | High-quality SPU row | (on = high-quality SPU) |
 | Rewind (`psx.feature.rewind`) | Rewind / buffer / interval rows | Rewind buffer, Rewind interval |
+| Internal Resolution (`psx.enhancement.internal-resolution`) | Internal resolution row (launcher and in-game), Dynamic resolution / Lowest resolution rows | Internal resolution: Game default, Native … 8K, Match display, Auto |
 
 The title's `[video]` / `[audio]` keys stay its baseline: mod off is exactly
 what the title ships. Activation only records the request
 (`host_enhancements.h`); the renderer setup resolves it over the baseline
 after activation, the G1.11 lesson. Perspective textures left Settings for
 the PGXP Precision mod; the Dynamic resolution checkbox and Lowest resolution
-row became Internal resolution = Auto (Match display with dynamic resolution,
-the title's floor). Graphics presets (`[quality.*]`, hardware detection,
-Re-detect) were removed outright. A mod that presents with vsync off declares
-`[[feature]] vsync = "off"` and the launcher shows its VSync row overridden.
+row became the Internal Resolution mod's Auto (Match display with dynamic
+resolution, the title's floor). Its option changes apply live through the same
+`gl_renderer_set_internal_scale_live` path the debug server's `video_set` uses,
+and never during a netplay match. The player's `settings.toml` no longer has
+`internal_resolution`, `supersampling` or `supersample`. The audio Sample rate
+row left too: the device opens at the runtime's built-in 44.1 kHz (old
+`[audio] frequency` keys are ignored); Volume stays. Graphics presets
+(`[quality.*]`, hardware detection, Re-detect) were removed outright. A mod
+that presents with vsync off declares `[[feature]] vsync = "off"` and the
+launcher shows its VSync row overridden.
 
 ## IR1 — Internal resolution presets (Native … 8K) and the GL scale ceiling (2026-09-26)
 
-**What the player gets.** Settings → Display → **Internal resolution**: Native,
-720p, 1080p, 1440p, 4K, 5K, 8K, Match display. A preset is a target height and
-resolves to an integer scale over the title's reference height
+**What the player gets.** Internal resolution presets: Native, 720p, 1080p,
+1440p, 4K, 5K, 8K, Match display (and, since S1, Auto). A preset is a target
+height and resolves to an integer scale over the title's reference height
 (`[video] resolution_reference_lines`, 240 by default): 3x, 5x (1200 lines,
-area-resolved to 1080), 6x, 9x, 12x, 18x. It is a Settings row, not a mod,
-because it needs no game hooks; it is presentation-only, so it also applies in
-netplay (each peer its own). Keys and precedence: `docs/config_schema.md`.
+area-resolved to 1080), 6x, 9x, 12x, 18x. It was a Settings row until S1
+(2026-10-24); it is now the built-in Internal Resolution mod over the title's
+`internal_resolution`. It is presentation-only, so it also applies in netplay
+(each peer its own). Keys and precedence: `docs/config_schema.md`.
 
 **Why the old ceiling was 4.** The software renderer keeps a CPU mirror of
 1 MiB·S², so it caps at 4, and every backend inherited that cap. OpenGL keeps

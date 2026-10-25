@@ -3291,6 +3291,20 @@ extern "C" int psx_mod_option_live_capable(const char* package_id, const char* f
     return 0;
 }
 
+extern "C" int psx_mod_option_live_host_only(const char* package_id, const char* feature_id) {
+    using namespace PSXRecompV4;
+    if (!package_id || !feature_id) return 0;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return 0;
+    bool any = false;
+    for (const ModResolution::Plugin& plugin : s.plan.plugins) {
+        if (plugin.package_id != package_id || plugin.feature_id != feature_id) continue;
+        if (!plugin.netplay_host_only) return 0;
+        any = true;
+    }
+    return any ? 1 : 0;
+}
+
 extern "C" int psx_mod_save_selection(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();

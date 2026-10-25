@@ -76,25 +76,29 @@ void psx_host_set_ui_capture(int on);
 int  psx_host_ui_capture_active(void);
 
 /* ---- P4: live video settings ---------------------------------------------
- * The [video] keys an in-game menu may change, in settings.toml terms: the
- * player's PC/system display settings. Screen model, scanlines, smoothing,
- * texture and FMV filtering are the built-in CRT Filter and Image Filtering
- * mods (host_enhancements.h), changed live through their mod options
- * (psx_mod_set_option_live), not here; dynamic resolution is
- * internal_resolution = PSX_IR_AUTO. psx_video_apply_live() applies what can
- * change on a running game, saves every field to settings.toml, and returns
- * PSX_VIDEO_RESTART_* bits for the fields that only take effect on the next
- * start (compared with boot). Main thread only. */
+ * The session's video state an in-game menu (or the debug server's video_set)
+ * may change. Screen model, scanlines, smoothing, texture and FMV filtering
+ * and the internal resolution are the built-in CRT Filter, Image Filtering
+ * and Internal Resolution mods (host_enhancements.h), changed live through
+ * their mod options (psx_mod_set_option_live); the internal_resolution and
+ * supersample_milli fields here are the session's effective values, for the
+ * debug server and the restart bits, and are not player settings.
+ * psx_video_apply_live() applies what can change on a running game, saves the
+ * player's PC/system fields (fullscreen, renderer, threads, frame generation)
+ * to settings.toml, and returns PSX_VIDEO_RESTART_* bits for the fields that
+ * only take effect on the next start (compared with boot). Main thread
+ * only. */
 typedef struct PsxHostVideoSettings {
     int fullscreen;            /* 0 windowed, 1 borderless, 2 exclusive */
     int frame_generation;      /* 0/1 */
     int renderer;              /* restart */
-    int internal_resolution;   /* live (psx_video_apply_live); PSX_IR_AUTO =
-                                * Match display with dynamic resolution */
-    int supersampling;         /* legacy factor; restart */
+    int internal_resolution;   /* session, live (psx_video_apply_live);
+                                * PSX_IR_AUTO = Match display with dynamic
+                                * resolution; not saved */
+    int supersampling;         /* the title's legacy factor; restart */
     int render_thread;         /* restart */
     int present_thread;        /* restart */
-    int supersample_milli;     /* live: 1000 off, 1250, 1500, 2000 */
+    int supersample_milli;     /* session, live: 1000 off .. 4000; not saved */
 } PsxHostVideoSettings;
 /* PsxHostVideoSettings no longer carries texture_filter, fmv_filter,
  * scanlines, scanline_strength_pct, present_linear or dynamic_resolution: a

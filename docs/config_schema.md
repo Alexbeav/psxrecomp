@@ -763,8 +763,15 @@ Local rewind has no `game.toml` key; it is the Rewind mod
 A `settings.toml` written before this change may still carry `antialiasing`,
 `texture_filtering`, `fmv_filter`, `crt_filter`, `scanlines`,
 `scanline_strength`, `geometry_correction`, `perspective_texturing`, `rewind`,
-`rewind_depth`, `rewind_interval`, `[audio] spu_hq` or the `quality_*` keys.
-They are ignored, never an error, and the next save drops them.
+`rewind_depth`, `rewind_interval`, `supersampling`, `internal_resolution`,
+`supersample`, `dynamic_resolution`, `dynamic_resolution_min`, `[audio]
+spu_hq`, `[audio] frequency` or the `quality_*` keys. They are ignored, never
+an error, and the next save drops them (an empty `[audio]` table included).
+
+**Audio sample rate.** The host audio device opens at the runtime's built-in
+rate (44.1 kHz, the SPU's own). It is not a player setting: the launcher has no
+Sample rate row for PSX and `settings.toml` has no `[audio] frequency`. Volume
+stays a launcher setting.
 
 **Graphics presets were removed.** A `game.toml` that still has a `[quality]`
 table (`[quality.low]` .. `[quality.ultra]`) fails to load with an error naming
@@ -772,29 +779,31 @@ the table; delete it. No title shipped one.
 
 ### Internal resolution (`internal_resolution`, `supersampling`)
 
-The player picks a preset in Settings → Display → **Internal resolution**:
-Native, 720p, 1080p, 1440p, 4K, 5K, 8K, Match display or **Auto**. It is
-stored in the player's `settings.toml`, and a game may ship a default the same
-way:
+The internal resolution is the title's `game.toml` baseline, and the player
+changes it with the built-in **Internal Resolution** mod
+(`psx.enhancement.internal-resolution`, docs/MOD_PACKAGES.md "Built-in host
+enhancements"): Game default, Native, 720p, 1080p, 1440p, 4K, 5K, 8K, Match
+display or **Auto**. It is not a Settings row and not a `settings.toml` key.
+With the mod off, or at Game default, the title's keys apply unchanged:
 
 ```toml
 [video]
 internal_resolution = "4k"          # native | 720p | 1080p | 1440p | 4k | 5k | 8k | display | auto, or a number of lines
-resolution_reference_lines = 240    # game.toml only: the title's usual display height (120..1024)
-supersample_disable_at_lines = 0    # game.toml only: supersample 1.0 at/above this display height (0 = off, 240..8640)
-match_display_max_lines = 0         # game.toml only: cap on the display height Match display uses (0 = none, 240..8640)
+resolution_reference_lines = 240    # the title's usual display height (120..1024)
+supersample_disable_at_lines = 0    # supersample 1.0 at/above this display height (0 = off, 240..8640)
+match_display_max_lines = 0         # cap on the display height Match display uses (0 = none, 240..8640)
 ```
 
 `match_display_max_lines` caps the monitor height that Match display (and
 Auto) and its dynamic-resolution floor (`display`) resolve against. It also caps the final Match display target after supersampling,
-so a larger saved factor cannot exceed it. Fixed presets keep their own target.
+so a larger factor cannot exceed it. Fixed presets keep their own target.
 With no cap, an 8K panel asks 18x (27x with `supersample = 1.5`), which is
 past the full-VRAM surface. The high-resolution window then engages, and
 dynamic resolution cannot step there. A title whose GPU budget is set for
 4K lines sets 2160.
 
 `supersample_disable_at_lines` uses the physical monitor height before the cap.
-At or above its threshold the effective factor is 1.0; the saved factor is
+At or above its threshold the effective factor is 1.0; the configured factor is
 retained for smaller monitors. Zero preserves the default behaviour.
 
 A preset is a target height. The runtime renders at the integer scale
@@ -804,48 +813,41 @@ A preset is a target height. The runtime renders at the integer scale
 and is resolved down. **Match display** takes the monitor's pixel height,
 measured from the game window's display when it opens. The backend clamps S
 to what it can allocate (below); `video_info` over TCP reports both numbers.
+PGXP Precision's sub-pixel geometry needs S >= 2 (720p and up at 240 lines) to
+be visible: at native resolution the corrected positions round back to the
+same pixels.
 
 **Auto** is Match display with dynamic resolution on: the scale starts at the
 monitor's resolution and steps down to the title's `dynamic_resolution_min`
-floor only while the game would miss frames, then back up. Choosing any fixed
-preset turns dynamic resolution off; there is no separate Dynamic resolution
-switch or Lowest resolution row. In `settings.toml` it is
-`internal_resolution = "auto"`; the retired `dynamic_resolution` key is read
-once (`true` becomes `"auto"`, `false` keeps the saved preset) and dropped on
-the next save, and the retired `dynamic_resolution_min` is ignored (the floor
-is the title's). A title may ship `internal_resolution = "auto"`, or its own
-fixed ceiling with `dynamic_resolution = true`; the launcher then shows Auto,
-and the title's ceiling stays until the player picks a different row.
-`PSX_DYNRES=0|1` still overrides dynamic resolution for one run.
+floor only while the game would miss frames, then back up. The mod's fixed
+choices turn dynamic resolution off; there is no separate Dynamic resolution
+switch or Lowest resolution row. A title may ship `internal_resolution =
+"auto"`, or its own fixed ceiling with `dynamic_resolution = true`; Game default
+keeps either. `PSX_DYNRES=0|1` still overrides dynamic resolution for one run.
 
-Precedence: the game's `internal_resolution` is the default; a player's legacy
-`supersampling` in `settings.toml` outranks it; the player's own
-`internal_resolution` outranks both. The launcher writes the preset as a stable
-id (`"4k"`) beside `supersampling = min(S, 4)`, so an older runtime reading the
-same file still gets the nearest factor it supports. A legacy factor with no
-matching preset appears in the launcher as its own entry, for example
-"2x (480 lines)". `settings.toml` `window_width` accepts 640 to 7680.
+Precedence for a session: `PSX_INTERNAL_RESOLUTION` (one run), then a title
+mod's `psx_mod_set_internal_resolution` request, then the Internal Resolution
+mod's choice, then the title's `internal_resolution` (or its legacy
+`supersampling` factor). Every session start restores the title's values before
+the mod's choice applies, so a rematch never inherits the last session's scale.
+The mod's option changes apply live from the in-game menu when the OpenGL
+backend can change its scale on a running game (otherwise at the next start),
+and never during a netplay match. The debug server's `video_set` changes the
+session's effective internal resolution and supersample live; it saves
+nothing.
 
-A host built against a recomp-ui without the Internal resolution row keeps
-the legacy Supersampling row (1x to 4x) and that row stays in charge: with no
-preset configured the launcher round trip is exactly the historical one, and
-no `internal_resolution` key is written. A preset from `game.toml` or a
-hand-edited `settings.toml` starts the row on the nearest factor it can show
-and survives if the row is left alone; picking a different factor there
-drops the preset.
-
-`PSX_INTERNAL_RESOLUTION=<preset or lines>` overrides every layer for one
-run (validation, and two local netplay peers that share one `settings.toml`).
-It is never written to `settings.toml`: the launcher shows and saves the
-configured preset.
+`PSX_INTERNAL_RESOLUTION=<preset or lines>` overrides every layer for one run
+(validation, and two local netplay peers that share one install).
 
 On OpenGL, any choice above native opens the game window with a
 high-pixel-density drawable (macOS Retina, Wayland scaling), so the window has
 the pixels to show it. Native keeps the window exactly as before.
 
-`supersampling = N` renders at N times the native resolution per axis and
-downsamples to the window. It accepts 1 to 32 in both `game.toml` and the
-player's `settings.toml`; 1 (the default) is native and unchanged.
+`supersampling = N` (game.toml) renders at N times the native resolution per
+axis and downsamples to the window, 1 to 32; 1 (the default) is native and
+unchanged. It is the title's legacy form of the baseline: an
+`internal_resolution`, or the mod's choice, supersedes it. `settings.toml`
+`window_width` accepts 640 to 7680.
 
 ### Bloom (`bloom`)
 
@@ -890,8 +892,9 @@ it becomes a scale: Match display on a 1080 px monitor with 2.0 asks for 2160
 lines (S = 9) and the present's area resolve brings it back to 1080, which is
 ordered-grid SSAA of everything, 2D included. Native and the legacy
 `supersampling` factor are left alone. Dynamic resolution takes the result as
-its ceiling and steps under it as before. `PSX_SUPERSAMPLE=<factor>` overrides
-it for one run.
+its ceiling and steps under it as before. It is the title's key only (the
+Internal Resolution mod applies it to the player's choice too);
+`PSX_SUPERSAMPLE=<factor>` overrides it for one run.
 
 To make supersampling the elastic part only, set the dynamic resolution floor
 to the output: `dynamic_resolution_min = "display"` (game.toml, also

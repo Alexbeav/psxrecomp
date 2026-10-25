@@ -6,6 +6,8 @@
  *
  * Usage: builtin_mod_manifests_test <mods/builtin/packages dir> */
 #include "mod_packages.h"
+#include "host_enhancements.h"
+#include "internal_resolution.h"
 
 #include <filesystem>
 #include <iostream>
@@ -51,6 +53,8 @@ int main(int argc, char** argv) {
         {"psx.enhancement.enhanced-audio", {"enhanced-audio", "psx.enhanced-audio", {}}},
         {"psx.feature.rewind", {"rewind", "psx.rewind",
             {{"buffer", "50"}, {"interval", "15"}}}},
+        {"psx.enhancement.internal-resolution", {"internal-resolution",
+            "psx.internal-resolution", {{"resolution", "default"}}}},
     };
     for (const auto& entry : fs::recursive_directory_iterator(root)) {
         if (!entry.is_regular_file() || entry.path().filename() != "manifest.toml")
@@ -104,6 +108,25 @@ int main(int argc, char** argv) {
                 auto d = want.defaults.find(option.id);
                 check(d != want.defaults.end() && option.default_value == d->second,
                       who + option.id + " defaults to its documented value");
+            }
+        }
+        /* Internal Resolution offers Game default and exactly the runtime's
+         * preset vocabulary (internal_resolution.h), Auto included, and every
+         * choice parses to the value the runtime resolves. */
+        if (package.id == "psx.enhancement.internal-resolution" && package.options.size() == 1) {
+            const ModOption& option = package.options[0];
+            check(option.choices.size() == (size_t)PSX_IR_PRESET_COUNT + 1,
+                  "Internal Resolution offers Game default plus every preset");
+            check(!option.choices.empty() && option.choices[0].value == "default" &&
+                      option.choices[0].label == "Game default",
+                  "Internal Resolution's first choice is Game default");
+            for (int i = 0; i < PSX_IR_PRESET_COUNT && i + 1 < (int)option.choices.size(); ++i) {
+                const ModChoice& c = option.choices[i + 1];
+                check(c.value == k_psx_ir_presets[i].id && c.label == k_psx_ir_presets[i].label,
+                      "Internal Resolution choice " + c.value + " matches the preset table");
+                check(psx_host_enh_parse_internal_resolution(c.value.c_str()) ==
+                          k_psx_ir_presets[i].value,
+                      "Internal Resolution choice " + c.value + " parses to its value");
             }
         }
     }

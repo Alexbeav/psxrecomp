@@ -14,6 +14,10 @@
  *                                    ([audio] spu_hq)
  *   psx.feature.rewind               Rewind: the local rewind ring, its buffer
  *                                    depth and capture interval
+ *   psx.enhancement.internal-resolution
+ *                                    Internal Resolution: the render height
+ *                                    ([video] internal_resolution), Auto
+ *                                    (dynamic resolution) included
  *
  * These used to be player settings (settings.toml, the launcher's Display and
  * Audio cards, the in-game menu). The title's game.toml [video] / [audio] keys
@@ -32,7 +36,7 @@
  * Activation only records: it runs before the renderer setup, which applies
  * the baseline and would otherwise undo whatever activation had applied.
  *
- * All four are host-only (their [[plugin]] declares netplay = "host_only"):
+ * All five are host-only (their [[plugin]] declares netplay = "host_only"):
  * they change what this machine shows, plays or keeps, never guest execution,
  * so they stay each player's own in netplay and never enter the plan
  * fingerprint (docs/MOD_PACKAGES.md "Host-only plugins").
@@ -40,8 +44,13 @@
  * Live option changes (the in-game menu's psx_mod_set_option_live): the CRT
  * Filter and Image Filtering plugins update their request and call the
  * applier main.cpp registered, which resolves again and pushes the result to
- * the renderer. Main thread only, like the rest of the mod runtime.
+ * the renderer. The Internal Resolution plugin calls its own applier, which
+ * can refuse (the backend cannot change scale live here, or a netplay match
+ * holds the scale): the change then applies at the next start. Main thread
+ * only, like the rest of the mod runtime.
  */
+
+#include "internal_resolution.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,7 +84,20 @@ typedef struct PsxHostEnhRequests {
     int rewind;                 /* Rewind enabled */
     int rewind_depth;           /* 50 / 100 / 150 / 200 */
     int rewind_interval;        /* 1 / 4 / 8 / 12 / 15 */
+    int resolution;             /* Internal Resolution enabled */
+    int resolution_value;       /* PSX_IR_UNSET (Game default) or a PSX_IR_*
+                                 * value (internal_resolution.h), Auto included;
+                                 * not PSX_HOST_ENH_DEFAULT, which is
+                                 * PSX_IR_DISPLAY's encoding */
 } PsxHostEnhRequests;
+
+/* The session's internal resolution in main.cpp's terms: the value
+ * (PSX_IR_UNSET: the legacy [video] supersampling factor stands) and whether
+ * dynamic resolution steps under it. */
+typedef struct PsxHostResolution {
+    int internal_resolution;
+    int dynamic_resolution;
+} PsxHostResolution;
 
 #define PSX_HOST_ENH_STRENGTH_DEFAULT 50
 #define PSX_HOST_ENH_REWIND_DEPTH_DEFAULT 50
@@ -108,6 +130,20 @@ static inline PsxHostLook psx_host_enh_resolve(const PsxHostLook* baseline,
     return out;
 }
 
+/* The effective internal resolution: the title's (its internal_resolution and
+ * dynamic_resolution) unless the Internal Resolution mod names one. Auto is
+ * Match display with dynamic resolution on; any fixed choice turns it off.
+ * Pure. */
+static inline PsxHostResolution psx_host_enh_resolve_resolution(
+        const PsxHostResolution* baseline, const PsxHostEnhRequests* req) {
+    PsxHostResolution out = *baseline;
+    if (req->resolution && req->resolution_value != PSX_IR_UNSET) {
+        out.internal_resolution = req->resolution_value;
+        out.dynamic_resolution = psx_ir_is_auto(req->resolution_value) ? 1 : 0;
+    }
+    return out;
+}
+
 /* Session start, before plugin activation: forget every request. */
 void psx_host_enh_reset(void);
 
@@ -118,6 +154,7 @@ void psx_host_enh_request_crt(int screen_kind, int scanlines, int strength_pct);
 void psx_host_enh_request_image(int smoothing, int texture_filter, int fmv_filter);
 void psx_host_enh_request_audio(void);
 void psx_host_enh_request_rewind(int depth, int interval);
+void psx_host_enh_request_resolution(int value);
 
 /* A copy of this session's requests. */
 void psx_host_enh_requests(PsxHostEnhRequests* out);
@@ -130,6 +167,13 @@ typedef void (*PsxHostEnhApplier)(void);
 void psx_host_enh_set_live_applier(PsxHostEnhApplier fn);
 int  psx_host_enh_apply_live(void);
 
+/* The Internal Resolution plugin's live re-application. The applier returns 1
+ * when the new scale took effect now, 0 when it waits for the next start
+ * (no live-capable backend, or a netplay match). No applier registered: 0. */
+typedef int (*PsxHostEnhResolutionApplier)(void);
+void psx_host_enh_set_resolution_applier(PsxHostEnhResolutionApplier fn);
+int  psx_host_enh_apply_resolution_live(void);
+
 /* Manifest option text -> encoding. Unknown text gives the option's default
  * (Game default, or the documented number), never an error: a value the
  * catalog accepted is always one of these. */
@@ -141,6 +185,9 @@ int psx_host_enh_parse_texture_filter(const char* text);/* default nearest bilin
 int psx_host_enh_parse_fmv_filter(const char* text);    /* default nearest bilinear sharp bicubic */
 int psx_host_enh_parse_rewind_depth(const char* text);  /* "50" "100" "150" "200" */
 int psx_host_enh_parse_rewind_interval(const char* text);/* "1" "4" "8" "12" "15" */
+/* "default" (and anything unknown) -> PSX_IR_UNSET; otherwise a preset id
+ * of internal_resolution.h ("native", "720p", ..., "display", "auto"). */
+int psx_host_enh_parse_internal_resolution(const char* text);
 
 #ifdef __cplusplus
 }

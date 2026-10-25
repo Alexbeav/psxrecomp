@@ -1,5 +1,6 @@
 /* test_host_enhancements.c -- the built-in host enhancement mods (CRT Filter,
- * Image Filtering, Enhanced Audio, Rewind) and their session requests
+ * Image Filtering, Enhanced Audio, Rewind, Internal Resolution) and their
+ * session requests
  * (host_enhancements.h, beads-eio.3.398).
  *
  * Links the real plugins and host_enhancements.c against a fake mod runtime
@@ -13,7 +14,11 @@
  *   - reset forgets every request (a session with the mod off, or a netplay
  *     clear, cannot inherit one);
  *   - the CRT Filter / Image Filtering option-changed callbacks re-record and
- *     report live only once main.cpp registered its applier. */
+ *     report live only once main.cpp registered its applier;
+ *   - the Internal Resolution mod: Game default keeps the title's value and
+ *     dynamic resolution, Auto turns dynamic resolution on, a fixed choice
+ *     turns it off; its option change reports what main.cpp's resolution
+ *     applier answers (it can refuse: no live-capable backend, netplay). */
 #include "host_enhancements.h"
 #include "mod_plugins.h"
 #include "video_texture_filter.h"
@@ -68,10 +73,85 @@ static int option_changed(const char* id, const char* option, const char* value)
 }
 static int g_applied;
 static void applier(void) { ++g_applied; }
+static int g_res_applied, g_res_answer;
+static int res_applier(void) { ++g_res_applied; return g_res_answer; }
 
 #define CRT "psx.enhancement.crt-filter"
 #define IMG "psx.enhancement.image-filtering"
 #define RWD "psx.feature.rewind"
+#define IR  "psx.enhancement.internal-resolution"
+
+static void test_resolution(void) {
+    PsxHostEnhRequests req;
+    memset(&req, 0, sizeof req);
+    /* A title shipping 1080p with dynamic resolution on under it. */
+    const PsxHostResolution base = {1080, 1};
+    PsxHostResolution r = psx_host_enh_resolve_resolution(&base, &req);
+    CHECK(r.internal_resolution == 1080 && r.dynamic_resolution == 1);   /* mod off */
+    req.resolution = 1;
+    req.resolution_value = PSX_IR_UNSET;                                 /* Game default */
+    r = psx_host_enh_resolve_resolution(&base, &req);
+    CHECK(r.internal_resolution == 1080 && r.dynamic_resolution == 1);
+    req.resolution_value = 2160;                                         /* 4K: fixed */
+    r = psx_host_enh_resolve_resolution(&base, &req);
+    CHECK(r.internal_resolution == 2160 && r.dynamic_resolution == 0);
+    req.resolution_value = PSX_IR_AUTO;
+    r = psx_host_enh_resolve_resolution(&base, &req);
+    CHECK(r.internal_resolution == PSX_IR_AUTO && r.dynamic_resolution == 1);
+    req.resolution_value = PSX_IR_DISPLAY;                               /* not "default" */
+    r = psx_host_enh_resolve_resolution(&base, &req);
+    CHECK(r.internal_resolution == PSX_IR_DISPLAY && r.dynamic_resolution == 0);
+    /* A title with only the legacy factor: Game default keeps it unset. */
+    const PsxHostResolution legacy = {PSX_IR_UNSET, 0};
+    req.resolution_value = PSX_IR_UNSET;
+    r = psx_host_enh_resolve_resolution(&legacy, &req);
+    CHECK(r.internal_resolution == PSX_IR_UNSET && r.dynamic_resolution == 0);
+    req.resolution = 0;
+    req.resolution_value = PSX_IR_NATIVE;                                /* mod off again */
+    r = psx_host_enh_resolve_resolution(&base, &req);
+    CHECK(r.internal_resolution == 1080 && r.dynamic_resolution == 1);
+
+    /* Every manifest choice parses; Game default and junk are unset. */
+    static const struct { const char* text; int value; } choices[] = {
+        {"default", PSX_IR_UNSET}, {"native", PSX_IR_NATIVE}, {"720p", 720},
+        {"1080p", 1080}, {"1440p", 1440}, {"4k", 2160}, {"5k", 2880}, {"8k", 4320},
+        {"display", PSX_IR_DISPLAY}, {"auto", PSX_IR_AUTO},
+        {"", PSX_IR_UNSET}, {"1600", PSX_IR_UNSET}, {"4K", PSX_IR_UNSET},
+    };
+    for (unsigned i = 0; i < sizeof choices / sizeof choices[0]; ++i)
+        CHECK(psx_host_enh_parse_internal_resolution(choices[i].text) == choices[i].value);
+    CHECK(psx_host_enh_parse_internal_resolution(NULL) == PSX_IR_UNSET);
+
+    /* The plugin: activation records, an option change asks the applier. */
+    psx_host_enh_reset();
+    psx_host_enh_requests(&req);
+    CHECK(!req.resolution && req.resolution_value == PSX_IR_UNSET);
+    activate("psx.internal-resolution");                /* no value: Game default */
+    psx_host_enh_requests(&req);
+    CHECK(req.resolution && req.resolution_value == PSX_IR_UNSET);
+    set_opt(IR, "internal-resolution", "resolution", "auto");
+    psx_host_enh_reset();
+    activate("psx.internal-resolution");
+    psx_host_enh_requests(&req);
+    CHECK(req.resolution && req.resolution_value == PSX_IR_AUTO);
+    /* No applier yet (renderer setup has not run): not live. */
+    set_opt(IR, "internal-resolution", "resolution", "1440p");
+    CHECK(option_changed("psx.internal-resolution", "resolution", "1440p") == 0);
+    psx_host_enh_set_resolution_applier(res_applier);
+    g_res_answer = 0;                                   /* backend cannot, or netplay */
+    CHECK(option_changed("psx.internal-resolution", "resolution", "1440p") == 0 &&
+          g_res_applied == 1);
+    g_res_answer = 1;
+    CHECK(option_changed("psx.internal-resolution", "resolution", "1440p") == 1 &&
+          g_res_applied == 2);
+    psx_host_enh_requests(&req);
+    CHECK(req.resolution_value == 1440);
+    psx_host_enh_set_resolution_applier(NULL);
+    CHECK(psx_host_enh_apply_resolution_live() == 0);
+    psx_host_enh_reset();
+    psx_host_enh_requests(&req);
+    CHECK(!req.resolution && req.resolution_value == PSX_IR_UNSET);
+}
 
 static void test_resolve(void) {
     /* A Tomba-like title: nearest, no smoothing, composite, no scanlines. */
@@ -216,6 +296,7 @@ int main(void) {
     test_resolve();
     test_parsers();
     test_plugins();
+    test_resolution();
     if (g_fail) {
         fprintf(stderr, "host_enhancements_test: %d failure(s)\n", g_fail);
         return 1;

@@ -9,10 +9,11 @@
  *   1. both default OFF (the faithful floor) when game.toml says nothing;
  *   2. game.toml [video] turns them on -- the title's baseline;
  *   3. settings.toml no longer carries them, nor any other look the built-in
- *      mods own (CRT Filter, Image Filtering, PGXP Precision): old keys are
- *      ignored, not errors, and a save drops them;
- *   4. Internal resolution "auto" (dynamic resolution) and the one-time
- *      migration of the retired dynamic_resolution key;
+ *      mods own (CRT Filter, Image Filtering, PGXP Precision, Internal
+ *      Resolution), nor the audio sample rate: old keys are ignored, not
+ *      errors, and a save drops them;
+ *   4. game.toml internal_resolution "auto" (dynamic resolution), the title's
+ *      baseline the Internal Resolution mod resolves over;
  *   5. a game.toml with the retired [quality.*] presets fails to load.
  */
 #include "config_loader.h"
@@ -170,16 +171,19 @@ static void test_retired_player_look_keys() {
         "rewind = true\n"
         "rewind_depth = 100\n"
         "rewind_interval = 4\n"
+        "dynamic_resolution = true\n"
         "dynamic_resolution_min = \"1080p\"\n"
+        "supersampling = 2\n"
+        "internal_resolution = \"4k\"\n"
+        "supersample = 1.5\n"
+        "window_width = 1600\n"
         "[audio]\n"
         "frequency = 48000\n"
         "spu_hq = true\n");
     auto us = PSXRecompV4::load_user_settings(p);
     check(!us.parse_error, "a settings.toml with retired keys still parses");
     check(us.has_renderer && us.renderer == 1, "the player's other video settings survive");
-    check(us.has_audio_freq && us.audio_freq == 48000, "the player's audio frequency survives");
-    check(!us.has_internal_resolution,
-          "dynamic_resolution_min alone does not invent an internal resolution");
+    check(us.has_window_width && us.window_width == 1600, "the player's window size survives");
     fs::remove(p);
 
     fs::path out = fs::temp_directory_path() / "psxrecomp_retired_look_saved.toml";
@@ -188,16 +192,19 @@ static void test_retired_player_look_keys() {
     for (const char* key : {"antialiasing", "texture_filtering", "fmv_filter", "crt_filter",
                             "scanlines", "scanline_strength", "geometry_correction",
                             "perspective_texturing", "quality_", "rewind =", "rewind_depth",
-                            "rewind_interval", "spu_hq", "dynamic_resolution"})
+                            "rewind_interval", "spu_hq", "dynamic_resolution",
+                            "supersampling", "internal_resolution", "supersample",
+                            "frequency", "[audio]"})
         check(text.find(key) == std::string::npos,
               (std::string("a save drops the retired key ") + key).c_str());
-    check(text.find("frequency = 48000") != std::string::npos, "a save keeps the rest");
+    check(text.find("renderer") != std::string::npos &&
+          text.find("window_width      = 1600") != std::string::npos, "a save keeps the rest");
     fs::remove(out);
 }
 
-/* Internal resolution "auto" is Match display with dynamic resolution on: a
- * title can ship it, a player can choose it, and it round-trips by its id. A
- * player's retired dynamic_resolution = true is read once as "auto". */
+/* Internal resolution "auto" is Match display with dynamic resolution on. A
+ * title can ship it as its baseline (the player chooses it through the
+ * Internal Resolution mod); a dynamic-resolution floor never is. */
 static void test_internal_resolution_auto() {
     fs::path p = write_game_toml("psxrecomp_ir_auto.toml",
         "[video]\n"
@@ -213,43 +220,6 @@ static void test_internal_resolution_auto() {
     bool rejected = false;
     try { (void)PSXRecompV4::load_game_config(p); } catch (const std::exception&) { rejected = true; }
     check(rejected, "dynamic_resolution_min is a fixed floor, never \"auto\"");
-    fs::remove(p);
-
-    p = write_temp("psxrecomp_ir_settings_auto.toml",
-        "[video]\n"
-        "internal_resolution = \"auto\"\n");
-    auto us = PSXRecompV4::load_user_settings(p);
-    check(us.has_internal_resolution && us.internal_resolution == -2,
-          "settings.toml internal_resolution = \"auto\" reads PSX_IR_AUTO");
-    fs::remove(p);
-
-    struct { const char* body; bool has; int value; const char* what; } migrate[] = {
-        { "[video]\ndynamic_resolution = true\n", true, -2,
-          "dynamic_resolution = true alone becomes auto" },
-        { "[video]\ninternal_resolution = \"1080p\"\ndynamic_resolution = true\n", true, -2,
-          "dynamic resolution under a fixed ceiling becomes auto" },
-        { "[video]\ninternal_resolution = \"1080p\"\ndynamic_resolution = false\n", true, 1080,
-          "dynamic_resolution = false keeps the fixed resolution" },
-        { "[video]\ndynamic_resolution = false\n", false, 0,
-          "dynamic_resolution = false alone chooses nothing" },
-    };
-    for (const auto& m : migrate) {
-        p = write_temp("psxrecomp_dynres_migrate.toml", m.body);
-        auto mu = PSXRecompV4::load_user_settings(p);
-        check(mu.has_internal_resolution == m.has &&
-              (!m.has || mu.internal_resolution == m.value), m.what);
-        fs::remove(p);
-    }
-
-    PSXRecompV4::UserSettings out;
-    out.has_internal_resolution = true; out.internal_resolution = -2;
-    p = fs::temp_directory_path() / "psxrecomp_ir_auto_roundtrip.toml";
-    check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes auto");
-    check(read_text(p).find("internal_resolution = \"auto\"") != std::string::npos,
-          "auto is persisted by its stable id");
-    auto back = PSXRecompV4::load_user_settings(p);
-    check(back.has_internal_resolution && back.internal_resolution == -2,
-          "auto survives a save/load round trip");
     fs::remove(p);
 }
 
@@ -350,54 +320,15 @@ static void test_internal_resolution_game_toml() {
     }
 }
 
-static void test_internal_resolution_settings() {
-    fs::path p = write_temp("psxrecomp_ir_settings.toml",
+/* window_width is still a player setting, up to an 8K-wide window. */
+static void test_window_width_settings() {
+    fs::path p = write_temp("psxrecomp_window_width.toml",
         "[video]\n"
-        "supersampling = 2\n"
-        "internal_resolution = \"display\"\n"
         "window_width = 7680\n");
     auto us = PSXRecompV4::load_user_settings(p);
-    check(us.has_internal_resolution && us.internal_resolution == -1,
-          "settings.toml internal_resolution = \"display\" reads -1");
-    check(us.has_supersampling && us.supersampling == 2, "legacy supersampling still read");
     check(us.has_window_width && us.window_width == 7680,
           "settings.toml window_width accepts 7680 (was capped at 3840)");
     fs::remove(p);
-
-    p = write_temp("psxrecomp_ir_settings_bad.toml",
-        "[video]\n"
-        "internal_resolution = \"huge\"\n");
-    us = PSXRecompV4::load_user_settings(p);
-    check(!us.parse_error && !us.has_internal_resolution,
-          "an unknown preset is ignored, not an error");
-    fs::remove(p);
-
-    const int values[] = { 1, 720, 1080, 1440, 2160, 2880, 4320, -1, 480 };
-    const char* ids[]  = { "native", "720p", "1080p", "1440p", "4k", "5k", "8k", "display", nullptr };
-    for (int i = 0; i < 9; i++) {
-        PSXRecompV4::UserSettings out;
-        out.has_internal_resolution = true; out.internal_resolution = values[i];
-        out.has_supersampling = true;       out.supersampling = 4;
-        p = fs::temp_directory_path() / "psxrecomp_ir_roundtrip.toml";
-        check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes");
-        std::string text;
-        {   // closed before fs::remove: Windows cannot delete an open file
-            std::ifstream f(p);
-            text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-        }
-        if (ids[i])
-            check(text.find(std::string("internal_resolution = \"") + ids[i] + "\"") != std::string::npos,
-                  "a preset is persisted by its stable id");
-        else
-            check(text.find("internal_resolution = 480") != std::string::npos,
-                  "a custom line count is persisted as an integer");
-        auto back = PSXRecompV4::load_user_settings(p);
-        check(back.has_internal_resolution && back.internal_resolution == values[i],
-              "internal_resolution survives a save/load round trip");
-        check(back.has_supersampling && back.supersampling == 4,
-              "the legacy supersampling key is still written beside it");
-        fs::remove(p);
-    }
 }
 
 /* [video] texture_window_batching: a game.toml-only OpenGL batching opt-in
@@ -717,7 +648,7 @@ int main() {
     }
     test_fractional_fast_forward();
     test_internal_resolution_game_toml();
-    test_internal_resolution_settings();
+    test_window_width_settings();
     test_defaults_off();
     test_game_toml_opt_in();
     test_game_window_width_validation();

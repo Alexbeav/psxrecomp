@@ -471,8 +471,8 @@ int psx_mod_current_option_value(const char* option_id,
  * option for the rest of the session and notifies its plugin. Returns 1 when
  * a plugin applied it live; 0 when the feature has no live-capable plugin (or
  * is not in the plan) -- then nothing changes until the next start; -1 when
- * refused: during netplay the plan is
- * negotiated between peers and must not change. Persisting the choice stays
+ * refused: during netplay the plan is negotiated between peers and must not
+ * change, except a host-only feature's (psx_mod_option_live_host_only). Persisting the choice stays
  * the mod provider's job (mods/state.toml).
  */
 typedef int (*PSXModOptionChangedCallback)(const char* option_id, const char* value);
@@ -483,6 +483,12 @@ int psx_mod_set_option_live(const char* package_id, const char* feature_id,
 /* 1 when the committed feature's plugin registered an option-changed callback
  * (so a live set can take effect now). Read-only; any thread. */
 int psx_mod_option_live_capable(const char* package_id, const char* feature_id);
+/* 1 when the committed feature is host-only (every plugin it activates
+ * declares netplay = "host_only"): it is the player's own in a match, so its
+ * options may change live during netplay (psx_mod_set_option_live), unlike
+ * every other feature's. Read-only; any thread, like
+ * psx_mod_option_live_capable. */
+int psx_mod_option_live_host_only(const char* package_id, const char* feature_id);
 /* Write the player's current selection (feature switches and option values,
  * as edited through the launcher mod provider) to mods/state.toml now,
  * without re-resolving the running plan. Main thread. 1 on success. */
@@ -575,9 +581,10 @@ int psx_mod_set_widescreen_hud_size(int proportional);
 /* Request an internal rendering height for this mod session (120..8192).
  * The existing resolution resolver selects an integer raster scale and the
  * backend applies its normal allocation limits. Zero clears the request.
- * Player settings are preserved, explicit PSX_INTERNAL_RESOLUTION overrides
-   * win, and each session clears this request before activating its committed
-   * mod plan. */
+ * It wins over the built-in Internal Resolution mod's choice and the title's
+ * baseline (both left unchanged); explicit PSX_INTERNAL_RESOLUTION overrides
+ * win over it, and each session clears this request before activating its
+ * committed mod plan. */
 int psx_mod_set_internal_resolution(uint32_t target_lines);
 /*
  * Set the wall-clock cadence of simulated guest VBlanks. A value of zero

@@ -3149,10 +3149,6 @@ GameOptions load_game_options(const fs::path& path) {
 
 // ---- UserSettings (settings.toml) — launcher-written override layer ----
 
-static bool valid_user_audio_freq(int n) {
-    return n == 32040 || n == 32000 || n == 44100 || n == 48000;
-}
-
 UserSettings load_user_settings(const fs::path& path) {
     UserSettings s;
     std::error_code ec;
@@ -3180,46 +3176,12 @@ UserSettings load_user_settings(const fs::path& path) {
             else if (m == "opengl") { s.renderer = 1; s.has_renderer = true; }
             else if (m == "vulkan") { s.renderer = 2; s.has_renderer = true; }
         });
-        if (v.contains("supersampling")) try_get([&]{
-            const auto n = toml::find<int64_t>(v, "supersampling");
-            if (n >= 1 && n <= 32) { s.supersampling = (int)n; s.has_supersampling = true; }
-        });
-        if (v.contains("supersample")) try_get([&]{
-            const toml::value& ss = toml::find(v, "supersample");
-            const double f = ss.is_integer() ? static_cast<double>(ss.as_integer())
-                                             : toml::get<double>(ss);
-            if (f >= 1.0 && f <= 4.0) {
-                s.supersample_milli = static_cast<int>(f * 1000.0 + 0.5);
-                s.has_supersample = true;
-            }
-        });
-        if (v.contains("internal_resolution")) try_get([&]{
-            const toml::value& ir = toml::find(v, "internal_resolution");
-            int value = 0;
-            if (ir.is_string()) {
-                if (psx_ir_parse(ir.as_string().str.c_str(), &value)) {
-                    s.internal_resolution = value; s.has_internal_resolution = true;
-                }
-            } else if (ir.is_integer()) {
-                const auto n = ir.as_integer();
-                if (n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES) {
-                    s.internal_resolution = (int)n; s.has_internal_resolution = true;
-                }
-            }
-        });
-        // Retired: the Dynamic resolution checkbox became Internal resolution
-        // = Auto. A file written before that is read once: a player's
-        // `dynamic_resolution = true` was dynamic resolution under some
-        // ceiling, which Auto (Match display, the title's floor) now means,
-        // so it becomes internal_resolution = "auto" and the next save drops
-        // the old key. `false`, and the old dynamic_resolution_min (the floor
-        // is the title's now), are ignored.
-        if (v.contains("dynamic_resolution")) try_get([&]{
-            if (toml::find<bool>(v, "dynamic_resolution")) {
-                s.internal_resolution = PSX_IR_AUTO;
-                s.has_internal_resolution = true;
-            }
-        });
+        // supersampling, internal_resolution, supersample, dynamic_resolution
+        // and dynamic_resolution_min are no longer player settings: the
+        // built-in Internal Resolution mod (psx.enhancement.internal-resolution)
+        // owns the internal resolution over the title's [video] baseline, Auto
+        // (dynamic resolution) included. Old keys are ignored, not errors, and
+        // the next save drops them (docs/config_schema.md).
         if (v.contains("window_width")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "window_width");
             if (n >= 640 && n <= 7680) { s.window_width = (int)n; s.has_window_width = true; }
@@ -3310,17 +3272,9 @@ UserSettings load_user_settings(const fs::path& path) {
         // rewind / rewind_depth / rewind_interval moved to the built-in
         // Rewind mod (psx.feature.rewind); the old keys are ignored.
     }
-    if (doc.contains("audio")) {
-        const toml::value& a = toml::find(doc, "audio");
-        if (a.contains("frequency")) try_get([&]{
-            const auto n = toml::find<int64_t>(a, "frequency");
-            if (valid_user_audio_freq((int)n)) {
-                s.audio_freq = (int)n;
-                s.has_audio_freq = true;
-            }
-        });
-        // spu_hq moved to the built-in Enhanced Audio mod; ignored here.
-    }
+    // [audio] holds no player setting: frequency (the output sample rate) is
+    // the runtime's built-in rate and spu_hq is the built-in Enhanced Audio
+    // mod. Both old keys are ignored and the next save drops them.
     if (doc.contains("hotkeys")) {
         const toml::value& h = toml::find(doc, "hotkeys");
         if (h.contains("rewind_pad")) try_get([&]{
@@ -3569,17 +3523,6 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "renderer          = \""
           << (s.renderer == 2 ? "vulkan" : s.renderer == 1 ? "opengl" : "software")
           << "\"\n";
-    if (s.has_supersampling)
-        f << "supersampling     = " << s.supersampling << "\n";
-    if (s.has_internal_resolution && psx_ir_value_valid(s.internal_resolution)) {
-        const char* id = psx_ir_id_for(s.internal_resolution);
-        if (id)
-            f << "internal_resolution = \"" << id << "\"\n";
-        else
-            f << "internal_resolution = " << s.internal_resolution << "\n";
-    }
-    if (s.has_supersample)
-        f << "supersample       = " << (s.supersample_milli / 1000.0) << "\n";
     if (s.has_window_width)
         f << "window_width      = " << s.window_width << "\n";
     if (s.has_fov_scale)
@@ -3615,9 +3558,6 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
-    f << "\n[audio]\n";
-    if (s.has_audio_freq)
-        f << "frequency = " << s.audio_freq << "\n";
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu ||
         s.has_hotkey_pad_fast_forward || s.has_hotkey_pad_fast_forward_toggle ||
         s.has_fast_forward_speed || s.has_fast_forward_mode) {

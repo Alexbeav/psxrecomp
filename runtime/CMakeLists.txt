@@ -1397,7 +1397,8 @@ if(BUILD_TESTING)
         src/mod_packages.cpp
         src/mod_media.cpp src/iso_reader.cpp src/cue_sheet.cpp
         src/crc32.c
-        src/psx_sha256.c)
+        src/psx_sha256.c
+        src/host_enhancements.c)
     target_include_directories(builtin_mod_manifests_test PRIVATE
         include
         ../recompiler/include
@@ -1741,15 +1742,16 @@ if(BUILD_TESTING)
     add_test(NAME mod_internal_resolution_test COMMAND mod_internal_resolution_test)
 
     # The built-in host enhancement mods (CRT Filter, Image Filtering,
-    # Enhanced Audio, Rewind): the real plugins and their session requests
-    # against a fake mod runtime (host_enhancements.h).
+    # Enhanced Audio, Rewind, Internal Resolution): the real plugins and their
+    # session requests against a fake mod runtime (host_enhancements.h).
     add_executable(host_enhancements_test
         tests/test_host_enhancements.c
         src/host_enhancements.c
         src/mod_builtin_crt_filter.c
         src/mod_builtin_image_filtering.c
         src/mod_builtin_enhanced_audio.c
-        src/mod_builtin_rewind.c)
+        src/mod_builtin_rewind.c
+        src/mod_builtin_internal_resolution.c)
     target_include_directories(host_enhancements_test PRIVATE include)
     add_test(NAME host_enhancements_test COMMAND host_enhancements_test)
 

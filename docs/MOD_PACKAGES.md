@@ -617,7 +617,7 @@ defensive, for the state listed here.
 | Frame-interpolation blend mode | `psx_mod_set_frame_interpolation_blend` | default | every session |
 | Native VBlank pacing and its rate | `psx_mod_set_native_vblank_rate` | off, 0 | every session |
 | PGXP request (`psx.enhancement.pgxp`) | the builtin `psx.pgxp` activation (`pgxp_mod_request`) | none | every session |
-| Host enhancement requests (CRT Filter, Image Filtering, Enhanced Audio, Rewind) | the builtin activations (`psx_host_enh_request_*`) | none | every session |
+| Host enhancement requests (CRT Filter, Image Filtering, Enhanced Audio, Rewind, Internal Resolution) | the builtin activations (`psx_host_enh_request_*`) | none | every session |
 | Frame period, if native VBlank pacing was on | `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
 | Frame interpolation and its rate | `psx_mod_set_frame_interpolation` | first-session value | later sessions |
 | Vsync forced off | `psx_mod_set_frame_interpolation`, `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
@@ -863,9 +863,10 @@ an opaque tail.
 Trusted graphics plugins can call `psx_mod_set_internal_resolution(lines)` to
 request a rendering height for their session. Values from 120 through 8192 use
 the existing integer-scale resolver and backend allocation limits; zero clears
-the request. `PSX_INTERNAL_RESOLUTION` takes precedence. The player's saved
-resolution stays unchanged, and every new session clears the request before
-its mod plan activates, including rematches and sessions without that mod.
+the request. `PSX_INTERNAL_RESOLUTION` takes precedence. It wins over the
+built-in Internal Resolution mod's choice and the title's baseline, which stay
+unchanged, and every new session clears the request before its mod plan
+activates, including rematches and sessions without that mod.
 
 The shared PGXP plugin uses `psx_mod_set_pgxp_precision(enabled, cpu_mode)`.
 This stores a session selection as well as setting live correction flags, so
@@ -1126,8 +1127,9 @@ immediates".
 
 ### Built-in host enhancements
 
-Four framework packages replace what used to be Settings rows (owner decision,
-beads-eio.3.398). Each targets `game_id = "*"`, is default-off, keeps save
+Five framework packages replace what used to be Settings rows (owner decision,
+beads-eio.3.398; the rule is recomp-ui's docs/SETTINGS_STANDARD.md: anything
+that changes the game's picture, sound or play is a mod). Each targets `game_id = "*"`, is default-off, keeps save
 states shared, and declares its plugin `netplay = "host_only"` (below): it
 changes only what this machine shows, plays or keeps, so it is the player's own
 in every netplay mode and never part of the plan fingerprint.
@@ -1138,32 +1140,48 @@ in every netplay mode and never part of the plan fingerprint.
 | `psx.enhancement.image-filtering` (Image Filtering) | `psx.image-filtering` | `smoothing`: default / smooth / sharp (default); `texture_filtering`: default / nearest / bilinear / xbr (default); `fmv_filtering`: default / nearest / bilinear / sharp / bicubic (default) |
 | `psx.enhancement.enhanced-audio` (Enhanced Audio) | `psx.enhanced-audio` | none: enabled = the high-quality SPU mix |
 | `psx.feature.rewind` (Rewind) | `psx.rewind` | `buffer`: 50 / 100 / 150 / 200 (50); `interval`: 1 / 4 / 8 / 12 / 15 (15) |
+| `psx.enhancement.internal-resolution` (Internal Resolution) | `psx.internal-resolution` | `resolution`: default / native / 720p / 1080p / 1440p / 4k / 5k / 8k / display / auto (default) |
 
 **The title's keys stay its baseline.** `[video] crt_filter`, `scanlines`,
 `scanline_strength`, `antialiasing` (the linear present scale; Smoothing is
 not the `antialiasing_mode` FXAA pass), `texture_filtering`, `fmv_filter` and
-`[audio] spu_hq` are what the title ships. With a mod off they apply unchanged;
-with it on, each option replaces its part, and an option at `default` ("Game
-default" in the launcher) keeps the baseline value. Scanline strength applies
-to the player's own scanlines (Scanlines = On); Game default keeps the
-title's scanlines and their strength. Enhanced Audio turns the high-quality
-mix on; with it off the title's `spu_hq` stands.
+`[audio] spu_hq`, and `[video] internal_resolution` (or the legacy
+`supersampling` factor) with `dynamic_resolution`, are what the title ships.
+With a mod off they apply unchanged; with it on, each option replaces its
+part, and an option at `default` ("Game default" in the launcher) keeps the
+baseline value. Scanline strength applies to the player's own scanlines
+(Scanlines = On); Game default keeps the title's scanlines and their strength.
+Enhanced Audio turns the high-quality mix on; with it off the title's `spu_hq`
+stands. Internal Resolution's Auto is Match display with dynamic resolution
+(floor: the title's `dynamic_resolution_min`); a fixed choice turns dynamic
+resolution off. PGXP Precision needs 2x or more (720p and up at 240 lines) to
+be visible. A title mod's `psx_mod_set_internal_resolution` request still wins
+over the Internal Resolution mod, and `PSX_INTERNAL_RESOLUTION` over both
+(docs/config_schema.md "Internal resolution").
 
 **Activation only records.** Each plugin's activation records a request
 (`psx_host_enh_request_*`, `runtime/include/host_enhancements.h`); the
 renderer setup at the session start resolves the requests over the baseline
-after activation (`session_host_look` in main.cpp) and arms the rewind ring
-when the machine is configured. Applying at activation would be undone by the
+after activation (`session_host_look` and `session_internal_resolution` in
+main.cpp) and arms the rewind ring when the machine is configured. Applying at activation would be undone by the
 renderer setup, which is why the PGXP request works the same way. The env
 overrides (`PSX_TEXTURE_FILTER`, `PSX_SCANLINES`, `PSX_AUDIO_SHADOW`,
-`PSX_REWIND`, ...) still win for a validation run, and the debug TCP commands
-(`scanline`, `texture_filter`, `post_aa`, `dynres`) change the session's
-effective values.
+`PSX_REWIND`, `PSX_INTERNAL_RESOLUTION`, `PSX_SUPERSAMPLE`, ...) still win for
+a validation run, and the debug TCP commands (`scanline`, `texture_filter`,
+`post_aa`, `dynres`, `video_set`) change the session's effective values.
 
-**Live changes.** CRT Filter and Image Filtering register option-changed
-callbacks: an in-game menu option change (`psx_mod_set_option_live`) records
-the new request and re-applies the look at once. Enhanced Audio and Rewind,
-and switching any feature on or off, apply at the next start.
+**Live changes.** CRT Filter, Image Filtering and Internal Resolution register
+option-changed callbacks: an in-game menu option change
+(`psx_mod_set_option_live`) records the new request and re-applies it at once.
+Internal Resolution changes the scale through the same live path as the debug
+server's `video_set` (`gl_renderer_set_internal_scale_live`); when the backend
+cannot change its scale on a running game, or during a netplay match (the
+scale is held), the callback refuses and the saved choice applies at the next
+start. Enhanced Audio and Rewind, and switching any feature on or off, apply at
+the next start. Because these features are host-only, the in-game menu accepts
+their option changes during a netplay match too (`mh_mod_set` asks
+`psx_mod_option_live_host_only`); every other feature stays fixed for the
+match.
 
 **Rewind** keeps `psx_mod_set_rewind_blocked` and the netplay suppression
 (rewind never runs in a match). Its hotkey stays a player setting

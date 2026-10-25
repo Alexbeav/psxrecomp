@@ -50,7 +50,7 @@ static std::string read_text(const fs::path& p) {
 static void test_old_keys_ignored_and_dropped() {
     fs::path p = write_temp("psxrecomp_rewind_retired.toml",
         "[video]\n"
-        "supersampling = 2\n"
+        "window_width = 1600\n"
         "rewind = true\n"
         "rewind_depth = 150\n"
         "rewind_interval = 8\n"
@@ -58,7 +58,7 @@ static void test_old_keys_ignored_and_dropped() {
         "rewind_pad = 1272\n");
     auto us = PSXRecompV4::load_user_settings(p);
     check(!us.parse_error, "a settings.toml with the old rewind keys still parses");
-    check(us.has_supersampling && us.supersampling == 2,
+    check(us.has_window_width && us.window_width == 1600,
           "the player's other settings survive the retired keys");
     check(us.has_hotkey_pad_rewind && us.hotkey_pad_rewind == 1272,
           "the Rewind controller hotkey is still a setting");
