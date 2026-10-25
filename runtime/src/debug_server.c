@@ -10739,7 +10739,8 @@ static void handle_dynres_check(int id, const char *json)
 }
 
 /* {"cmd":"video_set","internal_resolution":N,"supersample":M} - change the
- * Internal resolution preset (lines, 1 native, -1 match display) and/or the
+ * Internal resolution preset (lines, 1 native, -1 match display, -2 auto:
+ * match display with dynamic resolution) and/or the
  * supersample (thousandths, 1000..4000) through the in-game menu's live path.
  * Invalid values are rejected without applying or saving anything. Returns
  * the restart bits the change still needs (0 = applied live), the requested
@@ -10757,8 +10758,9 @@ static void handle_video_set(int id, const char *json)
         send_err(id, "video_set needs internal_resolution and/or supersample");
         return;
     }
-    if (ir != k_absent && !(ir == 1 || ir == -1 || (ir >= 2 && ir <= 8640))) {
-        send_err(id, "invalid internal_resolution (1 native, -1 match display, 2..8640 lines)");
+    if (ir != k_absent && !(ir == 1 || ir == -1 || ir == -2 || (ir >= 2 && ir <= 8640))) {
+        send_err(id, "invalid internal_resolution (1 native, -1 match display, -2 auto, "
+                     "2..8640 lines)");
         return;
     }
     if (ss != k_absent && (ss < 1000 || ss > 4000)) {

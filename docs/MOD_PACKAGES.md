@@ -177,12 +177,12 @@ stale the moment either side gains a mod.
 
 ## Feature manifest
 
-Write new manifests at the current format version, which is **10**. Older
+Write new manifests at the current format version, which is **11**. Older
 versions stay readable so installed packages survive an update, and each
 section below notes the version a field first required.
 
 ```toml
-format_version = 10
+format_version = 11
 id = "example.localization"
 version = "1.2.0"
 name = "Example Localization Pack"
@@ -265,6 +265,26 @@ The player can add or remove any listed feature from the Mods page ("Show in
 Quick Mods"); that choice is saved under `[quick_mods]` in `mods/state.toml`
 and overrides the manifest. Quick membership is presentation only: it never
 changes activation, preparation or the execution fingerprint.
+
+A feature whose plugin presents with driver vsync off -- frame interpolation
+(`psx_mod_set_frame_interpolation`), native VBlank pacing above the panel rate
+or uncapped (`psx_mod_set_native_vblank_rate`) -- declares it (format 11):
+
+```toml
+[[feature]]
+id = "smooth-motion"
+vsync = "off"
+```
+
+The launcher's VSync row is then shown disabled, at Off, with one line naming
+the feature while it is enabled, instead of offering a choice that would not
+apply; the player's saved VSync choice is untouched and applies again with the
+feature off (recomp-ui `launcher_model_vsync_forced_off_by`). `"off"` is the
+only value. A feature that forces vsync off without declaring it is named on
+stdout when it does (`mod ... forces vsync off but its manifest does not
+declare ...`), and the launcher's mod provider reports it as forcing vsync off
+for the rest of that process (an in-session or rematch launcher), but a fresh
+launch cannot know before its first session.
 
 ## Bounded integer patches
 
@@ -597,6 +617,7 @@ defensive, for the state listed here.
 | Frame-interpolation blend mode | `psx_mod_set_frame_interpolation_blend` | default | every session |
 | Native VBlank pacing and its rate | `psx_mod_set_native_vblank_rate` | off, 0 | every session |
 | PGXP request (`psx.enhancement.pgxp`) | the builtin `psx.pgxp` activation (`pgxp_mod_request`) | none | every session |
+| Host enhancement requests (CRT Filter, Image Filtering, Enhanced Audio, Rewind) | the builtin activations (`psx_host_enh_request_*`) | none | every session |
 | Frame period, if native VBlank pacing was on | `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
 | Frame interpolation and its rate | `psx_mod_set_frame_interpolation` | first-session value | later sessions |
 | Vsync forced off | `psx_mod_set_frame_interpolation`, `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
@@ -1102,6 +1123,88 @@ mid-session. Memory-card paths/formats are unchanged by this selector policy. Ex
 unscoped states are not automatically assigned a non-stock selection: they do
 not record which variant created them. Config rules and the emitted switch: docs/config_schema.md "Mod
 immediates".
+
+### Built-in host enhancements
+
+Four framework packages replace what used to be Settings rows (owner decision,
+beads-eio.3.398). Each targets `game_id = "*"`, is default-off, keeps save
+states shared, and declares its plugin `netplay = "host_only"` (below): it
+changes only what this machine shows, plays or keeps, so it is the player's own
+in every netplay mode and never part of the plan fingerprint.
+
+| Package (feature) | Plugin | Options (default) |
+|---|---|---|
+| `psx.enhancement.crt-filter` (CRT Filter) | `psx.crt-filter` | `screen_model`: default / crt / composite / trinitron (default); `scanlines`: default / on / off (default); `scanline_strength`: 1..100 (50) |
+| `psx.enhancement.image-filtering` (Image Filtering) | `psx.image-filtering` | `smoothing`: default / smooth / sharp (default); `texture_filtering`: default / nearest / bilinear / xbr (default); `fmv_filtering`: default / nearest / bilinear / sharp / bicubic (default) |
+| `psx.enhancement.enhanced-audio` (Enhanced Audio) | `psx.enhanced-audio` | none: enabled = the high-quality SPU mix |
+| `psx.feature.rewind` (Rewind) | `psx.rewind` | `buffer`: 50 / 100 / 150 / 200 (50); `interval`: 1 / 4 / 8 / 12 / 15 (15) |
+
+**The title's keys stay its baseline.** `[video] crt_filter`, `scanlines`,
+`scanline_strength`, `antialiasing` (the linear present scale; Smoothing is
+not the `antialiasing_mode` FXAA pass), `texture_filtering`, `fmv_filter` and
+`[audio] spu_hq` are what the title ships. With a mod off they apply unchanged;
+with it on, each option replaces its part, and an option at `default` ("Game
+default" in the launcher) keeps the baseline value. Scanline strength applies
+to the player's own scanlines (Scanlines = On); Game default keeps the
+title's scanlines and their strength. Enhanced Audio turns the high-quality
+mix on; with it off the title's `spu_hq` stands.
+
+**Activation only records.** Each plugin's activation records a request
+(`psx_host_enh_request_*`, `runtime/include/host_enhancements.h`); the
+renderer setup at the session start resolves the requests over the baseline
+after activation (`session_host_look` in main.cpp) and arms the rewind ring
+when the machine is configured. Applying at activation would be undone by the
+renderer setup, which is why the PGXP request works the same way. The env
+overrides (`PSX_TEXTURE_FILTER`, `PSX_SCANLINES`, `PSX_AUDIO_SHADOW`,
+`PSX_REWIND`, ...) still win for a validation run, and the debug TCP commands
+(`scanline`, `texture_filter`, `post_aa`, `dynres`) change the session's
+effective values.
+
+**Live changes.** CRT Filter and Image Filtering register option-changed
+callbacks: an in-game menu option change (`psx_mod_set_option_live`) records
+the new request and re-applies the look at once. Enhanced Audio and Rewind,
+and switching any feature on or off, apply at the next start.
+
+**Rewind** keeps `psx_mod_set_rewind_blocked` and the netplay suppression
+(rewind never runs in a match). Its hotkey stays a player setting
+(`[hotkeys] rewind_pad`). A build configured with `-DPSX_REWIND=OFF` does not
+stage `psx.feature.rewind`: `runtime.cmake` declines it like an
+`EXCLUDE_BUILTIN_MODS` entry, so it is absent and recorded as excluded for the
+release packager.
+
+### Host-only plugins (`netplay = "host_only"`)
+
+Format 11 adds a fourth plugin class beside `local_view`, `input` and
+`host_output` (docs/NETPLAY.md "Own-view mods"):
+
+```toml
+format_version = 11
+
+[[plugin]]
+feature = "crt-filter"
+id = "psx.crt-filter"
+netplay = "host_only"
+```
+
+A host-only plugin never touches guest execution: it sets host presentation,
+audio output or host-tool state from its activation (and option-changed)
+callbacks only. Its feature may contribute nothing else -- no other plugin,
+patch, overlay, resource or `[[requirement]]` -- or the manifest is rejected;
+such a feature is host-only (`ModFeature::host_only`). Then:
+
+- **The plan fingerprint leaves it out.** `canonical_resolution` skips
+  host-only features, their options and their plugins, and a package made of
+  nothing else. Two players who differ only in, say, the CRT Filter resolve
+  the same fingerprint, so isolated save states, the derived-disc cache and
+  netplay plan checks are unaffected by it.
+- **It is the player's own in every netplay mode.** A vanilla match keeps it
+  with the own-view features (`mod_runtime_commit_netplay_view`); an explicit
+  empty host plan keeps the player's host-only features and nothing else; a
+  host never publishes one in its lobby plan, and a host's plan never
+  switches a guest's (`apply_host_mod_plan`); a direct/LAN match keeps the
+  local selection, whose fingerprint does not include it.
+- **Its options may change live in a match** (`psx_mod_set_option_live`),
+  where every other feature's plan is fixed with the peers.
 
 ### Presentation bezel packages
 

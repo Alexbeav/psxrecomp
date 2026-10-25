@@ -8,7 +8,6 @@
 #define PSX_HOST_OVERLAY_H
 
 #include <stddef.h>
-#include "video_texture_filter.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -77,30 +76,30 @@ void psx_host_set_ui_capture(int on);
 int  psx_host_ui_capture_active(void);
 
 /* ---- P4: live video settings ---------------------------------------------
- * The [video] keys an in-game menu may change, in settings.toml terms.
- * psx_video_apply_live() applies what can change on a running game, saves
- * every field to settings.toml, and returns PSX_VIDEO_RESTART_* bits for the
- * fields that only take effect on the next start (compared with boot). Main
- * thread only. */
+ * The [video] keys an in-game menu may change, in settings.toml terms: the
+ * player's PC/system display settings. Screen model, scanlines, smoothing,
+ * texture and FMV filtering are the built-in CRT Filter and Image Filtering
+ * mods (host_enhancements.h), changed live through their mod options
+ * (psx_mod_set_option_live), not here; dynamic resolution is
+ * internal_resolution = PSX_IR_AUTO. psx_video_apply_live() applies what can
+ * change on a running game, saves every field to settings.toml, and returns
+ * PSX_VIDEO_RESTART_* bits for the fields that only take effect on the next
+ * start (compared with boot). Main thread only. */
 typedef struct PsxHostVideoSettings {
     int fullscreen;            /* 0 windowed, 1 borderless, 2 exclusive */
-    int texture_filter;        /* PSX_TEXTURE_FILTER_* (the [video] enum) */
-    int fmv_filter;            /* VIDEO_FMV_FILTER_* (config value) */
-    int scanlines;             /* 0/1 */
-    int scanline_strength_pct; /* 0..100 */
-    int present_linear;        /* [video] antialiasing (linear present) 0/1 */
-    int dynamic_resolution;    /* 0/1 */
     int frame_generation;      /* 0/1 */
     int renderer;              /* restart */
-    int internal_resolution;   /* live (psx_video_apply_live) */
+    int internal_resolution;   /* live (psx_video_apply_live); PSX_IR_AUTO =
+                                * Match display with dynamic resolution */
     int supersampling;         /* legacy factor; restart */
     int render_thread;         /* restart */
     int present_thread;        /* restart */
     int supersample_milli;     /* live: 1000 off, 1250, 1500, 2000 */
 } PsxHostVideoSettings;
-
-/* Texture filter values: PSX_TEXTURE_FILTER_* and psx_texture_filter_from_ui
- * (video_texture_filter.h, #655), shared with settings and the handoff. */
+/* PsxHostVideoSettings no longer carries texture_filter, fmv_filter,
+ * scanlines, scanline_strength_pct, present_linear or dynamic_resolution: a
+ * menu provider can test this to stay source-compatible with both shapes. */
+#define PSX_HOST_VIDEO_SETTINGS_MOD_OWNED_LOOK 1
 
 #define PSX_VIDEO_RESTART_RENDERER    (1u << 0)
 #define PSX_VIDEO_RESTART_RESOLUTION  (1u << 1)
@@ -111,13 +110,11 @@ typedef struct PsxHostVideoSettings {
 #define PSX_VIDEO_RESTART_NETPLAY     (1u << 3)
 
 #define PSX_VIDEO_LIVE_FULLSCREEN     (1u << 0)
-#define PSX_VIDEO_LIVE_TEXTURE_FILTER (1u << 1)
-#define PSX_VIDEO_LIVE_FMV_FILTER     (1u << 2)
-#define PSX_VIDEO_LIVE_SCANLINES      (1u << 3)
-#define PSX_VIDEO_LIVE_PRESENT_LINEAR (1u << 4)
-#define PSX_VIDEO_LIVE_DYNRES         (1u << 5)
+/* Bits 1..5 were texture filter, FMV filter, scanlines, linear present and
+ * dynamic resolution (now mod options / PSX_IR_AUTO); left unused. */
 #define PSX_VIDEO_LIVE_FRAME_GEN      (1u << 6)
-/* Internal resolution or supersampling: the scale moves at the next frame. */
+/* Internal resolution (Auto included) or supersampling: the scale moves at
+ * the next frame. */
 #define PSX_VIDEO_LIVE_RESOLUTION     (1u << 7)
 
 /* Pure helpers (unit-tested): which live fields differ, and which restart

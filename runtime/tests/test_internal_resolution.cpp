@@ -172,6 +172,34 @@ int main() {
     expect("display 4320 (8K)", psx_resolve_internal_scale(vd, 240, 4320, 32), 18);
     expect("display id", std::strcmp(psx_ir_id_for(vd), "display"), 0);
 
+    // Auto: Match display with dynamic resolution on. Every scale helper
+    // resolves it like Match display; a floor is never Auto.
+    int va = 0;
+    expect("auto parse", psx_ir_parse("Auto", &va), 1);
+    expect("auto value", va, PSX_IR_AUTO);
+    expect("auto valid", psx_ir_value_valid(va), 1);
+    expect("auto is auto", psx_ir_is_auto(va), 1);
+    expect("display is not auto", psx_ir_is_auto(PSX_IR_DISPLAY), 0);
+    expect("auto ceiling", psx_ir_ceiling(va), PSX_IR_DISPLAY);
+    expect("fixed ceiling", psx_ir_ceiling(1080), 1080);
+    expect("auto id", std::strcmp(psx_ir_id_for(va), "auto"), 0);
+    expect("auto label", std::strcmp(psx_ir_label_for(va), "Auto"), 0);
+    expect("auto unknown display", psx_resolve_internal_scale(va, 240, 0, 32), 1);
+    expect("auto 1080", psx_resolve_internal_scale(va, 240, 1080, 32), 5);
+    expect("auto 2160", psx_resolve_internal_scale(va, 240, 2160, 32), 9);
+    expect("auto ss 2.0", psx_resolve_internal_scale_ss(va, 240, 1080, 32, 2000), 9);
+    expect("auto capped like display", psx_resolve_internal_scale_ss_cap(
+        va, 240, 8640, 32, 4000, 4320), 18);
+    expect("auto floor display", psx_dynres_floor_scale(PSX_IR_DISPLAY, va, 240, 1080, 9), 5);
+    expect("auto floor 720p", psx_dynres_floor_scale(720, va, 240, 1080, 9), 3);
+    {
+        // A launcher row returning Auto keeps Auto (persisted as "auto").
+        PsxIrAdopted a = psx_ir_adopt_launcher(1, 1080, 5, 5, PSX_IR_AUTO, 240, 1080, 32);
+        expect("adopt auto preset", a.preset, PSX_IR_AUTO);
+        expect("adopt auto scale", a.scale, 5);
+        expect("adopt auto save", a.save_ir, PSX_IR_AUTO);
+    }
+
     // Integer line counts and rejects.
     int v = 0;
     expect("lines parse", psx_ir_parse("1600", &v), 1);

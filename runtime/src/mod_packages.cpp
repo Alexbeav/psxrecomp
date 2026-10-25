@@ -25,7 +25,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 10;
+constexpr uint32_t kMaxFormatVersion = 11;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -705,9 +705,17 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
     std::ostringstream out;
     out << "source_disc=" << source_disc_sha256 << '\n';
     for (const ModPackage* package : ordered) {
+        /* Host-only features (ModFeature::host_only) change nothing the guest
+         * executes, so they are not part of the plan's identity: two peers
+         * that differ only in, say, the CRT Filter run the same game. A
+         * package made of nothing else is left out entirely. */
+        if (std::all_of(package->features.begin(), package->features.end(),
+                        [](const ModFeature& f) { return f.host_only; }))
+            continue;
         out << package->id << '@' << package->version << '\n';
         const auto sit = selections.find(package->id);
         for (const ModFeature& feature : package->features) {
+            if (feature.host_only) continue;
             bool enabled = feature.default_enabled;
             const std::map<std::string, std::string>* values = nullptr;
             if (sit != selections.end()) {
@@ -771,6 +779,7 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
             << derived.output_sha256 << ':' << derived.package_id << '\n';
     }
     for (const ModResolution::Plugin& plugin : plugins) {
+        if (plugin.netplay_host_only) continue;
         out << "plugin:" << plugin.id << ':' << plugin.package_id << ':'
             << plugin.feature_id << '\n';
     }
@@ -1863,6 +1872,14 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     toml::find_or<bool>(v, "default_enabled", false);
                 feature.hidden = toml::find_or<bool>(v, "hidden", false);
                 feature.quick = toml::find_or<bool>(v, "quick", false);
+                if (v.contains("vsync")) {
+                    if (out.format_version < 11)
+                        throw std::runtime_error(
+                            "feature vsync requires format_version 11");
+                    if (toml::find<std::string>(v, "vsync") != "off")
+                        throw std::runtime_error("feature vsync must be \"off\"");
+                    feature.vsync_off = true;
+                }
                 feature.channel = out.channel;
                 if (v.contains("channel")) {
                     if (out.format_version < 6)
@@ -2666,13 +2683,18 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     const std::string netplay =
                         toml::find_or<std::string>(v, "netplay", "");
                     if (!netplay.empty() && netplay != "local_view" &&
-                        netplay != "input" && netplay != "host_output")
+                        netplay != "input" && netplay != "host_output" &&
+                        netplay != "host_only")
                         throw std::runtime_error(
-                            "plugin netplay must be \"local_view\", \"input\" "
-                            "or \"host_output\"");
+                            "plugin netplay must be \"local_view\", \"input\", "
+                            "\"host_output\" or \"host_only\"");
+                    if (netplay == "host_only" && out.format_version < 11)
+                        throw std::runtime_error(
+                            "plugin netplay = \"host_only\" requires format_version 11");
                     plugin.netplay_local_view = netplay == "local_view";
                     plugin.netplay_input = netplay == "input";
                     plugin.netplay_host_output = netplay == "host_output";
+                    plugin.netplay_host_only = netplay == "host_only";
                 }
                 read_conditions(v, out.options, plugin.feature_id,
                                 plugin.when, "plugin");
@@ -2715,6 +2737,29 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         "derived_disc patch asset is missing: " + relative_patch);
                 out.derived_discs.push_back(std::move(derived));
             }
+        }
+        /* A feature with a host_only plugin promises it never touches guest
+         * execution: everything it contributes is such a plugin. That promise
+         * is what lets it stay the player's own in netplay and leave the plan
+         * fingerprint, so a feature that also patches, overlays, prepares a
+         * resource or requires another feature cannot make it. */
+        for (ModFeature& feature : out.features) {
+            bool host_only = false, other_plugin = false;
+            for (const ModPlugin& plugin : out.plugins) {
+                if (plugin.feature_id != feature.id) continue;
+                (plugin.netplay_host_only ? host_only : other_plugin) = true;
+            }
+            if (!host_only) continue;
+            const auto owns = [&](const auto& list) {
+                return std::any_of(list.begin(), list.end(),
+                    [&](const auto& item) { return item.feature_id == feature.id; });
+            };
+            if (other_plugin || owns(out.patches) || owns(out.overlays) ||
+                owns(out.resources) || owns(out.requirements))
+                throw std::runtime_error(
+                    "feature " + feature.id + ": a netplay = \"host_only\" plugin's "
+                    "feature may contribute nothing but host_only plugins");
+            feature.host_only = true;
         }
         return true;
     } catch (const std::exception& ex) {
@@ -4117,6 +4162,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             resolved.netplay_local_view = plugin->netplay_local_view;
             resolved.netplay_input = plugin->netplay_input;
             resolved.netplay_host_output = plugin->netplay_host_output;
+            resolved.netplay_host_only = plugin->netplay_host_only;
             result.plugins.push_back(std::move(resolved));
         }
         for (const ModResource& resource : package->resources) {

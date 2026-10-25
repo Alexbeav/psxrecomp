@@ -170,12 +170,6 @@ unsigned psx_host_video_live_changes(const PsxHostVideoSettings *a,
     unsigned m = 0;
     if (!a || !b) return 0;
     if (a->fullscreen != b->fullscreen) m |= PSX_VIDEO_LIVE_FULLSCREEN;
-    if (a->texture_filter != b->texture_filter) m |= PSX_VIDEO_LIVE_TEXTURE_FILTER;
-    if (a->fmv_filter != b->fmv_filter) m |= PSX_VIDEO_LIVE_FMV_FILTER;
-    if (a->scanlines != b->scanlines || a->scanline_strength_pct != b->scanline_strength_pct)
-        m |= PSX_VIDEO_LIVE_SCANLINES;
-    if (a->present_linear != b->present_linear) m |= PSX_VIDEO_LIVE_PRESENT_LINEAR;
-    if (a->dynamic_resolution != b->dynamic_resolution) m |= PSX_VIDEO_LIVE_DYNRES;
     if (a->frame_generation != b->frame_generation) m |= PSX_VIDEO_LIVE_FRAME_GEN;
     if (a->internal_resolution != b->internal_resolution ||
         a->supersample_milli != b->supersample_milli)

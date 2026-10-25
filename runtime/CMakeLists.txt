@@ -62,9 +62,6 @@ if(BUILD_TESTING)
     target_include_directories(openxr_ready_state_test PRIVATE include)
     add_test(NAME openxr_ready_state_test COMMAND openxr_ready_state_test)
 
-    add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
-    target_include_directories(video_texture_filter_test PRIVATE include)
-    add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
     add_executable(overlay_memory_address_test tests/test_overlay_memory_address.c)
     target_include_directories(overlay_memory_address_test PRIVATE include)
     add_test(NAME overlay_memory_address_test COMMAND overlay_memory_address_test)
@@ -267,8 +264,8 @@ if(BUILD_TESTING)
             add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
                 --cxx ${CMAKE_CXX_COMPILER})
-            add_test(NAME menu_quality_callbacks_test COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_quality_callbacks.py)
+            add_test(NAME menu_launcher_callbacks_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_launcher_callbacks.py)
             add_test(NAME host_pause_first_present_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pause_first_present.py
                 --cxx ${CMAKE_CXX_COMPILER})
@@ -907,7 +904,7 @@ if(BUILD_TESTING)
         tests/test_pad_external_input.c src/pad_external_input.c)
     target_include_directories(pad_external_input_test PRIVATE include src)
     add_test(NAME pad_external_input_test COMMAND pad_external_input_test)
-    add_executable(host_overlay_test tests/test_host_overlay.c src/host_overlay.c src/video_texture_filter.c)
+    add_executable(host_overlay_test tests/test_host_overlay.c src/host_overlay.c)
     target_include_directories(host_overlay_test PRIVATE include src)
     find_package(Threads REQUIRED)
     target_link_libraries(host_overlay_test PRIVATE Threads::Threads)
@@ -1742,6 +1739,19 @@ if(BUILD_TESTING)
         src/mod_internal_resolution.c)
     target_include_directories(mod_internal_resolution_test PRIVATE include)
     add_test(NAME mod_internal_resolution_test COMMAND mod_internal_resolution_test)
+
+    # The built-in host enhancement mods (CRT Filter, Image Filtering,
+    # Enhanced Audio, Rewind): the real plugins and their session requests
+    # against a fake mod runtime (host_enhancements.h).
+    add_executable(host_enhancements_test
+        tests/test_host_enhancements.c
+        src/host_enhancements.c
+        src/mod_builtin_crt_filter.c
+        src/mod_builtin_image_filtering.c
+        src/mod_builtin_enhanced_audio.c
+        src/mod_builtin_rewind.c)
+    target_include_directories(host_enhancements_test PRIVATE include)
+    add_test(NAME host_enhancements_test COMMAND host_enhancements_test)
 
     add_executable(memcard_extensions_test
         tests/test_memcard_extensions.c src/memcard.c)

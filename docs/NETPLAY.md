@@ -457,6 +457,14 @@ them. This is a determinism contract for trusted plugins, not a sandbox. Host-si
 repeat on a resim (e.g. `psx_mod_set_host_rumble`) check
 `psx_netplay_is_resimulating()` themselves.
 
+A fourth class, `netplay = "host_only"` (format 11), is for plugins that never
+touch guest execution at all -- the framework's CRT Filter, Image Filtering,
+Enhanced Audio and Rewind mods: they only set host presentation, audio output
+or host-tool state. Their features are no part of the plan fingerprint and stay
+each player's own in every mode, content negotiation included: a host never
+publishes them and a host's plan never switches them (docs/MOD_PACKAGES.md
+"Host-only plugins").
+
 At a netplay session start the runtime resolves the player's own selection
 and keeps only features whose every contribution is such a plugin (no EXE or
 disc write, overlay or derived disc; `mod_runtime_commit_netplay_view`). They

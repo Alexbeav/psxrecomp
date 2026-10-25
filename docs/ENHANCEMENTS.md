@@ -434,8 +434,9 @@ supersampling         = 2      # REQUIRED for geometry_correction to be visible
 
 Both default **false** (the faithful floor). They are independent — a title may
 want stable geometry without changing texture mapping. Settable per-game in
-`game.toml` and per-player in `settings.toml` (the player's file wins, and a
-launcher save round-trips both keys rather than dropping them).
+`game.toml`. (Until 2026-10-24 also per-player in `settings.toml` and a
+launcher row; since then the player's switch is the PGXP Precision mod, see
+S1 below.)
 
 `geometry_correction` needs `supersampling >= 2`: at native resolution the
 corrected position rounds back to the pixel it started on, so there is nothing
@@ -758,8 +759,8 @@ is the line intended for review and eventual merge.
 
 | setting | default | player-reachable? | verdict |
 |---|---|---|---|
-| `perspective_texturing` | false | **yes** — Display row in the launcher | ships |
-| `geometry_correction` | false | **no** — `game.toml` / `settings.toml` only | known broken, hidden |
+| `perspective_texturing` | false | **yes** — the PGXP Precision mod (was a Display row until S1) | ships |
+| `geometry_correction` | false | **no** — `game.toml` only (`settings.toml` until S1) | known broken, hidden |
 
 `geometry_correction` is deliberately still *compiled in*. It was not excised,
 because the setting is only worth keeping if the code behind it still runs, and
@@ -1319,6 +1320,32 @@ own clear: `gl_frame_gen_test` draws overlapping PGXP triangles out of painter
 order and requires the in-between frame at phase 1 to equal the real one,
 with each feature (depth, colour) alone and together; each changes the real
 image there.
+
+## S1 — Enhancement settings become built-in mods (2026-10-24, beads-eio.3.398)
+
+The launcher's Settings page keeps PC/system controls only (window size,
+fullscreen, renderer, VSync, internal resolution, audio rate and volume,
+hotkeys, BIOS, multitap). The game's look moved to four framework built-in
+mods, all default-off, all `game_id = "*"`, all host-only
+(`[[plugin]] netplay = "host_only"`: never in the plan fingerprint, the
+player's own in netplay):
+
+| Mod | Replaces | Options (Game default = the title's `game.toml` value) |
+|---|---|---|
+| CRT Filter (`psx.enhancement.crt-filter`) | Screen model, Scanlines rows | Screen model, Scanlines, Scanline strength |
+| Image Filtering (`psx.enhancement.image-filtering`) | Antialiasing (linear present), Texture filtering, FMV filtering rows | Smoothing, Texture filtering, FMV filtering |
+| Enhanced Audio (`psx.enhancement.enhanced-audio`) | High-quality SPU row | (on = high-quality SPU) |
+| Rewind (`psx.feature.rewind`) | Rewind / buffer / interval rows | Rewind buffer, Rewind interval |
+
+The title's `[video]` / `[audio]` keys stay its baseline: mod off is exactly
+what the title ships. Activation only records the request
+(`host_enhancements.h`); the renderer setup resolves it over the baseline
+after activation, the G1.11 lesson. Perspective textures left Settings for
+the PGXP Precision mod; the Dynamic resolution checkbox and Lowest resolution
+row became Internal resolution = Auto (Match display with dynamic resolution,
+the title's floor). Graphics presets (`[quality.*]`, hardware detection,
+Re-detect) were removed outright. A mod that presents with vsync off declares
+`[[feature]] vsync = "off"` and the launcher shows its VSync row overridden.
 
 ## IR1 — Internal resolution presets (Native … 8K) and the GL scale ceiling (2026-09-26)
 

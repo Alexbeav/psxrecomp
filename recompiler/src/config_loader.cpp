@@ -883,7 +883,7 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             if (!ok) {
                 throw std::runtime_error(
                     "[video] internal_resolution must be native, 720p, 1080p, "
-                    "1440p, 4k, 5k, 8k, display, or a number of lines");
+                    "1440p, 4k, 5k, 8k, display, auto, or a number of lines");
             }
             rt.video_internal_resolution = value;
         }
@@ -895,7 +895,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             int value = 0;
             bool ok = false;
             if (ir.is_string()) {
-                ok = psx_ir_parse(ir.as_string().str.c_str(), &value) != 0;
+                /* A floor is a fixed height; "auto" is not one. */
+                ok = psx_ir_parse(ir.as_string().str.c_str(), &value) != 0 &&
+                     !psx_ir_is_auto(value);
             } else if (ir.is_integer()) {
                 const auto n = ir.as_integer();
                 ok = n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES;
@@ -1460,86 +1462,23 @@ static std::vector<DrawDistanceClampSite> parse_draw_distance_clamps(
     return sites;
 }
 
+// Graphics presets ([quality.low] .. [quality.ultra]) were removed: the
+// launcher no longer has a preset row and no title shipped any. A game.toml
+// that still carries a [quality] table fails to load, naming the table,
+// rather than having its presets silently ignored (docs/config_schema.md).
+static void reject_quality_presets(const toml::value& cfg,
+                                   const fs::path& config_path) {
+    if (!cfg.contains("quality")) return;
+    throw std::runtime_error(fmt::format(
+        "{}: [quality.*] graphics presets are no longer supported; delete the "
+        "[quality] tables (the title's [video] keys are its only look, and "
+        "players adjust it through the built-in CRT Filter and Image Filtering "
+        "mods, docs/config_schema.md)", config_path.string()));
+}
+
 // Derive the output filename stem from a rom basename. Mirrors the Python
 // audit_config.py logic: strip a trailing .BIN/.EXE (case-insensitive) but
 // preserve dotted names like "SCUS_942.36" unchanged.
-// [quality.<name>] (docs/QUALITY_PRESETS.md). Each preset is the whole
-// game.toml re-parsed with its keys laid over [video], so each key gets the
-// same validation as in [video]. Only the supported quality keys
-// (quality_key_supported) are accepted. Lowest preset first.
-static const char* const kQualityPlayerKeys[] = {
-    "texture_filtering", "fmv_filter", "antialiasing", "dynamic_resolution",
-    "dynamic_resolution_min", "frame_generation", "render_thread", "present_thread",
-    "geometry_correction", "perspective_texturing", "frame_interpolation",
-    "frame_interpolation_fps"};
-static const char* const kQualityPresetOnlyKeys[] = {
-    "supersample", "texture_lod", "anisotropic_filtering", "fmv_chroma_smoothing",
-    "bloom", "dithering", "pgxp_depth_buffer", "pgxp_color_correction", "pgxp_seam"};
-
-bool quality_key_player_editable(const std::string& key) {
-    for (const char* k : kQualityPlayerKeys) if (key == k) return true;
-    return false;
-}
-
-bool quality_key_supported(const std::string& key) {
-    if (quality_key_player_editable(key)) return true;
-    for (const char* k : kQualityPresetOnlyKeys) if (key == k) return true;
-    return false;
-}
-
-static std::vector<QualityPreset> parse_quality_presets(const toml::value& cfg,
-                                                        const fs::path& root,
-                                                        const fs::path& config_path) {
-    std::vector<QualityPreset> out;
-    if (!cfg.contains("quality")) return out;
-    const toml::value& q = toml::find(cfg, "quality");
-    if (!q.is_table())
-        throw std::runtime_error(fmt::format("{}: [quality] must be a table",
-                                             config_path.string()));
-    static const char* const kNames[] = {"low", "medium", "high", "ultra"};
-    for (const auto& kv : q.as_table()) {
-        bool known = false;
-        for (const char* n : kNames) known = known || kv.first == n;
-        if (!known)
-            throw std::runtime_error(fmt::format(
-                "{}: [quality.{}] is not a preset (low, medium, high, ultra)",
-                config_path.string(), kv.first));
-        if (!kv.second.is_table())
-            throw std::runtime_error(fmt::format(
-                "{}: [quality.{}] must be a table of [video] keys",
-                config_path.string(), kv.first));
-    }
-    for (const char* n : kNames) {
-        if (!q.contains(n)) continue;
-        QualityPreset p;
-        p.name = n;
-        toml::value merged = cfg;
-        toml::table& top = merged.as_table();
-        if (!top.count("video") || !top["video"].is_table())
-            top["video"] = toml::table{};
-        toml::table& video = top["video"].as_table();
-        for (const auto& kv : toml::find(q, n).as_table()) {
-            if (kv.second.is_table())
-                throw std::runtime_error(fmt::format(
-                    "{}: [quality.{}] {} must be a [video] value, not a table",
-                    config_path.string(), n, kv.first));
-            if (!quality_key_supported(kv.first))
-                throw std::runtime_error(fmt::format(
-                    "{}: [quality.{}] {} is not a preset key (docs/QUALITY_PRESETS.md "
-                    "lists the supported set)", config_path.string(), n, kv.first));
-            video[kv.first] = kv.second;
-            p.keys.push_back(kv.first);
-        }
-        try {
-            p.runtime = parse_runtime_block(merged, root);
-        } catch (const std::exception& e) {
-            throw std::runtime_error(fmt::format("[quality.{}]: {}", n, e.what()));
-        }
-        out.push_back(std::move(p));
-    }
-    return out;
-}
-
 static std::string derive_out_stem(const std::string& rom_basename) {
     auto ends_with_ci = [](const std::string& s, const std::string& suffix) {
         if (s.size() < suffix.size()) return false;
@@ -3166,7 +3105,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     loaded.ws_cull_packed_x_sites = std::move(ws_cull_packed_x_sites);
     loaded.draw_distance_clamp_sites =
         parse_draw_distance_clamps(cfg, config_path);
-    loaded.quality_presets = parse_quality_presets(cfg, root, config_path);
+    reject_quality_presets(cfg, config_path);
     loaded.mod_immediate_sites = parse_mod_immediate_sites(cfg, config_path);
     return loaded;
 }
@@ -3268,65 +3207,29 @@ UserSettings load_user_settings(const fs::path& path) {
                 }
             }
         });
+        // Retired: the Dynamic resolution checkbox became Internal resolution
+        // = Auto. A file written before that is read once: a player's
+        // `dynamic_resolution = true` was dynamic resolution under some
+        // ceiling, which Auto (Match display, the title's floor) now means,
+        // so it becomes internal_resolution = "auto" and the next save drops
+        // the old key. `false`, and the old dynamic_resolution_min (the floor
+        // is the title's now), are ignored.
         if (v.contains("dynamic_resolution")) try_get([&]{
-            s.dynamic_resolution = toml::find<bool>(v, "dynamic_resolution");
-            s.has_dynamic_resolution = true;
-        });
-        if (v.contains("dynamic_resolution_min")) try_get([&]{
-            const toml::value& ir = toml::find(v, "dynamic_resolution_min");
-            int value = 0;
-            if (ir.is_string()) {
-                if (psx_ir_parse(ir.as_string().str.c_str(), &value)) {
-                    s.dynamic_resolution_min = value; s.has_dynamic_resolution_min = true;
-                }
-            } else if (ir.is_integer()) {
-                const auto n = ir.as_integer();
-                if (n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES) {
-                    s.dynamic_resolution_min = (int)n; s.has_dynamic_resolution_min = true;
-                }
+            if (toml::find<bool>(v, "dynamic_resolution")) {
+                s.internal_resolution = PSX_IR_AUTO;
+                s.has_internal_resolution = true;
             }
         });
         if (v.contains("window_width")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "window_width");
             if (n >= 640 && n <= 7680) { s.window_width = (int)n; s.has_window_width = true; }
         });
-        if (v.contains("antialiasing")) try_get([&]{
-            s.antialiasing = toml::find<bool>(v, "antialiasing"); s.has_antialiasing = true;
-        });
-        if (v.contains("texture_filtering")) try_get([&]{
-            const auto m = toml::find<std::string>(v, "texture_filtering");
-            if (m == "nearest") { s.texture_filter = 0; s.has_texture_filter = true; }
-            else if (m == "bilinear") { s.texture_filter = 1; s.has_texture_filter = true; }
-            else if (m == "xbr") { s.texture_filter = 3; s.has_texture_filter = true; }
-        });
-        if (v.contains("fmv_filter")) try_get([&]{
-            const auto m = toml::find<std::string>(v, "fmv_filter");
-            if (video_fmv_filter_parse(m, &s.fmv_filter)) s.has_fmv_filter = true;
-        });
-        if (v.contains("geometry_correction")) try_get([&]{
-            s.geometry_correction = toml::find<bool>(v, "geometry_correction");
-            s.has_geometry_correction = true;
-        });
-        if (v.contains("perspective_texturing")) try_get([&]{
-            s.perspective_texturing = toml::find<bool>(v, "perspective_texturing");
-            s.has_perspective_texturing = true;
-        });
-        if (v.contains("crt_filter")) try_get([&]{
-            const auto m = toml::find<std::string>(v, "crt_filter");
-            if (m == "raw")            { s.screen_kind = 0; s.has_screen_kind = true; }
-            else if (m == "crt")       { s.screen_kind = 1; s.has_screen_kind = true; }
-            else if (m == "composite") { s.screen_kind = 2; s.has_screen_kind = true; }
-            else if (m == "trinitron") { s.screen_kind = 3; s.has_screen_kind = true; }
-        });
-        if (v.contains("scanlines")) try_get([&]{
-            s.scanlines = toml::find<bool>(v, "scanlines"); s.has_scanlines = true;
-        });
-        if (v.contains("scanline_strength")) try_get([&]{
-            double d = toml_number(v, "scanline_strength");
-            if (d < 0.0) d = 0.0;
-            if (d > 1.0) d = 1.0;
-            s.scanline_strength = d; s.has_scanline_strength = true;
-        });
+        // antialiasing, texture_filtering, fmv_filter, crt_filter, scanlines,
+        // scanline_strength, geometry_correction and perspective_texturing
+        // are no longer player settings: they are the built-in CRT Filter,
+        // Image Filtering and PGXP Precision mods (mods/state.toml), over the
+        // title's [video] baseline. Old keys are ignored, not errors, and the
+        // next save drops them (docs/config_schema.md).
         if (v.contains("fov_scale")) try_get([&]{
             const auto& n = toml::find(v, "fov_scale");
             if (n.is_floating())     s.fov_scale = n.as_floating();
@@ -3393,24 +3296,6 @@ UserSettings load_user_settings(const fs::path& path) {
             if (s.frame_interpolation_fps == 0 || s.frame_interpolation_fps >= 90)
                 s.has_frame_interpolation_fps = true;
         });
-        // Graphics preset state (docs/QUALITY_PRESETS.md). Values are checked
-        // by the runtime, which knows the title's presets.
-        if (v.contains("quality_preset")) try_get([&]{
-            s.quality_preset = toml::find<std::string>(v, "quality_preset");
-            s.has_quality_preset = !s.quality_preset.empty();
-        });
-        if (v.contains("quality_base")) try_get([&]{
-            s.quality_base = toml::find<std::string>(v, "quality_base");
-            s.has_quality_base = !s.quality_base.empty();
-        });
-        if (v.contains("quality_hardware")) try_get([&]{
-            s.quality_hardware = toml::find<std::string>(v, "quality_hardware");
-            s.has_quality_hardware = !s.quality_hardware.empty();
-        });
-        if (v.contains("quality_detected")) try_get([&]{
-            s.quality_detected = toml::find<std::string>(v, "quality_detected");
-            s.has_quality_detected = !s.quality_detected.empty();
-        });
         if (v.contains("aspect_ratio")) try_get([&]{
             const auto m = toml::find<std::string>(v, "aspect_ratio");
             int n = 0, d = 0;
@@ -3422,34 +3307,8 @@ UserSettings load_user_settings(const fs::path& path) {
             s.adaptive_view = toml::find<bool>(v, "adaptive_view");
             s.has_adaptive_view = true;
         });
-        if (v.contains("rewind")) try_get([&]{
-            s.rewind = toml::find<bool>(v, "rewind");
-            s.has_rewind = true;
-        });
-        if (v.contains("rewind_depth")) try_get([&]{
-            int d = toml::find<int>(v, "rewind_depth");
-            static const int opts[4] = {50, 100, 150, 200};
-            int best = opts[0];
-            int best_d = d > best ? d - best : best - d;
-            for (int i = 1; i < 4; ++i) {
-                int dd = d > opts[i] ? d - opts[i] : opts[i] - d;
-                if (dd < best_d) { best_d = dd; best = opts[i]; }
-            }
-            s.rewind_depth = best;
-            s.has_rewind_depth = true;
-        });
-        if (v.contains("rewind_interval")) try_get([&]{
-            int d = toml::find<int>(v, "rewind_interval");
-            static const int opts[5] = {1, 4, 8, 12, 15};
-            int best = opts[0];
-            int best_d = d > best ? d - best : best - d;
-            for (int i = 1; i < 5; ++i) {
-                int dd = d > opts[i] ? d - opts[i] : opts[i] - d;
-                if (dd < best_d) { best_d = dd; best = opts[i]; }
-            }
-            s.rewind_interval = best;
-            s.has_rewind_interval = true;
-        });
+        // rewind / rewind_depth / rewind_interval moved to the built-in
+        // Rewind mod (psx.feature.rewind); the old keys are ignored.
     }
     if (doc.contains("audio")) {
         const toml::value& a = toml::find(doc, "audio");
@@ -3460,9 +3319,7 @@ UserSettings load_user_settings(const fs::path& path) {
                 s.has_audio_freq = true;
             }
         });
-        if (a.contains("spu_hq")) try_get([&]{
-            s.spu_hq = toml::find<bool>(a, "spu_hq"); s.has_spu_hq = true;
-        });
+        // spu_hq moved to the built-in Enhanced Audio mod; ignored here.
     }
     if (doc.contains("hotkeys")) {
         const toml::value& h = toml::find(doc, "hotkeys");
@@ -3723,40 +3580,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
     if (s.has_supersample)
         f << "supersample       = " << (s.supersample_milli / 1000.0) << "\n";
-    if (s.has_dynamic_resolution)
-        f << "dynamic_resolution = " << (s.dynamic_resolution ? "true" : "false") << "\n";
-    if (s.has_dynamic_resolution_min &&
-        psx_ir_value_valid(s.dynamic_resolution_min)) {
-        const char* id = psx_ir_id_for(s.dynamic_resolution_min);
-        if (id)
-            f << "dynamic_resolution_min = \"" << id << "\"\n";
-        else
-            f << "dynamic_resolution_min = " << s.dynamic_resolution_min << "\n";
-    }
     if (s.has_window_width)
         f << "window_width      = " << s.window_width << "\n";
-    if (s.has_antialiasing)
-        f << "antialiasing      = " << (s.antialiasing ? "true" : "false") << "\n";
-    if (s.has_texture_filter)
-        f << "texture_filtering = \"" << (s.texture_filter == 3 ? "xbr" : s.texture_filter ? "bilinear" : "nearest") << "\"\n";
-    if (s.has_fmv_filter)
-        f << "fmv_filter        = \"" << video_fmv_filter_name(s.fmv_filter) << "\"\n";
-    if (s.has_geometry_correction)
-        f << "geometry_correction   = "
-          << (s.geometry_correction ? "true" : "false") << "\n";
-    if (s.has_perspective_texturing)
-        f << "perspective_texturing = "
-          << (s.perspective_texturing ? "true" : "false") << "\n";
-    if (s.has_screen_kind) {
-        const char* k = s.screen_kind == 1 ? "crt"
-                      : s.screen_kind == 2 ? "composite"
-                      : s.screen_kind == 3 ? "trinitron" : "raw";
-        f << "crt_filter        = \"" << k << "\"\n";
-    }
-    if (s.has_scanlines)
-        f << "scanlines         = " << (s.scanlines ? "true" : "false") << "\n";
-    if (s.has_scanline_strength)
-        f << "scanline_strength = " << s.scanline_strength << "\n";
     if (s.has_fov_scale)
         f << "fov_scale         = " << s.fov_scale << "\n";
     if (s.has_auto_skip_fmv)
@@ -3786,29 +3611,13 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "frame_interpolation = " << (s.frame_interpolation ? "true" : "false") << "\n";
     if (s.has_frame_interpolation_fps)
         f << "frame_interpolation_fps = " << s.frame_interpolation_fps << "\n";
-    if (s.has_quality_preset)
-        f << "quality_preset    = \"" << s.quality_preset << "\"\n";
-    if (s.has_quality_base)
-        f << "quality_base      = \"" << s.quality_base << "\"\n";
-    if (s.has_quality_hardware)
-        f << "quality_hardware  = \"" << s.quality_hardware << "\"\n";
-    if (s.has_quality_detected)
-        f << "quality_detected  = \"" << s.quality_detected << "\"\n";
     if (s.has_aspect_ratio)
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
-    if (s.has_rewind)
-        f << "rewind            = " << (s.rewind ? "true" : "false") << "\n";
-    if (s.has_rewind_depth)
-        f << "rewind_depth      = " << s.rewind_depth << "\n";
-    if (s.has_rewind_interval)
-        f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
     if (s.has_audio_freq)
         f << "frequency = " << s.audio_freq << "\n";
-    if (s.has_spu_hq)
-        f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu ||
         s.has_hotkey_pad_fast_forward || s.has_hotkey_pad_fast_forward_toggle ||
         s.has_fast_forward_speed || s.has_fast_forward_mode) {

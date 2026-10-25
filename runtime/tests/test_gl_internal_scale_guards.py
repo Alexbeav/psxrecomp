@@ -340,13 +340,14 @@ class InternalResolutionGuards(unittest.TestCase):
         # through internal_resolution.h, whose behaviour with and without the
         # Internal resolution row is unit-tested (internal_resolution_test).
         # A bare factor copy next to a sticky preset let the preset override
-        # a pick in an older launcher's Supersampling row.
-        # A third seed: a graphics preset picked in the launcher fills the
-        # rows through the same helper (quality_launcher_apply,
-        # docs/QUALITY_PRESETS.md).
-        self.assertEqual(MAIN.count("psx_ir_launcher_seed_supersampling("), 3)
-        self.assertEqual(MAIN.count("psx_ir_adopt_launcher("), 2)
-        self.assertEqual(MAIN.count("kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,"), 2)
+        # a pick in an older launcher's Supersampling row. Adoption goes
+        # through one host helper, which also decides Auto (dynamic
+        # resolution) and leaves an untouched row's selection alone.
+        self.assertEqual(MAIN.count("psx_ir_launcher_seed_supersampling("), 2)
+        self.assertEqual(MAIN.count("psx_ir_adopt_launcher("), 1)
+        self.assertIn("psx_ir_adopt_launcher(",
+                      body(MAIN, "[[maybe_unused]] static PsxIrAdopted adopt_launcher_internal_resolution("))
+        self.assertEqual(MAIN.count("adopt_launcher_internal_resolution("), 3)
         self.assertNotRegex(MAIN, r"g_video_scale\s*=\s*(seed|ls)\.supersampling;")
         self.assertIn("g_video_internal_res = ir.preset;", MAIN)
 

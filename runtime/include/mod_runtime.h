@@ -74,6 +74,11 @@ bool mod_runtime_netplay_view_active();
 bool mod_runtime_netplay_input_active();
 /* "package/feature" keys of `plan` that qualify as own-view features. */
 std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& plan);
+/* 1 when the selected package's feature is host-only (ModFeature::host_only):
+ * it is the player's own in every netplay mode, so a lobby plan never
+ * publishes it and a host's plan never switches it. */
+bool mod_runtime_feature_host_only(const std::string& package_id,
+                                   const std::string& feature_id);
 const std::string& mod_runtime_fingerprint();
 /* Empty scope preserves existing slots. Isolated packages require a committed,
  * verified content plan; resource preparation/preview alone establishes none. */
@@ -113,6 +118,12 @@ void mod_runtime_set_progress_hook(void (*hook)(void));
 /* Invokes activation callbacks for the committed plan. Call after the final
  * launcher commit and before renderer/window initialization. */
 void mod_runtime_activate_plugins(void);
+/* A trusted setter just forced driver vsync off (psx_mod_set_frame_interpolation,
+ * psx_mod_set_native_vblank_rate). From inside a plugin callback this records
+ * the plugin's feature, so the launcher's mod provider reports it as forcing
+ * vsync off for the rest of the process even when its manifest does not say
+ * vsync = "off" -- and names the undeclared feature once on stdout. */
+void mod_runtime_note_vsync_forced_off(void);
 /* NULL on success; a non-NULL arming failure requires refusing this launch. */
 const char* mod_runtime_activation_error(void);
 void mod_runtime_on_vblank(void);

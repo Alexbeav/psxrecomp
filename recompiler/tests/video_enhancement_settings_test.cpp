@@ -1,22 +1,26 @@
-/* video_enhancement_settings_test — [video] geometry_correction /
- * perspective_texturing plumbing.
+/* video_enhancement_settings_test — [video] enhancement plumbing.
  *
- * These two knobs are the opt-in for the sub-pixel vertex precision and
- * perspective-correct UV enhancements (psxrecomp issue #92). The underlying
- * GTE/GPU machinery has its own unit coverage in the runtime suite; what this
- * test pins is the part that decides whether it is ever switched on:
+ * geometry_correction / perspective_texturing are the opt-in for the sub-pixel
+ * vertex precision and perspective-correct UV enhancements (psxrecomp issue
+ * #92). The underlying GTE/GPU machinery has its own unit coverage in the
+ * runtime suite; what this test pins is the part that decides whether it is
+ * ever switched on:
  *
  *   1. both default OFF (the faithful floor) when game.toml says nothing;
- *   2. game.toml [video] turns them on;
- *   3. settings.toml (the player's file) parses them;
- *   4. save_user_settings round-trips them — a launcher save must not silently
- *      drop a hand-edited key, which would look like "the setting does nothing".
+ *   2. game.toml [video] turns them on -- the title's baseline;
+ *   3. settings.toml no longer carries them, nor any other look the built-in
+ *      mods own (CRT Filter, Image Filtering, PGXP Precision): old keys are
+ *      ignored, not errors, and a save drops them;
+ *   4. Internal resolution "auto" (dynamic resolution) and the one-time
+ *      migration of the retired dynamic_resolution key;
+ *   5. a game.toml with the retired [quality.*] presets fails to load.
  */
 #include "config_loader.h"
 
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -138,55 +142,131 @@ static void test_knobs_independent() {
     fs::remove(q);
 }
 
-static void test_user_settings_read() {
-    fs::path p = write_temp("psxrecomp_pgxp_settings.toml",
+static std::string read_text(const fs::path& p) {
+    std::ifstream f(p);   // closed on return: Windows cannot delete an open file
+    return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
+/* The look the built-in mods own is not a settings.toml key any more. A file
+ * from before that change still loads -- its old keys are ignored, never an
+ * error that would throw away the player's other settings -- and the next
+ * save drops them, so they cannot come back as a hidden override. */
+static void test_retired_player_look_keys() {
+    fs::path p = write_temp("psxrecomp_retired_look.toml",
         "[video]\n"
+        "renderer = \"opengl\"\n"
+        "antialiasing = false\n"
+        "texture_filtering = \"bilinear\"\n"
+        "fmv_filter = \"bicubic\"\n"
+        "crt_filter = \"crt\"\n"
+        "scanlines = true\n"
+        "scanline_strength = 0.3\n"
         "geometry_correction = true\n"
-        "perspective_texturing = false\n"
+        "perspective_texturing = true\n"
+        "quality_preset = \"high\"\n"
+        "quality_base = \"high\"\n"
+        "quality_hardware = \"abc\"\n"
+        "quality_detected = \"ultra\"\n"
+        "rewind = true\n"
+        "rewind_depth = 100\n"
+        "rewind_interval = 4\n"
+        "dynamic_resolution_min = \"1080p\"\n"
         "[audio]\n"
-        "frequency = 48000\n");
+        "frequency = 48000\n"
+        "spu_hq = true\n");
     auto us = PSXRecompV4::load_user_settings(p);
-    check(!us.parse_error, "settings.toml parses");
-    check(us.has_geometry_correction && us.geometry_correction,
-          "settings.toml geometry_correction = true read");
-    check(us.has_perspective_texturing && !us.perspective_texturing,
-          "settings.toml perspective_texturing = false read (explicit off)");
-    check(us.has_audio_freq && us.audio_freq == 48000,
-          "settings.toml audio frequency read");
+    check(!us.parse_error, "a settings.toml with retired keys still parses");
+    check(us.has_renderer && us.renderer == 1, "the player's other video settings survive");
+    check(us.has_audio_freq && us.audio_freq == 48000, "the player's audio frequency survives");
+    check(!us.has_internal_resolution,
+          "dynamic_resolution_min alone does not invent an internal resolution");
     fs::remove(p);
+
+    fs::path out = fs::temp_directory_path() / "psxrecomp_retired_look_saved.toml";
+    check(PSXRecompV4::save_user_settings(out, us), "save_user_settings writes");
+    const std::string text = read_text(out);
+    for (const char* key : {"antialiasing", "texture_filtering", "fmv_filter", "crt_filter",
+                            "scanlines", "scanline_strength", "geometry_correction",
+                            "perspective_texturing", "quality_", "rewind =", "rewind_depth",
+                            "rewind_interval", "spu_hq", "dynamic_resolution"})
+        check(text.find(key) == std::string::npos,
+              (std::string("a save drops the retired key ") + key).c_str());
+    check(text.find("frequency = 48000") != std::string::npos, "a save keeps the rest");
+    fs::remove(out);
 }
 
-/* An absent key must stay absent, so layering leaves the game.toml value alone
- * instead of forcing it off. */
-static void test_user_settings_absent_key() {
-    fs::path p = write_temp("psxrecomp_pgxp_settings_empty.toml",
+/* Internal resolution "auto" is Match display with dynamic resolution on: a
+ * title can ship it, a player can choose it, and it round-trips by its id. A
+ * player's retired dynamic_resolution = true is read once as "auto". */
+static void test_internal_resolution_auto() {
+    fs::path p = write_game_toml("psxrecomp_ir_auto.toml",
         "[video]\n"
-        "supersampling = 2\n");
+        "internal_resolution = \"auto\"\n");
+    auto gc = PSXRecompV4::load_game_config(p);
+    check(gc.runtime.video_internal_resolution == -2,
+          "game.toml internal_resolution = \"auto\" parses (PSX_IR_AUTO)");
+    fs::remove(p);
+
+    p = write_game_toml("psxrecomp_dynres_min_auto.toml",
+        "[video]\n"
+        "dynamic_resolution_min = \"auto\"\n");
+    bool rejected = false;
+    try { (void)PSXRecompV4::load_game_config(p); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "dynamic_resolution_min is a fixed floor, never \"auto\"");
+    fs::remove(p);
+
+    p = write_temp("psxrecomp_ir_settings_auto.toml",
+        "[video]\n"
+        "internal_resolution = \"auto\"\n");
     auto us = PSXRecompV4::load_user_settings(p);
-    check(!us.has_geometry_correction,
-          "absent geometry_correction leaves has_* false");
-    check(!us.has_perspective_texturing,
-          "absent perspective_texturing leaves has_* false");
+    check(us.has_internal_resolution && us.internal_resolution == -2,
+          "settings.toml internal_resolution = \"auto\" reads PSX_IR_AUTO");
+    fs::remove(p);
+
+    struct { const char* body; bool has; int value; const char* what; } migrate[] = {
+        { "[video]\ndynamic_resolution = true\n", true, -2,
+          "dynamic_resolution = true alone becomes auto" },
+        { "[video]\ninternal_resolution = \"1080p\"\ndynamic_resolution = true\n", true, -2,
+          "dynamic resolution under a fixed ceiling becomes auto" },
+        { "[video]\ninternal_resolution = \"1080p\"\ndynamic_resolution = false\n", true, 1080,
+          "dynamic_resolution = false keeps the fixed resolution" },
+        { "[video]\ndynamic_resolution = false\n", false, 0,
+          "dynamic_resolution = false alone chooses nothing" },
+    };
+    for (const auto& m : migrate) {
+        p = write_temp("psxrecomp_dynres_migrate.toml", m.body);
+        auto mu = PSXRecompV4::load_user_settings(p);
+        check(mu.has_internal_resolution == m.has &&
+              (!m.has || mu.internal_resolution == m.value), m.what);
+        fs::remove(p);
+    }
+
+    PSXRecompV4::UserSettings out;
+    out.has_internal_resolution = true; out.internal_resolution = -2;
+    p = fs::temp_directory_path() / "psxrecomp_ir_auto_roundtrip.toml";
+    check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes auto");
+    check(read_text(p).find("internal_resolution = \"auto\"") != std::string::npos,
+          "auto is persisted by its stable id");
+    auto back = PSXRecompV4::load_user_settings(p);
+    check(back.has_internal_resolution && back.internal_resolution == -2,
+          "auto survives a save/load round trip");
     fs::remove(p);
 }
 
-static void test_user_settings_round_trip() {
-    PSXRecompV4::UserSettings out;
-    out.geometry_correction = true;   out.has_geometry_correction = true;
-    out.perspective_texturing = true; out.has_perspective_texturing = true;
-    out.audio_freq = 48000;           out.has_audio_freq = true;
-
-    fs::path p = fs::temp_directory_path() / "psxrecomp_pgxp_roundtrip.toml";
-    check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes");
-
-    auto back = PSXRecompV4::load_user_settings(p);
-    check(!back.parse_error, "written settings.toml re-parses");
-    check(back.has_geometry_correction && back.geometry_correction,
-          "geometry_correction survives a save/load round trip");
-    check(back.has_perspective_texturing && back.perspective_texturing,
-          "perspective_texturing survives a save/load round trip");
-    check(back.has_audio_freq && back.audio_freq == 48000,
-          "audio frequency survives a save/load round trip");
+/* Graphics presets were removed. A title that still carries [quality.*]
+ * learns so at load instead of shipping presets nothing applies. */
+static void test_quality_presets_rejected() {
+    fs::path p = write_game_toml("psxrecomp_quality_retired.toml",
+        "[video]\n"
+        "supersample = 1.5\n"
+        "[quality.low]\n"
+        "supersample = 1.0\n");
+    bool rejected = false;
+    std::string why;
+    try { (void)PSXRecompV4::load_game_config(p); }
+    catch (const std::exception& e) { rejected = true; why = e.what(); }
+    check(rejected, "a game.toml with [quality.*] fails to load");
+    check(why.find("[quality") != std::string::npos, "the error names the [quality] table");
     fs::remove(p);
 }
 
@@ -642,9 +722,9 @@ int main() {
     test_game_toml_opt_in();
     test_game_window_width_validation();
     test_knobs_independent();
-    test_user_settings_read();
-    test_user_settings_absent_key();
-    test_user_settings_round_trip();
+    test_retired_player_look_keys();
+    test_internal_resolution_auto();
+    test_quality_presets_rejected();
     test_user_settings_fov_scale();
     test_texture_window_batching();
     test_render_thread();
@@ -659,7 +739,7 @@ int main() {
                      failures);
         return 1;
     }
-    std::printf("PASS: [video] geometry_correction / perspective_texturing "
-                "plumbing\n");
+    std::printf("PASS: [video] enhancement plumbing (title baseline, retired "
+                "player keys, Internal resolution Auto)\n");
     return 0;
 }

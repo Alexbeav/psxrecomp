@@ -7,6 +7,11 @@
  *   0   unset: the legacy [video] supersampling factor stands
  *   1   native (1x)
  *  -1   match display: the target is the monitor's pixel height
+ *  -2   auto: Match display as the ceiling with dynamic resolution on (the
+ *       scale steps down to the title's dynamic_resolution_min floor only
+ *       while the game would miss frames). Every scale helper below resolves
+ *       it exactly like Match display; only the dynamic-resolution switch
+ *       differs, and that is the caller's (psx_ir_is_auto).
  *   N   (N >= 2) a target output height in lines (720, 1080, ... or a
  *       legacy "Nx" entry expressed as reference_lines * N)
  *
@@ -25,6 +30,7 @@
 #define PSX_IR_UNSET     0
 #define PSX_IR_NATIVE    1
 #define PSX_IR_DISPLAY  (-1)
+#define PSX_IR_AUTO     (-2)
 #define PSX_IR_DEFAULT_REF_LINES 240
 /* Custom line counts accepted from config (a 16K panel is 8640 lines). */
 #define PSX_IR_MIN_LINES 2
@@ -45,6 +51,7 @@ static const PsxIrPreset k_psx_ir_presets[] = {
     { "5k",      "5K",            2880           },
     { "8k",      "8K",            4320           },
     { "display", "Match display", PSX_IR_DISPLAY },
+    { "auto",    "Auto",          PSX_IR_AUTO    },
 };
 #define PSX_IR_PRESET_COUNT ((int)(sizeof(k_psx_ir_presets) / sizeof(k_psx_ir_presets[0])))
 
@@ -58,13 +65,24 @@ static inline int psx_ir_lower_eq(const char *a, const char *b) {
 
 /* 1 if value is a legal encoding (unset excluded). */
 static inline int psx_ir_value_valid(int value) {
-    return value == PSX_IR_NATIVE || value == PSX_IR_DISPLAY ||
+    return value == PSX_IR_NATIVE || value == PSX_IR_DISPLAY || value == PSX_IR_AUTO ||
            (value >= PSX_IR_MIN_LINES && value <= PSX_IR_MAX_LINES);
 }
 
-/* Parse a persisted value: a preset id (case-insensitive) or a decimal line
- * count in [PSX_IR_MIN_LINES, PSX_IR_MAX_LINES]. Returns 1 and stores the
- * value on success; 0 for anything else (the caller keeps its default). */
+/* Auto: Match display with dynamic resolution on. */
+static inline int psx_ir_is_auto(int value) { return value == PSX_IR_AUTO; }
+
+/* The fixed target a value renders at, its ceiling for Auto: Auto resolves
+ * as Match display, everything else as itself. */
+static inline int psx_ir_ceiling(int value) {
+    return value == PSX_IR_AUTO ? PSX_IR_DISPLAY : value;
+}
+
+/* Parse a persisted value: a preset id (case-insensitive, "auto" included) or
+ * a decimal line count in [PSX_IR_MIN_LINES, PSX_IR_MAX_LINES]. Returns 1 and
+ * stores the value on success; 0 for anything else (the caller keeps its
+ * default). A dynamic-resolution floor is a fixed height: its callers reject
+ * PSX_IR_AUTO themselves. */
 static inline int psx_ir_parse(const char *s, int *out) {
     if (!s || !*s) return 0;
     for (int i = 0; i < PSX_IR_PRESET_COUNT; i++)
@@ -96,6 +114,7 @@ static inline const char *psx_ir_label_for(int value) {
  * display 1 until the caller can measure the monitor. */
 static inline int psx_ir_scale_for(int value, int ref_lines, int display_px_h) {
     if (ref_lines < 1) ref_lines = PSX_IR_DEFAULT_REF_LINES;
+    value = psx_ir_ceiling(value);
     int target;
     if (value == PSX_IR_DISPLAY) target = display_px_h;
     else if (value >= PSX_IR_MIN_LINES) target = value;
@@ -155,6 +174,7 @@ static inline int psx_resolve_internal_scale_ss(int value, int ref_lines,
                                                 int display_px_h, int s_max,
                                                 int ss_milli) {
     ss_milli = psx_ss_milli_clamp(ss_milli);
+    value = psx_ir_ceiling(value);
     if (ss_milli != PSX_SS_MILLI_MIN) {
         if (value == PSX_IR_DISPLAY) {
             if (display_px_h > 0)
@@ -172,7 +192,7 @@ static inline int psx_resolve_internal_scale_ss(int value, int ref_lines,
 static inline int psx_resolve_internal_scale_ss_cap(int value, int ref_lines,
         int display_px_h, int s_max, int ss_milli, int max_display_lines) {
     int s = psx_resolve_internal_scale_ss(value, ref_lines, display_px_h, s_max, ss_milli);
-    if (value == PSX_IR_DISPLAY && max_display_lines > 0) {
+    if (psx_ir_ceiling(value) == PSX_IR_DISPLAY && max_display_lines > 0) {
         int cap = psx_resolve_internal_scale(max_display_lines, ref_lines, 0, s_max);
         if (s > cap) s = cap;
     }
@@ -270,7 +290,7 @@ static inline PsxIrAdopted psx_ir_adopt_launcher(int has_row, int preset,
 static inline int psx_dynres_floor_scale(int min_value, int selected_ir, int ref_lines,
                                          int display_px_h, int ceiling) {
     const int v = (min_value == PSX_IR_DISPLAY && selected_ir != PSX_IR_UNSET)
-                  ? selected_ir : min_value;
+                  ? psx_ir_ceiling(selected_ir) : min_value;
     int s = psx_resolve_internal_scale(v, ref_lines, display_px_h, ceiling);
     return s > ceiling ? ceiling : s;
 }
