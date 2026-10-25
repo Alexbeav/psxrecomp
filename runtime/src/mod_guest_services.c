@@ -3,6 +3,7 @@
  * the header for the contract. */
 #include "mod_plugins.h"
 #include "cpu_state.h"
+#include "cdrom.h"
 #include "dma.h"
 #include "gpu.h"
 #include "interrupts.h"
@@ -14,6 +15,11 @@
 /* mod_runtime.cpp: 1 while a netplay host-output plugin's hook runs; every
  * guest-mutating service refuses then (docs/NETPLAY.md). */
 int psx_mod_host_output_scope(void);
+
+int psx_mod_resident_cd_sector(uint32_t lba, const void* user_data) {
+    if (psx_mod_host_output_scope()) return 0;
+    return cdrom_resident_feed_sector(lba, (const uint8_t*)user_data);
+}
 
 uint32_t psx_mod_call_guest(struct CPUState* cpu, uint32_t function,
                             uint32_t return_address, uint32_t a0, uint32_t a1,

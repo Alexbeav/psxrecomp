@@ -48,6 +48,18 @@ typedef struct PSXResidentFile {
                                 * the original file; NULL = not catalogued */
 } PSXResidentFile;
 
+/* Deliver exactly one stock data sector through the actual controller FIFO,
+ * IRQ and original guest Ready/DMA path. The ReadN stream remains active and
+ * its next sector keeps ordinary timing. Busy/changed/media sectors decline
+ * without mutation. No host pointer or transfer cursor is retained; ordinary
+ * controller snapshots contain every accepted effect.
+ *
+ * Trusted title code must prove the file/span/code/callback and a free next
+ * destination, including queued GPU source pointers and active GPU/SPU DMA.
+ * The controller checks CD ownership only. Do not use for XA/FMV or to bypass
+ * original consumers, publish completion, or replace a final Pause ack. */
+int psx_mod_resident_cd_sector(uint32_t lba, const void* user_data);
+
 typedef struct PSXResidentSink PSXResidentSink;
 
 /* Store one derived blob (decoded asset, table, ...) for source file `file`.
