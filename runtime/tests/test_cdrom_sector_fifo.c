@@ -5,24 +5,30 @@
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
 uint64_t s_frame_count, psx_cycle_count;
 static int test_dma_active;
-static int test_raw_fail, test_copy_result = 1, test_copy_calls;
-static uint8_t test_submode = 8;
+static int test_raw_fail, test_raw_bad_header, test_raw_bad_copy;
+static int test_copy_result = 1, test_copy_calls;
+static uint8_t test_raw_mode = 2, test_submode = 8;
 int dma_cdrom_transfer_active(void) { return test_dma_active; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat |= bit; }
 int iso_read_raw_sector(void* h, uint32_t lba, uint8_t* out, int size) {
-    int m,s,f;
+    int m, s, f;
     (void)h; if (test_raw_fail) return 0;
-    memset(out, 0, size); lba_to_msf((int)lba,150,&m,&s,&f);
-    out[12]=bin_to_bcd(m);out[13]=bin_to_bcd(s);out[14]=bin_to_bcd(f);
-    out[15]=2;out[16]=out[20]=9;out[17]=out[21]=7;
+    memset(out, 0, size);
+    lba_to_msf((int)lba, 150, &m, &s, &f);
+    out[12]=bin_to_bcd(m); out[13]=bin_to_bcd(s);
+    out[14]=bin_to_bcd(f) ^ (test_raw_bad_header ? 1u : 0u);
+    out[15]=test_raw_mode; out[16]=out[20]=9; out[17]=out[21]=7;
     out[18]=out[22]=test_submode;
+    if (test_raw_bad_copy) out[20]=1;
     memset(out+24, (unsigned char)lba, 2048); return 1;
 }
 int iso_read_sector(void* h,uint32_t lba,uint8_t* out,int size) {(void)h;memset(out,(unsigned char)lba,size);return 1;}
 
 static void setup(void) {
     test_dma_active = 0;
-    test_raw_fail=0;test_submode=8;test_copy_result=1;test_copy_calls=0;
+    test_raw_fail = test_raw_bad_header = test_raw_bad_copy = 0;
+    test_raw_mode = 2; test_submode = 8;
+    test_copy_result = 1; test_copy_calls = 0;
     psx_cycle_count = 1000000;
     cdrom_init("synthetic");
     setloc_pending = 0;

@@ -34,6 +34,11 @@ int psx_mod_resident_cd_read(uint32_t address, const void* data,
         (const uint8_t*)data + copy.bytes - 2048u, resident_cd_copy, &copy);
 }
 
+int psx_mod_resident_cd_sector(uint32_t lba, const void* user_data) {
+    if (psx_mod_host_output_scope()) return 0;
+    return cdrom_resident_feed_sector(lba, (const uint8_t*)user_data);
+}
+
 uint32_t psx_mod_call_guest(struct CPUState* cpu, uint32_t function,
                             uint32_t return_address, uint32_t a0, uint32_t a1,
                             uint32_t a2, uint32_t a3) {

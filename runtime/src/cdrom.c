@@ -1434,7 +1434,8 @@ static int maybe_deliver_xa_audio(const uint8_t* raw_data, int lba,
     return 1;
 }
 
-static int read_sector_at(int min, int sec, int sect) {
+static int read_sector_at_with_raw(int min, int sec, int sect,
+                                  const uint8_t* supplied_raw) {
     int lba = msf_to_lba(min, sec, sect);
     uint8_t user_data[SECTOR_SIZE];
     uint8_t raw_data[RAW_SECTOR_SIZE];
@@ -1443,7 +1444,12 @@ static int read_sector_at(int min, int sec, int sect) {
     const uint8_t *history_bytes = user_data;
     int history_size = SECTOR_SIZE;
 
-    if (iso_handle) {
+    if (supplied_raw) {
+        memcpy(raw_data, supplied_raw, sizeof raw_data);
+        memcpy(user_data, raw_data + RAW_USER_DATA_OFFSET, sizeof user_data);
+        have_raw = 1;
+        if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
+    } else if (iso_handle) {
         have_raw = iso_read_raw_sector(iso_handle, lba, raw_data, RAW_SECTOR_SIZE);
         if (have_raw) {
             memcpy(user_data, raw_data + RAW_USER_DATA_OFFSET, SECTOR_SIZE);
@@ -1538,6 +1544,10 @@ static int read_sector_at(int min, int sec, int sect) {
                     0);
     }
     return delivery.data_delivered ? 1 : 0;
+}
+
+static int read_sector_at(int min, int sec, int sect) {
+    return read_sector_at_with_raw(min, sec, sect, NULL);
 }
 
 static void advance_msf(int* m, int* s, int* f) {
@@ -1877,8 +1887,9 @@ static int data_fifo_ready(void) {
 static uint64_t s_dataready_fires;  /* INT1 (data-ready) raised per streamed sector — FMV dispatch probe */
 uint64_t cdrom_get_dataready_fires(void) { return s_dataready_fires; }
 
-static int deliver_read_sector(void) {
-    int delivered = read_sector_at(read_min, read_sec, read_sect);
+static int deliver_read_sector_with_raw(const uint8_t* supplied_raw) {
+    int delivered = read_sector_at_with_raw(read_min, read_sec, read_sect,
+                                           supplied_raw);
     advance_msf(&read_min, &read_sec, &read_sect);
     if (xa_data_end_pending) {
         xa_data_end_pending = 0;
@@ -1898,6 +1909,10 @@ static int deliver_read_sector(void) {
     fire_cdrom_irq();
     s_dataready_fires++;
     return 1;
+}
+
+static int deliver_read_sector(void) {
+    return deliver_read_sector_with_raw(NULL);
 }
 
 /* A continuing DMA needs the newly filled slot immediately. A sector whose
@@ -3343,6 +3358,59 @@ int cdrom_resident_complete_read(uint32_t lba, uint32_t sectors,
     if (subq_replacements_active) update_last_valid_subq(last);
     record_sector_history((int)last, slot->size, mode_reg, 1, slot->data, &delivery);
     trace_cdrom('H', lba, sectors, 0);
+    return 1;
+}
+
+int cdrom_resident_feed_sector(uint32_t lba, const uint8_t* user_data) {
+    uint8_t raw[RAW_SECTOR_SIZE];
+    uint64_t timing_seq;
+    int min, sec, frame;
+    /* The title owns the verified file, callback and destination consumer.
+     * This helper owns one real controller delivery, never guest RAM or a
+     * host-side continuation. A declined call leaves the controller intact. */
+    if (!user_data || !has_disc() || lba >= iso_sector_count(iso_handle) ||
+        lba > 0x7FFFFF00u || !reading || read_cmd != 0x06 ||
+        (mode_reg != 0x80u && mode_reg != 0xA0u) ||
+        xa_stream_active || xa_data_end_pending || cdda_playing ||
+        cdda_data_end_pending || setloc_pending ||
+        msf_to_lba(read_min, read_sec, read_sect) != (int)lba ||
+        irq_flag || pending.pending || queued_cmd.pending ||
+        pending_dataready || pending_present_due || param_count ||
+        response_read < response_count || dma_cdrom_transfer_active())
+        return 0;
+    /* PsyQ reads 12 header bytes and 2048 user bytes, retaining 280 ECC
+     * bytes in whole-sector mode. That tail is not another owner's payload.
+     * A partial header/payload or any other unread FIFO must not be replaced. */
+    if (rb_available() &&
+        !(mode_reg == 0xA0u && RB_.size == WHOLE_SECTOR_SIZE &&
+          RB_.pos == 12 + SECTOR_SIZE && last_sector_mode == mode_reg &&
+          last_sector_have_raw && last_sector_lba >= 0 &&
+          (uint32_t)last_sector_lba + 1u == lba))
+        return 0;
+    if (!iso_read_raw_sector(iso_handle, lba, raw, sizeof raw) ||
+        raw[15] != CDROM_SECTOR_MODE2 ||
+        memcmp(raw + 16, raw + 20, 4) || !(raw[18] & 0x08u) ||
+        (raw[18] & 0x66u) ||
+        memcmp(raw + RAW_USER_DATA_OFFSET, user_data, SECTOR_SIZE))
+        return 0;
+    lba_to_msf((int)lba, 150, &min, &sec, &frame);
+    if (raw[12] != bin_to_bcd(min) || raw[13] != bin_to_bcd(sec) ||
+        raw[14] != bin_to_bcd(frame))
+        return 0;
+
+    /* Keep the stock header/subheader/ECC and supply the verified resident
+     * payload. The ordinary FIFO, status response, IRQ presentation and DMA
+     * paths handle the sector; the guest still executes its original Ready.
+     * There is no saved host pointer or multi-sector grant to invalidate. */
+    memcpy(raw + RAW_USER_DATA_OFFSET, user_data, SECTOR_SIZE);
+    timing_seq = cd_timing_begin_sector((int)lba);
+    (void)deliver_read_sector_with_raw(raw);
+    cd_timing_flag(timing_seq, CDT_DATA);
+    cd_timing_arm_irq(timing_seq);
+    s_accel_block_accum = 0;
+    read_delay = sector_delay_cycles();
+    s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
+    trace_cdrom('H', lba, 1, 0);
     return 1;
 }
 

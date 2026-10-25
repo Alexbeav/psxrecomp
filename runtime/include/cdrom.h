@@ -43,6 +43,12 @@ int  cdrom_get_setloc_lba(void);
 int cdrom_resident_complete_read(uint32_t lba, uint32_t sectors,
     const uint8_t* last_user_data, int (*commit)(void*), void* context);
 
+/* Admit one verified resident data sector into the real ReadN FIFO/IRQ path.
+ * Requires an ACKed stream at lba, no pending controller/DMA/payload owner,
+ * and matching pure-data raw bytes. Never stops the stream or calls a guest
+ * callback. The title must separately prove its destination/upload ownership. */
+int cdrom_resident_feed_sector(uint32_t lba, const uint8_t* user_data);
+
 /* 'instant' per-frame sector-IRQ budget (step 3). Clamped to [1, 4096];
  * the per-sector period additionally floors at CDROM_MIN_DELAY. Writers:
  * game.toml [runtime] instant_max_per_frame, the cdrom_instant_rate TCP

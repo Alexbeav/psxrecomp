@@ -890,9 +890,21 @@ typedef char spu_shadow_voice_count_check[
 const void* spu_shadow_tap_buffer(void) { return s_shadow_tap; }
 int         spu_shadow_tap_count(void)  { return s_shadow_tap_frame; }
 
+/* Hardware ADPCM fetches continue after Release reaches zero. Audible state
+ * only gates the envelope/output; pitch and block/IRQ/ENDX state keep running.
+ * PSX-SPX, SPU Interrupt / Voice Interrupt:
+ * https://psx-spx.consoledev.net/soundprocessingunitspu/#voice-interrupt
+ * Private host voices have an explicit lifetime and are not hardware slots. */
+static int voice_needs_clock(int idx) {
+    const SpuVoice *v = &voices[idx];
+    return v->active || (idx < SPU_VOICE_COUNT &&
+        ((voice_reg(idx, 2) & 0x3FFFu) || v->sample_idx >= SPU_BLOCK_SAMPLES));
+}
+
 static int16_t voice_next_sample(int idx) {
     SpuVoice *v = &voices[idx];
-    if (!v->active) return 0;
+    if (!voice_needs_clock(idx)) return 0;
+    const int audible = v->active;
 
     if (v->sample_idx >= SPU_BLOCK_SAMPLES) {
         if (v->flags & 0x01u) {
@@ -901,7 +913,7 @@ static int16_t voice_next_sample(int idx) {
              * (CurAddr = LoopAddr) does this unconditionally. */
             v->cur_addr = v->repeat_addr & (SPU_RAM_SIZE - 1u);
             if (v->flags & 0x02u) {
-                spu_event_record(SPU_EV_END_LOOP, idx, v->repeat_addr);
+                if (audible) spu_event_record(SPU_EV_END_LOOP, idx, v->repeat_addr);
             } else {
                 /* END without REPEAT: hardware forces the envelope to ZERO
                  * and enters Release (Beetle spu.cpp:341-352 — "Force
@@ -918,7 +930,7 @@ static int16_t voice_next_sample(int idx) {
                  * parked there at full envelope; a handful of ice-block
                  * hits in the X4 attract demo railed the whole mix at
                  * +32767 for ~35 s ("static" / music cut-out). */
-                spu_event_record(SPU_EV_END_STOP, idx, v->cur_addr);
+                if (audible) spu_event_record(SPU_EV_END_STOP, idx, v->cur_addr);
                 v->adsr_phase = ADSR_RELEASE;
                 v->adsr_divider = 0;
                 v->env_level = 0;
@@ -931,10 +943,12 @@ static int16_t voice_next_sample(int idx) {
      * INSTEAD of its interpolated ADPCM sample. Everything else — block
      * decoding/address advance, ENDX latching, pitch stepping, the ADSR
      * envelope and the volume stages — behaves exactly as for ADPCM. */
-    int16_t raw_s;
+    int16_t raw_s = 0;
     uint32_t non_mask = (uint32_t)spu_regs[reg_index(0x1F801D94u)]
                       | ((uint32_t)spu_regs[reg_index(0x1F801D96u)] << 16);
-    if (idx<SPU_VOICE_COUNT?(non_mask & (1u << idx)):
+    if (!audible) {
+        /* Silent hardware slots still clock below, without interpolation. */
+    } else if (idx<SPU_VOICE_COUNT?(non_mask & (1u << idx)):
             (private_modes[idx-SPU_VOICE_COUNT]&1u)) {
         raw_s = (int16_t)noise_lfsr;
     } else {
@@ -953,7 +967,7 @@ static int16_t voice_next_sample(int idx) {
      * advances. The optional shadow keeps its own cubic, block-clamped window;
      * the canonical hardware path above independently uses the preceding
      * block's tail for Gaussian interpolation. */
-    if (s_shadow_tap_on && s_shadow_tap_frame < SPU_SHADOW_TAP_FRAMES) {
+    if (audible && s_shadow_tap_on && s_shadow_tap_frame < SPU_SHADOW_TAP_FRAMES) {
         SpuShadowVoiceTap *t =
             &s_shadow_tap[s_shadow_tap_frame].voice[idx];
         int si = v->sample_idx;
@@ -971,8 +985,9 @@ static int16_t voice_next_sample(int idx) {
     }
 
     /* Step envelope once per output sample (44.1 kHz). */
-    adsr_run(idx, v);
-    /* Deactivate once Release fully decays to silence. */
+    if (audible) adsr_run(idx, v);
+    /* Retire audible output once Release fully decays. Hardware fetches keep
+     * running through voice_needs_clock; private voices stop completely. */
     if (v->adsr_phase == ADSR_RELEASE && v->env_level == 0) {
         v->active = 0;
     }
@@ -1140,7 +1155,7 @@ static void spu_render_block(int16_t* out_stereo, int frames) {
     int mix_voices=SPU_VOICE_COUNT+(private_enabled?SPU_PRIVATE_VOICES:0);
     if (enabled) {
         for (int v = 0; v < mix_voices; v++) {
-            if (voices[v].active) { any_voice = 1; break; }
+            if (voice_needs_clock(v)) { any_voice = 1; break; }
         }
     }
 
@@ -1157,7 +1172,9 @@ static void spu_render_block(int16_t* out_stereo, int frames) {
     /* MotK intro FMV (and other XA-only scenes): active_mask stays 0 while
      * CD/XA plays. Keep capture / noise / reverb / main sweeps (issue #103
      * fidelity — FMV is exactly the CD-with-reverb case) but skip the
-     * 24-voice walk and per-voice sweep steps. Shadow tap stays on the
+     * 24-voice walk and per-voice sweep steps only when no hardware slot needs
+     * pitch-driven fetching. Silent released slots can still trigger IRQs.
+     * Shadow tap stays on the
      * general path. */
     if (enabled && !any_voice && !s_shadow_tap_on) {
         static int16_t s_voice_silence[2048 * 2];
