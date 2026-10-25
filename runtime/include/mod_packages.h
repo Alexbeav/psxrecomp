@@ -646,6 +646,8 @@ bool mod_register_activation_plugin(const std::string& id, void (*callback)(void
 bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void));
 void mod_reset_plugin_sessions();
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
+bool mod_register_pcm_plugin(const std::string& id, PSXModPCMCallback callback);
+PSXModPCMCallback mod_pcm_callback(const std::string& id);
 bool mod_register_savestate_plugin(const std::string& id, void (*callback)(void));
 void mod_invoke_savestate_plugin(const std::string& id);
 /* A function-entry hook is a trusted implementation like the others: manifests
