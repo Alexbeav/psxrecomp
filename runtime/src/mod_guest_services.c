@@ -2,7 +2,9 @@
  * one shared implementation of an effect several titles' adapters need; see
  * the header for the contract. */
 #include "mod_plugins.h"
+#include "mod_resident.h"
 #include "cpu_state.h"
+#include "cdrom.h"
 #include "dma.h"
 #include "gpu.h"
 #include "interrupts.h"
@@ -14,6 +16,23 @@
 /* mod_runtime.cpp: 1 while a netplay host-output plugin's hook runs; every
  * guest-mutating service refuses then (docs/NETPLAY.md). */
 int psx_mod_host_output_scope(void);
+
+typedef struct ResidentCDCopy {
+    uint32_t address, bytes, lba;
+    const void* data;
+} ResidentCDCopy;
+static int resident_cd_copy(void* opaque) {
+    ResidentCDCopy* copy = (ResidentCDCopy*)opaque;
+    return psx_mod_dma_write_ram(copy->address, copy->data, copy->bytes, (int)copy->lba);
+}
+int psx_mod_resident_cd_read(uint32_t address, const void* data,
+                            uint32_t lba, uint32_t sectors) {
+    if (psx_mod_host_output_scope() || !data || !sectors ||
+        sectors > UINT32_MAX / 2048u || (address & 3u)) return 0;
+    ResidentCDCopy copy = {address, sectors * 2048u, lba, data};
+    return cdrom_resident_complete_read(lba, sectors,
+        (const uint8_t*)data + copy.bytes - 2048u, resident_cd_copy, &copy);
+}
 
 uint32_t psx_mod_call_guest(struct CPUState* cpu, uint32_t function,
                             uint32_t return_address, uint32_t a0, uint32_t a1,

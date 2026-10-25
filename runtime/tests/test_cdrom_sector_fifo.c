@@ -5,21 +5,118 @@
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
 uint64_t s_frame_count, psx_cycle_count;
 static int test_dma_active;
+static int test_raw_fail, test_copy_result = 1, test_copy_calls;
+static uint8_t test_submode = 8;
 int dma_cdrom_transfer_active(void) { return test_dma_active; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat |= bit; }
 int iso_read_raw_sector(void* h, uint32_t lba, uint8_t* out, int size) {
-    (void)h; memset(out, 0, size); out[15]=2; out[18]=out[22]=8;
+    int m,s,f;
+    (void)h; if (test_raw_fail) return 0;
+    memset(out, 0, size); lba_to_msf((int)lba,150,&m,&s,&f);
+    out[12]=bin_to_bcd(m);out[13]=bin_to_bcd(s);out[14]=bin_to_bcd(f);
+    out[15]=2;out[16]=out[20]=9;out[17]=out[21]=7;
+    out[18]=out[22]=test_submode;
     memset(out+24, (unsigned char)lba, 2048); return 1;
 }
 int iso_read_sector(void* h,uint32_t lba,uint8_t* out,int size) {(void)h;memset(out,(unsigned char)lba,size);return 1;}
 
 static void setup(void) {
     test_dma_active = 0;
+    test_raw_fail=0;test_submode=8;test_copy_result=1;test_copy_calls=0;
     psx_cycle_count = 1000000;
     cdrom_init("synthetic");
+    setloc_pending = 0;
     mode_reg = 0x80;
     reading = 1;
     read_min = 0; read_sec = 3; read_sect = 25; /* LBA 100 */
+}
+static void sector(void);
+static void ack(void);
+static void request(void);
+static void drain(unsigned lba, int words);
+static int resident_copy(void* context) {
+    CHECK(context == &test_copy_calls);
+    ++test_copy_calls;
+    return test_copy_result;
+}
+static void resident_setup(uint8_t mode) {
+    setup(); mode_reg=mode; reading=0;
+    seek_min=0; seek_sec=3; seek_sect=25;
+    s_setloc_lba=100; setloc_pending=1;
+    exec_command(6);
+    CHECK(irq_flag==CDIRQ_ACK && response_count==1);
+    (void)cdrom_read(0x1F801801);
+    CHECK(response_read==response_count && response_count!=0);
+    /* ReadN's consumed response and elapsed presentation deadline remain
+     * after the SDK acknowledges it; neither means there is pending work. */
+    psx_cycle_count+=CDROM_IRQ_PRESENT_DELAY;
+    cdrom_advance(0); ack(); i_stat=0;
+    CHECK(cdrom_irq_present_due!=0 && !irq_flag && reading);
+}
+static void resident_header_cursor_and_restore(void) {
+    const uint8_t modes[]={0x80,0xA0};
+    for(unsigned n=0;n<sizeof modes;++n) {
+        uint8_t payload[2048]; memset(payload,102,sizeof payload);
+        resident_setup(modes[n]);
+        CHECK(cdrom_resident_complete_read(100,3,payload,resident_copy,&test_copy_calls));
+        CHECK(test_copy_calls==1 && !reading && !irq_flag && !i_stat);
+        CHECK(last_sector_lba==102 && msf_to_lba(read_min,read_sec,read_sect)==103);
+        CHECK(s_setloc_lba==100 && !setloc_pending);
+        CHECK(s_ring_read==s_ring_write && s_ring_write==3);
+        CHECK(s_data_fifo.pos==((modes[n]&0x20)?2060:2048));
+        CHECK(last_sector_xa_file==9 && last_sector_xa_channel==7);
+        const uint32_t size=cdrom_snapshot_bytes();
+        uint8_t* wire=malloc(size);CHECK(wire);
+        cdrom_snapshot_write(wire);
+        setup(); CHECK(cdrom_snapshot_read(wire,size));free(wire);
+        CHECK(last_sector_lba==102 && msf_to_lba(read_min,read_sec,read_sect)==103);
+        CHECK(s_data_fifo.pos==((modes[n]&0x20)?2060:2048));
+        exec_command(0x10);
+        CHECK(response_count==8 && response_fifo[0]==0 && response_fifo[1]==3 &&
+              response_fifo[2]==0x27 && response_fifo[3]==2 &&
+              response_fifo[4]==9 && response_fifo[5]==7 && response_fifo[6]==8);
+        response_clear();ack();
+        exec_command(0x11);
+        CHECK(response_count==8 && response_fifo[5]==0 &&
+              response_fifo[6]==3 && response_fifo[7]==0x28);
+        response_clear();ack();
+        /* Original Pause/ack and a retail read with no new Setloc resume
+         * at the next sector, never the start or last-header sector. */
+        exec_command(9);response_clear();ack();
+        psx_cycle_count+=100000000;process_pending(0);response_clear();ack();
+        mode_reg=0x80;exec_command(6);response_clear();ack();
+        CHECK(msf_to_lba(read_min,read_sec,read_sect)==103);
+        sector();request();drain(103,512);
+    }
+}
+static void resident_declines_atomically(void) {
+    for(unsigned reason=0;reason<14;++reason) {
+        uint8_t payload[2048];memset(payload,102,sizeof payload);
+        resident_setup(0xA0);
+        switch(reason) {
+        case 0: reading=0;break;
+        case 1: read_sect++;break; /* A physical sector already arrived. */
+        case 2: irq_flag=3;break;
+        case 3: test_dma_active=1;break;
+        case 4: mode_reg=0xE0;break;
+        case 5: pending.pending=1;break;
+        case 6: queued_cmd.pending=1;break;
+        case 7: test_submode=0x24;break;
+        case 8: test_submode=0x0A;break;
+        case 9: test_raw_fail=1;break;
+        case 10: payload[42]^=1;break;
+        case 11: test_copy_result=0;break;
+        case 12: setloc_pending=1;break;
+        case 13: response_read=0;break; /* Unconsumed command response. */
+        }
+        const uint32_t size=cdrom_snapshot_bytes();
+        uint8_t *before=malloc(size),*after=malloc(size);CHECK(before&&after);
+        cdrom_snapshot_write(before);
+        CHECK(!cdrom_resident_complete_read(100,3,payload,resident_copy,&test_copy_calls));
+        CHECK(test_copy_calls==(reason==11?1:0));
+        cdrom_snapshot_write(after);CHECK(!memcmp(before,after,size));
+        free(before);free(after);
+    }
 }
 static void sector(void) {
     psx_cycle_count += 225792;
@@ -231,6 +328,8 @@ static void snapshot_setloc_and_paused_head(void) {
     free(wire);
 }
 int main(void) {
+    resident_header_cursor_and_restore();
+    resident_declines_atomically();
     pause_read_resumes_position();
     snapshot_setloc_and_paused_head();
     invalid_setloc_preserves_target();

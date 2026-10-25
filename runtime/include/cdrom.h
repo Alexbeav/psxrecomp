@@ -33,6 +33,16 @@ void cdrom_notify_game_started(void);
  * ring buffer to correlate each sector transfer with its disc position. */
 int  cdrom_get_setloc_lba(void);
 
+/* Trusted opt-in resident adapter: fold a verified Mode2/Form1 data span
+ * after its real ReadN ACK, before the first sector has arrived. The commit
+ * callback copies the complete span to RAM and must not advance guest time.
+ * A zero callback result leaves controller state unchanged. Success retains
+ * the actual final header/FIFO and next drive cursor, cancels sector delivery,
+ * and raises no IRQ; the title must finish its audited SDK completion/Pause.
+ * last_user_data must be the verified final2048-byte payload. */
+int cdrom_resident_complete_read(uint32_t lba, uint32_t sectors,
+    const uint8_t* last_user_data, int (*commit)(void*), void* context);
+
 /* 'instant' per-frame sector-IRQ budget (step 3). Clamped to [1, 4096];
  * the per-sector period additionally floors at CDROM_MIN_DELAY. Writers:
  * game.toml [runtime] instant_max_per_frame, the cdrom_instant_rate TCP

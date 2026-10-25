@@ -48,6 +48,14 @@ typedef struct PSXResidentFile {
                                 * the original file; NULL = not catalogued */
 } PSXResidentFile;
 
+/* Complete a verified pure-data resident span through the shared CD-DMA RAM
+ * path. Requires the original ReadN ACK and pristine first-sector ownership;
+ * busy/media/changed payloads decline without RAM/controller mutation. Keeps
+ * the actual final GetlocL header, retained FIFO and next drive cursor. The
+ * trusted title still supplies its original SDK completion and Pause ack. */
+int psx_mod_resident_cd_read(uint32_t address, const void* data,
+                            uint32_t lba, uint32_t sectors);
+
 typedef struct PSXResidentSink PSXResidentSink;
 
 /* Store one derived blob (decoded asset, table, ...) for source file `file`.
