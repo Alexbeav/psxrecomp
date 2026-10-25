@@ -197,6 +197,9 @@ static int test_disc_request(int *ready) { ++disc_request_calls; *ready = 1; ret
 static void test_disc_request_activate(void) { psx_mod_set_disc_request_provider(test_disc_request); }
 /* Widescreen tag passthroughs mod_runtime forwards to the GPU; unused here. */
 extern "C" void gpu_ws_tag_hud_primitive(uint32_t, int) {}
+extern "C" void gpu_ws_tag_hud_prim_projected(uint32_t, int) {}
+extern "C" void gpu_ws_set_gte_sxy_tracking(int) {}
+extern "C" int gpu_ws_gte_sxy_recent(int32_t, int32_t) { return 0; }
 extern "C" void gpu_ws_tag_world_primitive(uint32_t, int) {}
 extern "C" void gpu_ws_set_adaptive_backdrop_preload(int) {}
 extern "C" int gpu_ws_configured_x_reveal(void) { return 0; }

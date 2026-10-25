@@ -169,6 +169,9 @@ void psx_frontend_on_savestate_refused(int is_load, int slot, const char *reason
  * pending, serialize with cpu->pc = resume_pc; if a load is pending, restore and
  * longjmp to the scheduler (never returns in that case). Near-free when idle. */
 void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+/* Host request latch for the IRQ maintenance fast paths. Read-only outside
+ * savestate.c: a staged request must not wait thousands of quiet block edges. */
+extern int g_psx_savestate_pending;
 
 #ifdef __cplusplus
 }

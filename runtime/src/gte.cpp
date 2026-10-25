@@ -17,6 +17,7 @@ extern "C" int psx_netplay_active(void);
 
 extern "C" uint32_t psx_read_word(uint32_t addr);
 extern "C" int gpu_ws_precise_nclip_enabled(void);
+extern "C" void gpu_ws_note_gte_sxy(int32_t x, int32_t y);
 /* overlay_loader.c: nonzero while an overlay shadow diff (interpreter record
  * plus native replay of one candidate) is running. */
 extern "C" int psx_overlay_shadow_diff_active(void);
@@ -1259,6 +1260,8 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     int64_t sx = sx16 >> 16;
     int64_t sy = sy16 >> 16;
     gte->push_sxy(sx, sy);
+    gpu_ws_note_gte_sxy((int16_t)(gte->SXY[2] & 0xFFFF),
+                        (int16_t)((uint32_t)gte->SXY[2] >> 16));
     if (!s_gte_replay_sandbox) {
         /* Bound the 16.16 transport so an extreme projection cannot wrap an
          * int32 and masquerade as a valid on-screen shadow. */

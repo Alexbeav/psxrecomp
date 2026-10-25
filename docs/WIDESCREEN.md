@@ -130,7 +130,8 @@ User has visually confirmed: world geometry, characters, HUD, menus, FMVs, and
 proportions on the 16:9 stretch.
 
 **Live diagnostics (TCP debug server, committed `1e28a94`/earlier):**
-`ws_aspect num den` (toggle the GTE squash on/off in place — `1 1` = off),
+`ws_aspect num den` (set the GTE squash for a target aspect in place: `4 3` = off/identity, `16 9` = 0.75x;
+note `1 1` is NOT off, it expands X by 4/3),
 `ws_far_threshold [t]` (set the SZ depth split + read the backdrop driver's SZ
 stats so the split is data-driven), `ws_census on|off|<start> <end>` (always-on
 per-prim draw ring → CSV), `ws_margin <v|-1>` (force the cull margin), and the
@@ -583,3 +584,15 @@ To enable 21:9 later: widen the backdrop generation, then promote the launcher's
 2-state toggle to a 3-way Off / 16:9 / 21:9 (the `cycle_aspect` callback already
 cycles `aspect_index` 0/1/2 and is the scaffold). Full feasibility analysis in
 the session memory `native_wide_fov_autocull.md`.
+
+## Cull margin follows the display width (2026-10-24)
+
+`psx_ws_x_margin()` on the squash path was `160 * (1/s - 1)`, correct only for
+320-pixel modes. The reveal is a fraction of the game's own half-width, so it
+is now `(W/2) * (1/s - 1)` with `W` the live horizontal display width (512 in
+Army Men's gameplay, 368 in Ape Escape): pixel-domain screen-X culls
+(`[widescreen.cull]`) get that margin. Ratio-style consumers (terrain angle,
+aspect cone, `cull_scale`, the gameplay-field scaler) read
+`psx_ws_x_margin_320()`, the same reveal on the 320 basis, and keep their
+behaviour in every mode. 320-wide titles are unchanged bit for bit.
+Test: `ws_cull_margin_width_test`.

@@ -16988,7 +16988,23 @@ void debug_server_init(int port)
 #endif
 
     int yes = 1;
+#ifdef _WIN32
+    /* Winsock SO_REUSEADDR permits two listeners on one address/port, with
+     * indeterminate routing. Parallel QA commands must reach exactly one
+     * runtime. Exclusive ownership also refuses an already occupied port.
+     * https://learn.microsoft.com/windows/win32/winsock/so-exclusiveaddruse */
+    if (setsockopt(s_listen, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                   (const char *)&yes, sizeof(yes)) != 0) {
+        s_listen_err = sock_error();
+        fprintf(stdout, "psxrecomp: debug server exclusive socket option FAILED (%d)\n",
+                s_listen_err);
+        sock_close(s_listen);
+        s_listen = SOCK_INVALID;
+        return;
+    }
+#else
     setsockopt(s_listen, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
+#endif
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));

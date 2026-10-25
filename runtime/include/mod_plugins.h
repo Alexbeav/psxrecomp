@@ -372,6 +372,21 @@ void psx_mod_tag_hud_primitive(uint32_t primitive, int edge);
  * immediately before the GP0 colour command; for a compound E1+SPRT packet
  * this is its E1 word (P_TAG+4). */
 void psx_mod_anchor_hud_primitive(uint32_t primitive, int edge);
+/* As psx_mod_anchor_hud_primitive, for a packet whose X coordinates came out
+ * of the GTE (so they already carry the widescreen squash about the display
+ * centre, and the guest wrote them verbatim). Projection-and-stretch moves the
+ * piece to the selected edge by translation, keeping its proportions; scaling
+ * it about the edge again would squash it twice. */
+void psx_mod_anchor_hud_primitive_projected(uint32_t primitive, int edge);
+/* Did the GTE project a vertex at screen (x, y) in this or the previous
+ * vblank? Under the widescreen squash a primitive whose every vertex answers
+ * yes was built from projected geometry (already squashed); one that does not
+ * carries authored screen coordinates. Always 0 while the squash is off. */
+int psx_mod_gte_sxy_recent(int32_t x, int32_t y);
+/* Opt in to (1) or out of (0) the recent-projection record behind
+ * psx_mod_gte_sxy_recent. Off by default: until a plugin enables it nothing is
+ * recorded and the query answers 0. Call from an activation callback. */
+void psx_mod_set_gte_sxy_tracking(int enabled);
 /* Screen-space masks identified by their title's producer, P_TAG addresses.
  * Flat panels extend only their exterior boundaries. Radial flat/Gouraud
  * quads scale around the display centre for an aspect-aware iris transition.

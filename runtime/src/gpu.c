@@ -44,6 +44,7 @@
 #include "ws_backdrop_extent.h"
 #include "ws_prepass_guard.h"
 #include "ws_hud_anchor.h"
+#include "ws_gte_sxy.h"
 #include "ws_repeat_rect.h"
 #include "ws_feedback_rect.h"
 #include "ws_screen_mask.h"
@@ -739,6 +740,8 @@ int gpu_ws_netplay_local_viewport_width(void) {
  * unconditionally so a probe can sweep the cull margin live (0 = force 4:3
  * cull while still stretching; large = over-draw) at a fixed camera position.
  * -1 = normal computed margin. */
+static uint32_t gpu_h_display_width(void);
+static int ws_px_to_320(int px);
 static int ws_margin_override = -1;
 static int ws_cull_guard_pixels = 0;
 static int ws_activation_guard_pixels = 0;
@@ -1242,7 +1245,7 @@ void gpu_ws_set_cull_scale_sites(const uint32_t *addresses,
  * (x < half*z/H) widens to the live view by scaling the bound by
  * (half + margin) / half. 64-bit intermediate; saturates to int32. */
 int32_t psx_ws_cull_scale(int32_t bound, int32_t half_extent) {
-    const int32_t margin = psx_ws_x_margin();
+    const int32_t margin = psx_ws_x_margin_320();
     if (margin <= 0 || half_extent <= 0) return bound;
     int64_t v = (int64_t)bound * (int64_t)(half_extent + margin) / half_extent;
     if (v > INT32_MAX) v = INT32_MAX;
@@ -1298,7 +1301,7 @@ void gpu_ws_set_angle_sites(const uint32_t *addresses,
 
 uint32_t psx_ws_angle_widen(uint32_t vanilla) {
     ws_angle_calls++;
-    const int margin = psx_ws_x_margin();
+    const int margin = psx_ws_x_margin_320();
     if (margin <= 0) {
         ws_angle_43_identity++;
         return vanilla;
@@ -1526,7 +1529,7 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
 
     ws_aspect_cone_calls++;
     site->calls++;
-    const int total_margin = psx_ws_x_margin();
+    const int total_margin = psx_ws_x_margin_320();
     if (total_margin <= 0) {
         ws_aspect_cone_43_identity++;
         site->identity_43++;
@@ -1551,8 +1554,8 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
     }
 
     const int visible_margin =
-        (total_margin > ws_cull_guard_pixels)
-            ? total_margin - ws_cull_guard_pixels : 0;
+        (total_margin > ws_px_to_320(ws_cull_guard_pixels))
+            ? total_margin - ws_px_to_320(ws_cull_guard_pixels) : 0;
     const int32_t fx =
         (int16_t)psx_read_half(ws_aspect_cone_forward_addr +
                              ws_aspect_cone_forward_offsets[0]);
@@ -1574,7 +1577,7 @@ uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
         !in_visible && !in_guard && state->active &&
         psx_ws_aspect_cone_contains(
             x, z, y, fx, fz, fy, threshold,
-            total_margin + (int)ws_aspect_cone_hysteresis_pixels);
+            total_margin + ws_px_to_320((int)ws_aspect_cone_hysteresis_pixels));
 
     if (!in_visible && !in_guard && !in_hysteresis) {
         state->active = 0;
@@ -1627,6 +1630,18 @@ void gpu_ws_set_local_view_only(int on) { ws_local_view_only = on ? 1 : 0; }
 void gpu_ws_set_local_view_scope(int on) { ws_local_view_scope = on ? 1 : 0; }
 int gpu_ws_local_view_only(void) { return ws_local_view_only; }
 
+/* Half of the game's current horizontal display width (160 for 320 modes). */
+static int ws_cull_half_width(void) {
+    int src_w = 0;
+    uint32_t w;
+    if (ws_local_viewport_layout(NULL, &src_w, NULL, NULL))
+        w = (uint32_t)src_w;
+    else
+        w = gpu_h_display_width();
+    if (w < 64u) w = 320u;
+    return (int)(w / 2u);
+}
+
 int psx_ws_x_margin(void) {
     if (ws_local_view_only && !ws_local_view_scope) return 0;
     if (ws_margin_override >= 0) return ws_margin_override;
@@ -1645,8 +1660,26 @@ int psx_ws_x_margin(void) {
         return ws_nw_configured_offset() * ((ws_view_camera_addr || ws_view_manual) ? 2 : 1)
                + ws_cull_guard_pixels;
     if (!ws_active()) return 0;
-    return (160 * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
+    /* The reveal is a fraction of the game's own half-width: a 512-wide mode
+     * (Army Men in-game) hides 256*(1/s-1) px per side, not the 160*(1/s-1)
+     * a 320 mode does. The screen-X compares live in that mode's pixels. */
+    return (ws_cull_half_width() * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
            + ws_cull_guard_pixels;
+}
+
+/* A pixel quantity of the current display mode on the 320-pixel basis. */
+static int ws_px_to_320(int px) {
+    const int half = ws_cull_half_width();
+    return half == 160 ? px : (int)(((int64_t)px * 160 + half / 2) / half);
+}
+
+/* The same margin on the 320-pixel basis. Camera-space frustum angles, aspect
+ * cones, scaled bounds and gameplay-field scalers are ratios authored against
+ * a 160-pixel half-screen; they must not grow with the display mode. */
+int psx_ws_x_margin_320(void) {
+    const int m = psx_ws_x_margin();
+    const int half = ws_cull_half_width();
+    return half == 160 ? m : (int)(((int64_t)m * 160 + half / 2) / half);
 }
 
 int psx_ws_activation_margin(void) {
@@ -1656,7 +1689,7 @@ int psx_ws_activation_margin(void) {
 
 int32_t psx_ws_player_x_bound(int32_t vanilla)
 {
-    const int margin = psx_ws_x_margin();
+    const int margin = psx_ws_x_margin_320();
     if (margin <= 0) return vanilla;
     return (int32_t)(((int64_t)vanilla * (320 + 2 * margin)) / 320);
 }
@@ -2662,7 +2695,23 @@ static void ws_tag_stats_note_lookup(GpuWsTagStats *stats, int result) {
     }
 }
 
-void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
+/* Positions the GTE projected this and the previous vblank (ws_gte_sxy.h).
+ * Opt-in: nothing is recorded (and every query answers no) until a title
+ * plugin enables it, and only while the squash is engaged, so titles that do
+ * not use the query pay nothing and see no change. */
+static WsGteSxy ws_gte_sxy;
+static int ws_gte_sxy_tracking;   /* opt-in: a title plugin turns it on */
+void gpu_ws_set_gte_sxy_tracking(int on) { ws_gte_sxy_tracking = on ? 1 : 0; }
+void gpu_ws_note_gte_sxy(int32_t x, int32_t y) {
+    if (!ws_gte_sxy_tracking || !ws_active()) return;
+    ws_gte_sxy_note(&ws_gte_sxy, (uint32_t)s_frame_count, x, y);
+}
+int gpu_ws_gte_sxy_recent(int32_t x, int32_t y) {
+    if (!ws_gte_sxy_tracking) return 0;
+    return ws_gte_sxy_recent(&ws_gte_sxy, (uint32_t)s_frame_count, x, y);
+}
+
+static void ws_tag_hud_prim(uint32_t prim, int anchor, int projected) {
     ws_hud_tag_stats.tag_calls++;
     uint32_t command_addr = prim + 4u;
     uint32_t words[12];
@@ -2676,10 +2725,22 @@ void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
 
     WsPrepassPacketGuard guard =
         ws_prepass_packet_guard(words, word_count);
-    ws_hud_anchor_insert(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE,
-                         GPU_RAM_KEY(command_addr), anchor, &guard,
-                         (uint32_t)s_frame_count);
+    if (projected)
+        ws_hud_anchor_insert_projected(ws_hud_anchor_tags,
+                                       WS_HUD_ANCHOR_TABLE_SIZE,
+                                       GPU_RAM_KEY(command_addr), anchor,
+                                       &guard, (uint32_t)s_frame_count);
+    else
+        ws_hud_anchor_insert(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE,
+                             GPU_RAM_KEY(command_addr), anchor, &guard,
+                             (uint32_t)s_frame_count);
     ws_hud_tag_stats.last_tag_frame = (uint32_t)s_frame_count;
+}
+void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
+    ws_tag_hud_prim(prim, anchor, 0);
+}
+void gpu_ws_tag_hud_prim_projected(uint32_t prim, int anchor) {
+    ws_tag_hud_prim(prim, anchor, 1);
 }
 
 void gpu_ws_tag_background_prim(uint32_t prim) {
@@ -2816,7 +2877,7 @@ static int ws_nw_radial_mask_transform(int32_t x[4], int32_t y[4]) {
     return 1;
 }
 
-static int ws_explicit_hud_anchor(int *out_anchor) {
+static int ws_explicit_hud_anchor_ex(int *out_anchor, int *out_projected) {
     if (gp0_cmd_source_addr == 0xFFFFFFFFu)
         return 0;
     if (gp0_words_needed <= 0 || gp0_words_needed > 12)
@@ -2825,16 +2886,20 @@ static int ws_explicit_hud_anchor(int *out_anchor) {
     if ((command_addr & 3u) ||
         (command_addr >= psx_ram_live_bytes() &&
          !psx_mod_gpu_dma_memory_contains(command_addr, 4u))) return 0;
-    int anchor = 0;
-    int result = ws_hud_anchor_lookup_result(
+    int anchor = 0, projected = 0;
+    int result = ws_hud_anchor_lookup_result_ex(
         ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE, GPU_RAM_KEY(command_addr),
         gp0_cmd_buf, (uint32_t)gp0_words_needed, (uint32_t)s_frame_count,
-        &anchor);
+        &anchor, &projected);
     ws_tag_stats_note_lookup(&ws_hud_tag_stats, result);
     if (result != WS_HUD_ANCHOR_HIT)
         return 0;
     if (out_anchor) *out_anchor = anchor;
+    if (out_projected) *out_projected = projected;
     return 1;
+}
+static int ws_explicit_hud_anchor(int *out_anchor) {
+    return ws_explicit_hud_anchor_ex(out_anchor, NULL);
 }
 
 static int ws_nw_explicit_hud_delta(int32_t *out_delta) {
@@ -2850,19 +2915,36 @@ static int ws_nw_explicit_hud_delta(int32_t *out_delta) {
 /* A title can identify one widget whose pieces arrive in separate DMA lists.
  * Per-list auto grouping cannot see that ownership. Use the same guarded
  * edge/centre role as native-wide, expressed as a squash pivot here. */
-static int ws_projection_hud_anchor(int32_t *out_anchor) {
+static int ws_projection_hud_anchor_ex(int32_t *out_anchor, int *out_projected) {
     if (!ws_active()) return 0;
-    int edge;
-    if (!ws_explicit_hud_anchor(&edge)) return 0;
+    int edge, projected = 0;
+    if (!ws_explicit_hud_anchor_ex(&edge, &projected)) return 0;
+    if (out_projected) *out_projected = projected;
     if (out_anchor)
         *out_anchor = ws_disp_x() + (edge < 0 ? 0 : edge > 0 ? ws_disp_w() : ws_disp_w() / 2);
     return 1;
 }
 
+static int ws_projection_hud_anchor(int32_t *out_anchor) {
+    return ws_projection_hud_anchor_ex(out_anchor, NULL);
+}
+
+/* Shift that takes an X already squashed about the display centre to where
+ * scaling it about the anchor would have put it: (anchor - centre) * (1 - s). */
+static int32_t ws_projected_hud_shift(int32_t anchor) {
+    return ws_scale_about(0, anchor) - ws_scale_about(0, ws_disp_x() + ws_disp_w() / 2);
+}
+
 static int ws_projection_hud_transform(int32_t *x, int count) {
     int32_t anchor;
-    if (!ws_projection_hud_anchor(&anchor)) return 0;
-    for (int i = 0; i < count; i++) x[i] = ws_scale_about(x[i], anchor);
+    int projected = 0;
+    if (!ws_projection_hud_anchor_ex(&anchor, &projected)) return 0;
+    if (projected) {
+        const int32_t shift = ws_projected_hud_shift(anchor);
+        for (int i = 0; i < count; i++) x[i] += shift;
+    } else {
+        for (int i = 0; i < count; i++) x[i] = ws_scale_about(x[i], anchor);
+    }
     return 1;
 }
 
@@ -3364,9 +3446,14 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], int32_t vy[4]) {
 static int ws_auto_ui_transform_rect(int32_t *x, int32_t *y, int *w, int *h) {
     if (!x || !y || !w || !h || *w <= 0) return 0;
     int32_t explicit_anchor;
-    if (ws_projection_hud_anchor(&explicit_anchor)) {
-        *x = ws_scale_about(*x, explicit_anchor);
-        *w = (int)ws_scale_len(*w);
+    int explicit_projected = 0;
+    if (ws_projection_hud_anchor_ex(&explicit_anchor, &explicit_projected)) {
+        if (explicit_projected) {
+            *x += ws_projected_hud_shift(explicit_anchor);
+        } else {
+            *x = ws_scale_about(*x, explicit_anchor);
+            *w = (int)ws_scale_len(*w);
+        }
         return 1;
     }
     if (ws_nw_explicit_hud_delta(NULL) || psx_ws_prim_is_tagged())
@@ -4653,12 +4740,10 @@ int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
 }
 
-void gpu_get_display_info(GpuDisplayInfo* out) {
-    out->display_x = display_area_x;
-    out->display_y = display_area_y;
-    out->depth24   = (int)(display_depth & 1u);
-    out->disabled  = (int)display_disabled;
-
+/* Visible horizontal pixel width (GP1(08h) mode + GP1(06h) range). Shared by
+ * gpu_get_display_info and the widescreen cull margin, which is called per
+ * vertex and must not pay for the vertical layout. */
+static uint32_t gpu_h_display_width(void) {
     /* Dot-clock divider from GP1(08h) hres (PSX-SPX graphicsprocessingunitgpu,
      * "Horizontal Timings", Dotclocks: /10, /8, /7, /5, /4). */
     uint32_t cycles;
@@ -4681,6 +4766,18 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         w = ((dots / cycles) + 2u) & ~3u;
         if (w == 0u) w = 4u;
     }
+
+    if (w > 640) w = 640;
+    return w;
+}
+
+void gpu_get_display_info(GpuDisplayInfo* out) {
+    out->display_x = display_area_x;
+    out->display_y = display_area_y;
+    out->depth24   = (int)(display_depth & 1u);
+    out->disabled  = (int)display_disabled;
+
+    uint32_t w = gpu_h_display_width();
 
     /* DuckStation GetFullDisplayResolution: clamp Y1/Y2 to the broadcast
      * active region before taking the difference. Unclamped Y2 past the
@@ -4707,7 +4804,7 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
      * of the video — do not reintroduce it. Right-edge junk is a separate
      * present/filter issue, not a reason to shrink CRTC width. */
 
-    /* Clamp to sane maximums */
+    /* Clamp to sane maximums (gpu_h_display_width clamps too) */
     if (w > 640) w = 640;
     if (out->depth24) {
         if (screen_h > PSX_DISPLAY_PRESENT_MAX_HEIGHT)

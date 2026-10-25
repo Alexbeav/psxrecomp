@@ -92,7 +92,15 @@ void psx_idle_note_check(struct CPUState *c, uint32_t pc) { (void)c; (void)pc; }
 int psx_netplay_active(void) { return 0; }
 int psx_selfcheck_enabled(void) { return 0; }
 int psx_mod_function_entry_active(void) { return 0; }
-void savestate_poll(struct CPUState *c, uint32_t pc) { (void)c; (void)pc; }
+int g_psx_savestate_pending;
+unsigned g_test_savestate_polls;
+uint32_t g_test_savestate_pc;
+void savestate_poll(struct CPUState *c, uint32_t pc) {
+    (void)c;
+    ++g_test_savestate_polls;
+    g_test_savestate_pc = pc;
+    g_psx_savestate_pending = 0;
+}
 void psx_netplay_poll_snap(struct CPUState *c, uint32_t pc) { (void)c; (void)pc; }
 void psx_selfcheck_poll(struct CPUState *c, uint32_t pc) { (void)c; (void)pc; }
 void psx_rewind_poll(struct CPUState *c, uint32_t pc) { (void)c; (void)pc; }

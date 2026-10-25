@@ -1034,6 +1034,11 @@ if(BUILD_TESTING)
     target_include_directories(ws_hud_anchor_test PRIVATE include)
     add_test(NAME ws_hud_anchor_test COMMAND ws_hud_anchor_test)
 
+    add_executable(ws_gte_sxy_test
+        tests/test_ws_gte_sxy.c)
+    target_include_directories(ws_gte_sxy_test PRIVATE include)
+    add_test(NAME ws_gte_sxy_test COMMAND ws_gte_sxy_test)
+
     add_executable(gpu_textured_dot_nw_shift_exec_test
         tests/test_gpu_textured_dot_nw_shift_exec.c
         src/psx_video_timing.c
@@ -1096,6 +1101,19 @@ if(BUILD_TESTING)
             $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
     endif()
     add_test(NAME ws_local_view_margin_test COMMAND ws_local_view_margin_test)
+
+    add_executable(ws_cull_margin_width_test
+        tests/test_ws_cull_margin_width.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(ws_cull_margin_width_test PRIVATE include src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ws_cull_margin_width_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(ws_cull_margin_width_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME ws_cull_margin_width_test COMMAND ws_cull_margin_width_test)
 
     # Depth24 GP1(07h) present hold (#636): hold count, upload span and the
     # staged frame agree across windowed/headless/deferred presents, rollback
@@ -1533,6 +1551,9 @@ if(BUILD_TESTING)
 
     add_executable(mod_resident_test
         tests/test_mod_resident.cpp
+        src/mod_immediate.c
+        src/host_overlay.c
+        src/func_override.c
         src/mod_resident.cpp
         src/mod_runtime.cpp
         src/mod_netplay.c

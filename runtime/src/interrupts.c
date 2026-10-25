@@ -26,6 +26,7 @@
  */
 
 #include "interrupts.h"
+#include "savestate.h"
 #include "mod_runtime.h"
 #include "savestate.h"
 #include "psx_memory.h"
@@ -1224,7 +1225,7 @@ void psx_check_interrupts(CPUState* cpu) {
         uint32_t sr = cpu->cop0[COP0_SR];
         if (!(sr & 0x01u) || !(sr & (1u << 10))) {
             s_irq_path_fast_sr++;
-            if ((++s_fast_maintenance & 0x3FFFu) == 0) {
+            if ((++s_fast_maintenance & 0x3FFFu) == 0 || g_psx_savestate_pending) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
@@ -1278,7 +1279,7 @@ void psx_check_interrupts(CPUState* cpu) {
         }
         if ((i_stat & i_mask) == 0 && sw_pending == 0) {
             s_irq_path_fast_none++;
-            if ((++s_fast_maintenance & 0x3FFFu) == 0) {
+            if ((++s_fast_maintenance & 0x3FFFu) == 0 || g_psx_savestate_pending) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
@@ -1307,7 +1308,7 @@ void psx_check_interrupts(CPUState* cpu) {
         s_last_interrupt_check_cycle = psx_get_cycle_count();
         g_ls_suppress_record++;
         total_checks++;
-        if ((total_checks & 0x3FFFu) == 0) {
+        if ((total_checks & 0x3FFFu) == 0 || g_psx_savestate_pending) {
             extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
             extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
             extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);

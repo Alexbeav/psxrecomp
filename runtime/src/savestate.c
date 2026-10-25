@@ -205,7 +205,7 @@ static void cancel_pending_states(void) {
     if (s_load_pending >= 0) s_load_failed = 1;
     s_save_pending = s_load_pending = s_save_defer_slot = -1;
     s_last_save_pc = 0;
-    s_status_pending = 0;
+    g_psx_savestate_pending = 0;
     clear_load_blob();
 }
 
@@ -886,7 +886,7 @@ int savestate_pending(void) {
 void savestate_get_status(PSXSavestateStatus* out) {
     if (!out) return;
     out->generation = s_status_generation;
-    out->pending = s_status_pending;
+    out->pending = g_psx_savestate_pending;
     out->last_ok = s_status_last_ok;
     out->last_load = s_status_last_load;
     out->last_slot = s_status_last_slot;
@@ -967,7 +967,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_save_defer_slot = -1;
             s_last_save_pc = 0;
             s_save_failed = 1;
-            s_status_pending = 0;
+            g_psx_savestate_pending = 0;
             s_status_last_ok = 0;
             s_status_generation++;
             fprintf(stderr,
@@ -1007,7 +1007,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     s_last_save_pc = 0;
                     s_save_failed = 1;
                 }
-                s_status_pending = 0;
+                g_psx_savestate_pending = 0;
                 s_status_last_ok = ok ? 1 : 0;
                 s_status_generation++;
                 fprintf(stderr, "savestate: %s slot %d @ pc=0x%08X -> %s\n",
@@ -1016,7 +1016,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             } else {
                 s_last_save_pc = 0;
                 s_save_failed = 1;
-                s_status_pending = 0;
+                g_psx_savestate_pending = 0;
                 s_status_last_ok = 0;
                 s_status_generation++;
                 psx_frontend_on_savestate_notify(0, slot, 0);
@@ -1099,7 +1099,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
 #endif
         free(rollback);
         if (!loaded) {
-            s_status_pending = 0;
+            g_psx_savestate_pending = 0;
             s_status_last_ok = 0;
             s_status_generation++;
         }
@@ -1116,7 +1116,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             cdrom_accelerate_after_savestate();
             /* Netplay post-load barrier observes this before the longjmp. */
             s_load_completed = 1;
-            s_status_pending = 0;
+            g_psx_savestate_pending = 0;
             s_status_last_ok = 1;
             s_status_generation++;
             /* Restage FBO/present latch so the restored frame is visible

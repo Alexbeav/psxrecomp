@@ -61,6 +61,9 @@ extern "C" void gpu_get_display_info(GpuDisplayInfo* out) { *out = GpuDisplayInf
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
 extern "C" int fntrace_is_game_started(void) { return 1; }
 extern "C" void gpu_ws_tag_hud_primitive(uint32_t, int) {}
+extern "C" void gpu_ws_tag_hud_prim_projected(uint32_t, int) {}
+extern "C" void gpu_ws_set_gte_sxy_tracking(int) {}
+extern "C" int gpu_ws_gte_sxy_recent(int32_t, int32_t) { return 0; }
 extern "C" void gpu_ws_tag_world_primitive(uint32_t, int) {}
 extern "C" void gpu_ws_set_adaptive_backdrop_preload(int) {}
 extern "C" int gpu_ws_configured_x_reveal(void) { return 0; }
@@ -70,6 +73,21 @@ extern "C" void gpu_ws_tag_screen_mask_quad(uint32_t) {}
 extern "C" { uint64_t s_frame_count = 0; }
 static uint64_t cycles;
 extern "C" uint64_t psx_get_cycle_count(void) { return cycles; }
+/* Link the real package override/immediate services, as mod_runtime_test does.
+ * Resident-resource tests do not execute guest functions or service devices. */
+extern "C" uint32_t psx_peek_word_untraced(uint32_t a) { return psx_read_word(a); }
+extern "C" void psx_dispatch_call(struct CPUState*, uint32_t, uint32_t) {}
+extern "C" {
+uint64_t psx_cycle_count = 0;
+uint64_t psx_next_service_cycle = 0;
+int psx_in_device_service = 0;
+int g_event_step_conservative = 0;
+int g_ls_replay_active = 0;
+uint32_t g_psx_cyc_batch = 0;
+uint32_t g_psx_cyc_batch_limit = 0;
+void psx_devices_service_to_now(void) {}
+void psx_advance_cycles_slow(uint32_t amount) { psx_cycle_count += amount; }
+}
 extern "C" void gpu_ws_tag_radial_screen_mask_quad(uint32_t, float) {}
 extern "C" void gpu_ws_tag_feedback_rect(uint32_t) {}
 extern "C" int psx_netplay_active(void) { return 0; }
