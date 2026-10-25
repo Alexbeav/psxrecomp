@@ -94,6 +94,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "psx_trigger.h"     /* continuous SDL trigger -> 0..255 magnitude */
 #include "mod_pad_transform.h"
 #include "psx_hotkey_pad.h"   /* host shortcut bindings, direct claims */
+#include "psx_stick_fold.h"   /* default-map digital stick fold (host layer) */
 #include "psx_controller_type.h" /* mapped wheel-name classification */
 #include "psx_netplay_rb.h"
 #include "psx_selfcheck.h"
@@ -6795,7 +6796,9 @@ static uint16_t host_layer_release_claimed(uint16_t word, uint32_t claimed) {
 
 /* Stage 1 for P1 while the host layer is armed: buttons less any claimed
  * shortcut button; DualShock with the layer's sticks unless P1 is digital
- * (host_view, the transform's host pad: the sticks in either mode). */
+ * (host_view, the transform's host pad: the sticks in either mode). A digital
+ * P1 folds the left stick onto the D-pad like a default-mapped controller
+ * (psx_stick_fold.h), so a digital-only game moves from the stick here too. */
 static int capture_host_layer_pad(PsxNetPad* out, uint16_t word,
                                   const uint8_t st[4], bool guarded,
                                   bool host_view, int present_sio_slot = 0) {
@@ -6805,6 +6808,9 @@ static int capture_host_layer_pad(PsxNetPad* out, uint16_t word,
     const bool analog = mode != PSXRecompV4::PAD_MODE_DIGITAL;
     const bool sticks = analog || host_view;
     out->buttons = host_layer_release_claimed(word, g_p1_claimed_buttons);
+    if (!analog && !host_view)
+        out->buttons = psx_fold_left_stick_to_dpad(out->buttons, st[0], st[1],
+                                                   kDefaultDeadzoneRaw);
     out->lx = sticks ? st[0] : 0x80; out->ly = sticks ? st[1] : 0x80;
     out->rx = sticks ? st[2] : 0x80; out->ry = sticks ? st[3] : 0x80;
     out->analog = analog ? SIO_PAD_DUALSHOCK : SIO_PAD_DIGITAL;
