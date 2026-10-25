@@ -86,6 +86,17 @@ struct ModFeature {
     /* Manifest `quick`: offered in the launcher's Quick Mods card by default.
      * The player's own choice (state.toml [quick_mods]) overrides it. */
     bool quick = false;
+    /* Derived at parse: every contribution of this feature is a
+     * netplay = "host_only" plugin (ModPlugin::netplay_host_only). Such a
+     * feature changes only this machine's presentation, audio output or host
+     * tools, so it stays the player's own in netplay and the canonical plan
+     * fingerprint leaves it out (canonical_resolution). */
+    bool host_only = false;
+    /* Manifest `vsync = "off"` (format 11): while enabled, this feature's
+     * plugin presents with driver vsync off (frame interpolation, native
+     * VBlank pacing above the panel rate). The launcher shows its VSync row
+     * as overridden instead of offering a choice that would not apply. */
+    bool vsync_off = false;
 };
 
 enum class ModConstraintKind {
@@ -235,6 +246,14 @@ struct ModPlugin {
      * hooks run in the shared simulation, but every guest write it attempts
      * is refused there, so it can never diverge the peers. */
     bool netplay_host_output = false;
+    /* netplay = "host_only" (format 11): the plugin never touches guest
+     * execution at all -- it only sets host presentation, audio output or
+     * host-tool state from its activation (the framework's CRT Filter, Image
+     * Filtering, Enhanced Audio and Rewind). Its feature may own nothing
+     * else (ModFeature::host_only). It stays on per player in every netplay
+     * mode, is never published in a lobby plan, and is not part of the plan
+     * fingerprint. */
+    bool netplay_host_only = false;
 };
 
 struct ModResource {
@@ -406,6 +425,7 @@ struct ModResolution {
         bool netplay_local_view = false;
         bool netplay_input = false;
         bool netplay_host_output = false;
+        bool netplay_host_only = false;
     };
     std::vector<Plugin> plugins;
     struct Resource {

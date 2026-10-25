@@ -1,0 +1,77 @@
+format_version = 11
+id = "psx.enhancement.internal-resolution"
+version = "1.0.0"
+name = "Internal Resolution"
+author = "psxrecomp"
+description = "The height the 3D picture is rendered at before it is scaled to the window: Native is the console's own, higher settings render sharper geometry. Auto renders at your display's resolution and steps down only while the game would otherwise miss frames. Presentation only: the game runs exactly the same, and in netplay each player keeps their own choice."
+resolver = "declarative"
+save_compatibility = "shared"
+
+# The render height is a property of the host renderer, not of any particular
+# disc, so this ships with the framework and applies to every game. The
+# title's [video] internal_resolution (or its legacy supersampling factor) and
+# dynamic_resolution stay its baseline: with the feature off they apply
+# unchanged, and "Game default" keeps them.
+[[target]]
+game_id = "*"
+
+[[feature]]
+id = "internal-resolution"
+name = "Internal Resolution"
+description = "Disabled by default: the game keeps its own resolution. Turn it on to choose one. PGXP Precision needs 2x or more (720p and up) to be visible."
+group = "Visual"
+default_enabled = false
+
+[[option]]
+feature = "internal-resolution"
+id = "resolution"
+label = "Internal resolution"
+description = "Native is the console's own resolution. 720p through 8K render that many lines (rounded up to a whole multiple of the game's own lines). Match display renders at your monitor's height. Auto is Match display that steps down to the game's minimum only while frames would be missed."
+group = "Visual"
+type = "choice"
+default = "default"
+
+[[option.choice]]
+value = "default"
+label = "Game default"
+
+[[option.choice]]
+value = "native"
+label = "Native"
+
+[[option.choice]]
+value = "720p"
+label = "720p"
+
+[[option.choice]]
+value = "1080p"
+label = "1080p"
+
+[[option.choice]]
+value = "1440p"
+label = "1440p"
+
+[[option.choice]]
+value = "4k"
+label = "4K"
+
+[[option.choice]]
+value = "5k"
+label = "5K"
+
+[[option.choice]]
+value = "8k"
+label = "8K"
+
+[[option.choice]]
+value = "display"
+label = "Match display"
+
+[[option.choice]]
+value = "auto"
+label = "Auto"
+
+[[plugin]]
+feature = "internal-resolution"
+id = "psx.internal-resolution"
+netplay = "host_only"

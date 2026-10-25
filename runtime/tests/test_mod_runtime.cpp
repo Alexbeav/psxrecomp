@@ -1760,6 +1760,80 @@ int main(int argc, char** argv) {
         check(std::string(std::istreambuf_iterator<char>(saved), {}) == disabled, "prepared online launch preserves disabled offline choice");
         PSXRecompV4::mod_runtime_end_netplay(); test_match_caps = {};
     }
+    // Host-only features ([[plugin]] netplay = "host_only": the CRT Filter,
+    // Image Filtering, Enhanced Audio, Rewind) stay the player's own in every
+    // netplay mode and are no part of the plan fingerprint.
+    {
+        static int look_runs = 0, plain_runs = 0;
+        check(psx_mod_register_activation_plugin("host.only.look", +[]() { ++look_runs; }),
+              "register host-only fixture");
+        check(psx_mod_register_activation_plugin("host.only.plain", +[]() { ++plain_runs; }),
+              "register ordinary fixture");
+        const auto host_root = root / "host-only-netplay";
+        write_text(host_root / "packages/look.test/1.0.0/manifest.toml",
+            "format_version = 11\nid = \"look.test\"\nversion = \"1.0.0\"\nname = \"Look\"\n"
+            "[[target]]\ngame_id = \"READER\"\n[[feature]]\nid = \"look\"\nname = \"Look\"\n"
+            "[[plugin]]\nfeature = \"look\"\nid = \"host.only.look\"\nnetplay = \"host_only\"\n");
+        write_text(host_root / "packages/plain.test/1.0.0/manifest.toml",
+            "format_version = 5\nid = \"plain.test\"\nversion = \"1.0.0\"\nname = \"Plain\"\n"
+            "[[target]]\ngame_id = \"READER\"\n[[feature]]\nid = \"active\"\nname = \"Active\"\n"
+            "[[plugin]]\nfeature = \"active\"\nid = \"host.only.plain\"\n");
+        const std::string both =
+            "format_version = 2\n[[feature]]\npackage_id = \"look.test\"\nid = \"look\"\nenabled = true\n"
+            "[[feature]]\npackage_id = \"plain.test\"\nid = \"active\"\nenabled = true\n";
+        const std::string look_only =
+            "format_version = 2\n[[feature]]\npackage_id = \"look.test\"\nid = \"look\"\nenabled = true\n";
+        PSXRecompV4::mod_runtime_end_netplay(); test_match_caps = {};
+        write_text(host_root / "state.toml", both);
+        check(PSXRecompV4::mod_runtime_initialize(host_root, "READER", 0, {}, &error),
+              "host-only initialize");
+        check(PSXRecompV4::mod_runtime_feature_host_only("look.test", "look") &&
+              !PSXRecompV4::mod_runtime_feature_host_only("plain.test", "active"),
+              "host-only features are recognised");
+        // LAN/direct: the local selection; its fingerprint leaves the look out.
+        check(PSXRecompV4::mod_runtime_commit_for_direct_netplay(iso_path, &error),
+              "direct launch with a host-only feature");
+        const std::string plain_fp = PSXRecompV4::mod_runtime_session_plan_fp();
+        check(plain_fp.size() == 64, "direct launch publishes a fingerprint");
+        PSXRecompV4::mod_runtime_end_netplay();
+        // Vanilla netplay: the player's host-only feature stays, the rest goes.
+        look_runs = plain_runs = 0;
+        check(PSXRecompV4::mod_runtime_commit_netplay_view(iso_path, &error),
+              "vanilla netplay commit");
+        mod_runtime_activate_plugins();
+        check(look_runs == 1 && plain_runs == 0,
+              "vanilla netplay keeps only the player's host-only feature");
+        PSXRecompV4::mod_runtime_end_netplay();
+        // Content negotiation, explicit empty host plan: vanilla shared game,
+        // the player's look kept.
+        test_match_caps = {}; test_match_caps.valid = 1;
+        look_runs = plain_runs = 0;
+        check(PSXRecompV4::mod_runtime_commit_for_netplay(iso_path, &error),
+              "empty host plan commit");
+        mod_runtime_activate_plugins();
+        check(look_runs == 1 && plain_runs == 0,
+              "an empty host plan keeps the player's host-only feature");
+        PSXRecompV4::mod_runtime_end_netplay(); test_match_caps = {};
+        // Content negotiation, the host's plan (plain only, which a host
+        // never publishes the look into): a guest with plain off offline and
+        // the look on gets plain from the host, keeps its look, and the
+        // fingerprints agree.
+        write_text(host_root / "state.toml", look_only);
+        check(PSXRecompV4::mod_runtime_initialize(host_root, "READER", 0, {}, &error),
+              "guest initialize");
+        test_match_caps = {}; test_match_caps.valid = 1; test_match_caps.mod_count = 1;
+        std::snprintf(test_match_caps.mod_plan_fp, sizeof(test_match_caps.mod_plan_fp), "%s", plain_fp.c_str());
+        std::snprintf(test_match_caps.mods[0].id, sizeof(test_match_caps.mods[0].id), "plain.test");
+        std::snprintf(test_match_caps.mods[0].ver, sizeof(test_match_caps.mods[0].ver), "1.0.0");
+        std::snprintf(test_match_caps.mods[0].feats, sizeof(test_match_caps.mods[0].feats), "active");
+        look_runs = plain_runs = 0;
+        check(PSXRecompV4::mod_runtime_commit_for_netplay(iso_path, &error),
+              "the host's plan verifies whatever the guest's host-only choice");
+        mod_runtime_activate_plugins();
+        check(look_runs == 1 && plain_runs == 1,
+              "the host's plan runs beside the guest's own host-only feature");
+        PSXRecompV4::mod_runtime_end_netplay(); test_match_caps = {};
+    }
     // The audio timeline skips INDEX00 pregaps and maps into the unchanged
     // mounted BIN, including a second audio track sharing the same file.
     const auto audio_root=root/"disc-audio";

@@ -1013,31 +1013,6 @@ struct WidescreenMaskedRejectSite {
     uint32_t reject_mask = 0;
 };
 
-// [quality.<name>] -- a named graphics preset (docs/QUALITY_PRESETS.md).
-// The table holds [video] keys; the preset's runtime config is the whole
-// game.toml parsed with those keys laid over [video], so every [video] key
-// (and its validation) works in a preset without being listed here.
-// The [video] keys a [quality.*] preset may set (docs/QUALITY_PRESETS.md).
-// Each is fully enforced: a preset in force masks the player's saved value,
-// a one-run override and an unrelated edit keep the disk value, a launcher
-// row or live change to it is a governed edit, and picking a preset applies
-// it. Player-editable (settings.toml form, launcher row): texture_filtering,
-// fmv_filter, antialiasing, dynamic_resolution, dynamic_resolution_min,
-// frame_generation, render_thread, present_thread, geometry_correction,
-// perspective_texturing, frame_interpolation, frame_interpolation_fps.
-// Preset-only (no settings.toml form, no row): supersample, texture_lod,
-// anisotropic_filtering, fmv_chroma_smoothing, bloom, dithering,
-// pgxp_depth_buffer, pgxp_color_correction, pgxp_seam. Any other key in a
-// preset is a load error.
-bool quality_key_supported(const std::string& key);
-bool quality_key_player_editable(const std::string& key);
-
-struct QualityPreset {
-    std::string              name;     // "low" | "medium" | "high" | "ultra"
-    RuntimeConfig            runtime;  // [video] with [quality.<name>] on top
-    std::vector<std::string> keys;     // the [video] keys this preset sets
-};
-
 struct WidescreenPackedXSite {
     uint32_t address = 0;
     uint32_t expected = 0;
@@ -1556,9 +1531,6 @@ struct GameConfig {
     // [[draw_distance.clamp]] -- opt-in "keep far geometry" clamps. Empty by
     // default; inert until a mod switches them on; regen required.
     std::vector<DrawDistanceClampSite> draw_distance_clamp_sites;
-    // [quality.low/medium/high/ultra] -- graphics presets, lowest first. Empty:
-    // the title has no presets and [video] alone applies (unchanged).
-    std::vector<QualityPreset> quality_presets;
     // [[mod_immediate.sites]]: run-time-selectable immediates (ModImmediateSite).
     std::vector<ModImmediateSite> mod_immediate_sites;
     // Guarded SLTU on SX<<16 against screen width<<16; both wide edges.
@@ -1590,37 +1562,19 @@ struct UserSettings {
 
     // [video]
     bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
-    bool has_supersampling  = false; int  supersampling  = 1; // 1..32 (runtime clamps per backend)
-    // Internal resolution preset (RuntimeConfig::video_internal_resolution
-    // encoding). Written as a stable id ("4k") or a line count; when present
-    // it wins over supersampling, which is still written (capped at 4) so an
-    // older runtime reading the same file degrades gracefully.
-    bool has_internal_resolution = false; int internal_resolution = 0;
-    // Supersampling on top of the internal resolution, in thousandths
-    // (1000 off .. 4000), the player's pick of [video] supersample.
-    bool has_supersample = false; int supersample_milli = 1000;
-    // Dynamic resolution (RuntimeConfig::video_dynamic_resolution, _min).
-    // Written only once the player changed them, so a title's default can
-    // still move in a later release.
-    bool has_dynamic_resolution = false; bool dynamic_resolution = false;
-    bool has_dynamic_resolution_min = false; int dynamic_resolution_min = 720;
+    // No supersampling / internal_resolution / supersample /
+    // dynamic_resolution keys: the built-in Internal Resolution mod
+    // (psx.enhancement.internal-resolution) owns the internal resolution,
+    // Auto (dynamic resolution) included, over the title's [video]
+    // baseline (runtime/include/host_enhancements.h). Old keys are ignored.
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960
-    bool has_antialiasing   = false; bool antialiasing   = true;
-    bool has_texture_filter = false; int  texture_filter = 0; // 0=nearest,1=bilinear
-    // FMV present reconstruction (VIDEO_FMV_FILTER_*). Only consulted when
-    // antialiasing is on. See RuntimeConfig::video_fmv_filter.
-    bool has_fmv_filter     = false; int  fmv_filter     = VIDEO_FMV_FILTER_DEFAULT;
-    // Sub-pixel vertex precision / perspective-correct UVs (see RuntimeConfig).
-    // Both default off — the faithful floor — and are player-selectable.
-    bool has_geometry_correction   = false; bool geometry_correction   = false;
-    bool has_perspective_texturing = false; bool perspective_texturing = false;
-    bool has_screen_kind    = false; int  screen_kind    = 0; // 0..3 (ScreenKind)
-    // Scanline post-process (see RuntimeConfig::video_scanlines). Strength stored
-    // 0..1; the launcher ABI carries it as an integer percent.
-    bool has_scanlines         = false; bool   scanlines         = false;
-    bool has_scanline_strength = false; double scanline_strength = 0.5;
+    // No antialiasing / texture_filtering / fmv_filter / crt_filter /
+    // scanlines / scanline_strength / geometry_correction /
+    // perspective_texturing keys: the built-in CRT Filter, Image Filtering
+    // and PGXP Precision mods own them over the title's [video] baseline
+    // (runtime/include/host_enhancements.h). Old keys are ignored.
     // [video] fov_scale: GTE projection-distance multiplier (1.0 = faithful).
     // Stored raw (int or float TOML); the runtime range-checks and warns.
     bool has_fov_scale = false; double fov_scale = 1.0;
@@ -1660,14 +1614,6 @@ struct UserSettings {
     bool has_vsync             = false; int  vsync             = 1;
     bool has_frame_interpolation = false; bool frame_interpolation = false;
     bool has_frame_interpolation_fps = false; int frame_interpolation_fps = 0;
-    // [video] quality_* (docs/QUALITY_PRESETS.md): the graphics preset in
-    // force ("low".."ultra", or "custom" once the player changed a setting it
-    // governs), the preset a "custom" started from, the hardware fingerprint
-    // the last detection ran on, and what that detection picked.
-    bool has_quality_preset = false;   std::string quality_preset;
-    bool has_quality_base = false;     std::string quality_base;
-    bool has_quality_hardware = false; std::string quality_hardware;
-    bool has_quality_detected = false; std::string quality_detected;
     // [launcher] — when true, boot straight into the game and skip the GUI
     // launcher window (mirrors snesrecomp's SkipLauncher). Overridable per-run:
     // `--launcher` forces the GUI back on; `PSX_NO_LAUNCHER=1` forces it off.
@@ -1679,17 +1625,9 @@ struct UserSettings {
     bool has_aspect_ratio   = false; int  aspect_num     = 4; // display aspect W:H
                                      int  aspect_den     = 3; // (4:3 = native)
     bool has_adaptive_view  = false; bool adaptive_view  = false;
-    // [video] rewind: local rewind ring on/off. OFF by default — the ring
-    // holds whole-machine snapshots (2 MB RAM + 1 MB VRAM + 512 KB SPU RAM
-    // each) and captures on a frame cadence, so it is opt-in rather than a
-    // cost every host pays. Env PSX_REWIND still outranks this.
-    bool has_rewind         = false; bool rewind         = false;
-    // [video] rewind_depth: local rewind snap-ring capacity. UI offers
-    // 50 / 100 / 150 / 200 (default 50). Runtime clamps + snaps to those steps.
-    bool has_rewind_depth   = false; int  rewind_depth   = 50;
-    // [video] rewind_interval: frames between local rewind snaps. UI offers
-    // 1 / 4 / 8 / 12 / 15 (default 15).
-    bool has_rewind_interval = false; int rewind_interval = 15;
+    // Local rewind (on/off, buffer depth, interval) is the built-in Rewind
+    // mod (psx.feature.rewind); the old [video] rewind keys are ignored. Its
+    // controller hotkey stays here, under [hotkeys].
     // [hotkeys] controller-only host shortcuts. Values use recomp-ui's
     // RECOMP_LAUNCHER_PAD_* encoding (0 = unbound, 1+button, 100+axis).
     bool has_hotkey_pad_rewind = false; int hotkey_pad_rewind = 1272; /* select+r3 */
@@ -1700,9 +1638,9 @@ struct UserSettings {
     bool has_fast_forward_speed = false; double fast_forward_speed = 4.0;
     bool has_fast_forward_mode = false; bool fast_forward_toggle_mode = false;
     bool has_hotkey_pad_fast_forward_toggle = false; int hotkey_pad_fast_forward_toggle = 0; /* unbound */
-    // [audio]
-    bool has_spu_hq         = false; bool spu_hq         = false;
-    bool has_audio_freq     = false; int  audio_freq     = 44100;
+    // [audio]: no player keys. The output sample rate is the runtime's
+    // built-in rate (the old `frequency` key is ignored) and the
+    // high-quality SPU is the built-in Enhanced Audio mod.
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;

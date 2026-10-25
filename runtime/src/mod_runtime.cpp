@@ -156,6 +156,15 @@ RuntimeMods& state() {
     return value;
 }
 
+/* "package/feature" of every feature whose plugin forced driver vsync off in
+ * this process (mod_runtime_note_vsync_forced_off), declared or not. The
+ * launcher's mod provider reports these as forcing vsync off alongside the
+ * features whose manifest says vsync = "off". */
+std::map<std::string, bool>& vsync_forced_features() {
+    static std::map<std::string, bool> value;
+    return value;
+}
+
 std::filesystem::path media_cache_root() {
     std::filesystem::path root;
 #if defined(_WIN32)
@@ -1228,6 +1237,11 @@ int provider_feature_get(void*, int index, RecompLauncherCModFeature* out) {
     }
     out->enabled =
         state().manager.feature_enabled(package->id, feature->id) ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_MOD_VSYNC_OFF)
+    out->forces_vsync_off =
+        (feature->vsync_off ||
+         vsync_forced_features().count(package->id + "/" + feature->id)) ? 1 : 0;
+#endif
     out->option_count =
         (int)provider_feature_options(*package, feature->id).size();
     for (const ModResolution::Diagnostic& diagnostic :
@@ -2059,6 +2073,9 @@ static bool apply_host_mod_plan(const PsxLobbyMatchCaps& caps, std::string* erro
                 continue;
             }
             for (const ModFeature& feature : package->features) {
+                /* The player's own, in every netplay mode: a host's plan
+                 * neither carries nor switches it. */
+                if (feature.host_only) continue;
                 const bool want = required >= 0 &&
                     feat_csv_wants(caps.mods[required].feats, feature.id);
                 const bool have = s.manager.feature_enabled(package_id, feature.id);
@@ -2097,6 +2114,7 @@ static bool apply_host_mod_plan(const PsxLobbyMatchCaps& caps, std::string* erro
             continue;
         }
         for (const ModFeature& feature : package->features) {
+            if (feature.host_only) continue;
             const bool want = feat_csv_wants(pkg.feats, feature.id);
             if (!s.manager.set_feature_enabled(pkg.id, feature.id, want, &err) && want) {
                 if (error) *error = err;
@@ -2425,6 +2443,9 @@ bool mod_runtime_verify_session_plan_fp(std::string* error) {
     return false;
 }
 
+static bool commit_netplay_own_features(const std::filesystem::path& disc_path,
+                                        std::string* error, bool host_only_features);
+
 bool mod_runtime_commit_for_netplay(const std::filesystem::path& disc_path,
                                     std::string* error) {
     if (psx_mod_netplay_profile()) return mod_runtime_commit_netplay(disc_path, error);
@@ -2434,7 +2455,10 @@ bool mod_runtime_commit_for_netplay(const std::filesystem::path& disc_path,
         return mod_runtime_commit_for_direct_netplay(disc_path, error);
     if (caps->mod_count <= 0) {
         session_plan_fp().clear();
-        return mod_runtime_clear_for_netplay(error);
+        /* The host published no mods: the shared game is vanilla. The
+         * player's host-only features (presentation, audio output, host
+         * tools) are no part of it and stay theirs, as in every mode. */
+        return commit_netplay_own_features(disc_path, error, true);
     }
     if (!caps->mod_plan_fp[0]) {
         if (error) *error = "Netplay mod plan is missing its fingerprint.";
@@ -2497,6 +2521,17 @@ void mod_runtime_end_netplay() {
     s.validation = s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256, true);
 }
 
+bool mod_runtime_feature_host_only(const std::string& package_id,
+                                   const std::string& feature_id) {
+    const RuntimeMods& s = state();
+    if (!s.initialized) return false;
+    const ModPackage* package = s.manager.selected_package(package_id);
+    if (!package) return false;
+    for (const ModFeature& feature : package->features)
+        if (feature.id == feature_id) return feature.host_only;
+    return false;
+}
+
 std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& plan) {
     /* A feature stays on online only when everything it contributes is a
      * local-view plugin: no EXE/disc write, overlay or derived disc (those
@@ -2506,7 +2541,7 @@ std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& 
         const std::string key = p.package_id + "/" + p.feature_id;
         auto it = ok.find(key);
         const bool good = p.netplay_local_view || p.netplay_input ||
-                          p.netplay_host_output;
+                          p.netplay_host_output || p.netplay_host_only;
         ok[key] = it == ok.end() ? good : (it->second && good);
     }
     for (const ModResolution::Write& w : plan.writes)
@@ -2538,9 +2573,12 @@ bool mod_runtime_netplay_view_active() {
     return s.netplay_view_plan && s.plan.ok && !s.plan.plugins.empty();
 }
 
-bool mod_runtime_commit_netplay_view(const std::filesystem::path& disc_path,
-                                     std::string* error) {
-    if (psx_mod_netplay_profile()) return mod_runtime_commit_netplay(disc_path, error);
+/* Netplay with the shared game vanilla: install the player's own selection
+ * reduced to the features that stay per player -- every own-view feature
+ * (mod_runtime_netplay_view_features), or with host_only_features only the
+ * host-only ones (ModFeature::host_only). */
+static bool commit_netplay_own_features(const std::filesystem::path& disc_path,
+                                        std::string* error, bool host_only_features) {
     RuntimeMods& s = state();
     std::string why;
     (void)mod_runtime_clear_for_netplay(&why);
@@ -2549,7 +2587,12 @@ bool mod_runtime_commit_netplay_view(const std::filesystem::path& disc_path,
     const ModResolution full =
         s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
     if (!full.ok) return true; /* the player's set does not resolve: vanilla */
-    const std::vector<std::string> keep = mod_runtime_netplay_view_features(full);
+    std::vector<std::string> keep = mod_runtime_netplay_view_features(full);
+    if (host_only_features)
+        keep.erase(std::remove_if(keep.begin(), keep.end(), [](const std::string& key) {
+            const size_t slash = key.find('/');
+            return !mod_runtime_feature_host_only(key.substr(0, slash), key.substr(slash + 1));
+        }), keep.end());
     if (keep.empty()) return true;
     /* The player's selection with every other feature off. */
     std::map<std::string, ModSelection> reduced = s.manager.selections();
@@ -2580,6 +2623,12 @@ bool mod_runtime_commit_netplay_view(const std::filesystem::path& disc_path,
                      "view only\n", k.c_str());
     if (error) error->clear();
     return true;
+}
+
+bool mod_runtime_commit_netplay_view(const std::filesystem::path& disc_path,
+                                     std::string* error) {
+    if (psx_mod_netplay_profile()) return mod_runtime_commit_netplay(disc_path, error);
+    return commit_netplay_own_features(disc_path, error, false);
 }
 const std::string& mod_runtime_fingerprint() {
     return state().plan.fingerprint;
@@ -3210,6 +3259,26 @@ extern "C" int psx_mod_register_option_changed_plugin(const char* id,
     return 1;
 }
 
+extern "C" void mod_runtime_note_vsync_forced_off(void) {
+    using namespace PSXRecompV4;
+    RuntimeMods& s = state();
+    const ModResolution::Plugin* plugin = s.current_plugin;
+    if (!plugin || plugin->package_id.empty() || plugin->feature_id.empty()) return;
+    const std::string key = plugin->package_id + "/" + plugin->feature_id;
+    auto& seen = vsync_forced_features();
+    if (seen.count(key)) return;
+    seen[key] = true;
+    bool declared = false;
+    if (const ModPackage* package = s.manager.selected_package(plugin->package_id))
+        for (const ModFeature& feature : package->features)
+            if (feature.id == plugin->feature_id) declared = feature.vsync_off;
+    if (!declared)
+        std::fprintf(stdout,
+            "psxrecomp: mod %s forces vsync off but its manifest does not declare "
+            "[[feature]] vsync = \"off\"; the launcher can show that only from "
+            "now on, not before the first session\n", key.c_str());
+}
+
 extern "C" int psx_mod_option_live_capable(const char* package_id, const char* feature_id) {
     using namespace PSXRecompV4;
     if (!package_id || !feature_id) return 0;
@@ -3220,6 +3289,20 @@ extern "C" int psx_mod_option_live_capable(const char* package_id, const char* f
             option_changed_plugins().count(plugin.id))
             return 1;
     return 0;
+}
+
+extern "C" int psx_mod_option_live_host_only(const char* package_id, const char* feature_id) {
+    using namespace PSXRecompV4;
+    if (!package_id || !feature_id) return 0;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return 0;
+    bool any = false;
+    for (const ModResolution::Plugin& plugin : s.plan.plugins) {
+        if (plugin.package_id != package_id || plugin.feature_id != feature_id) continue;
+        if (!plugin.netplay_host_only) return 0;
+        any = true;
+    }
+    return any ? 1 : 0;
 }
 
 extern "C" int psx_mod_save_selection(void) {
@@ -3242,7 +3325,10 @@ extern "C" int psx_mod_set_option_live(const char* package_id, const char* featu
                                        const char* option_id, const char* value) {
     using namespace PSXRecompV4;
     if (!package_id || !feature_id || !option_id || !value) return 0;
-    if (psx_netplay_active()) return -1;
+    /* A host-only feature is the player's own in a match (nothing to
+     * negotiate); every other feature's plan is fixed with the peers. */
+    if (psx_netplay_active() && !mod_runtime_feature_host_only(package_id, feature_id))
+        return -1;
     RuntimeMods& s = state();
     if (!s.initialized || !s.plan.ok) return 0;
     bool in_plan = false;

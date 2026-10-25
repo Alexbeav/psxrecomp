@@ -2462,6 +2462,96 @@ int main() {
         ModPackageManager negative(folder);negative.scan(&error);
         check(!negative.scan_errors().empty(),"negative resource slice rejected");
     }
+    {
+        /* [[plugin]] netplay = "host_only" (format 11): a feature made only of
+         * such plugins changes nothing the guest executes, so it is left out
+         * of the plan fingerprint (two peers that differ only in, say, the CRT
+         * Filter run the same game), and it may own nothing else. A feature
+         * may also declare vsync = "off" for the launcher's VSync row. */
+        const fs::path folder = root / "host-only";
+        mod_clear_plugins_for_tests();
+        check(mod_register_activation_plugin("test.look", +[]() {}),
+              "host-only test plugin must register");
+        check(mod_register_activation_plugin("test.sim", +[]() {}),
+              "simulation test plugin must register");
+        const auto head = [](const std::string& id, int format) {
+            return "format_version = " + std::to_string(format) + "\nid = \"" + id +
+                   "\"\nversion = \"1.0.0\"\nname = \"" + id +
+                   "\"\nresolver = \"declarative\"\n[[target]]\ngame_id = \"*\"\n";
+        };
+        write_text(folder / "packages/look.mod/1.0.0/manifest.toml",
+            head("look.mod", 11) +
+            "[[feature]]\nid = \"look\"\nname = \"Look\"\n"
+            "[[option]]\nfeature = \"look\"\nid = \"tone\"\nlabel = \"Tone\"\n"
+            "type = \"choice\"\ndefault = \"a\"\n"
+            "[[option.choice]]\nvalue = \"a\"\nlabel = \"A\"\n"
+            "[[option.choice]]\nvalue = \"b\"\nlabel = \"B\"\n"
+            "[[plugin]]\nfeature = \"look\"\nid = \"test.look\"\nnetplay = \"host_only\"\n");
+        write_text(folder / "packages/sim.mod/1.0.0/manifest.toml",
+            head("sim.mod", 11) +
+            "[[feature]]\nid = \"sim\"\nname = \"Sim\"\nvsync = \"off\"\n"
+            "[[plugin]]\nfeature = \"sim\"\nid = \"test.sim\"\n");
+        ModPackageManager host(folder);
+        check(host.scan(&error) && host.scan_errors().empty(), "host-only catalog scans");
+        check(host.load_state(&error), error.c_str());
+        const ModPackage& look = host.packages().at("look.mod").at("1.0.0");
+        const ModPackage& sim = host.packages().at("sim.mod").at("1.0.0");
+        check(look.features.size() == 1 && look.features[0].host_only &&
+                  !look.features[0].vsync_off,
+              "a feature made only of host_only plugins is host-only");
+        check(sim.features.size() == 1 && !sim.features[0].host_only &&
+                  sim.features[0].vsync_off,
+              "vsync = \"off\" is read; an ordinary plugin's feature is not host-only");
+        check(host.set_feature_enabled("sim.mod", "sim", true, &error), error.c_str());
+        const ModResolution base = host.resolve("SLUS-TEST");
+        check(base.ok, "simulation-only plan resolves");
+        check(host.set_feature_enabled("look.mod", "look", true, &error), error.c_str());
+        const ModResolution with_look = host.resolve("SLUS-TEST");
+        check(with_look.ok && with_look.plugins.size() == 2,
+              "the host-only feature still activates its plugin");
+        bool host_only_flag = false;
+        for (const auto& plugin : with_look.plugins)
+            if (plugin.id == "test.look") host_only_flag = plugin.netplay_host_only;
+        check(host_only_flag, "the resolved plugin carries netplay_host_only");
+        check(with_look.fingerprint == base.fingerprint,
+              "enabling a host-only feature must not change the plan fingerprint");
+        check(host.set_feature_option("look.mod", "look", "tone", "b", &error), error.c_str());
+        check(host.resolve("SLUS-TEST").fingerprint == base.fingerprint,
+              "a host-only feature's options must not change the plan fingerprint");
+        check(host.set_feature_enabled("sim.mod", "sim", false, &error), error.c_str());
+        check(host.resolve("SLUS-TEST").fingerprint != base.fingerprint,
+              "an ordinary plugin feature still changes the fingerprint");
+
+        const auto rejects = [&](const std::string& body, const char* what) {
+            const fs::path bad = root / "host-only-bad";
+            fs::remove_all(bad, ec);
+            write_text(bad / "packages/bad.mod/1.0.0/manifest.toml", body);
+            ModPackageManager probe(bad);
+            (void)probe.scan(&error);
+            check(!probe.scan_errors().empty(), what);
+            fs::remove_all(bad, ec);
+        };
+        rejects(head("bad.mod", 10) +
+                "[[feature]]\nid = \"f\"\nname = \"F\"\n"
+                "[[plugin]]\nfeature = \"f\"\nid = \"test.look\"\nnetplay = \"host_only\"\n",
+                "netplay = \"host_only\" requires format_version 11");
+        rejects(head("bad.mod", 10) + "[[feature]]\nid = \"f\"\nname = \"F\"\nvsync = \"off\"\n",
+                "feature vsync requires format_version 11");
+        rejects(head("bad.mod", 11) + "[[feature]]\nid = \"f\"\nname = \"F\"\nvsync = \"on\"\n",
+                "feature vsync accepts only \"off\"");
+        rejects(head("bad.mod", 11) +
+                "[[feature]]\nid = \"f\"\nname = \"F\"\n"
+                "[[plugin]]\nfeature = \"f\"\nid = \"test.look\"\nnetplay = \"host_only\"\n"
+                "[[plugin]]\nfeature = \"f\"\nid = \"test.sim\"\n",
+                "a host_only feature may not also carry an ordinary plugin");
+        rejects(head("bad.mod", 11) +
+                "[[feature]]\nid = \"f\"\nname = \"F\"\n"
+                "[[plugin]]\nfeature = \"f\"\nid = \"test.look\"\nnetplay = \"host_only\"\n"
+                "[[patch]]\nfeature = \"f\"\ntarget = \"main_exe\"\naddress = 2147487744\n"
+                "expected = \"01 02 03 04\"\nreplace = \"05 06 07 08\"\n",
+                "a host_only feature may not patch the game");
+        mod_clear_plugins_for_tests();
+    }
     fs::remove_all(root, ec);
     if (failures) {
         std::cerr << failures << " mod package test(s) failed\n";

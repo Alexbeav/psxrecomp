@@ -13,7 +13,7 @@
 #include "projection_scale_config.hpp"
 #include "mod_controller_source.h"
 #include "window_size.h"     /* default game-window size */
-#include "internal_resolution.h" /* Settings -> Display -> Internal resolution */
+#include "internal_resolution.h" /* the Internal Resolution mod and [video] internal_resolution */
 #include "mod_internal_resolution.h"
 #include "dynamic_resolution.h"  /* [video] dynamic_resolution: the step controller */
 #include "render_thread.h"        /* rt_get_stats: queue backpressure (dynres) */
@@ -126,7 +126,6 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "crash_trace.h"
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
-#include "quality_presets.h"
 #include "game_mode.h"
 #include "bios_rom_alias.h"
 #include "host_path.h"
@@ -137,6 +136,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "mod_plugins.h"
 #include "mod_local_input_policy.h"
 #include "mod_session_baseline.h"
+#include "host_enhancements.h"
 #include "func_override.h"
 #include "mod_runtime.h"
 #include "video_texture_filter.h"
@@ -160,13 +160,6 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
-/* A recomp-ui that shows the Internal resolution row; an older one only has
- * the legacy Supersampling row (internal_resolution.h, launcher round trip). */
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-static constexpr int kLauncherHasInternalResolution = 1;
-#else
-static constexpr int kLauncherHasInternalResolution = 0;
-#endif
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
 #if defined(PSX_HAS_CODEGEN_SETUP_HOST)
@@ -1256,14 +1249,16 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 
 /* [video] options, resolved from the game config (defaults: native + AA). */
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
-static bool          g_video_aa    = true;  /* linear present filtering */
+/* Linear present filtering for this session: the title's [video]
+ * antialiasing, or the Image Filtering mod's Smoothing (session_host_look). */
+static bool          g_video_aa    = true;
 static int           g_video_post_aa = 0;   /* [video] antialiasing_mode / PSX_AA_MODE (GL_POST_AA_*) */
 static float         g_video_bloom = 0.0f;  /* [video] bloom (PSX_BLOOM overrides) */
 static std::string   g_video_post_shader;   /* [video] post_shader (PSX_POST_SHADER overrides) */
 static int           g_video_ss_milli = 1000; /* [video] supersample / PSX_SUPERSAMPLE */
 
 /* [video] match_display_max_lines (0 = none): the display height Match
- * display, its dynamic-resolution floor and the quality detection resolve
+ * display and its dynamic-resolution floor resolve
  * against, capped. On an 8K panel Match display x1.5 asks 27x, past the
  * full-VRAM surface, where the high-resolution window engages and dynamic
  * resolution cannot step; a title can cap it at, say, 4K lines. */
@@ -1279,12 +1274,13 @@ static int match_display_px_h(SDL_Window *window) {
                ? g_video_match_max_lines : h;
 }
 /* FMV present reconstruction (VIDEO_FMV_FILTER_*), pushed to the GL renderer
- * once the config is resolved. Only consulted while g_video_aa is on. */
+ * once the session's look is resolved. Only consulted while g_video_aa is on. */
 static int           g_video_fmv_filter = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
-/* Scanline post-process (host display enhancement). Off by default; toggled by
- * the launcher Display card, the PSX_SCANLINES env override, the F6 hotkey, or
- * the `scanline` TCP command. Strength 0..1 is the dark-gap depth. Pushed to the
- * GL renderer each present alongside the FMV filter. */
+/* Scanline post-process (host display enhancement). Off by default; set for
+ * the session from the title's [video] scanlines and the CRT Filter mod, then
+ * changed for the session only by the PSX_SCANLINES env override, the F6
+ * hotkey, or the `scanline` TCP command. Strength 0..1 is the dark-gap depth.
+ * Pushed to the GL renderer each present alongside the FMV filter. */
 static bool          g_video_scanlines = false;
 static float         g_video_scanline_strength = 0.5f;
 
@@ -1303,36 +1299,8 @@ extern "C" int psx_video_get_scanlines(float *strength) {
     return g_video_scanlines ? 1 : 0;
 }
 
-/* recomp-ui stores this 1-based so a zero-initialized (older) host reads as
- * "unset" rather than pinning nearest; the config enum is 0-based. Convert at
- * the boundary, and treat anything out of range as the default. */
-static inline int launcher_fmv_filter_to_cfg(int ls_value) {
-    if (ls_value < 1 || ls_value > PSXRecompV4::VIDEO_FMV_FILTER_COUNT)
-        return PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
-    return ls_value - 1;
-}
-/* Texture filtering offered to every frontend (pre-game launcher and in-game
- * menu providers): the [video] texture_filtering enum, PSX_TEXTURE_FILTER_*.
- * Stable world (2) is set by mods, never offered. With the catalog, frontends
- * keep any of these values across startup and soft return instead of
- * collapsing them to Nearest/Bilinear. */
-#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_TEXTURE_FILTER_CATALOG)
-static const char* const kPsxTextureFilterLabels[] = {"Nearest", "Bilinear", "xBR"};
-static const int kPsxTextureFilterValues[] = {
-    PSX_TEXTURE_FILTER_NEAREST, PSX_TEXTURE_FILTER_BILINEAR, PSX_TEXTURE_FILTER_XBR};
-static void psx_launcher_texture_filter_catalog(RecompLauncherCGameInfo* gi) {
-    gi->texture_filter_labels = kPsxTextureFilterLabels;
-    gi->texture_filter_values = kPsxTextureFilterValues;
-    gi->num_texture_filters = 3;
-}
-#elif defined(RECOMP_LAUNCHER)
-static void psx_launcher_texture_filter_catalog(RecompLauncherCGameInfo*) {}
-#endif
-static inline int cfg_fmv_filter_to_launcher(int cfg_value) {
-    if (cfg_value < 0 || cfg_value >= PSXRecompV4::VIDEO_FMV_FILTER_COUNT)
-        cfg_value = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
-    return cfg_value + 1;
-}
+/* Texture filtering for this session (PSX_TEXTURE_FILTER_*): the title's
+ * [video] texture_filtering, or the Image Filtering mod's choice. */
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
 static int           g_mod_texfilter = -1;
 extern "C" void psx_mod_set_texture_filter(int mode) {
@@ -1340,6 +1308,41 @@ extern "C" void psx_mod_set_texture_filter(int mode) {
     g_mod_texfilter = mode;
     gr_set_texture_filter(mode);
 }
+#if defined(RECOMP_LAUNCHER)
+/* Rows that are not PSX Settings any more: what the built-in CRT Filter,
+ * Image Filtering, Enhanced Audio, Rewind and Internal Resolution mods
+ * replaced (host_enhancements.h), Perspective textures (psx.enhancement.pgxp)
+ * and the Dynamic resolution checkbox (Internal Resolution = Auto). recomp-ui's
+ * psx profile no longer offers them; clearing them here too keeps an older
+ * recomp-ui, whose profile still does, from drawing controls that nothing
+ * applies. (The Sample rate row is the profile's hide_audio_freq, which a
+ * GameInfo cannot clear: an older recomp-ui still draws it, and the runtime
+ * ignores what it returns.) */
+static void psx_launcher_hide_mod_owned_rows(RecompLauncherCGameInfo* gi) {
+    gi->has_supersampling = 0;       /* Internal Resolution (and the legacy
+                                      * Supersampling cycle) */
+    gi->has_antialiasing = 0;        /* Image Filtering: Smoothing */
+    gi->has_texture_filter = 0;      /* Image Filtering: Texture filtering */
+    gi->has_screen_kind = 0;         /* CRT Filter: Screen model */
+    gi->has_spu_hq = 0;              /* Enhanced Audio */
+    gi->has_geometry_precision = 0;  /* PGXP Precision: Perspective textures */
+#if defined(RECOMP_LAUNCHER_HAS_FMV_FILTER)
+    gi->has_fmv_filter = 0;          /* Image Filtering: FMV filtering */
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
+    gi->has_scanlines = 0;           /* CRT Filter: Scanlines */
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_REWIND_DEPTH)
+    gi->has_rewind_depth = 0;        /* Rewind */
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
+    gi->has_dynamic_resolution = 0;  /* Internal resolution = Auto */
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_LINEAR_FILTER_HIDDEN)
+    gi->linear_filter_hidden = 1;    /* no legacy Linear filtering row either */
+#endif
+}
+#endif
 /* Sub-pixel vertex precision + perspective-correct UVs (PGXP-style). Visual
  * only: the PS1-visible GTE SXY FIFO stays integer, so guest-side culling and
  * SXY readback are untouched. Default off = the faithful floor. */
@@ -1370,20 +1373,30 @@ static float         g_video_pgxp_depth_threshold = 4096.0f;
 static int           g_video_pgxp_mod_only            = 0;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 
-/* Settings -> Display -> Internal resolution (internal_resolution.h). The
- * preset supersedes the legacy supersampling factor once set; PSX_IR_UNSET
- * leaves the factor as the player (or game.toml) wrote it. This is the
- * configured preset (game.toml < settings.toml < launcher) and the only one
- * the launcher shows or settings.toml saves. PSX_INTERNAL_RESOLUTION lives
- * apart in g_video_internal_res_env: it wins for the run but is never
- * persisted, so two local peers sharing one settings.toml stay independent. */
+/* The session's internal resolution (internal_resolution.h): the title's
+ * [video] internal_resolution, or the built-in Internal Resolution mod's
+ * choice (session_internal_resolution). The value supersedes the legacy
+ * supersampling factor (g_video_scale) once set; PSX_IR_UNSET leaves the
+ * factor as game.toml wrote it. Auto (PSX_IR_AUTO) is Match display with
+ * dynamic resolution on. PSX_INTERNAL_RESOLUTION lives apart in
+ * g_video_internal_res_env: it wins for the run, so two local peers sharing
+ * one install stay independent. */
 static int           g_video_internal_res = PSX_IR_UNSET;
 static int           g_video_internal_res_env = PSX_IR_UNSET;
-/* Dynamic resolution ([video] dynamic_resolution, dynamic_resolution_min;
- * dynamic_resolution.h): the internal resolution above is the ceiling, and
- * the GL scale steps down to the floor only while the game would miss frames.
- * Same precedence as the preset (game.toml < settings.toml < launcher);
- * PSX_DYNRES=0/1 and PSX_DYNRES_MIN win for one run, never persisted. */
+/* The title's baseline, captured when the config loads: its internal
+ * resolution and dynamic resolution, its legacy supersampling factor and its
+ * [video] supersample. Every session start restores it before the mod's
+ * request applies, so a rematch never inherits the last session's scale. */
+static PsxHostResolution g_title_resolution = {PSX_IR_UNSET, 0};
+static int           g_title_scale = 1;
+static int           g_title_ss_milli = 1000;
+/* Dynamic resolution (dynamic_resolution.h): the internal resolution above is
+ * the ceiling, and the GL scale steps down to the floor only while the game
+ * would miss frames. The Internal Resolution mod turns it on with Auto and off
+ * with a fixed resolution; at Game default (or with the mod off) the title's
+ * [video] dynamic_resolution stands, over its own internal resolution. The
+ * floor is the title's [video] dynamic_resolution_min. PSX_DYNRES=0/1 and
+ * PSX_DYNRES_MIN win for one run. */
 static int           g_video_dynres = 0;
 static int           g_video_dynres_min = 720;
 static int           g_video_dynres_env = -1;
@@ -1435,18 +1448,19 @@ static int           g_video_requested_scale = 1;
 static bool          g_video_scale_applies = true;
 static bool          g_video_hidpi_window = false;
 
-static_assert(PSX_IR_LEGACY_SS_MAX == SW_MAX_INTERNAL_SCALE,
-              "settings.toml supersampling for an older runtime is the software ceiling");
-
 static int video_scale_ceiling(void) {
     return g_video_renderer == 1 ? GL_MAX_INTERNAL_SCALE : SW_MAX_INTERNAL_SCALE;
 }
 
-/* Session priority: environment override, active mod request, player setting. */
+/* Session priority: environment override, a title mod's request
+ * (psx_mod_set_internal_resolution), then the session's choice: the Internal
+ * Resolution mod's, or the title's baseline.
+ * Auto renders at its ceiling, Match display; dynres_requested() says whether
+ * the scale may step down under it. */
 static int effective_internal_resolution(void) {
     const uint32_t mod_lines = psx_mod_internal_resolution_request();
-    return g_video_internal_res_env != PSX_IR_UNSET ? g_video_internal_res_env
-        : mod_lines ? (int)mod_lines : g_video_internal_res;
+    return psx_ir_ceiling(g_video_internal_res_env != PSX_IR_UNSET ? g_video_internal_res_env
+        : mod_lines ? (int)mod_lines : g_video_internal_res);
 }
 
 /* Resolve the Internal resolution preset into g_video_scale. display_px_h is
@@ -1459,25 +1473,29 @@ static void apply_internal_resolution(int display_px_h) {
         display_px_h, video_scale_ceiling(), display_supersample(nullptr), g_video_match_max_lines);
 }
 
-/* The value the launcher row starts on: the preset, or the legacy factor shown
- * as the preset it matches (3 -> 720p) or as its own "Nx" entry. */
-[[maybe_unused]] static int internal_resolution_for_launcher(void) {
-    if (g_video_internal_res != PSX_IR_UNSET) return g_video_internal_res;
-    return psx_ir_from_supersampling(g_video_scale < 1 ? 1 : g_video_scale, g_video_ref_lines);
-}
 static std::string   g_bezel_path;      /* mod-owned OpenGL margin artwork */
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
-static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
+static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron (session) */
 static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_window_aspect */
-static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
-static int           g_audio_freq     = 44100; /* host device request */
+static bool          g_audio_spu_hq   = false; /* SPU float-shadow, session (env overrides) */
+/* The host audio device's sample rate: the runtime's built-in output rate
+ * (not a player setting; the SPU mixes at 44.1 kHz). */
+static constexpr int g_audio_freq     = 44100;
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 /* Local rewind is opt-in: the snap ring is whole-machine state on a frame
- * cadence, too much to charge every host for a feature many never open. */
+ * cadence, too much to charge every host for a feature many never open. The
+ * session's values come from the built-in Rewind mod (psx.feature.rewind);
+ * session_host_look() sets them, off without it. */
 static int           g_rewind_enabled = 0;
 static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/150/200) */
 static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
+/* The title's look: its game.toml [video] screen_kind / scanlines /
+ * scanline_strength / antialiasing / texture_filtering / fmv_filter and
+ * [audio] spu_hq, captured when the config loads. The CRT Filter, Image
+ * Filtering and Enhanced Audio mods resolve over it at every session start
+ * (session_host_look); with them off it is exactly what the title ships. */
+static PsxHostLook   g_title_look = {0, 0, 50, 1, 0, 0, 0};
 static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
 static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
 static int           g_hotkey_pad_fast_forward = 1528;   /* select + l1 (hold) */
@@ -1591,153 +1609,6 @@ static int           s_render_thread_tried = 0;
 static int           g_video_vsync        = 1;
 static int           g_frame_interpolation = 0;
 static int           g_frame_interpolation_fps = 0;
-/* Graphics presets (docs/QUALITY_PRESETS.md): the decision for this run,
- * the [video] keys the title's presets govern and the presets themselves
- * (kept for the launcher, which can switch or re-detect). Empty when the
- * title has no [quality.*] tables: nothing changes. */
-static psxq::Decision g_quality;
-static std::vector<std::string> g_quality_keys;
-static std::vector<PSXRecompV4::QualityPreset> g_quality_presets;
-static unsigned g_quality_offered = 0;
-static const PSXRecompV4::QualityPreset* quality_preset_for(int tier) {
-    const char* n = psx_quality_name(tier);
-    if (!n) return nullptr;
-    for (const auto& p : g_quality_presets)
-        if (p.name == n) return &p;
-    return nullptr;
-}
-static int quality_preset_in_force(void) {
-    return g_quality.preset >= 0 && g_quality.preset < PSX_QUALITY_COUNT;
-}
-/* The [video] globals a preset can set, from a parsed runtime block (the
- * same assignments game.toml's [video] gets at startup). Used when the
- * launcher switches presets; the startup path swaps gc.runtime instead. */
-/* GL_RENDERER for a due detection. The launcher may hold a current GL
- * context: restore it around the probe. SDL video is brought up for the
- * probe only when nothing else has (and never under the dummy/offscreen
- * drivers headless runs use). */
-static int quality_gl_probe(char* out, size_t cap) {
-    const char* drv = std::getenv("SDL_VIDEODRIVER");
-    if (drv && (std::strcmp(drv, "dummy") == 0 || std::strcmp(drv, "offscreen") == 0))
-        return 0;
-    const bool was_init = SDL_WasInit(SDL_INIT_VIDEO) != 0;
-    if (!was_init && SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return 0;
-    SDL_Window* cur_w = SDL_GL_GetCurrentWindow();
-    SDL_GLContext cur_c = SDL_GL_GetCurrentContext();
-    const int ok = psx_quality_probe_gl_renderer(out, cap);
-    if (cur_w && cur_c) SDL_GL_MakeCurrent(cur_w, cur_c);
-    if (!was_init) SDL_QuitSubSystem(SDL_INIT_VIDEO);
-    return ok;
-}
-
-/* Detect / restore the graphics preset (docs/QUALITY_PRESETS.md) right after
- * game.toml loads, before anything reads gc.runtime: the chosen preset's
- * runtime block replaces it, so every [video] consumer below sees the
- * preset. settings.toml's values for the keys a preset governs are dropped
- * later (settings layering) unless the player went Custom. */
-static void quality_startup(PSXRecompV4::GameConfig& gc,
-                            const std::filesystem::path& settings_path) {
-    g_quality_presets = gc.quality_presets;
-    g_quality_offered = psxq::offered_mask(gc);
-    g_quality_keys = psxq::governed_keys(gc);
-    if (!g_quality_offered) return;
-    PsxHostInfo host;
-    psx_quality_probe_host(&host);
-    PSXRecompV4::UserSettings us = PSXRecompV4::load_user_settings(settings_path);
-    const char* redetect = std::getenv("PSX_QUALITY_REDETECT");
-    g_quality = psxq::decide(g_quality_offered, us, host, std::getenv("PSX_QUALITY"),
-                             redetect && redetect[0] == '1', quality_gl_probe,
-                             g_headless || g_hidden_window);
-    if (const auto* p = quality_preset_for(g_quality.base)) gc.runtime = p->runtime;
-    if (g_quality.detection_skipped)
-        std::fprintf(stdout, "psxrecomp: graphics preset %s (headless / hidden window: "
-                     "no detection)\n", g_quality.preset >= 0
-                     ? psx_quality_name(g_quality.preset) : "none, [video] as configured");
-    else if (g_quality.detected_now)
-        std::fprintf(stdout, "psxrecomp: graphics preset detected: %s (%s; %s)%s\n",
-                     psx_quality_name(g_quality.preset), g_quality.reason.c_str(),
-                     g_quality.summary.c_str(),
-                     g_quality.gl_probed ? "" : " [no GL probe: this run only, not saved]");
-    else
-        std::fprintf(stdout, "psxrecomp: graphics preset %s%s%s%s\n",
-                     psx_quality_name(g_quality.preset),
-                     g_quality.preset == PSX_QUALITY_CUSTOM ? " (from " : "",
-                     g_quality.preset == PSX_QUALITY_CUSTOM ? psx_quality_name(g_quality.base) : "",
-                     g_quality.env_override ? " (PSX_QUALITY, this run only)"
-                     : g_quality.preset == PSX_QUALITY_CUSTOM ? ")" : "");
-    if (g_quality.hardware_changed_custom)
-        std::fprintf(stdout, "psxrecomp: new hardware since your graphics settings were "
-                     "made; your Custom settings are kept (Re-detect in Settings -> Display)\n");
-    if (g_quality.persist && !us.parse_error) {
-        psxq::record(us, g_quality);
-        if (!PSXRecompV4::save_user_settings(settings_path, us))
-            std::fprintf(stderr, "psxrecomp: could not save the graphics preset to %s\n",
-                         settings_path.string().c_str());
-    }
-}
-
-/* The preset/key-ownership transaction (psxq::settle_save) in front of every
- * save that may carry governed keys: boot launcher, soft-return launcher and
- * the in-game menu's live settings. The pending edit is what the frontend
- * reported since the last save. */
-static psxq::Edit g_quality_edit = psxq::Edit::NONE;
-static int g_quality_picked = PSX_QUALITY_NONE;
-static bool quality_save_user_settings(const std::filesystem::path& path,
-                                       PSXRecompV4::UserSettings& us) {
-    if (g_quality_offered) {
-        const PSXRecompV4::UserSettings disk = PSXRecompV4::load_user_settings(path);
-        if (!disk.parse_error) {
-            const bool was_override = g_quality.env_override;
-            if (psxq::settle_save(us, disk, g_quality, g_quality_edit, g_quality_picked,
-                                  g_quality_keys))
-                std::fprintf(stdout, "psxrecomp: graphics preset %s%s%s%s\n",
-                             psx_quality_name(g_quality.preset),
-                             g_quality.preset == PSX_QUALITY_CUSTOM ? " (from " : "",
-                             g_quality.preset == PSX_QUALITY_CUSTOM
-                                 ? psx_quality_name(g_quality.base) : "",
-                             g_quality.preset == PSX_QUALITY_CUSTOM ? ")" : "");
-            else if (was_override && g_quality_edit != psxq::Edit::NONE)
-                std::fprintf(stdout, "psxrecomp: graphics settings changed under "
-                             "PSX_QUALITY: this run only, not saved\n");
-        }
-    }
-    g_quality_edit = psxq::Edit::NONE;
-    g_quality_picked = PSX_QUALITY_NONE;
-    return PSXRecompV4::save_user_settings(path, us);
-}
-
-static void quality_apply_video_globals(const PSXRecompV4::RuntimeConfig& r) {
-    g_video_scale        = r.video_supersampling;
-    g_video_internal_res = r.video_internal_resolution;
-    g_video_dynres       = r.video_dynamic_resolution ? 1 : 0;
-    g_video_dynres_min   = r.video_dynamic_resolution_min;
-    g_video_aa           = r.video_antialiasing;
-    g_video_post_aa      = r.video_antialiasing_mode;
-    g_video_ss_milli     = r.video_supersample_milli;
-    g_video_texfilter    = r.video_texture_filter;
-    g_video_fmv_filter   = r.video_fmv_filter;
-    g_video_geometry_correction   = r.video_geometry_correction ? 1 : 0;
-    g_video_perspective_texturing = r.video_perspective_texturing ? 1 : 0;
-    g_video_pgxp_tolerance = (float)r.video_pgxp_tolerance;
-    g_video_pgxp_position_fallback   = r.video_pgxp_position_fallback ? 1 : 0;
-    g_video_pgxp_preserve_projection = r.video_pgxp_preserve_projection ? 1 : 0;
-    g_video_pgxp_depth_buffer     = r.video_pgxp_depth_buffer ? 1 : 0;
-    g_video_pgxp_color_correction = r.video_pgxp_color_correction ? 1 : 0;
-    g_video_pgxp_seam             = r.video_pgxp_seam;
-    g_video_pgxp_depth_threshold  = (float)r.video_pgxp_depth_threshold;
-    g_render_thread      = r.video_render_thread ? 1 : 0;
-    g_present_thread     = r.video_present_thread ? 1 : 0;
-    g_frame_generation   = r.video_frame_generation ? 1 : 0;
-    g_frame_generation_method = r.video_frame_generation_method;
-    g_frame_interpolation     = r.video_frame_interpolation ? 1 : 0;
-    g_frame_interpolation_fps = r.video_frame_interpolation_fps;
-    /* Preset-only keys (no settings.toml form): picking a preset applies them. */
-    g_video_bloom        = r.video_bloom;
-    g_video_fmv_chroma   = r.video_fmv_chroma_smoothing ? 1 : 0;
-    g_video_texture_lod  = r.video_texture_lod;
-    g_video_aniso        = r.video_anisotropic_filtering;
-    g_video_dithering    = r.video_dithering;
-}
 static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_frame_interpolation_blend_default =
@@ -2035,6 +1906,9 @@ static void reset_mod_owned_presentation(void) {
      * renderer setup takes it and combines it with the [video] baseline
      * (pgxp_session.h). */
     psx_pgxp_session_reset();
+    /* Likewise the CRT Filter, Image Filtering, Enhanced Audio and Rewind
+     * requests (host_enhancements.h), resolved at the renderer setup. */
+    psx_host_enh_reset();
     /* Render-pass counters, the disabled-after-faults latch and any open
      * plan generation belong to the session that made them. */
     render_pass_reset_session();
@@ -2073,8 +1947,10 @@ extern "C" int psx_mod_set_native_vblank_rate(
      * blocking would silently replace the requested guest cadence with the
      * display cadence. The frame pacer owns fixed-rate timing here.
      */
-    if (frames_per_second == 0 || frames_per_second > 60)
+    if (frames_per_second == 0 || frames_per_second > 60) {
         g_video_vsync = 0;
+        mod_runtime_note_vsync_forced_off();   /* the launcher's VSync row */
+    }
     if (frames_per_second) {
         std::fprintf(stdout,
             "psxrecomp: mod selected native guest VBlank pacing at %u FPS "
@@ -2104,6 +1980,7 @@ extern "C" int psx_mod_set_frame_interpolation(
      */
     g_video_renderer = 1;
     g_video_vsync = 0;
+    mod_runtime_note_vsync_forced_off();   /* the launcher's VSync row */
     g_frame_interpolation = 1;
     g_frame_interpolation_fps =
         frames_per_second ? (int)frames_per_second : 0;
@@ -10491,6 +10368,70 @@ static void dynres_setup(void) {
                  floor_s * g_video_ref_lines, ceiling * g_video_ref_lines);
 }
 
+/* ---- The session's look (host_enhancements.h) ---------------------------
+ * The title's baseline (g_title_look) with the CRT Filter, Image Filtering
+ * and Enhanced Audio requests this session's activation recorded, resolved
+ * at the renderer setup after start_mod_session -- never at activation, whose
+ * work that setup would undo. Rewind's request is taken here as well and
+ * armed when the session's machine is configured (psx_rewind_configure). */
+static void session_host_look(void) {
+    PsxHostEnhRequests req;
+    psx_host_enh_requests(&req);
+    const PsxHostLook look = psx_host_enh_resolve(&g_title_look, &req);
+    g_video_screen = look.screen_kind;
+    g_video_scanlines = look.scanlines != 0;
+    g_video_scanline_strength = look.scanline_strength_pct / 100.0f;
+    g_video_aa = look.present_linear != 0;
+    g_video_texfilter = look.texture_filter;
+    g_video_fmv_filter = look.fmv_filter;
+    g_audio_spu_hq = look.spu_hq != 0;
+    g_rewind_enabled = req.rewind ? 1 : 0;
+    g_rewind_depth = req.rewind ? req.rewind_depth : PSX_HOST_ENH_REWIND_DEPTH_DEFAULT;
+    g_rewind_interval = req.rewind ? req.rewind_interval
+                                   : PSX_HOST_ENH_REWIND_INTERVAL_DEFAULT;
+    if (req.crt || req.image || req.audio || req.rewind)
+        std::fprintf(stdout, "psxrecomp: host enhancements:%s%s%s%s\n",
+                     req.crt ? " CRT Filter" : "", req.image ? " Image Filtering" : "",
+                     req.audio ? " Enhanced Audio" : "", req.rewind ? " Rewind" : "");
+}
+
+/* The CRT Filter / Image Filtering plugins' live option changes (in-game
+ * menu): resolve again and push what changed to the renderer. */
+static void host_look_apply_live(void) {
+    PsxHostEnhRequests req;
+    psx_host_enh_requests(&req);
+    const PsxHostLook look = psx_host_enh_resolve(&g_title_look, &req);
+    psx_video_set_scanlines(look.scanlines, look.scanline_strength_pct / 100.0f);
+    g_video_screen = look.screen_kind;
+    gpu_set_screen_kind(g_video_screen);
+    g_video_aa = look.present_linear != 0;
+    g_video_texfilter = look.texture_filter;
+    if (g_mod_texfilter < 0) gr_set_texture_filter(g_video_texfilter);
+    g_video_fmv_filter = look.fmv_filter;
+    if (g_gl_active) gl_renderer_set_fmv_filter(g_video_fmv_filter);
+}
+
+/* ---- The session's internal resolution (host_enhancements.h) ------------
+ * The title's baseline (g_title_resolution, its legacy factor and supersample)
+ * restored at every session start, then the Internal Resolution mod's choice
+ * from this session's activation. Called at the renderer setup after
+ * start_mod_session, before the PSX_INTERNAL_RESOLUTION / PSX_SUPERSAMPLE
+ * env overrides and the scale resolution. */
+static void session_internal_resolution(void) {
+    PsxHostEnhRequests req;
+    psx_host_enh_requests(&req);
+    const PsxHostResolution r = psx_host_enh_resolve_resolution(&g_title_resolution, &req);
+    g_video_internal_res = r.internal_resolution;
+    g_video_dynres = r.dynamic_resolution;
+    g_video_scale = g_title_scale;
+    g_video_ss_milli = g_title_ss_milli;
+    if (req.resolution && req.resolution_value != PSX_IR_UNSET) {
+        const char* lbl = psx_ir_label_for(req.resolution_value);
+        std::fprintf(stdout, "psxrecomp: host enhancements: Internal Resolution %s\n",
+                     lbl ? lbl : "?");
+    }
+}
+
 /* ---- Live video apply (host_overlay.h P4) ------------------------------- */
 static std::filesystem::path g_overlay_settings_path;  /* settings.toml */
 static PsxHostVideoSettings g_video_boot;              /* as the session booted */
@@ -10548,15 +10489,10 @@ extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     if (!v) return;
     std::memset(v, 0, sizeof *v);
     v->fullscreen = s_window_fullscreen.mode;
-    v->texture_filter = g_video_texfilter;
-    v->fmv_filter = g_video_fmv_filter;
-    v->scanlines = g_video_scanlines ? 1 : 0;
-    v->scanline_strength_pct = (int)(g_video_scanline_strength * 100.0f + 0.5f);
-    v->present_linear = g_video_aa ? 1 : 0;
-    v->dynamic_resolution = g_video_dynres ? 1 : 0;
     v->frame_generation = g_frame_generation ? 1 : 0;
     v->renderer = g_video_renderer;
-    v->internal_resolution = g_video_internal_res;
+    /* The player's choice: Auto while dynamic resolution is on. */
+    v->internal_resolution = g_video_dynres ? PSX_IR_AUTO : g_video_internal_res;
     /* The legacy factor as booted: the live scale moves with the internal
      * resolution and supersample, which apply without a relaunch. */
     v->supersampling = g_video_boot_valid ? g_video_boot.supersampling : g_video_scale;
@@ -10570,23 +10506,65 @@ extern "C" void psx_video_current(PsxHostVideoSettings *v) {
     }
 }
 
+/* Move the session to an internal resolution while the game runs: the value
+ * (PSX_IR_UNSET: the title's legacy supersampling factor), dynamic resolution
+ * under it, and the supersample factor (out of range: unchanged). The GL
+ * owner confirms allocation/application before this returns. The request is
+ * kept either way; the session's scale only moves when the backend takes it,
+ * otherwise the change waits for a relaunch and the restart bits say so.
+ * Returns 1 when the new scale applied now. Main thread. */
+static int video_resolution_apply_live(int ir, int dynres, int ss_milli) {
+    const int was_dynres = g_video_dynres;
+    g_video_internal_res = ir;
+    g_video_dynres = dynres ? 1 : 0;
+    if (ss_milli >= PSX_SS_MILLI_MIN && ss_milli <= PSX_SS_MILLI_MAX)
+        g_video_ss_milli = ss_milli;
+    const int shown = g_video_dynres ? PSX_IR_AUTO : g_video_internal_res;
+    const int prev_scale = g_video_scale;
+    video_res_refresh_capable();
+    int applied = 0;
+    if (g_video_res_live_capable.load()) {
+        /* No value anywhere: the title's legacy factor is the scale. */
+        if (effective_internal_resolution() == PSX_IR_UNSET) g_video_scale = g_title_scale;
+        apply_internal_resolution(match_display_px_h(sdl_window));
+        applied = gl_renderer_set_internal_scale_live(g_video_scale);
+    }
+    if (applied) {
+        std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
+        g_video_scale = applied;
+        video_res_set_applied(shown, g_video_ss_milli);
+        g_video_res_live_failed.store(false);
+        dynres_setup();   /* the new scale is the controller's ceiling */
+    } else {
+        g_video_scale = prev_scale;
+        g_video_res_live_failed.store(true);
+        std::fprintf(stdout, "psxrecomp: internal resolution change needs a "
+                             "relaunch (live change unavailable)\n");
+    }
+    /* Into or out of Auto: the controller follows the choice. */
+    if (!dynres_requested()) {
+        g_dynres.active = false;
+    } else if (!was_dynres || !g_dynres.active) {
+        dynres_setup();
+        if (!g_dynres.active && gl_renderer_dynamic_resolution_ceiling() >= 2)
+            g_dynres.active = true;
+    }
+    return applied ? 1 : 0;
+}
+
 extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
     if (!next) return 0;
     PsxHostVideoSettings cur;
     psx_video_current(&cur);
     unsigned m = psx_host_video_live_changes(&cur, next);
-    /* A governed value changed here makes the preset Custom when it is saved
-     * below (psxq::settle_save), so the next launch keeps it. */
-    if (g_quality_offered && g_quality_edit == psxq::Edit::NONE)
-        g_quality_edit = psxq::live_edit(cur, *next, g_quality_keys);
     unsigned deferred = 0;
-    /* Netplay: dynamic resolution, frame generation and the filters change
-     * how a peer renders mid-match; only the presentation of the frame we
-     * already show may change. The rest is saved for the next session. */
+    /* Netplay: the resolution and frame generation change how a peer renders
+     * mid-match; only the presentation of the frame we already show may
+     * change. The rest is saved for the next session. (Screen model,
+     * scanlines and filtering are host-only mods now, changed through the
+     * mod options: psx_mod_set_option_live.) */
     if (psx_netplay_active()) {
-        const unsigned present_only = PSX_VIDEO_LIVE_FULLSCREEN |
-                                      PSX_VIDEO_LIVE_SCANLINES |
-                                      PSX_VIDEO_LIVE_PRESENT_LINEAR;
+        const unsigned present_only = PSX_VIDEO_LIVE_FULLSCREEN;
         if (m & ~present_only) deferred = PSX_VIDEO_RESTART_NETPLAY;
         m &= present_only;
     }
@@ -10595,80 +10573,53 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
         apply_present_cadence();
         log_present_cadence();
     }
-    if (m & PSX_VIDEO_LIVE_TEXTURE_FILTER) {
-        g_video_texfilter = psx_texture_filter_from_ui(next->texture_filter);
-        if (g_mod_texfilter < 0) gr_set_texture_filter(g_video_texfilter);
-    }
-    if (m & PSX_VIDEO_LIVE_FMV_FILTER) {
-        g_video_fmv_filter = next->fmv_filter;
-        if (g_gl_active) gl_renderer_set_fmv_filter(g_video_fmv_filter);
-    }
-    if (m & PSX_VIDEO_LIVE_SCANLINES)
-        psx_video_set_scanlines(next->scanlines, next->scanline_strength_pct / 100.0f);
-    if (m & PSX_VIDEO_LIVE_PRESENT_LINEAR) g_video_aa = next->present_linear != 0;
-    if (m & PSX_VIDEO_LIVE_DYNRES) {
-        g_video_dynres = next->dynamic_resolution ? 1 : 0;
-        if (!g_video_dynres) g_dynres.active = false;
-        else { dynres_setup(); if (!g_dynres.active && gl_renderer_dynamic_resolution_ceiling() >= 2) g_dynres.active = true; }
-    }
     if (m & PSX_VIDEO_LIVE_RESOLUTION) {
-        /* The GL owner confirms allocation/application before this returns. */
-        if (next->internal_resolution != PSX_IR_UNSET)
-            g_video_internal_res = next->internal_resolution;
-        if (next->supersample_milli >= PSX_SS_MILLI_MIN &&
-            next->supersample_milli <= PSX_SS_MILLI_MAX)
-            g_video_ss_milli = next->supersample_milli;
-        /* The request is kept (and saved) either way; the session's scale
-         * only moves when the backend takes it. Otherwise the change waits
-         * for a relaunch and the restart bits say so. */
-        const int prev_scale = g_video_scale;
-        video_res_refresh_capable();
-        int applied = 0;
-        if (g_video_res_live_capable.load()) {
-            apply_internal_resolution(match_display_px_h(sdl_window));
-            applied = gl_renderer_set_internal_scale_live(g_video_scale);
+        /* Auto is Match display with dynamic resolution on; a fixed choice
+         * turns it off. Unchanged, the session's own choice stands. */
+        int ir = g_video_internal_res, dynres = g_video_dynres;
+        if (next->internal_resolution != PSX_IR_UNSET &&
+            next->internal_resolution != cur.internal_resolution) {
+            ir = next->internal_resolution;
+            dynres = psx_ir_is_auto(ir) ? 1 : 0;
         }
-        if (applied) {
-            std::fprintf(stdout, "psxrecomp: internal scale %dx (live)\n", applied);
-            g_video_scale = applied;
-            video_res_set_applied(g_video_internal_res, g_video_ss_milli);
-            g_video_res_live_failed.store(false);
-            dynres_setup();   /* the new scale is the controller's ceiling */
-        } else {
-            g_video_scale = prev_scale;
-            g_video_res_live_failed.store(true);
-            std::fprintf(stdout, "psxrecomp: internal resolution change needs a "
-                                 "relaunch (live change unavailable)\n");
-        }
+        (void)video_resolution_apply_live(ir, dynres, next->supersample_milli);
     }
     if ((m & PSX_VIDEO_LIVE_FRAME_GEN) && g_gl_active) {
         g_frame_generation = next->frame_generation ? 1 : 0;
         gl_renderer_set_frame_generation(g_frame_generation);
     }
-    /* Persist everything the menu shows, live or not, like the launcher. */
+    /* Persist the player settings the menu shows, live or not, like the
+     * launcher. The internal resolution and supersample are not player
+     * settings (the Internal Resolution mod and the title own them): a
+     * debug-server change lasts for this session only. */
     if (!g_overlay_settings_path.empty()) {
         try {
             PSXRecompV4::UserSettings us = PSXRecompV4::load_user_settings(g_overlay_settings_path);
             us.fullscreen = next->fullscreen;                  us.has_fullscreen = true;
-            us.texture_filter = next->texture_filter;          us.has_texture_filter = true;
-            us.fmv_filter = next->fmv_filter;                  us.has_fmv_filter = true;
-            us.scanlines = next->scanlines != 0;               us.has_scanlines = true;
-            us.scanline_strength = next->scanline_strength_pct / 100.0; us.has_scanline_strength = true;
-            us.antialiasing = next->present_linear != 0;       us.has_antialiasing = true;
-            us.dynamic_resolution = next->dynamic_resolution != 0; us.has_dynamic_resolution = true;
             us.frame_generation = next->frame_generation != 0; us.has_frame_generation = true;
             us.renderer = next->renderer;                      us.has_renderer = true;
-            us.supersampling = next->supersampling;            us.has_supersampling = true;
             us.render_thread = next->render_thread != 0;       us.has_render_thread = true;
             us.present_thread = next->present_thread != 0;     us.has_present_thread = true;
-            us.internal_resolution = next->internal_resolution; us.has_internal_resolution = true;
-            us.supersample_milli = next->supersample_milli;
-            us.has_supersample = next->supersample_milli >= 1000;
-            (void)quality_save_user_settings(g_overlay_settings_path, us);
+            (void)PSXRecompV4::save_user_settings(g_overlay_settings_path, us);
         } catch (...) {
         }
     }
     return video_restart_bits(&g_video_boot, next) | deferred;
+}
+
+/* The Internal Resolution plugin's live option change (in-game menu): resolve
+ * again and move the scale now when the backend can. A netplay match holds
+ * the scale (psx_video_apply_live defers it the same way), and a backend
+ * without a live scale change waits for the next start: both return 0 and
+ * change nothing, so the plugin's choice applies at the next session. */
+static int host_resolution_apply_live(void) {
+    if (psx_netplay_active()) return 0;
+    video_res_refresh_capable();
+    if (!g_video_res_live_capable.load()) return 0;
+    PsxHostEnhRequests req;
+    psx_host_enh_requests(&req);
+    const PsxHostResolution r = psx_host_enh_resolve_resolution(&g_title_resolution, &req);
+    return video_resolution_apply_live(r.internal_resolution, r.dynamic_resolution, 0);
 }
 
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -13732,6 +13683,11 @@ namespace {
                 RecompLauncherCModFeature feature{};
                 if (!mods->feature_get(mods->ctx, i, &feature) || !feature.enabled)
                     continue;
+                /* Host-only features (CRT Filter, Image Filtering, ...) stay
+                 * each player's own: never part of the published plan. */
+                if (PSXRecompV4::mod_runtime_feature_host_only(feature.package_id,
+                                                               feature.id))
+                    continue;
                 int pkg_index = -1;
                 for (int j = 0; j < caps->mod_count; ++j) {
                     if (std::strcmp(caps->mods[j].id, feature.package_id) == 0) {
@@ -16699,192 +16655,6 @@ namespace {
         "Fast-forward toggle",
     };
 
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-    /* Internal resolution vocabulary for the launcher's Display card: the
-     * presets, plus the player's current legacy factor as its own "Nx (L
-     * lines)" entry when no preset matches it, so nothing changes silently. */
-    static const char* g_ir_labels[PSX_IR_PRESET_COUNT + 1];
-    static int         g_ir_values[PSX_IR_PRESET_COUNT + 1];
-    static int         g_ir_count = 0;
-    static char        g_ir_custom_label[48];
-    static const char  kIrNote[] =
-        "Above 4x: OpenGL only. Past 16x on Apple GPUs only the displayed "
-        "frame is kept at full resolution.";
-    static void build_internal_resolution_vocab(int current) {
-        g_ir_count = 0;
-        for (int i = 0; i < PSX_IR_PRESET_COUNT; i++) {
-            g_ir_labels[g_ir_count] = k_psx_ir_presets[i].label;
-            g_ir_values[g_ir_count] = k_psx_ir_presets[i].value;
-            g_ir_count++;
-        }
-        if (current >= PSX_IR_MIN_LINES && !psx_ir_id_for(current)) {
-            int s = psx_ir_scale_for(current, g_video_ref_lines, 0);
-            std::snprintf(g_ir_custom_label, sizeof g_ir_custom_label,
-                          "%dx (%d lines)", s, current);
-            g_ir_labels[g_ir_count] = g_ir_custom_label;
-            g_ir_values[g_ir_count] = current;
-            g_ir_count++;
-        }
-    }
-#endif
-
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-    /* Graphics presets in the launcher (docs/QUALITY_PRESETS.md). */
-    std::string g_quality_summary_s, g_quality_reason_s;
-
-    /* The display height the internal-resolution rows are seeded for. Set on
-     * the main thread (pre-game fill, in-game menu setup); the mapper below
-     * only reads it. */
-    std::atomic<int> g_quality_display_h{0};
-
-    /* A preset's rows, side-effect free: computed from its parsed [video]
-     * block and startup constants (reference lines, env overrides), never
-     * from or into the live globals. Safe on any thread -- the in-game menu
-     * calls it from its draw thread while the game runs. */
-    psxq::Rows quality_rows_for(const PSXRecompV4::RuntimeConfig& r) {
-        return psxq::rows_from_runtime(r, g_video_dynres_env >= 0, g_video_dynres_env,
-                                       g_video_dynres_min_env != PSX_IR_UNSET,
-                                       g_video_dynres_min_env);
-    }
-    psxq::Rows quality_rows_of(const RecompLauncherCSettings& s) {
-        psxq::Rows r;
-        r.texture_filter = s.texture_filter;
-        r.fmv_filter = s.fmv_filter;
-        r.antialiasing = s.antialiasing;
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-        r.dynamic_resolution = s.dynamic_resolution;
-        r.dynamic_resolution_min = s.dynamic_resolution_min;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
-        r.render_thread = s.render_thread;
-        r.present_thread = s.present_thread;
-        r.frame_generation = s.frame_generation;
-#endif
-        r.geometry_correction = s.geometry_correction;
-        r.perspective_texturing = s.perspective_texturing;
-        r.frame_interp = s.frame_interp;
-        r.frame_interp_fps = s.frame_interp_fps;
-        return r;
-    }
-    void quality_rows_to(const psxq::Rows& r, RecompLauncherCSettings* s) {
-        s->texture_filter = r.texture_filter;
-        s->fmv_filter = r.fmv_filter;
-        s->antialiasing = r.antialiasing;
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-        s->dynamic_resolution = r.dynamic_resolution;
-        s->dynamic_resolution_min = r.dynamic_resolution_min;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
-        s->render_thread = r.render_thread;
-        s->present_thread = r.present_thread;
-        s->frame_generation = r.frame_generation;
-#endif
-        s->geometry_correction = r.geometry_correction;
-        s->perspective_texturing = r.perspective_texturing;
-        s->frame_interp = r.frame_interp;
-        s->frame_interp_fps = r.frame_interp_fps;
-    }
-    bool quality_preset_rows(int tier, psxq::Rows* out) {
-        const auto* p = quality_preset_for(tier);
-        if (!p) return false;
-        *out = quality_rows_for(p->runtime);
-        return true;
-    }
-
-    /* Fill the launcher rows a preset sets (Settings encodings). Pure. */
-    void quality_launcher_apply(int preset, RecompLauncherCSettings* s) {
-        const auto* p = quality_preset_for(preset - 1);
-        if (!p || !s) return;
-        const PSXRecompV4::RuntimeConfig& r = p->runtime;
-        quality_rows_to(quality_rows_for(r), s);
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-        s->internal_resolution = r.video_internal_resolution != PSX_IR_UNSET
-            ? r.video_internal_resolution
-            : psx_ir_from_supersampling(r.video_supersampling < 1 ? 1 : r.video_supersampling,
-                                        g_video_ref_lines);
-#endif
-        s->supersampling = psx_ir_launcher_seed_supersampling(
-            kLauncherHasInternalResolution, r.video_internal_resolution, r.video_supersampling,
-            g_video_ref_lines, g_quality_display_h.load());
-    }
-
-    void quality_publish_strings(void) {
-        g_quality_summary_s = g_quality.summary;
-        g_quality_reason_s = g_quality.reason;
-    }
-
-    /* Re-detect: a fresh detection (GL probe included), saved on launch. */
-    int quality_launcher_redetect(void) {
-        PsxHostInfo host;
-        psx_quality_probe_host(&host);
-        PSXRecompV4::UserSettings none;
-        psxq::Decision d = psxq::decide(g_quality_offered, none, host, nullptr, true,
-                                        quality_gl_probe);
-        if (d.preset < 0 || d.preset >= PSX_QUALITY_COUNT) return 0;
-        g_quality.detected = d.detected;
-        g_quality.fingerprint = d.fingerprint;
-        g_quality.summary = d.summary;
-        g_quality.reason = d.reason;
-        g_quality.detected_now = true;
-        quality_publish_strings();
-        return d.preset + 1;
-    }
-
-    void quality_fill_game_info(RecompLauncherCGameInfo* gi) {
-        if (!g_quality_offered) return;
-        quality_publish_strings();
-        g_quality_display_h = match_display_px_h(nullptr);
-        gi->quality_offered_mask = (int)g_quality_offered;
-        gi->quality_detected = (g_quality.detected >= 0 && g_quality.detected < PSX_QUALITY_COUNT)
-            ? g_quality.detected + 1 : 0;
-        gi->quality_summary = g_quality_summary_s.c_str();
-        gi->quality_reason = g_quality_reason_s.c_str();
-        gi->quality_apply = quality_launcher_apply;
-        gi->quality_redetect = quality_launcher_redetect;
-    }
-
-    /* Settings.quality_* <-> the decision (1-based in the launcher). */
-    void quality_seed_launcher(RecompLauncherCSettings* ls) {
-        if (!g_quality_offered) return;
-        ls->quality_preset = g_quality.preset >= 0 ? g_quality.preset + 1 : 0;
-        ls->quality_base = g_quality.base >= 0 ? g_quality.base + 1 : 0;
-    }
-
-    /* After the launcher: classify what the player did (Settings.quality_preset,
-     * the same contract in recomp-ui and recomp-launcher), and apply a newly
-     * picked preset's keys the launcher has no row for. The state itself is
-     * settled when settings.toml is saved (quality_save_user_settings). */
-    void quality_take_launcher(const RecompLauncherCSettings* ls,
-                               PSXRecompV4::UserSettings* /*us*/, bool apply_now) {
-        if (!g_quality_offered) return;
-        const psxq::LauncherEdit le = psxq::classify_launcher(
-            ls->quality_preset, ls->quality_base, quality_rows_of(*ls),
-            g_quality.preset, g_quality.base, g_quality_keys, quality_preset_rows);
-        if (le.edit == psxq::Edit::NONE && !le.set_base) return;
-        if (le.edit != psxq::Edit::NONE) g_quality_edit = le.edit;
-        if (le.edit == psxq::Edit::PICK) {
-            g_quality_picked = le.picked;
-            if (apply_now && !g_quality.env_override) {
-                if (const auto* p = quality_preset_for(le.picked)) {
-                    /* The launcher wrote this preset's values into its rows,
-                     * which the launch path applies next; this covers the rest
-                     * (supersample, PGXP extras, ...). */
-                    quality_apply_video_globals(p->runtime);
-                    if (ls->quality_preset - 1 != PSX_QUALITY_CUSTOM)
-                        std::fprintf(stdout, "psxrecomp: graphics preset %s\n",
-                                     psx_quality_name(le.picked));
-                }
-            }
-            return;
-        }
-        if (le.set_base) {
-            g_quality.base = le.base;
-            if (apply_now && le.base_changed)
-                if (const auto* p = quality_preset_for(le.base)) quality_apply_video_globals(p->runtime);
-        }
-    }
-#endif
-
     void ae_rui_set_sidecar_paths(const char* argv0) {
         const auto exe = exe_dir_from_argv(argv0 ? argv0 : "");
         g_rui_keybinds_path = (exe / "keybinds.ini").string();
@@ -16912,7 +16682,7 @@ namespace {
         (void)ws_offered_b;
         (void)ws_ultrawide_offered_b;
         launcher_profile_apply("psx", gi);
-        psx_launcher_texture_filter_catalog(gi);
+        psx_launcher_hide_mod_owned_rows(gi);
 #if defined(RECOMP_LAUNCHER_HAS_ARTWORK_GALLERY)
         /* A regional package keeps its covers beside the shared entry, not
          * per backend; elsewhere the launcher uses <exe dir>/artwork. */
@@ -16978,29 +16748,8 @@ namespace {
 #endif
         gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
         gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
-        /* The Perspective textures row. Hidden for a title that ships PGXP
-         * through the psx.enhancement.pgxp mod ([video] pgxp_mod_only): the
-         * Mods page is then its one switch, and the row's value is not
-         * applied, so showing it would be a second control that does
-         * nothing. */
-        gi->has_geometry_precision = g_video_pgxp_mod_only ? 0 : 1;
-        gi->has_rewind_depth = 1;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-        /* The Supersampling row becomes an Internal resolution list. */
-        build_internal_resolution_vocab(internal_resolution_for_launcher());
-        gi->internal_resolution_labels = g_ir_labels;
-        gi->internal_resolution_values = g_ir_values;
-        gi->num_internal_resolutions = g_ir_count;
-        gi->internal_resolution_note = kIrNote;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-        gi->has_dynamic_resolution = 1;
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
         gi->has_render_pipeline = g_offer_render_pipeline ? 1 : 0;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-        quality_fill_game_info(gi);
 #endif
         if (language_labels && num_languages > 0) {
             gi->language_labels = language_labels;
@@ -17186,52 +16935,14 @@ bool g_ovl_netplay = false;
 
 /* Only the main thread reads live runtime state. Provider draw callbacks
  * consume a coherent snapshot under the same mutex as their posted edits. */
-#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-/* Graphics presets in the menu: the run's preset state and the live rows a
- * preset governs, captured on the main thread; the player's selection
- * (psxq::MenuSelection) so a provider is re-seeded with what it chose, not
- * with live values a pick or a netplay match defers. */
-int g_ovl_q_preset = 0, g_ovl_q_base = 0;
-std::atomic<int> g_ovl_q_detected{0};
-psxq::Rows g_ovl_q_live{};
-psxq::MenuSelection g_ovl_q_sel;
-std::string g_ovl_q_summary, g_ovl_q_reason;   /* fixed at menu setup */
-psxq::Rows mh_quality_live_rows(const PsxHostVideoSettings& v) {
-    psxq::Rows r;
-    r.texture_filter = v.texture_filter;
-    r.fmv_filter = cfg_fmv_filter_to_launcher(v.fmv_filter);
-    r.antialiasing = v.present_linear;
-    r.dynamic_resolution = v.dynamic_resolution;
-    r.dynamic_resolution_min = dynres_min_value();
-    r.frame_generation = v.frame_generation;
-    r.render_thread = v.render_thread;
-    r.present_thread = v.present_thread;
-    r.geometry_correction = g_video_geometry_correction ? 1 : 0;
-    r.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
-    r.frame_interp = g_frame_interpolation ? 1 : 0;
-    r.frame_interp_fps = g_frame_interpolation_fps;
-    return r;
-}
-#endif
-
 void mh_refresh_snapshot() {
     PsxHostVideoSettings current;
     psx_video_current(&current);
     const bool netplay = psx_netplay_active() != 0;
-#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-    const psxq::Rows qlive = mh_quality_live_rows(current);
-    RecompLauncherCSettings q{};
-    quality_seed_launcher(&q);
-#endif
     std::lock_guard<std::mutex> lk(g_ovl_mu);
     g_ovl_video_current = current;
     g_ovl_video_boot = g_video_boot;
     g_ovl_netplay = netplay;
-#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-    g_ovl_q_live = qlive;
-    g_ovl_q_preset = q.quality_preset;
-    g_ovl_q_base = q.quality_base;
-#endif
 }
 int mh_netplay_active(void) {
     std::lock_guard<std::mutex> lk(g_ovl_mu);
@@ -17263,7 +16974,7 @@ unsigned mh_restart_bits(const PsxHostVideoSettings& next) {
      * the live value) and the result differs from what the session booted
      * with. The live internal resolution moves under dynamic resolution, so
      * comparing with boot alone flagged edits that never touched it (an
-     * in-game texture filter change relaunched the game). */
+     * in-game fullscreen change relaunched the game). */
     unsigned out = video_restart_bits(&g_ovl_video_boot, &next) &
                    psx_host_video_restart_bits(&now, &next);
     /* A resolution edit the backend cannot apply live waits for a relaunch
@@ -17274,8 +16985,7 @@ unsigned mh_restart_bits(const PsxHostVideoSettings& next) {
     /* In a netplay match only presentation applies live (psx_video_apply_live);
      * the rest waits for the next session. */
     if (g_ovl_netplay &&
-        (psx_host_video_live_changes(&now, &next) &
-         ~(PSX_VIDEO_LIVE_FULLSCREEN | PSX_VIDEO_LIVE_SCANLINES | PSX_VIDEO_LIVE_PRESENT_LINEAR)))
+        (psx_host_video_live_changes(&now, &next) & ~PSX_VIDEO_LIVE_FULLSCREEN))
         out |= PSX_MENU_RESTART_AFTER_MATCH;
     return out;
 }
@@ -17293,10 +17003,14 @@ std::vector<OvlModSet> g_ovl_mod_posts;
 /* The provider never touches the mod catalogue itself (it may run on the GL
  * thread): every change is posted here, recorded in the catalogue and saved
  * to mods/state.toml on the main thread, and handed to a live-capable plugin.
- * option == NULL is the feature switch (value "true"/"false"): restart. */
+ * option == NULL is the feature switch (value "true"/"false"): restart.
+ * During netplay the plan is negotiated with the peers, so nothing changes --
+ * except an option of a host-only feature (CRT Filter, Image Filtering,
+ * Internal Resolution, ...), which is only this player's presentation or
+ * audio and is never part of the plan (psx_mod_option_live_host_only). */
 int mh_mod_set(const char* p, const char* f, const char* o, const char* v) {
     if (!p || !f || !v) return 0;
-    if (psx_netplay_active()) return 0;  /* the plan is negotiated with peers */
+    if (psx_netplay_active() && !(o && psx_mod_option_live_host_only(p, f))) return 0;
     std::lock_guard<std::mutex> lk(g_ovl_mu);
     g_ovl_mod_posts.push_back({p, f, o ? o : "", v});
     return o ? psx_mod_option_live_capable(p, f) : 0;
@@ -17339,27 +17053,18 @@ int mh_disc_insert(int n) {
 }
 
 #if defined(RECOMP_LAUNCHER)
-/* Shared launcher ABI helpers: the same translations the pre-game launcher
- * handoff uses (texture filter, FMV filter), so the two cannot drift. */
+/* The launcher-Settings view of the in-game menu: the same rows as the
+ * pre-game launcher's Settings page. The internal resolution is not one of
+ * them: the Internal Resolution mod's option changes it live (Mods page). */
 const char* const kOvlRenderers[] = {"Software", "OpenGL", "Vulkan"};
 PsxHostVideoSettings ovl_video_from(const RecompLauncherCSettings& ls) {
     PsxHostVideoSettings v;
     mh_video_get(&v);  /* keeps fields the menu does not show */
     v.fullscreen = ls.fullscreen ? (v.fullscreen ? v.fullscreen : 1) : 0;
-    v.texture_filter = psx_texture_filter_from_ui(ls.texture_filter);
-    v.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
-    v.scanlines = ls.scanlines ? 1 : 0;
-    v.scanline_strength_pct = ls.scanline_strength_pct;
-    v.present_linear = ls.antialiasing ? 1 : 0;
-    v.dynamic_resolution = ls.dynamic_resolution ? 1 : 0;
     v.frame_generation = ls.frame_generation ? 1 : 0;
     v.renderer = ls.renderer;
     v.render_thread = ls.render_thread ? 1 : 0;
     v.present_thread = ls.present_thread ? 1 : 0;
-    if (ls.internal_resolution != 0) v.internal_resolution = ls.internal_resolution;
-#if defined(RECOMP_LAUNCHER_HAS_SUPERSAMPLE)
-    if (ls.supersample_milli >= 1000) v.supersample_milli = ls.supersample_milli;
-#endif
     return v;
 }
 void mh_launcher_settings_get(RecompLauncherCSettings* out) {
@@ -17368,32 +17073,10 @@ void mh_launcher_settings_get(RecompLauncherCSettings* out) {
     mh_video_get(&v);
     RecompLauncherCSettings& ls = *out;
     ls.fullscreen = v.fullscreen;
-    ls.texture_filter = v.texture_filter;
-    ls.fmv_filter = cfg_fmv_filter_to_launcher(v.fmv_filter);
-    ls.scanlines = v.scanlines;
-    ls.scanline_strength_pct = v.scanline_strength_pct;
-    ls.antialiasing = v.present_linear;
-    ls.dynamic_resolution = v.dynamic_resolution;
     ls.frame_generation = v.frame_generation;
     ls.renderer = v.renderer;
     ls.render_thread = v.render_thread;
     ls.present_thread = v.present_thread;
-    ls.internal_resolution = internal_resolution_for_launcher();
-#if defined(RECOMP_LAUNCHER_HAS_SUPERSAMPLE)
-    ls.supersample_milli = v.supersample_milli;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-    /* Every row a preset governs, the hidden ones included, as the player
-     * selected them (main-thread snapshot): a pick's next-launch rows and
-     * netplay-deferred rows stay selected, so the host's classification
-     * compares like for like with the preset in quality_preset/base. */
-    {
-        std::lock_guard<std::mutex> lk(g_ovl_mu);
-        quality_rows_to(g_ovl_q_sel.seed(g_ovl_q_live), &ls);
-        ls.quality_preset = g_ovl_q_preset;
-        ls.quality_base = g_ovl_q_base;
-    }
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK) && \
     defined(PSX_HAS_JOGCON_FFB_PLAYER_SETTING)
     ls.jogcon_force_feedback = psx_jogcon_ffb_player_enabled();
@@ -17413,44 +17096,20 @@ unsigned mh_launcher_settings_apply(const RecompLauncherCSettings* s) {
     }
     return mh_restart_bits(next);
 }
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-int mh_quality_redetect(void) { return g_ovl_q_detected.load(); }
-#endif
 void mh_launcher_game_info(RecompLauncherCGameInfo* out) {
     if (!out) return;
     RecompLauncherCGameInfo& gi = *out;
     launcher_profile_apply("psx", &gi);
-    psx_launcher_texture_filter_catalog(&gi);
+    psx_launcher_hide_mod_owned_rows(&gi);
     gi.name = g_ovl_name.c_str();
     gi.keybinds_path = g_ovl_keybinds.c_str();
     gi.config_path = g_ovl_config.c_str();
     gi.num_players = PSX_MAX_PLAYERS < 4 ? PSX_MAX_PLAYERS : 4;
     gi.renderer_labels = kOvlRenderers;
     gi.num_renderers = 2;
-    gi.has_supersampling = 0;            /* restart-only; set before boot */
-    gi.has_dynamic_resolution = 1;
-#if defined(RECOMP_LAUNCHER_HAS_SUPERSAMPLE)
-    gi.has_supersample = 1;              /* live with Internal resolution */
-#endif
     gi.has_render_pipeline = 1;
     gi.has_vsync = 0;
-    gi.has_rewind_depth = 0;
     gi.mods = PSXRecompV4::mod_runtime_launcher_provider();
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-    /* The Graphics preset contract, for providers that implement it. Only
-     * thread-safe callbacks: quality_apply is a pure preset -> rows mapping,
-     * and re-detect returns this session's detection (a fresh probe needs
-     * the GL context and mutates the run's state: it stays in the pre-game
-     * launcher). The strings were fixed on the main thread at menu setup. */
-    if (g_quality_offered) {
-        gi.quality_offered_mask = (int)g_quality_offered;
-        gi.quality_detected = g_ovl_q_detected.load();
-        gi.quality_summary = g_ovl_q_summary.c_str();
-        gi.quality_reason = g_ovl_q_reason.c_str();
-        gi.quality_apply = quality_launcher_apply;
-        gi.quality_redetect = mh_quality_redetect;
-    }
-#endif
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
     /* The same lobby the pre-game launcher drives, so the menu can host/join. */
     gi.netplay_supported = g_lnch_netplay_available ? 1 : 0;
@@ -17487,23 +17146,6 @@ void ovl_draw(int w, int h, void*) { if (g_ovl && g_ovl->draw) g_ovl->draw(g_ovl
 #endif
 
 static void recomp_overlay_setup(const char* argv0, const std::string& title) {
-#if defined(RECOMP_LAUNCHER) && defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-    /* Main thread: the preset strings and detection the menu publishes, and
-     * the display the preset rows are seeded for. Fixed before any provider
-     * attaches, never written while one can read them. */
-    if (g_quality_offered && !g_ovl_on) {
-        g_ovl_q_summary = g_quality.summary;
-        g_ovl_q_reason = g_quality.reason;
-        g_ovl_q_detected = (g_quality.detected >= 0 && g_quality.detected < PSX_QUALITY_COUNT)
-            ? g_quality.detected + 1 : 0;
-        g_quality_display_h = match_display_px_h(nullptr);
-        {
-            std::lock_guard<std::mutex> lk(g_ovl_mu);
-            g_ovl_q_sel.reset();
-        }
-        mh_refresh_snapshot();
-    }
-#endif
     const char* e = std::getenv("PSX_OVERLAY");
     const PsxMenuProvider* p = psx_menu_provider();
     g_menu_host.default_selection = 0;
@@ -17546,12 +17188,12 @@ extern "C" int psx_debug_menu_host_json(char* out, size_t cap) {
     return std::snprintf(out, cap,
         "\"provider\":\"%s\",\"attached\":%d,\"default_selection\":%d,\"open\":%d,"
         "\"paused\":%d,\"pause_depth\":%d,\"ui_capture\":%d,\"netplay\":%d,"
-        "\"texture_filter\":%d,\"fmv_filter\":%d,\"present_linear\":%d,\"fullscreen\":%d,"
+        "\"internal_resolution\":%d,\"fullscreen\":%d,"
         "\"render_thread\":%d,\"frame_generation\":%d,\"disc_count\":%d,\"disc_mounted\":%d",
         p && p->name ? p->name : "", g_ovl_on ? 1 : 0, g_menu_host.default_selection,
         ovl_open() ? 1 : 0, g_ovl_pause_held ? 1 : 0, psx_host_pause_depth(),
-        psx_host_ui_capture_active(), mh_netplay_active(), v.texture_filter, v.fmv_filter,
-        v.present_linear, v.fullscreen, v.render_thread, v.frame_generation, mh_disc_count(),
+        psx_host_ui_capture_active(), mh_netplay_active(), v.internal_resolution,
+        v.fullscreen, v.render_thread, v.frame_generation, mh_disc_count(),
         mh_disc_mounted());
 }
 
@@ -17615,29 +17257,8 @@ static void host_pause_service(void) {
     if (have_video) (void)psx_video_apply_live(&video);
 #if defined(RECOMP_LAUNCHER)
     if (have_ls) {
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-        /* The menu's Graphics preset row: classified like the launcher's
-         * (a pick, or a governed edit); the save below settles it. Rows the
-         * menu shows apply now, preset-only keys at the next launch. */
-        quality_take_launcher(&post, nullptr, false);
-#endif
         const PsxHostVideoSettings v = ovl_video_from(post);
         (void)psx_video_apply_live(&v);
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-        /* What the player selected versus what is live now: rows that wait
-         * (a pick's next-launch rows, netplay-deferred rows) stay selected
-         * for the next seed. Then refresh the preset state the save settled. */
-        {
-            PsxHostVideoSettings now;
-            psx_video_current(&now);
-            const psxq::Rows live = mh_quality_live_rows(now);
-            {
-                std::lock_guard<std::mutex> lk(g_ovl_mu);
-                g_ovl_q_sel.record(quality_rows_of(post), live);
-            }
-            mh_refresh_snapshot();
-        }
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK) && \
     defined(PSX_HAS_JOGCON_FFB_PLAYER_SETTING)
         /* Controls > Wheel force feedback (experimental): live, and saved to
@@ -18124,7 +17745,6 @@ int main(int argc, char** argv) {
     if (game_config_path) {
         try {
             auto gc = PSXRecompV4::load_game_config(game_config_path);
-            quality_startup(gc, exe_dir_from_argv(argv[0]) / "settings.toml");
             game_name = gc.name;
             game_id   = gc.id;
             game_region = gc.region;
@@ -18263,7 +17883,13 @@ int main(int argc, char** argv) {
             g_video_ref_lines    = gc.runtime.video_resolution_reference_lines;
             g_video_match_max_lines = gc.runtime.video_match_display_max_lines;
             g_video_ss_disable_at_lines = gc.runtime.video_supersample_disable_at_lines;
-            g_video_dynres       = gc.runtime.video_dynamic_resolution ? 1 : 0;
+            /* The title's dynamic resolution: its own switch, or Auto. */
+            g_video_dynres       = (gc.runtime.video_dynamic_resolution ||
+                                    psx_ir_is_auto(gc.runtime.video_internal_resolution)) ? 1 : 0;
+            /* The baseline the Internal Resolution mod resolves over. */
+            g_title_resolution.internal_resolution = g_video_internal_res;
+            g_title_resolution.dynamic_resolution = g_video_dynres;
+            g_title_scale = g_video_scale;
             g_video_dynres_min   = gc.runtime.video_dynamic_resolution_min;
             if (gc.runtime.video_window_width > 0) {
                 g_video_win_w = gc.runtime.video_window_width;
@@ -18276,6 +17902,7 @@ int main(int argc, char** argv) {
                 g_video_post_shader.assign(u8.begin(), u8.end());
             }
             g_video_ss_milli   = gc.runtime.video_supersample_milli;
+            g_title_ss_milli   = g_video_ss_milli;
             g_video_texfilter  = gc.runtime.video_texture_filter;
             g_video_fmv_filter = gc.runtime.video_fmv_filter;
             g_video_geometry_correction   =
@@ -18617,6 +18244,14 @@ int main(int argc, char** argv) {
                 psx_ws_set_backdrop_sites(gc.ws_backdrop_x_sites.data(),
                                           (int)gc.ws_backdrop_x_sites.size());
             g_audio_spu_hq     = gc.runtime.audio_spu_hq;
+            g_title_look.screen_kind = gc.runtime.video_screen_kind;
+            g_title_look.scanlines = gc.runtime.video_scanlines ? 1 : 0;
+            g_title_look.scanline_strength_pct =
+                (int)(gc.runtime.video_scanline_strength * 100.0 + 0.5);
+            g_title_look.present_linear = gc.runtime.video_antialiasing ? 1 : 0;
+            g_title_look.texture_filter = gc.runtime.video_texture_filter;
+            g_title_look.fmv_filter = gc.runtime.video_fmv_filter;
+            g_title_look.spu_hq = gc.runtime.audio_spu_hq ? 1 : 0;
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
@@ -18791,9 +18426,6 @@ int main(int argc, char** argv) {
 #endif
         PSXRecompV4::UserSettings us =
             PSXRecompV4::load_user_settings(settings_path);
-        /* A graphics preset in force owns its keys (docs/QUALITY_PRESETS.md). */
-        if (quality_preset_in_force())
-            psxq::mask_user_settings(us, g_quality_keys);
         user_settings_has_renderer = us.has_renderer;
         if (us.parse_error) {
             /* The file exists but is not valid TOML: every setting in it (the
@@ -18835,28 +18467,12 @@ int main(int argc, char** argv) {
         if (us.has_netplay_lobby_url && !us.netplay_lobby_url.empty())
             g_lnch_lobby_url = us.netplay_lobby_url;
 #endif
-        /* A player's legacy factor outranks the game's shipped preset; their
-         * own preset (written by this build) outranks both. */
-        if (us.has_supersampling) {
-            g_video_scale = us.supersampling;
-            g_video_internal_res = PSX_IR_UNSET;
-        }
-        if (us.has_internal_resolution) g_video_internal_res = us.internal_resolution;
-        if (us.has_supersample) g_video_ss_milli = us.supersample_milli;
-        if (us.has_dynamic_resolution) g_video_dynres = us.dynamic_resolution ? 1 : 0;
-        if (us.has_dynamic_resolution_min) g_video_dynres_min = us.dynamic_resolution_min;
         if (us.has_window_width)   g_video_win_w     = us.window_width;
-        if (us.has_antialiasing)   g_video_aa        = us.antialiasing;
-        if (us.has_texture_filter) g_video_texfilter = us.texture_filter;
-        if (us.has_fmv_filter)     g_video_fmv_filter = us.fmv_filter;
-        if (us.has_geometry_correction)
-            g_video_geometry_correction = us.geometry_correction ? 1 : 0;
-        if (us.has_perspective_texturing)
-            g_video_perspective_texturing = us.perspective_texturing ? 1 : 0;
-        if (us.has_screen_kind)    g_video_screen    = us.screen_kind;
-        if (us.has_scanlines)      g_video_scanlines = us.scanlines;
-        if (us.has_scanline_strength)
-            g_video_scanline_strength = (float)us.scanline_strength;
+        /* Internal resolution (and supersampling, dynamic resolution), screen
+         * model, scanlines, filtering, the high-quality SPU, rewind and the
+         * PGXP corrections are not settings.toml keys any more: the built-in
+         * mods own them over the title's baseline (host_enhancements.h,
+         * pgxp_session.h). Neither is the audio sample rate (g_audio_freq). */
         /* fov_scale precedence: game.toml < settings.toml < PSX_GTE_FOV_SCALE.
          * Bad values warn and leave the lower layer's value in place. */
         if (us.has_fov_scale) {
@@ -18892,11 +18508,6 @@ int main(int argc, char** argv) {
             g_video_aspect_num = us.aspect_num;
             g_video_aspect_den = us.aspect_den;
         }
-        if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
-        if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
-        if (us.has_rewind)        g_rewind_enabled = us.rewind ? 1 : 0;
-        if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
-        if (us.has_rewind_interval) g_rewind_interval = us.rewind_interval;
         if (us.has_hotkey_pad_rewind)
             g_hotkey_pad_rewind = normalize_hotkey_pad_binding(
                 us.hotkey_pad_rewind,
@@ -19478,45 +19089,14 @@ int main(int argc, char** argv) {
             bool match_session_bios_set = false;
             seed.vsync = g_video_vsync; seed.has_vsync = true;
             seed.renderer = g_video_renderer;             seed.has_renderer = true;
-            /* Internal resolution round trip (internal_resolution.h): only a
-             * launcher with the row seeds and returns the preset. An older one
-             * gets the legacy Supersampling row, and a pick there wins. */
-            const int ir_preset_seeded = g_video_internal_res;
-            const int ir_ss_seeded = psx_ir_launcher_seed_supersampling(
-                kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
-                g_video_ref_lines, match_display_px_h(nullptr));
-            seed.supersampling = ir_ss_seeded;            seed.has_supersampling = true;
-            int ir_row_result = PSX_IR_UNSET;   /* the row's pick, when it has one */
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-            seed.internal_resolution = internal_resolution_for_launcher();
-            seed.has_internal_resolution = true;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-            seed.dynamic_resolution = dynres_requested() != 0;
-            seed.has_dynamic_resolution = true;
-#endif
+            /* No Internal resolution / Supersampling round trip: the built-in
+             * Internal Resolution mod owns it (psx_launcher_hide_mod_owned_rows
+             * clears the row). */
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
             seed.render_thread = g_render_thread != 0;
             seed.present_thread = g_present_thread != 0;
             seed.frame_generation = g_frame_generation != 0;
 #endif
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-            seed.dynamic_resolution_min = dynres_min_value();
-            seed.has_dynamic_resolution_min = true;
-#endif
-            seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
-            seed.texture_filter = g_video_texfilter;      seed.has_texture_filter = true;
-            seed.fmv_filter = g_video_fmv_filter;         seed.has_fmv_filter = true;
-            /* Seeded (and marked present) so a launcher save round-trips the
-             * player's hand-edited value instead of dropping the key. */
-            seed.geometry_correction = (g_video_geometry_correction != 0);
-            seed.has_geometry_correction = true;
-            seed.perspective_texturing = (g_video_perspective_texturing != 0);
-            seed.has_perspective_texturing = true;
-            seed.screen_kind = g_video_screen;            seed.has_screen_kind = true;
-            seed.scanlines = g_video_scanlines;           seed.has_scanlines = true;
-            seed.scanline_strength = g_video_scanline_strength;
-            seed.has_scanline_strength = true;
             seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
             seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0);
@@ -19530,11 +19110,6 @@ int main(int argc, char** argv) {
             seed.has_frame_interpolation_fps = true;
             seed.aspect_num = g_video_aspect_num;
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
-            seed.audio_freq = g_audio_freq;               seed.has_audio_freq = true;
-            seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
-            seed.rewind = g_rewind_enabled != 0;          seed.has_rewind = true;
-            seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
-            seed.rewind_interval = g_rewind_interval;     seed.has_rewind_interval = true;
             seed.hotkey_pad_rewind = g_hotkey_pad_rewind;
             seed.has_hotkey_pad_rewind = true;
             seed.hotkey_pad_save_state_menu = g_hotkey_pad_save_state_menu;
@@ -19654,11 +19229,10 @@ int main(int argc, char** argv) {
             ls.window_scale   = std::max(1, std::min(4, g_video_win_w / 320));
             ls.fullscreen     = seed.fullscreen;
             ls.ignore_aspect  = 0;
-            ls.linear_filter  = (seed.texture_filter != 0) ? 1 : 0;
             ls.widescreen     = (seed.aspect_num == 16 && seed.aspect_den == 9) ? 1 : 0;
             ls.widescreen_hud = ls.widescreen;
             ls.enable_audio   = 1;
-            ls.audio_freq     = seed.audio_freq;
+            ls.audio_freq     = g_audio_freq;  /* fixed; the Sample rate row is hidden */
             ls.volume         = host_volume_get();
             {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
@@ -19707,32 +19281,10 @@ int main(int argc, char** argv) {
             if (ls.renderer == 0 && !user_settings_has_renderer &&
                 PSXRecompV4::DEFAULT_VIDEO_RENDERER != 0)
                 ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
-            ls.supersampling      = seed.supersampling;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-            ls.internal_resolution = seed.internal_resolution;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-            ls.dynamic_resolution = seed.dynamic_resolution ? 1 : 0;
-            ls.dynamic_resolution_min = seed.dynamic_resolution_min;
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
             ls.render_thread    = seed.render_thread ? 1 : 0;
             ls.present_thread   = seed.present_thread ? 1 : 0;
             ls.frame_generation = seed.frame_generation ? 1 : 0;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-            quality_seed_launcher(&ls);
-#endif
-            ls.antialiasing       = seed.antialiasing ? 1 : 0;
-            ls.texture_filter     = seed.texture_filter;
-            ls.fmv_filter         = cfg_fmv_filter_to_launcher(seed.fmv_filter);
-            ls.geometry_correction   = seed.geometry_correction ? 1 : 0;
-            ls.perspective_texturing = seed.perspective_texturing ? 1 : 0;
-            ls.screen_kind        = seed.screen_kind;
-#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
-            ls.scanlines             = seed.scanlines ? 1 : 0;
-            ls.scanline_strength_pct = seed.has_scanline_strength
-                ? (int)(seed.scanline_strength * 100.0 + 0.5) : 50;
 #endif
 #if defined(RECOMP_LAUNCHER_VSYNC_ADAPTIVE)
             /* [video] vsync (1 on, 0 off/immediate, -1 adaptive, 2 VRR) <->
@@ -19742,10 +19294,6 @@ int main(int argc, char** argv) {
 #endif
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
-            ls.spu_hq             = seed.spu_hq ? 1 : 0;
-            ls.rewind_enabled    = seed.rewind ? 1 : 0;
-            ls.rewind_depth      = seed.rewind_depth > 0 ? seed.rewind_depth : 50;
-            ls.rewind_interval   = seed.rewind_interval > 0 ? seed.rewind_interval : 15;
             ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
                 normalize_hotkey_pad_binding(seed.hotkey_pad_rewind,
                     PSX_HOTKEY_PAD_SELECT_R3);
@@ -20020,13 +19568,6 @@ int main(int argc, char** argv) {
                     default: seed.aspect_num = 4;  seed.aspect_den = 3; break;
                 }
                 seed.has_aspect_ratio = true;
-                /* has_texture_filter is on (PSX profile) so the launcher edits
-                 * ls.texture_filter as the [video] enum (psx_texture_filter_from_ui: 0 nearest, 1 bilinear, 3 xBR); ls.linear_filter
-                 * is the legacy fallback field for consoles without the cap and is
-                 * left unused here. */
-                seed.texture_filter = psx_texture_filter_from_ui(ls.texture_filter); seed.has_texture_filter = true;
-                seed.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
-                seed.has_fmv_filter = true;
                 {
                     const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                     const int un = std::min(n, PSXRecompV4::UserSettings::kMaxControllerPlayers);
@@ -20075,43 +19616,14 @@ int main(int argc, char** argv) {
                     seed.has_deadzone = true;
                 }
 
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-                /* Before the rows below: a new preset's keys without a row. */
-                quality_take_launcher(&ls, &seed, true);
-#endif
                 /* ---- deeper PSX-style settings write-back (mirrors the seed
                  * fields above), all gated on by the "psx" launcher_profile caps. */
                 seed.window_width          = ls.window_width;          seed.has_window_width          = true;
                 seed.renderer              = ls.renderer;              seed.has_renderer              = true;
-                seed.supersampling         = ls.supersampling;         seed.has_supersampling         = true;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-                ir_row_result = ls.internal_resolution;
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-                seed.dynamic_resolution = ls.dynamic_resolution != 0;
-                seed.has_dynamic_resolution = true;
-                seed.dynamic_resolution_min = ls.dynamic_resolution_min;
-                seed.has_dynamic_resolution_min = true;
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
                 seed.render_thread    = ls.render_thread != 0;    seed.has_render_thread    = true;
                 seed.present_thread   = ls.present_thread != 0;   seed.has_present_thread   = true;
                 seed.frame_generation = ls.frame_generation != 0; seed.has_frame_generation = true;
-#endif
-                seed.antialiasing          = ls.antialiasing != 0;     seed.has_antialiasing          = true;
-                seed.geometry_correction   = ls.geometry_correction != 0;
-                seed.has_geometry_correction = true;
-                seed.perspective_texturing = ls.perspective_texturing != 0;
-                seed.has_perspective_texturing = true;
-                seed.fmv_filter            = launcher_fmv_filter_to_cfg(ls.fmv_filter);
-                seed.has_fmv_filter        = true;
-                seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
-#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
-                seed.scanlines             = ls.scanlines != 0;        seed.has_scanlines             = true;
-                if (ls.scanline_strength_pct >= 0) {
-                    seed.scanline_strength = ls.scanline_strength_pct / 100.0;
-                    seed.has_scanline_strength = true;
-                }
 #endif
 #if defined(RECOMP_LAUNCHER_VSYNC_ADAPTIVE)
                 if (ls.vsync >= RECOMP_LAUNCHER_VSYNC_ON && ls.vsync <= RECOMP_LAUNCHER_VSYNC_ADAPTIVE) {
@@ -20122,14 +19634,6 @@ int main(int argc, char** argv) {
 #endif
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
-                seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
-                seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
-                seed.rewind                = ls.rewind_enabled != 0;
-                seed.has_rewind            = true;
-                seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
-                seed.has_rewind_depth      = true;
-                seed.rewind_interval       = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
-                seed.has_rewind_interval   = true;
                 seed.hotkey_pad_rewind = normalize_hotkey_pad_binding(
                     ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],
                     PSX_HOTKEY_PAD_SELECT_R3);
@@ -20290,7 +19794,7 @@ int main(int argc, char** argv) {
                 /* Keep settings changed and then dismissed with Quit. */
                 {
                     PSXRecompV4::UserSettings save = seed;
-                    (void)quality_save_user_settings(
+                    (void)PSXRecompV4::save_user_settings(
                         exe_dir_from_argv(argv[0]) / "settings.toml", save);
                 }
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
@@ -20366,21 +19870,8 @@ int main(int argc, char** argv) {
                     g_netplay_from_lobby = 0;
                 }
                 g_video_renderer  = seed.renderer;
-                {
-                    const PsxIrAdopted ir = psx_ir_adopt_launcher(
-                        kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,
-                        seed.supersampling, ir_row_result, g_video_ref_lines,
-                        match_display_px_h(nullptr), video_scale_ceiling());
-                    g_video_internal_res = ir.preset;
-                    g_video_scale        = ir.scale;
-                    seed.supersampling   = ir.save_ss;
-                    seed.has_internal_resolution = ir.save_ir != PSX_IR_UNSET;
-                    seed.internal_resolution     = ir.save_ir;
-                }
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-                g_video_dynres = seed.dynamic_resolution ? 1 : 0;
-                g_video_dynres_min = seed.dynamic_resolution_min;
-#endif
+                /* Internal resolution (and with it dynamic resolution) was
+                 * adopted with the write-back above. */
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
                 /* First boot: the pipeline has not started yet. */
                 g_render_thread    = seed.render_thread ? 1 : 0;
@@ -20388,17 +19879,6 @@ int main(int argc, char** argv) {
                 g_frame_generation = seed.frame_generation ? 1 : 0;
 #endif
                 g_video_vsync = seed.vsync;
-                g_video_aa        = seed.antialiasing;
-                g_video_texfilter = seed.texture_filter;
-                g_video_fmv_filter = seed.fmv_filter;
-                g_video_geometry_correction   = seed.geometry_correction ? 1 : 0;
-                g_video_perspective_texturing = seed.perspective_texturing ? 1 : 0;
-                g_video_screen    = seed.screen_kind;
-                if (seed.has_scanlines) g_video_scanlines = seed.scanlines;
-                if (seed.has_scanline_strength)
-                    g_video_scanline_strength = (float)seed.scanline_strength;
-                gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
-                                          g_video_scanline_strength);
                 g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled =
                     turbo_loads_offered && seed.turbo_loads ? 1 : 0;
@@ -20409,13 +19889,6 @@ int main(int argc, char** argv) {
                 g_frame_interpolation_fps = seed.frame_interpolation_fps;
                 g_video_aspect_num = seed.aspect_num;
                 g_video_aspect_den = seed.aspect_den;
-                g_audio_freq      = seed.audio_freq;
-                g_audio_spu_hq    = seed.spu_hq;
-                g_rewind_enabled = seed.has_rewind ? (seed.rewind ? 1 : 0) : 0;
-                g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
-                    ? seed.rewind_depth : 50;
-                g_rewind_interval = seed.has_rewind_interval && seed.rewind_interval > 0
-                    ? seed.rewind_interval : 15;
                 g_hotkey_pad_rewind = seed.has_hotkey_pad_rewind
                     ? seed.hotkey_pad_rewind
                     : PSX_HOTKEY_PAD_SELECT_R3;
@@ -20485,7 +19958,7 @@ int main(int argc, char** argv) {
                 /* Persist the user's choices next to the exe. */
                 {
                     PSXRecompV4::UserSettings save = seed;
-                    (void)quality_save_user_settings(
+                    (void)PSXRecompV4::save_user_settings(
                         exe_dir_from_argv(argv[0]) / "settings.toml", save);
                 }
             }
@@ -20811,6 +20284,10 @@ session_reboot:
                      g_headless && g_video_renderer != 0 ? " (headless)" : "");
     }
     gpu_init();
+    /* This session's internal resolution: the title's baseline and the
+     * Internal Resolution mod's request from start_mod_session's activation
+     * (first boot and rematch alike); the env overrides below still win. */
+    session_internal_resolution();
     /* Internal-resolution supersampling (SSAA). Must follow gpu_init.
      * Dual-raster: gr_set_scale(N) arms GL hr FBO @ N× while glb_set_scale
      * keeps SW at 1×. SW-only netplay: force scale 1. Offline: full SSAA. */
@@ -20896,6 +20373,13 @@ session_reboot:
                             (net_cfg.enabled && s_netplay_gl_present &&
                              gl_renderer_cpu_auth_dual());
     g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
+    /* This session's look: the title's baseline and the host enhancement
+     * mods' requests from start_mod_session's activation, which ran above for
+     * the first boot and for a rematch. The env overrides below still win
+     * for a validation run. */
+    session_host_look();
+    psx_host_enh_set_live_applier(host_look_apply_live);
+    psx_host_enh_set_resolution_applier(host_resolution_apply_live);
     if (const char* e = std::getenv("PSX_TEXTURE_FILTER")) g_video_texfilter = std::atoi(e);
     gr_set_texture_filter(g_mod_texfilter < 0 ? g_video_texfilter : g_mod_texfilter);
     /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
@@ -20995,7 +20479,7 @@ session_reboot:
                      pgxp_arm.culling ? ", precise culling" : "",
                      pgxp_in.mod_enabled ? " (PGXP mod)" : "",
                      (pgxp_arm.geometry && requested_scale < 2)
-                         ? " (needs [video] supersampling >= 2 to be visible)" : "");
+                         ? " (needs an internal resolution of 2x or more to be visible)" : "");
     }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
      * this aspect; native-wide fills it with a genuinely wider frame (no
@@ -22356,60 +21840,29 @@ soft_return_lobby:
         ls.disc_index = selected_disc_index;
         ls.fullscreen = g_fullscreen;
         ls.ignore_aspect = 0;
-        ls.linear_filter = (g_video_texfilter != 0) ? 1 : 0;
         ls.widescreen =
             (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.widescreen_hud = ls.widescreen;
         ls.enable_audio = 1;
-        ls.audio_freq = g_audio_freq;
+        ls.audio_freq = g_audio_freq;  /* fixed; the Sample rate row is hidden */
         ls.volume = host_volume_get();
         ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
         if (ls.renderer < 0 || ls.renderer > (vulkan_offered ? 2 : 1))
             ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
-        /* Internal resolution round trip, as at first boot. */
-        const int ir_preset_seeded = g_video_internal_res;
-        const int ir_ss_seeded = psx_ir_launcher_seed_supersampling(
-            kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
-            g_video_ref_lines, match_display_px_h(nullptr));
-        ls.supersampling = ir_ss_seeded;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-        ls.internal_resolution = internal_resolution_for_launcher();
-#endif
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-        ls.dynamic_resolution = dynres_requested() != 0;
-        ls.dynamic_resolution_min = dynres_min_value();
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
         /* The saved choice, not this run's (env A/B or already running). */
         ls.render_thread    = g_render_thread_pref;
         ls.present_thread   = g_present_thread_pref;
         ls.frame_generation = g_frame_generation_pref;
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-        quality_seed_launcher(&ls);
-#endif
 #endif
         ls.vsync = psx_vsync_to_launcher(launcher_vsync_preference());
-        ls.antialiasing = g_video_aa ? 1 : 0;
-        ls.texture_filter = g_video_texfilter;
-        ls.fmv_filter = cfg_fmv_filter_to_launcher(g_video_fmv_filter);
-        ls.geometry_correction = g_video_geometry_correction ? 1 : 0;
-        ls.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
-        ls.screen_kind = g_video_screen;
-#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
-        ls.scanlines             = g_video_scanlines ? 1 : 0;
-        ls.scanline_strength_pct = (int)(g_video_scanline_strength * 100.0f + 0.5f);
-#endif
         ls.frame_interp = g_frame_interpolation ? 1 : 0;
         ls.frame_interp_fps = g_frame_interpolation_fps;
-        ls.spu_hq = g_audio_spu_hq ? 1 : 0;
         ls.assist_fast_forward_multiplier = (int)std::lround(g_fast_forward_preference * 10.0);
         ls.fast_forward_toggle_mode = g_fast_forward_toggle_mode ? 1 : 0;
         ls.auto_skip_fmv = (skip_fmv_offered && g_auto_skip_fmv) ? 1 : 0;
         ls.turbo_loads = (turbo_loads_offered && g_turbo_loads_enabled) ? 1 : 0;
-        ls.rewind_enabled = g_rewind_enabled;
-        ls.rewind_depth = g_rewind_depth;
-        ls.rewind_interval = g_rewind_interval;
         ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
             normalize_hotkey_pad_binding(
                 g_hotkey_pad_rewind,
@@ -22697,15 +22150,6 @@ soft_return_lobby:
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                 }
             }
-            int ir_row_result = PSX_IR_UNSET;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-            ir_row_result = ls.internal_resolution;
-#endif
-            const PsxIrAdopted ir = psx_ir_adopt_launcher(
-                kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,
-                ls.supersampling, ir_row_result, g_video_ref_lines,
-                match_display_px_h(nullptr),
-                ls.renderer == 1 ? GL_MAX_INTERNAL_SCALE : SW_MAX_INTERNAL_SCALE);
             /* Persist controller (and rematch video) choices without wiping
              * the rest of settings.toml — merge into the on-disk file. */
             {
@@ -22777,67 +22221,21 @@ soft_return_lobby:
                 }
                 us.renderer = ls.renderer;
                 us.has_renderer = true;
-                us.supersampling = ir.save_ss;
-                us.has_supersampling = true;
-                us.internal_resolution = ir.save_ir;
-                us.has_internal_resolution = ir.save_ir != PSX_IR_UNSET;
-#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
-                us.dynamic_resolution = ls.dynamic_resolution != 0;
-                us.has_dynamic_resolution = true;
-                us.dynamic_resolution_min = ls.dynamic_resolution_min;
-                us.has_dynamic_resolution_min = true;
-                g_video_dynres = us.dynamic_resolution ? 1 : 0;
-                g_video_dynres_min = us.dynamic_resolution_min;
-#endif
 #if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
                 /* Persisted only: the running pipeline keeps its threads;
                  * the new choice applies at next launch. */
                 us.render_thread    = ls.render_thread != 0;    us.has_render_thread    = true;
                 us.present_thread   = ls.present_thread != 0;   us.has_present_thread   = true;
                 us.frame_generation = ls.frame_generation != 0; us.has_frame_generation = true;
-#if defined(RECOMP_LAUNCHER_HAS_QUALITY_PRESETS)
-                /* Persisted only; the preset applies at next launch. */
-                quality_take_launcher(&ls, &us, false);
-#endif
                 g_render_thread_pref    = ls.render_thread ? 1 : 0;
                 g_present_thread_pref   = ls.present_thread ? 1 : 0;
                 g_frame_generation_pref = ls.frame_generation ? 1 : 0;
 #endif
                 us.vsync = psx_vsync_from_launcher(ls.vsync, launcher_vsync_preference()); us.has_vsync = true;
-                us.antialiasing = ls.antialiasing != 0;
-                us.has_antialiasing = true;
-                us.texture_filter = psx_texture_filter_from_ui(ls.texture_filter);
-                us.has_texture_filter = true;
-                us.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
-                us.has_fmv_filter = true;
-                us.geometry_correction = ls.geometry_correction != 0;
-                us.has_geometry_correction = true;
-                us.perspective_texturing = ls.perspective_texturing != 0;
-                us.has_perspective_texturing = true;
-                us.screen_kind = ls.screen_kind;
-                us.has_screen_kind = true;
-#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
-                us.scanlines = ls.scanlines != 0;
-                us.has_scanlines = true;
-                if (ls.scanline_strength_pct >= 0) {
-                    us.scanline_strength = ls.scanline_strength_pct / 100.0;
-                    us.has_scanline_strength = true;
-                }
-#endif
                 us.frame_interpolation = ls.frame_interp != 0;
                 us.has_frame_interpolation = true;
                 us.frame_interpolation_fps = ls.frame_interp_fps;
                 us.has_frame_interpolation_fps = true;
-                us.audio_freq = ls.audio_freq;
-                us.has_audio_freq = true;
-                us.spu_hq = ls.spu_hq != 0;
-                us.has_spu_hq = true;
-                us.rewind = ls.rewind_enabled != 0;
-                us.has_rewind = true;
-                us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
-                us.has_rewind_depth = true;
-                us.rewind_interval = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
-                us.has_rewind_interval = true;
                 us.hotkey_pad_rewind = normalize_hotkey_pad_binding(
                     ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],
                     PSX_HOTKEY_PAD_SELECT_R3);
@@ -22880,24 +22278,13 @@ soft_return_lobby:
                     us.has_bios_path = false;
                     write_cached_path(argv[0], "bios.cfg", {});
                 }
-                (void)quality_save_user_settings(settings_path, us);
+                (void)PSXRecompV4::save_user_settings(settings_path, us);
             }
             g_video_renderer = ls.renderer;
-            g_video_internal_res = ir.preset;
-            g_video_scale = ir.scale;
-            g_video_aa = ls.antialiasing;
-            g_video_texfilter = psx_texture_filter_from_ui(ls.texture_filter);
-            g_video_fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
-            g_video_geometry_correction = ls.geometry_correction ? 1 : 0;
-            g_video_perspective_texturing = ls.perspective_texturing ? 1 : 0;
-            g_video_screen = ls.screen_kind;
-#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
-            g_video_scanlines = ls.scanlines != 0;
-            if (ls.scanline_strength_pct >= 0)
-                g_video_scanline_strength = ls.scanline_strength_pct / 100.0f;
-            gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
-                                      g_video_scanline_strength);
-#endif
+            /* The internal resolution, screen model, scanlines, filtering,
+             * high-quality SPU and rewind are the host enhancement mods': the
+             * rematch's session start resolves them again
+             * (session_internal_resolution, session_host_look). */
             /* Load acceleration and FMV skipping are mod-owned on PSX, and the
              * launcher struct these come from was snapshotted BEFORE
              * mod_runtime_activate_plugins() ran. Applying them here would
@@ -22915,34 +22302,6 @@ soft_return_lobby:
             g_video_vsync = psx_vsync_from_launcher(ls.vsync, launcher_vsync_preference());
             g_mod_owned_baseline.values.video_vsync = g_video_vsync;
             apply_present_cadence();
-            g_audio_freq = ls.audio_freq;
-            if (g_audio_spu_hq != (ls.spu_hq != 0)) {
-                g_audio_spu_hq = ls.spu_hq != 0;
-                spu_shadow_set_enabled(g_audio_spu_hq);
-                /* Re-prove only the optional output mix; preserve all guest
-                 * voices, SPU RAM, envelopes and timing. */
-                spu_shadow_reset();
-            }
-            if (ls.rewind_depth > 0) {
-                g_rewind_depth = ls.rewind_depth;
-                psx_rewind_set_depth((uint32_t)g_rewind_depth);
-            }
-            if (ls.rewind_interval > 0) {
-                g_rewind_interval = ls.rewind_interval;
-                psx_rewind_set_interval((uint32_t)g_rewind_interval);
-            }
-            /* Applied live so turning rewind off frees the ring now rather
-             * than next launch — reclaiming it is the point of the setting.
-             * shutdown() also closes the overlay and drops a pending load. */
-            if ((ls.rewind_enabled ? 1 : 0) != g_rewind_enabled) {
-                g_rewind_enabled = ls.rewind_enabled ? 1 : 0;
-                psx_rewind_set_enabled(g_rewind_enabled);
-                if (g_rewind_enabled)
-                    psx_rewind_configure(memory_get_bios_checksum(),
-                                         game_entry_pc);
-                else
-                    psx_rewind_shutdown();
-            }
             g_fast_forward_preference = psx_fast_forward_preference(ls.assist_fast_forward_multiplier / 10.0);
             g_fast_forward_toggle_mode = ls.fast_forward_toggle_mode != 0;
             g_hotkey_pad_rewind = normalize_hotkey_pad_binding(

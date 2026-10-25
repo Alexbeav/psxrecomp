@@ -196,10 +196,12 @@ Cost: extra CPU for the 1× SW pass. Benefit: peers can use different GL
 settings without desyncing the sim. SW-only netplay forces scale 1 for the
 whole path. Offline play keeps full supersampling with no dual-raster tax.
 
-**Internal resolution is a per-peer presentation setting.** Settings → Display →
-Internal resolution is not a mod, so it is not cleared for netplay: each peer
-keeps its own preset, clamped to its own GPU, and one peer at 4K next to another
-at Native is a supported match. Only the GL present surface changes; the 1×
+**Internal resolution is a per-peer presentation choice.** It is the built-in
+Internal Resolution mod (`psx.enhancement.internal-resolution`), a host-only
+mod (below), so it stays each player's own in netplay: each peer keeps its own
+preset, clamped to its own GPU, and one peer at 4K next to another at Native is
+a supported match. Its option does not change during a match (the scale is
+held); a change made then applies at the next session. Only the GL present surface changes; the 1×
 software authority, the digests and the rollback snapshots are the same on every
 peer. Mods are cleared for netplay, except a player's own-view mods (below),
 which stay per player and never touch the shared game.
@@ -456,6 +458,14 @@ guest allocations, the cycle-scale gate) refuses while one runs
 them. This is a determinism contract for trusted plugins, not a sandbox. Host-side calls that must not
 repeat on a resim (e.g. `psx_mod_set_host_rumble`) check
 `psx_netplay_is_resimulating()` themselves.
+
+A fourth class, `netplay = "host_only"` (format 11), is for plugins that never
+touch guest execution at all -- the framework's CRT Filter, Image Filtering,
+Enhanced Audio, Rewind and Internal Resolution mods: they only set host
+presentation, audio output or host-tool state. Their features are no part of the plan fingerprint and stay
+each player's own in every mode, content negotiation included: a host never
+publishes them and a host's plan never switches them (docs/MOD_PACKAGES.md
+"Host-only plugins").
 
 At a netplay session start the runtime resolves the player's own selection
 and keeps only features whose every contribution is such a plugin (no EXE or
