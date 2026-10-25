@@ -667,8 +667,8 @@ struct RuntimeConfig {
     // Hide unqualified threading/frame-generation controls in player packages.
     // Existing titles keep their current UI unless they opt out explicitly.
     bool                  video_offer_render_pipeline = true;
-    // [launcher] quick_controls: show Quick Mods and Quick Settings cards next
-    // to the memory cards on the launcher dashboard. Off by default.
+    // [launcher] quick_controls: show the Quick Mods card next to the memory
+    // cards on the launcher dashboard. Off by default.
     bool                  launcher_quick_controls = false;
 
     // texture_window_batching: OpenGL only. Let textured primitives with
