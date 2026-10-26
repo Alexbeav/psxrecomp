@@ -114,8 +114,9 @@ int psx_host_menu_overlay_image(const uint32_t **p,int *w,int *h) {
 
 int gpu_display_is_depth24(void){return 0;}
 void gpu_get_display_info(GpuDisplayInfo *out){memset(out,0,sizeof(*out));out->width=320;out->height=240;}
-int psx_ws_prim_in_backdrop(void){return 0;}
-int gpu_ws_nw_flat_backdrop_enabled(void){return 0;}
+static int test_backdrop_phase, test_flat_backdrop;
+int psx_ws_prim_in_backdrop(void){return test_backdrop_phase;}
+int gpu_ws_nw_flat_backdrop_enabled(void){return test_flat_backdrop;}
 static int test_background_full_composite;
 int gpu_ws_background_requires_full_composite(void){return test_background_full_composite;}
 /* Fixtures embedding this source rename main and supply their own frontend /
@@ -1284,6 +1285,51 @@ static int steps_main(int ceiling, int window, const char *chain, int fresh) {
     return failures ? 1 : 0;
 }
 
+/* A rope must meet its textured prop under both backdrop heuristics. Read the
+ * actual wide surface, including the queued mirror and supersampled paths. */
+static int backdrop_lines_main(int scale) {
+    test_background_full_composite = 1;
+    glb_wide_configure(426, 53);
+    glb_wide_set_target(0);
+    glb_set_draw_area(0, 0, 319, 239);
+    glb_set_draw_offset(0, 0);
+    glb_set_mask_bits(0, 0);
+    glb_set_semi_transparency(0, 0);
+    g_ws_bd_stretch_on = 1;
+    g_ws_bd_phase_mode = 1;
+    g_ws_bd_stretch_pct = 0;
+    for (int policy = 0; policy < 2; ++policy) {
+        glb_wide_clear(0, 0, 512, 0);
+        test_flat_backdrop = policy == 0;
+        test_backdrop_phase = policy == 1;
+        glb_draw_line(64, 20, 64, 100, 0x7fff);
+        glb_draw_shaded_line(100, 20, 0x7fff, 100, 100, 0x7fff);
+        test_backdrop_phase = 0;
+        uint16_t texels[64];
+        for (int i = 0; i < 64; ++i) texels[i] = 0x7c00;
+        glb_vram_transfer_in(512, 0, 8, 8, texels);
+        glb_set_color_modulation(128, 128, 128, 1);
+        glb_draw_textured_rect(60, 100, 8, 8, 0, 0, 0, 0, 8 | (2 << 7));
+        glb_draw_textured_rect(96, 100, 8, 8, 0, 0, 0, 0, 8 | (2 << 7));
+        gl_renderer_sync_cpu();
+        int w = 0, h = 0, cap = 426 * 512 * scale * scale;
+        uint32_t *pixels = malloc((size_t)cap * sizeof(*pixels));
+        int got = pixels ? glb_wide_dump_full(pixels, cap, &w, &h, 0) : 0;
+        check(got == cap, "rope wide readback");
+        if (got == cap) for (int x = 64; x <= 100; x += 36) {
+            int col = (53 + x) * scale;
+            check((pixels[80 * scale * w + col] & 0xffffff) == 0xf8f8f8,
+                  "world rope remains at its projected X");
+            check((pixels[103 * scale * w + col] & 0xffffff) == 0x0000f8,
+                  "textured prop remains under the rope endpoint");
+        }
+        free(pixels);
+    }
+    check(glGetError() == GL_NO_ERROR, "rope GL errors");
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     int scale = argc > 1 ? atoi(argv[1]) : 1;
     const char *mode = argc > 2 ? argv[2] : "scene";
@@ -1352,6 +1398,11 @@ int main(int argc, char **argv) {
     }
 
     check(si.effective == scale, "requested scale allocated");
+    if (!strcmp(mode, "backdrop-lines")) {
+        int rc = backdrop_lines_main(scale);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
     if (!strcmp(mode, "composite-steps")) {
         int rc = composite_steps_main(scale, si.windowed);
         gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();

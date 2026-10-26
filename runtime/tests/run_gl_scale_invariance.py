@@ -269,6 +269,16 @@ def main():
     if not digests_agree({k: v[0] for k, v in sbs.items()}):
         print("FAIL sbs native VRAM digest differs across scales/modes:", sbs)
         ok = False
+    # Backdrop policies must not detach world ropes from textured props.
+    for s in (1, 5):
+        for window in ("0", "1"):
+            e = dict(env, PSX_GL_HIRES_WINDOW=window)
+            r = run([probe, s, "backdrop-lines"], env=e)
+            parsed = parse_run(r.stdout)
+            print(f"backdrop lines {s}x window={window}: exit={r.returncode}",
+                  r.stdout.strip().splitlines()[-1:])
+            if r.returncode or not parsed or parsed[1]:
+                ok = False
     # Lines batched with triangles: (label, scale, env).
     lines = {}
     for label, s, extra in (("full", 1, {}), ("full", 9, {}),

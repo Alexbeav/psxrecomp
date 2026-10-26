@@ -3364,6 +3364,11 @@ static void wide_target_end(GLint uXoff, GLint uXhalf) {
  * tag+narrow heuristic for A/B. */
 static int bd_prim_gate(const int *xs, int n, int textured) {
     if (g_wide_w <= 0 || !g_ws_bd_stretch_on) return 0;
+    /* Lines belong to the projected scene (ropes, wires, outlines), not the
+     * filled sky/water backdrop. Stretching them moves their endpoints away
+     * from the world polygons they connect to, e.g. Tomba 2's hanging bucket.
+     * Apply this before both the flat and phase-based backdrop policies. */
+    if (!textured && n == 2) return 0;
     /* Some games draw their authored 4:3 sky/water as flat-colour polygons.
      * Stretch those only in the native-wide mirror: the canonical framebuffer
      * remains byte-for-byte 4:3, while the flat backdrop reaches the reveal
