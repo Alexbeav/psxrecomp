@@ -16,6 +16,7 @@ int main(void) {
  assert(!psx_audio_catchup_update(&s,1,0,1000,410,300,20));
  assert(psx_audio_catchup_update(&s,1,0,1001,420,300,20));
  assert(!psx_audio_catchup_update(&s,0,0,1002,430,300,20));
+ assert(psx_audio_catchup_update(&s,1,0,1003,435,300,20)); /* old stream active */
  assert(!psx_audio_catchup_update(&s,1,0,0,440,300,20)); /* new stream counter */
  assert(!psx_audio_catchup_update(&s,1,0,1,500,0,20));
  assert(!psx_audio_catchup_update(&s,1,0,2,500,100,0));

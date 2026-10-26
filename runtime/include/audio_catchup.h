@@ -9,9 +9,10 @@ typedef struct PsxAudioCatchup { uint64_t last_underruns; int active; } PsxAudio
 static inline int psx_audio_catchup_update(PsxAudioCatchup *s, int enabled,
     int other_sink, uint64_t underruns, uint64_t now, uint64_t deadline,
     uint64_t period) {
+    const int restarted = underruns < s->last_underruns;
     const int dry = underruns > s->last_underruns;
     s->last_underruns = underruns;
-    if (!enabled || other_sink || !deadline || !period || now < deadline) {
+    if (restarted || !enabled || other_sink || !deadline || !period || now < deadline) {
         s->active = 0; return 0;
     }
     if (dry && now - deadline >= period) s->active = 1;
