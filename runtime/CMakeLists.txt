@@ -1579,6 +1579,14 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME mod_resident_test COMMAND mod_resident_test)
 
+    add_executable(mod_disc_read_session_test tests/test_mod_disc_read_session.cpp
+        src/iso_reader.cpp src/cue_sheet.cpp)
+    target_include_directories(mod_disc_read_session_test PRIVATE include ../recompiler/include)
+    target_compile_features(mod_disc_read_session_test PRIVATE cxx_std_17)
+    target_link_libraries(mod_disc_read_session_test PRIVATE chdr-static)
+    add_test(NAME mod_disc_read_session_test COMMAND mod_disc_read_session_test
+        "${CMAKE_CURRENT_BINARY_DIR}/disc-read-session-fixture")
+
     if(WIN32)
         add_executable(autocompile_child_env_test tests/test_autocompile_child_env.c)
         target_include_directories(autocompile_child_env_test PRIVATE src)
@@ -2440,14 +2448,4 @@ if(BUILD_TESTING)
         target_sources(${fixture} PRIVATE src/texture_pack_install.cpp src/duckstation_texture_pack.cpp tests/texture_install_stb.cpp)
         target_link_libraries(${fixture} PRIVATE psx_texture_image_decode Threads::Threads)
     endforeach()
-endif()
-
-if(BUILD_TESTING)
-    add_executable(mod_disc_read_session_test tests/test_mod_disc_read_session.cpp
-        src/iso_reader.cpp src/cue_sheet.cpp)
-    target_include_directories(mod_disc_read_session_test PRIVATE include ../recompiler/include)
-    target_compile_features(mod_disc_read_session_test PRIVATE cxx_std_17)
-    target_link_libraries(mod_disc_read_session_test PRIVATE chdr-static)
-    add_test(NAME mod_disc_read_session_test COMMAND mod_disc_read_session_test
-        "${CMAKE_CURRENT_BINARY_DIR}/disc-read-session-fixture")
 endif()
