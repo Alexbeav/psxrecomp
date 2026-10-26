@@ -4709,11 +4709,14 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         }
         line_to_quad(lv, quad);
         if (s_fb_n > 0 && (s_fb_mode != GL_TRIANGLES || s_fb_semi != semi ||
-                           s_fb_mask != (int)s_mask_set || s_fb_depth != 0))
+                           s_fb_mask != (int)s_mask_set || s_fb_gate != 0 || s_fb_depth != 0))
             flush_flat_batch();
         if (s_fb_n + 6 > FLATBATCH_MAXV)
             flush_flat_batch();
         s_fb_mode = GL_TRIANGLES;
+        /* The expanded line is still world geometry. A previous backdrop
+         * batch may have left its stretch key set even after being flushed. */
+        s_fb_gate = 0;
         s_fb_semi = semi;
         s_fb_mask = (int)s_mask_set;
         s_fb_depth = 0;   /* lines are 2D: never depth-tested (G1.14) */

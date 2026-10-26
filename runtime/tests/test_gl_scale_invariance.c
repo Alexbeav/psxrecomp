@@ -1298,10 +1298,15 @@ static int backdrop_lines_main(int scale) {
     g_ws_bd_stretch_on = 1;
     g_ws_bd_phase_mode = 1;
     g_ws_bd_stretch_pct = 0;
-    for (int policy = 0; policy < 2; ++policy) {
+    for (int policy = 0; policy < 2; ++policy) for (int order = 0; order < 3; ++order) {
         glb_wide_clear(0, 0, 512, 0);
         test_flat_backdrop = policy == 0;
         test_backdrop_phase = policy == 1;
+        /* Cover both a pending backdrop batch and its key remaining after a
+         * flush. Supersampled lines expand to triangles, but must not join
+         * that backdrop batch or inherit its horizontal stretch. */
+        if (order) glb_draw_flat_triangle(4, 4, 20, 4, 4, 12, 0x4210);
+        if (order == 2) gl_renderer_sync_cpu();
         glb_draw_line(64, 20, 64, 100, 0x7fff);
         glb_draw_shaded_line(100, 20, 0x7fff, 100, 100, 0x7fff);
         test_backdrop_phase = 0;
