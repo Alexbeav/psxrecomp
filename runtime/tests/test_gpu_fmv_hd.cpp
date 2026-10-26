@@ -86,6 +86,18 @@ int main() {
               "valid frame decodes after failure or session restart");
         gpu_fmv_hd_shutdown();gpu_fmv_hd_shutdown();
     }
+#ifndef _WIN32
+    /* The complete path does not name the pack. Truncating its trailing
+     * separators would instead open the valid shorter root by accident. */
+    const auto oversized_root=root.string()+std::string(4096,'/')+"missing";
+    setenv("PSX_FMV_HD_DIR",oversized_root.c_str(),1);
+    (void)lookup();
+    char path_status[512]; gpu_fmv_hd_debug_json(path_status,sizeof path_status);
+    check(std::strstr(path_status,"\"movies\":0")!=nullptr,
+          "overlong root must not open a different truncated pack path");
+    gpu_fmv_hd_shutdown();
+    setenv("PSX_FMV_HD_DIR",root.string().c_str(),1);
+#endif
     /* Host sleep must not advance the movie. Only captured guest cycles may
      * select the second HD subframe; loading an earlier timeline restarts it. */
     auto interpolated=header; interpolated.sub=2; index(interpolated);

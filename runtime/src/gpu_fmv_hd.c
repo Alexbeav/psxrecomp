@@ -167,6 +167,8 @@ static int worker(void *arg) {
 
 static void load_movie(const char *dir) {
     if (s_nmovies >= FMV_MAX_MOVIES) return;
+    const size_t dir_len = strlen(dir);
+    if (dir_len >= sizeof s_movies[0].dir) return;
     char path[1100];
     snprintf(path, sizeof path, "%s/index.bin", dir);
     uint8_t *b = NULL; size_t len = 0;
@@ -214,7 +216,7 @@ static void load_movie(const char *dir) {
         }
     }
     Movie *m = &s_movies[s_nmovies];
-    snprintf(m->dir, sizeof m->dir, "%s", dir);
+    memcpy(m->dir, dir, dir_len + 1);
     m->h = h;
     m->bound_stream = v3;
     m->sigs = (uint8_t *)malloc((size_t)bytes);
@@ -236,14 +238,16 @@ static void init_once(void) {
     char root[1024];
     const char *env = getenv("PSX_FMV_HD_DIR");
     if (env && env[0] == '0' && env[1] == 0) return;
-    if (env && env[0]) snprintf(root, sizeof root, "%s", env);
+    int root_len;
+    if (env && env[0]) root_len = snprintf(root, sizeof root, "%s", env);
     else {
         const char *base = SDL_GetBasePath();
-        snprintf(root, sizeof root, "%sfmv_hd", base ? base : "");
+        root_len = snprintf(root, sizeof root, "%sfmv_hd", base ? base : "");
 #if !defined(PSX_SDL3)
         SDL_free((void *)base);
 #endif
     }
+    if (root_len < 0 || (size_t)root_len >= sizeof root) return;
     /* Movie folders: liste.txt (one name per line), portable without dirent. */
     char list[1100];
     snprintf(list, sizeof list, "%s/liste.txt", root);
@@ -259,7 +263,8 @@ static void init_once(void) {
         if (strchr(line, '/') || strchr(line, '\\') || strchr(line, ':') ||
             !strcmp(line, ".") || !strcmp(line, "..")) continue;
         char dir[1100];
-        snprintf(dir, sizeof dir, "%s/%s", root, line);
+        int dir_len = snprintf(dir, sizeof dir, "%s/%s", root, line);
+        if (dir_len < 0 || (size_t)dir_len >= sizeof dir) continue;
         load_movie(dir);
     }
     free(txt);
