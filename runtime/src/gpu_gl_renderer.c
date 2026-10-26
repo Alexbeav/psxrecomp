@@ -3364,6 +3364,11 @@ static void wide_target_end(GLint uXoff, GLint uXhalf) {
  * tag+narrow heuristic for A/B. */
 static int bd_prim_gate(const int *xs, int n, int textured) {
     if (g_wide_w <= 0 || !g_ws_bd_stretch_on) return 0;
+    /* Lines belong to the projected scene (ropes, wires, outlines), not the
+     * filled sky/water backdrop. Stretching them moves their endpoints away
+     * from the world polygons they connect to, e.g. Tomba 2's hanging bucket.
+     * Apply this before both the flat and phase-based backdrop policies. */
+    if (!textured && n == 2) return 0;
     /* Some games draw their authored 4:3 sky/water as flat-colour polygons.
      * Stretch those only in the native-wide mirror: the canonical framebuffer
      * remains byte-for-byte 4:3, while the flat backdrop reaches the reveal
@@ -4704,11 +4709,14 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         }
         line_to_quad(lv, quad);
         if (s_fb_n > 0 && (s_fb_mode != GL_TRIANGLES || s_fb_semi != semi ||
-                           s_fb_mask != (int)s_mask_set || s_fb_depth != 0))
+                           s_fb_mask != (int)s_mask_set || s_fb_gate != 0 || s_fb_depth != 0))
             flush_flat_batch();
         if (s_fb_n + 6 > FLATBATCH_MAXV)
             flush_flat_batch();
         s_fb_mode = GL_TRIANGLES;
+        /* The expanded line is still world geometry. A previous backdrop
+         * batch may have left its stretch key set even after being flushed. */
+        s_fb_gate = 0;
         s_fb_semi = semi;
         s_fb_mask = (int)s_mask_set;
         s_fb_depth = 0;   /* lines are 2D: never depth-tested (G1.14) */
