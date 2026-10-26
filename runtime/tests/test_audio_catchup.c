@@ -20,5 +20,13 @@ int main(void) {
  assert(!psx_audio_catchup_update(&s,1,0,1,500,0,20));
  assert(!psx_audio_catchup_update(&s,1,0,2,500,100,0));
  assert(psx_audio_catchup_update(&s,1,0,3,500,480,17)); /* NTSC-sized period */
+ /* A real dry callback can arm recovery, but an empty/healthy-low queue
+  * must receive fresh PCM. Only accelerated excess may be discarded. */
+ assert(!psx_audio_catchup_discard(1,0.0,80.0));
+ assert(!psx_audio_catchup_discard(1,79.9,80.0));
+ assert(psx_audio_catchup_discard(1,80.0,80.0));
+ assert(psx_audio_catchup_discard(1,200.0,80.0));
+ assert(!psx_audio_catchup_discard(0,200.0,80.0));
+ assert(!psx_audio_catchup_discard(1,200.0,0.0));
  puts("PASS underrun + full late-period gate, hysteresis, absorbed stalls, FF/OFF/reset and rate-independent period");
 }

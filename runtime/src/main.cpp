@@ -5089,6 +5089,8 @@ static int sdl_audio_catchup_sink(int other_sink) {
     }
     psx_sdl_audio_lock(sdl_audio_device);
     rab_get_stats(&s_drc, &stats);
+    const double fill_ms = rab_fill_ms(&s_drc);
+    const double target_ms = s_drc.cfg.target_ms;
     psx_sdl_audio_unlock(sdl_audio_device);
     const int active = psx_audio_catchup_update(&state,
         psx_audio_sync_enabled() && !psx_netplay_active() && present_should_wall_pace(),
@@ -5096,7 +5098,7 @@ static int sdl_audio_catchup_sink(int other_sink) {
         stats.underrun_events, SDL_GetPerformanceCounter(),
         s_frame_pacer.next_deadline,
         (uint64_t)((double)SDL_GetPerformanceFrequency() * g_frame_period_ms / 1000.0));
-    return active;
+    return psx_audio_catchup_discard(active, fill_ms, target_ms);
 }
 
 static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
