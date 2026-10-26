@@ -86,21 +86,56 @@ int main(int argc, char **argv) {
      * loader permits shared sources, so construct this fixture through it. */
     {
 #ifdef _WIN32
-        if (_mkdir("keyboard_pad_chord_fixture") != 0) return 1;
+        if (_mkdir("keyboard_pad_chord_fixture.v1") != 0) return 1;
 #else
-        if (mkdir("keyboard_pad_chord_fixture", 0755) != 0) return 1;
+        if (mkdir("keyboard_pad_chord_fixture.v1", 0755) != 0) return 1;
 #endif
-        FILE *config = fopen("keyboard_pad_chord_fixture/keybinds.ini", "wb");
+        /* A real extensionless executable is a file, including on Windows.
+         * Its first launch must write beside it, then load the same settings. */
+        FILE *exe = fopen("keyboard_pad_chord_fixture.v1/fixture", "wb");
+        if (!exe) return 1;
+        fclose(exe);
+        psx_keybinds_init("keyboard_pad_chord_fixture.v1/fixture");
+        FILE *defaults = fopen("keyboard_pad_chord_fixture.v1/keybinds.ini", "rb");
+        expect_word("extensionless executable creates adjacent INI", 1,
+                    defaults != NULL);
+        if (defaults) fclose(defaults);
+
+        FILE *config = fopen("keyboard_pad_chord_fixture.v1/keybinds.ini", "wb");
         if (!config) return 1;
-        fputs("[player1]\ncross = Escape\ncircle = S, Escape\n"
+        fputs("[player1]\nup = W\nr1 = Q\ncross = Escape\ncircle = S, Escape\n"
               "[player2]\ncross = Escape\n", config);
         fclose(config);
-        psx_keybinds_init("keyboard_pad_chord_fixture/fixture.exe");
-        remove("keyboard_pad_chord_fixture/keybinds.ini");
+        psx_keybinds_init("keyboard_pad_chord_fixture.v1/fixture");
+        keys[SDL_SCANCODE_W] = 1;
+        expect_word("extensionless executable loads W as Up", 0xFFEFu,
+                    psx_keybinds_pad_word(keys, 1));
+        keys[SDL_SCANCODE_W] = 0;
+
+        const char *paths[] = {
+            "keyboard_pad_chord_fixture.v1/fixture.exe",
+            "keyboard_pad_chord_fixture.v1",
+            "keyboard_pad_chord_fixture.v1/"
+        };
+        for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+            psx_keybinds_reset_player(1);
+            psx_keybinds_init(paths[i]);
+            expect_scancode(paths[i], SDL_SCANCODE_W,
+                            psx_keybinds_get_button(1, PSX_KB_UP));
+        }
+        psx_keybinds_init("keyboard_pad_chord_fixture.v1/fixture");
+        psx_keybinds_set_button(1, PSX_KB_UP, SDL_SCANCODE_V);
+        psx_keybinds_save();
+        psx_keybinds_reset_player(1);
+        psx_keybinds_init("keyboard_pad_chord_fixture.v1/fixture");
+        expect_scancode("extensionless executable saves and reloads", SDL_SCANCODE_V,
+                        psx_keybinds_get_button(1, PSX_KB_UP));
+        remove("keyboard_pad_chord_fixture.v1/fixture");
+        remove("keyboard_pad_chord_fixture.v1/keybinds.ini");
 #ifdef _WIN32
-        _rmdir("keyboard_pad_chord_fixture");
+        _rmdir("keyboard_pad_chord_fixture.v1");
 #else
-        rmdir("keyboard_pad_chord_fixture");
+        rmdir("keyboard_pad_chord_fixture.v1");
 #endif
         expect_scancode("shared INI primary Escape", SDL_SCANCODE_ESCAPE,
                         psx_keybinds_get_button(1, PSX_KB_CROSS));

@@ -13,6 +13,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
+#include <sys/stat.h>
 
 /* Mouse-button pseudo-scancodes. Values sit above SDL's keyboard scancode
  * space (SDL_NUM_SCANCODES == 512), so they flow through the existing
@@ -186,6 +187,17 @@ static const char *scancode_to_name(SDL_Scancode sc) {
 
 static char s_ini_path[1024] = {0};
 
+static int path_is_directory(const char *path) {
+#ifdef _WIN32
+    struct _stat64 info;
+    return _stat64(path, &info) == 0 &&
+           (info.st_mode & _S_IFMT) == _S_IFDIR;
+#else
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+#endif
+}
+
 /* Resolve keybinds.ini alongside exe_path. exe_path may be a file (argv[0] /
  * the exe) or a directory (the exe dir the launcher passes) — either works. */
 static void derive_ini_path(const char *exe_path) {
@@ -193,22 +205,20 @@ static void derive_ini_path(const char *exe_path) {
         strcpy(s_ini_path, "keybinds.ini");
         return;
     }
-    /* Find the last path separator; if none, treat the whole thing as a dir. */
+    /* Find the executable's parent without guessing from its extension. */
     const char *slash = NULL;
     for (const char *p = exe_path; *p; p++)
         if (*p == '/' || *p == '\\') slash = p;
 
-    /* Heuristic: a path ending in a separator, or with no extension in the last
-     * component, is treated as a directory; otherwise strip the file name. */
+    /* Explicit directory paths and existing directories are accepted. Linux
+     * executable names need no dot, while directory names may contain dots. */
     size_t len = strlen(exe_path);
     int ends_sep = (exe_path[len-1] == '/' || exe_path[len-1] == '\\');
-    const char *last = slash ? slash + 1 : exe_path;
-    int has_ext = strchr(last, '.') != NULL;
 
     char dir[1024];
     if (ends_sep) {
         snprintf(dir, sizeof(dir), "%s", exe_path);
-    } else if (!has_ext) {
+    } else if (path_is_directory(exe_path)) {
         /* directory path without trailing sep */
         snprintf(dir, sizeof(dir), "%s/", exe_path);
     } else if (slash) {
