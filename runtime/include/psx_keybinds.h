@@ -68,7 +68,8 @@ typedef struct {
 
 /* Initialize from <exe_dir>/keybinds.ini. Generates a default file if one does
  * not exist. exe_path may be NULL/argv[0]/the exe directory itself — the .ini is
- * placed in that file's directory (or the path itself when it is a directory). */
+ * placed in that file's directory (or the path itself when it is an existing
+ * directory or ends in a path separator). Executable names need no extension. */
 void psx_keybinds_init(const char *exe_path);
 
 /* Read-only view of the current bindings. */
