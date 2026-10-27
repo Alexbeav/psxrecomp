@@ -1,6 +1,7 @@
 #include "mod_netplay.h"
 #include "netplay_state_digest.h"
 #include "crc32.h"
+#undef NDEBUG
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

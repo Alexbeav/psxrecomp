@@ -987,6 +987,8 @@ if(BUILD_TESTING)
     # Run the same session fixture in both real compilation flavors.
     foreach(_pgxp_session_test IN ITEMS pgxp_session_test pgxp_session_hooks_test)
         add_executable(${_pgxp_session_test} tests/test_pgxp_session.cpp
+            src/mod_immediate.c src/func_override.c
+            src/host_overlay.c src/host_span_ring.c
             src/pgxp_session.cpp src/mod_builtin_pgxp.c src/pgxp.cpp
             src/psx_ram_geometry.c
             src/mod_runtime.cpp src/mod_function_replacements.c
@@ -1526,6 +1528,7 @@ if(BUILD_TESTING)
     add_test(NAME resident_sector_test COMMAND resident_sector_test)
     add_executable(netplay_view_mods_test
         tests/test_netplay_view_mods.cpp
+        src/mod_immediate.c src/func_override.c src/host_overlay.c
         src/iso_reader_c.cpp
         src/host_span_ring.c
         src/mod_runtime.cpp src/mod_function_replacements.c
@@ -2464,7 +2467,7 @@ endif()
 
 # Fixtures compiling the real mod runtime also need its read-only installer.
 if(BUILD_TESTING)
-    foreach(fixture pgxp_session_test mod_runtime_test netplay_view_mods_test mod_runtime_cache_test mod_resident_test)
+    foreach(fixture pgxp_session_test pgxp_session_hooks_test mod_runtime_test netplay_view_mods_test mod_runtime_cache_test mod_resident_test)
         target_sources(${fixture} PRIVATE src/texture_pack_install.cpp src/duckstation_texture_pack.cpp tests/texture_install_stb.cpp)
         target_link_libraries(${fixture} PRIVATE psx_texture_image_decode Threads::Threads)
     endforeach()

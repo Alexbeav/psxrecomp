@@ -11,6 +11,15 @@ callbacks use the same explicit ownership restoration. The original validation
 below is historical evidence; combined source/build/game qualification is
 tracked in `beads-9zi2` and optimization campaign `beads-fobc`.
 
+The combined GCC15.2 build now passes all18 targeted runtime cases, including
+the ordinary scheduler-escape fixture, missing-profile/image checks, loader
+negotiation, modern settings profiles, own-view isolation, resident loading and
+both PGXP compilation flavors. Replacement codegen, compiled-overlay ABI35
+forwarding and interpreted-entry guard checks also pass. Fixture-only duplicate
+definitions/missing link inputs were repaired, and netplay assertions stay active
+in Release. This supersedes the historical fixture failures below for this
+combined source; built-game and two-peer qualification remain separate.
+
 This branch bridges X6's native replacement and negotiated loading services to
 modern SDK `6f0ccbc6b67fee626de6a7b0945ca3abb26332aa`. It is a local integration
 candidate, not a qualified game repin. No games or memory cards were launched.

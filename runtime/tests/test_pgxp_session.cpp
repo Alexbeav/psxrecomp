@@ -128,6 +128,18 @@ extern "C" void psx_write_word(uint32_t a, uint32_t v) {
 extern "C" void psx_host_write_byte(uint32_t a, uint8_t v) { psx_write_byte(a, v); }
 extern "C" void psx_host_write_half(uint32_t a, uint16_t v) { psx_write_half(a, v); }
 extern "C" void psx_host_write_word(uint32_t a, uint32_t v) { psx_write_word(a, v); }
+/* This fixture installs presentation policy; it never dispatches guest code,
+ * credits guest cycles, or installs an audio callback. Fail on accidental use. */
+extern "C" uint32_t psx_peek_word_untraced(uint32_t a) { return psx_read_word(a); }
+extern "C" {
+uint64_t psx_cycle_count=0, psx_next_service_cycle=0;
+int psx_in_device_service=0, g_event_step_conservative=0, g_ls_replay_active=0;
+uint32_t g_psx_cyc_batch=0, g_psx_cyc_batch_limit=0;
+void psx_devices_service_to_now(void) { std::abort(); }
+void psx_advance_cycles_slow(uint32_t) { std::abort(); }
+}
+extern "C" void psx_dispatch_call(CPUState*, uint32_t, uint32_t) { std::abort(); }
+extern "C" void spu_set_pcm_overlay(PSXModPCMCallback callback) { if (callback) std::abort(); }
 extern "C" uint32_t psx_mod_memory_alloc(uint32_t, uint32_t) { return 0; }
 extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t, uint32_t) { return 0; }
 extern "C" int psx_ws_x_margin(void) { return 0; }
@@ -143,12 +155,6 @@ extern "C" void gpu_ws_set_adaptive_backdrop_preload(int) {}
 extern "C" void psx_projection_reset_session(void) {}
 extern "C" void gpu_ws_set_native_scene_predicate(int (*)(void)) {}
 extern "C" int gpu_ws_configured_x_reveal(void) { return 0; }
-extern "C" int psx_netplay_active(void) { return 0; }
-extern "C" void gpu_hd_textures_shutdown(void) {}
-extern "C" int gpu_hd_textures_configure(const char*, int, int, char*, size_t) { return 1; }
-extern "C" void gpu_hd_textures_set_dump_enabled(int) {}
-extern "C" void gpu_hd_textures_get_diag(GpuHdTextureDiag* out) { *out = {}; }
-extern "C" int gpu_hd_textures_reload(char*, size_t) { return 1; }
 extern "C" void gpu_ws_set_manual_view_anchor(int, int) {}
 extern "C" void gpu_ws_tag_hud_prim(uint32_t, int) {}
 extern "C" void gpu_ws_tag_screen_mask_quad(uint32_t) {}
