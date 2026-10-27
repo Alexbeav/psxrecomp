@@ -7,6 +7,7 @@ static const PSXModNetplayProfile *title_profile;
 static int profile_active;
 static int profile_aspect;
 static char options_identity[65];
+static int profile_loading;
 
 int psx_mod_register_netplay_profile(const PSXModNetplayProfile *profile) {
     unsigned mask;
@@ -23,6 +24,12 @@ int psx_mod_register_netplay_profile(const PSXModNetplayProfile *profile) {
             !profile->renderer_option_value[0] || !profile->settings_package_id ||
             !profile->widescreen_plugin_id)))
         return 0;
+    if ((profile->loading_package_id || profile->loading_feature_id ||
+         profile->loading_plugin_id) &&
+        (!profile->loading_package_id || !profile->loading_package_id[0] ||
+         !profile->loading_feature_id || !profile->loading_feature_id[0] ||
+         !profile->loading_plugin_id || !profile->loading_plugin_id[0] ||
+         profile->settings_package_id)) return 0;
     if (title_profile) return title_profile == profile;
     title_profile = profile;
     mask = profile->fixed_aspect_mask;
@@ -54,6 +61,10 @@ uint32_t psx_mod_netplay_session_id(uint32_t session_id) {
         hash ^= (uint32_t)profile_aspect;
         hash *= 16777619u;
     }
+    if (title_profile->loading_plugin_id) {
+        hash ^= (uint32_t)profile_loading;
+        hash *= 16777619u;
+    }
     return session_id ^ hash;
 }
 int psx_mod_netplay_set_options_identity(const char *identity) {
@@ -62,7 +73,7 @@ int psx_mod_netplay_set_options_identity(const char *identity) {
     if (!identity) return 0;
     length = strlen(identity);
     if (length && (length != 64 || !title_profile ||
-                   !title_profile->settings_package_id)) return 0;
+                   (!title_profile->settings_package_id && !title_profile->loading_plugin_id))) return 0;
     for (size_t index = 0; index < length; ++index) {
         char value = identity[index];
         if (value >= 'A' && value <= 'F') value += 'a' - 'A';
@@ -121,6 +132,17 @@ int psx_mod_netplay_content_identity(const char *execution_content, char out[65]
             psx_sha256_update(&ctx, (const uint8_t *)value, strlen(value) + 1);
         }
     }
+    /* Preserve every existing settings-only identity byte-for-byte. Native
+     * loader profiles additionally bind the selected verified plan and flag. */
+    if (title_profile->loading_plugin_id) {
+        const char *fields[] = {title_profile->loading_package_id,
+            title_profile->loading_feature_id, title_profile->loading_plugin_id,
+            options_identity};
+        const uint8_t enabled = profile_loading != 0;
+        psx_sha256_update(&ctx, &enabled, 1);
+        for (size_t index = 0; index < sizeof(fields) / sizeof(fields[0]); ++index)
+            psx_sha256_update(&ctx, (const uint8_t *)fields[index], strlen(fields[index]) + 1);
+    }
     psx_sha256_final(&ctx, bytes);
     for (i = 0; i < 32; ++i) {
         out[2*i] = hex[bytes[i] >> 4];
@@ -148,3 +170,10 @@ int psx_mod_netplay_requires_texture_banks(void) {
 int psx_mod_netplay_renderer_allowed(int renderer) {
     return !psx_mod_netplay_requires_texture_banks() || renderer == 1;
 }
+int psx_mod_netplay_loading_feature(const char *package_id, const char *feature_id) {
+    return title_profile && title_profile->loading_package_id && package_id && feature_id &&
+        strcmp(title_profile->loading_package_id, package_id) == 0 &&
+        strcmp(title_profile->loading_feature_id, feature_id) == 0;
+}
+void psx_mod_netplay_set_loading(int enabled) { profile_loading = enabled != 0; }
+int psx_mod_netplay_loading(void) { return profile_loading; }

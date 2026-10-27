@@ -79,6 +79,7 @@ if(BUILD_TESTING)
     add_test(NAME mod_netplay_wide_test COMMAND mod_netplay_test --wide)
     add_test(NAME mod_netplay_optional_bank_test COMMAND mod_netplay_test --no-banks)
     add_test(NAME mod_netplay_options_policy_test COMMAND mod_netplay_test --options)
+    add_test(NAME mod_netplay_loading_policy_test COMMAND mod_netplay_test --loading)
     add_executable(savestate_title_policy_test tests/test_savestate_title_policy.c
         src/mod_netplay.c src/psx_sha256.c)
     target_include_directories(savestate_title_policy_test PRIVATE include)
@@ -152,6 +153,9 @@ if(BUILD_TESTING)
     add_executable(ws_mixed_world_test tests/test_ws_mixed_world.c)
     target_include_directories(ws_mixed_world_test PRIVATE include)
     add_test(NAME ws_mixed_world COMMAND ws_mixed_world_test)
+    add_executable(mod_function_replacements_test tests/test_mod_function_replacements.c src/mod_function_replacements.c)
+    target_include_directories(mod_function_replacements_test PRIVATE include)
+    add_test(NAME mod_function_replacements_test COMMAND mod_function_replacements_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
@@ -292,6 +296,11 @@ if(BUILD_TESTING)
                 --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
                 --ninja "${PSX_PROFILE_TEST_NINJA}")
             set_tests_properties(execution_profile_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME native_idle_wait_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_idle_wait.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(native_idle_wait_policy_test PROPERTIES RUN_SERIAL TRUE)
         endif()
         add_test(NAME host_launch_timings_protocol_test COMMAND ${CMAKE_COMMAND} -E env
             "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}" "${Python3_EXECUTABLE}"
@@ -978,9 +987,11 @@ if(BUILD_TESTING)
     # Run the same session fixture in both real compilation flavors.
     foreach(_pgxp_session_test IN ITEMS pgxp_session_test pgxp_session_hooks_test)
         add_executable(${_pgxp_session_test} tests/test_pgxp_session.cpp
+            src/mod_immediate.c src/func_override.c
+            src/host_overlay.c src/host_span_ring.c
             src/pgxp_session.cpp src/mod_builtin_pgxp.c src/pgxp.cpp
             src/psx_ram_geometry.c
-            src/mod_runtime.cpp
+            src/mod_runtime.cpp src/mod_function_replacements.c
             src/mod_packages.cpp
             src/mod_media.cpp
             src/disc_path.cpp
@@ -1470,7 +1481,7 @@ if(BUILD_TESTING)
         src/func_override.c
         src/iso_reader_c.cpp
         src/host_span_ring.c
-        src/mod_runtime.cpp
+        src/mod_runtime.cpp src/mod_function_replacements.c
         src/mod_netplay.c
         src/mod_packages.cpp
         src/mod_media.cpp
@@ -1499,6 +1510,7 @@ if(BUILD_TESTING)
     add_test(NAME mod_netplay_missing_renderer_test COMMAND mod_runtime_test --missing-renderer)
     add_test(NAME mod_netplay_profile_options_test COMMAND mod_runtime_test --profile-options)
     add_test(NAME mod_netplay_option_renderer_missing_test COMMAND mod_runtime_test --option-renderer-missing)
+    add_test(NAME mod_native_loader_bridge_test COMMAND mod_runtime_test --native-loading)
 
     add_executable(neversoft_helpers_test tests/test_neversoft_helpers.cpp)
     target_include_directories(neversoft_helpers_test PRIVATE include)
@@ -1516,9 +1528,10 @@ if(BUILD_TESTING)
     add_test(NAME resident_sector_test COMMAND resident_sector_test)
     add_executable(netplay_view_mods_test
         tests/test_netplay_view_mods.cpp
+        src/mod_immediate.c src/func_override.c src/host_overlay.c
         src/iso_reader_c.cpp
         src/host_span_ring.c
-        src/mod_runtime.cpp
+        src/mod_runtime.cpp src/mod_function_replacements.c
         src/mod_netplay.c
         src/mod_packages.cpp
         src/mod_media.cpp
@@ -1565,7 +1578,7 @@ if(BUILD_TESTING)
         src/host_overlay.c
         src/func_override.c
         src/mod_resident.cpp
-        src/mod_runtime.cpp
+        src/mod_runtime.cpp src/mod_function_replacements.c
         src/mod_netplay.c
         src/mod_packages.cpp
         src/mod_media.cpp
@@ -2454,7 +2467,7 @@ endif()
 
 # Fixtures compiling the real mod runtime also need its read-only installer.
 if(BUILD_TESTING)
-    foreach(fixture pgxp_session_test mod_runtime_test netplay_view_mods_test mod_runtime_cache_test mod_resident_test)
+    foreach(fixture pgxp_session_test pgxp_session_hooks_test mod_runtime_test netplay_view_mods_test mod_runtime_cache_test mod_resident_test)
         target_sources(${fixture} PRIVATE src/texture_pack_install.cpp src/duckstation_texture_pack.cpp tests/texture_install_stb.cpp)
         target_link_libraries(${fixture} PRIVATE psx_texture_image_decode Threads::Threads)
     endforeach()

@@ -72,6 +72,12 @@ bool mod_runtime_netplay_view_active();
 /* 1 while that plan holds a [[plugin]] netplay = "input" (a pad transform
  * applied to this player's own pad at netplay staging). */
 bool mod_runtime_netplay_input_active();
+/* Limit the existing lobby mod picker to a trusted title's loader feature. */
+void mod_runtime_set_netplay_lobby_view(bool active);
+/* Native loader offers must identify the actual selected disc, including
+ * before the first offline commit. Same-path replacements are remeasured. */
+std::string mod_runtime_plan_fingerprint_portable(const std::filesystem::path& disc_path,
+                                                 std::string* error = nullptr);
 /* "package/feature" keys of `plan` that qualify as own-view features. */
 std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& plan);
 /* 1 when the selected package's feature is host-only (ModFeature::host_only):
@@ -138,6 +144,7 @@ void mod_runtime_set_mounted_disc_resolver(const char* (*path)(void), int (*inde
  * all callbacks. Never serialize this into guest saves. */
 typedef struct ModFunctionEntryContext {
     uint32_t depth;
+    uint32_t replacement_depth;
     const void *plugin;
     struct CPUState *cpu;
     int finished;

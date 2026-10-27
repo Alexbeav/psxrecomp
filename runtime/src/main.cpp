@@ -13700,7 +13700,9 @@ namespace {
         caps->mod_plan_fp[0] = '\0';
         caps->mod_count = 0;
         std::memset(caps->mods, 0, sizeof(caps->mods));
-        if (const PSXModNetplayProfile* profile = psx_mod_netplay_profile()) {
+        const auto* title_profile = psx_mod_netplay_profile();
+        const bool title_loading = title_profile && title_profile->loading_plugin_id;
+        if (const PSXModNetplayProfile* profile = title_loading ? nullptr : title_profile) {
             if (!profile->settings_package_id) return 1;
             RecompLauncherCModPackage package{};
             if (!mods || !mods->feature_count || !mods->feature_get ||
@@ -13728,7 +13730,7 @@ namespace {
             g_lnch_mod_plan_error = "Title netplay settings feature is unavailable";
             return 0;
         }
-        if (!PSXRecompV4::mod_runtime_prepare_resources(g_launcher_disc_path,
+        if (!title_loading && !PSXRecompV4::mod_runtime_prepare_resources(g_launcher_disc_path,
                                                        &g_lnch_mod_plan_error)) return 0;
         if (!mods || !mods->package_count || !mods->package_get)
             return 1;
@@ -13744,6 +13746,8 @@ namespace {
                 if (PSXRecompV4::mod_runtime_feature_host_only(feature.package_id,
                                                                feature.id))
                     continue;
+                if (title_loading && !psx_mod_netplay_loading_feature(
+                        feature.package_id, feature.id)) continue;
                 int pkg_index = -1;
                 for (int j = 0; j < caps->mod_count; ++j) {
                     if (std::strcmp(caps->mods[j].id, feature.package_id) == 0) {
@@ -13768,7 +13772,7 @@ namespace {
                 ae_append_feat_token(caps->mods[pkg_index].feats,
                                      sizeof(caps->mods[pkg_index].feats), token);
             }
-        } else {
+        } else if (!title_loading) {
             const int count = mods->package_count(mods->ctx);
             for (int i = 0; i < count && caps->mod_count < PSX_LOBBY_MAX_MODS; ++i) {
                 RecompLauncherCModPackage pkg{};
@@ -13780,7 +13784,8 @@ namespace {
         }
 
         if (caps->mod_count > 0) {
-            const std::string fp = PSXRecompV4::mod_runtime_plan_fingerprint_portable();
+            const std::string fp = PSXRecompV4::mod_runtime_plan_fingerprint_portable(
+                g_launcher_disc_path, &g_lnch_mod_plan_error);
             if (fp.empty()) {
                 g_lnch_mod_plan_error =
                     "enabled mods did not produce a portable netplay fingerprint";
@@ -16774,6 +16779,11 @@ namespace {
         gi->locked_pad_mode = locked_pad_mode_i;
         gi->lock_device = ctrl_lock_device_b ? 1 : 0;
         gi->aspect_mask = 0;
+        const PSXModNetplayProfile *view_profile = psx_mod_netplay_profile();
+        if (view_profile && view_profile->loading_plugin_id)
+            gi->netplay_mode_changed = [](int active) {
+                PSXRecompV4::mod_runtime_set_netplay_lobby_view(active != 0);
+            };
         gi->renderer_labels = kPsxRendererLabels;
         gi->num_renderers = vulkan_offered_b ? 3 : 2;
         gi->settings_bindings = 1;
@@ -17904,9 +17914,6 @@ int main(int argc, char** argv) {
                 g_idle_skip_enabled = idle_env
                     ? (idle_env[0] == '1' ? 1 : 0)
                     : (gc.runtime.idle_skip ? 1 : 0);
-                std::fprintf(stdout, "psxrecomp: idle_skip %s%s\n",
-                             g_idle_skip_enabled ? "enabled" : "disabled",
-                             idle_env ? " (environment override)" : "");
                 {
                     psx_idle_skip_set_host_writer(psx_host_write_word);
                     psx_idle_skip_set_store_tracker(&g_psx_track_last_store,
@@ -17919,12 +17926,19 @@ int main(int argc, char** argv) {
                 psx_idle_skip_set_store_counter_sites(
                     gc.runtime.idle_skip_store_counter_sites.data(),
                     (int)gc.runtime.idle_skip_store_counter_sites.size());
+                const int build_wait_sites = psx_build_idle_wait_configure();
+                std::fprintf(stdout, "psxrecomp: idle_skip %s%s\n",
+                             g_idle_skip_enabled ? "enabled" : "disabled",
+                             build_wait_sites >= 0 ? " (build-selected wait family)" :
+                             (idle_env ? " (environment override)" : ""));
                 if (g_idle_skip_enabled && g_idle_skip_ext)
                     std::fprintf(stdout, "psxrecomp: idle_skip store-counter loops on%s, "
                                  "%zu audited site(s)%s\n",
                                  ext_env ? " (environment override)" : "",
-                                 gc.runtime.idle_skip_store_counter_sites.size(),
-                                 gc.runtime.idle_skip_store_counter_sites.empty()
+                                 build_wait_sites >= 0 ? (size_t)build_wait_sites :
+                                     gc.runtime.idle_skip_store_counter_sites.size(),
+                                 build_wait_sites == 0 || (build_wait_sites < 0 &&
+                                     gc.runtime.idle_skip_store_counter_sites.empty())
                                      ? " -- none listed, so nothing is skipped" : "");
                 psx_precise_slice_init_from_env();
             }

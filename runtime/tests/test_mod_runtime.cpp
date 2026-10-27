@@ -261,6 +261,9 @@ static void test_active_entry(CPUState* cpu, uint32_t address) {
     } else if (entry_test_mode == 5) {
         /* Guest scheduling/RFE can abandon the callback's C++ scope. */
         callback_longjmp();
+    } else if (entry_test_mode == 7) {
+        if (!psx_mod_finish_function(cpu)) failures++;
+        throw std::runtime_error("entry callback exception");
     } else if (entry_test_mode == 6) {
         if (!psx_mod_finish_function(cpu)) failures++;
         ModFunctionEntryContext interrupted{};
@@ -278,6 +281,7 @@ static void test_active_entry(CPUState* cpu, uint32_t address) {
 }
 static void test_disabled_entry(CPUState*, uint32_t) { disabled_entry_hits++; }
 static void test_unselected_entry(CPUState*, uint32_t) { unselected_entry_hits++; }
+static int test_replacement(CPUState*, uint32_t) { return 1; }
 
 static bool filter_handles;
 static bool filter_context_active;
@@ -329,6 +333,7 @@ static void test_guest_function(CPUState* cpu, uint32_t) {
 
 static void test_activation_plugin(void) {
     activation_calls++;
+    psx_mod_set_function_replacement(0x80003000u, test_replacement);
 }
 
 static const uint8_t* media_snapshot;
@@ -541,6 +546,9 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--commands-only") {
         std::cout << "mod command tests: " << failures << " failures\n";
         return failures ? 1 : 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--native-loading") {
+#include "test_mod_native_loader.inc"
     }
 #if defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
     const fs::path root = fs::temp_directory_path() / "psxrecomp-mod-runtime-cache-test";
@@ -865,6 +873,8 @@ int main(int argc, char** argv) {
     psx_mod_instruction(&entry_cpu, 0x80003004u, 0x90A30014u);
     check(instruction_hits == 2, "fetched and live instruction guards reject changed code");
     psx_mod_write_word(0x80003004u, 0x90A30014u);
+    check(psx_mod_try_function_replacement(&entry_cpu, 0x80003000u) == 1,
+          "activation registers trusted replacements");
     mod_runtime_on_vblank();
     check(plugin_calls == 1,
           "resolved trusted plugin must run on guest VBlank");
@@ -897,6 +907,8 @@ int main(int argc, char** argv) {
     check(!psx_mod_dispatch_guest_function(&entry_cpu, 0x8FFF0000u) &&
               g_psx_mod_guest_functions == 0,
           "clearing the plan drops guest callback availability");
+    check(!psx_mod_try_function_replacement(&entry_cpu, 0x80003000u),
+          "clearing the active plan removes its replacements");
     psx_mod_function_entry(&entry_cpu, 0x80003000u);
     check(g_psx_mod_function_entry_hooks == 0 && active_entry_hits == 3,
           "clearing the plan must drop its function-entry hooks");
@@ -1003,6 +1015,13 @@ int main(int argc, char** argv) {
     check(psx_mod_function_entry(&entry_cpu, 0x80003000u) == 1 &&
               entry_cpu.pc == entry_cpu.gpr[31] && !psx_mod_function_entry_active(),
           "nested exception landing preserves the live outer callback and completion");
+    entry_test_mode = 7;
+    bool callback_threw = false;
+    try { psx_mod_function_entry(&entry_cpu, 0x80003000u); }
+    catch (const std::runtime_error&) { callback_threw = true; }
+    check(callback_threw && !psx_mod_function_entry_active() &&
+          !psx_mod_finish_function(&entry_cpu),
+          "C++ exception restores callback ownership and capture gate before propagation");
     entry_test_mode = 0;
 
     entry_cpu.gpr[4] = 35u;

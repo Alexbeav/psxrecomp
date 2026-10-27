@@ -13,6 +13,7 @@
 #include <array>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -61,12 +62,26 @@ int memcard_is_present(int) { return 0; }
 int memcard_read_sector(int, int, uint8_t* buf) { std::memset(buf, 0, 128); return -1; }
 int memcard_write_sector(int, int, const uint8_t*) { return -1; }
 void memcard_flush(int) {}
+int memcard_last_flush_result(int) { return -1; } /* No cards in this fixture. */
+uint64_t psx_cycle_count=0, psx_next_service_cycle=0;
+int psx_in_device_service=0, g_event_step_conservative=0, g_ls_replay_active=0;
+uint32_t g_psx_cyc_batch=0, g_psx_cyc_batch_limit=0;
+void psx_devices_service_to_now(void) { std::abort(); }
+void psx_advance_cycles_slow(uint32_t) { std::abort(); }
+void psx_dispatch_call(CPUState*, uint32_t, uint32_t) { std::abort(); }
+void spu_set_pcm_overlay(PSXModPCMCallback callback) { if (callback) std::abort(); }
 }
 
 /* The guest bus: main RAM, plus the real SIO (sio.c) at 0x1F801040..5F, so
  * a bus read of SIO_DATA / SIO_STAT has its hardware side effects here too.
  * Every MMIO bus access is counted. */
 static int mmio_bus_accesses;
+extern "C" uint32_t psx_peek_word_untraced(uint32_t address) {
+    if ((address & 0x1FFFFFFFu) >= ram.size() || (address & 3u)) std::abort();
+    uint32_t value;
+    std::memcpy(&value,ram.data()+(address & 0x1FFFFFFFu),sizeof value);
+    return value;
+}
 static bool is_sio(uint32_t a) {
     a &= 0x1fffffffu;
     return a >= 0x1F801040u && a < 0x1F801060u;

@@ -56,7 +56,6 @@ extern "C" int gpu_hd_textures_reload(char*, size_t) { return 1; }
 extern "C" void psx_projection_reset_session(void) {}
 extern "C" void gpu_ws_set_native_scene_predicate(int (*)(void)) {}
 extern "C" int psx_ws_x_margin(void) { return 0; }
-extern "C" int psx_netplay_active(void) { return 0; }
 extern "C" void spu_set_pcm_overlay(PSXModPCMCallback) {}
 extern "C" void gpu_get_display_info(GpuDisplayInfo* out) { *out = GpuDisplayInfo{}; }
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
@@ -94,6 +93,7 @@ extern "C" void gpu_ws_tag_feedback_rect(uint32_t) {}
 /* mod_runtime.cpp's lobby netplay commit reads the negotiated match caps.
  * No lobby match is negotiated in this test. */
 static PsxLobbyMatchCaps no_match_caps;
+extern "C" int psx_netplay_active(void) { return 0; }
 extern "C" const PsxLobbyMatchCaps* psx_lobby_match_caps(void) { return &no_match_caps; }
 
 static void check(bool ok, const char* what) {

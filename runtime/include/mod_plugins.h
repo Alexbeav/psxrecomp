@@ -31,6 +31,9 @@ typedef int (*PSXModFunctionFilterCallback)(struct CPUState* cpu,
  * manifests select implementations by this stable id; archives never provide
  * native code or symbol names.
  */
+/* Activation runs during host setup, before guest scheduling. It must not
+ * enter guest execution that may escape via scheduler/watchdog longjmp.
+ * Ordinary returns and C++ exceptions restore plugin ownership. */
 int psx_mod_register_activation_plugin(const char* id,
                                        PSXModActivationCallback callback);
 /* Host-only cleanup before each plan activates, including plans that omit this
@@ -133,6 +136,19 @@ void psx_mod_set_texture_filter(int mode);
 /* Entry callbacks can make nested guest calls while retaining host registers.
  * Save/load and rewind must wait until that host context has returned. */
 int psx_mod_function_entry_active(void);
+/* Opt-in native implementation of an explicitly hooked function. Register
+ * during activation. A callback returns nonzero only after completing the
+ * function's caller-visible effects; the dispatcher publishes pc=$ra. A zero
+ * result must leave state untouched and falls through to the original body.
+ * No emulated cycles are credited automatically. Unregister with NULL.
+ * Registration is active-plan configuration, not savestate payload. */
+typedef int (*PSXModFunctionReplacement)(struct CPUState* cpu, uint32_t address);
+int psx_mod_set_function_replacement(uint32_t address, PSXModFunctionReplacement callback);
+int psx_mod_try_function_replacement(struct CPUState* cpu, uint32_t address);
+void psx_mod_clear_function_replacements(void);
+/* Live replacement callbacks also block capture of an unresumable C stack. */
+uint32_t psx_mod_function_replacement_depth(void);
+void psx_mod_function_replacement_restore_depth(uint32_t depth);
 
 /* [timing] guest_cycle_scale mod gate (docs/config_schema.md, Timing block).
  * With guest_cycle_scale_gated = true in game.toml the scale applies only
