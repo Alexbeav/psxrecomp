@@ -235,6 +235,23 @@ class GateTests(unittest.TestCase):
         (self.stage / 'overlay_toolchain/tcc/examples/fib.c').write_text('int x;')
         ptr.payload_gates(self.stage, 'windows', 'Fixture.exe')
 
+    def test_hash_bound_disc_overlay_asset(self):
+        package = self.stage / 'mods/bundled/fixture.patch/1.0.0'
+        (package / 'assets').mkdir(parents=True)
+        asset = package / 'assets/warning.bin'
+        asset.write_bytes(b'authored patch fixture')
+        (package / 'manifest.toml').write_text(
+            '[[overlay]]\ntarget="disc_user"\noffset=16\n'
+            'file="assets/warning.bin"\nsha256="%s"\nexpected_sha256="%s"\n'
+            % (hashlib.sha256(asset.read_bytes()).hexdigest(), '0' * 64))
+        ptr.payload_gates(self.stage, 'windows', 'Fixture.exe')
+        asset.write_bytes(b'tampered')
+        with self.assertRaisesRegex(ptr.PackagingError, 'hash mismatch'):
+            ptr.payload_gates(self.stage, 'windows', 'Fixture.exe')
+
+    def test_undeclared_mod_binary_is_refused(self):
+        self.assert_refused('mods/bundled/fixture/1.0.0/assets/disc.bin', message='image')
+
     def test_openbios_required(self):
         (self.stage / 'bios/openbios.bin').write_bytes(b'short')
         with self.assertRaisesRegex(ptr.PackagingError, 'OpenBIOS'):

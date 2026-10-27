@@ -831,9 +831,33 @@ def check_diagnostics(ctx, stage):
     log('Playtest Diagnostics default %s (%s)' % ('on' if want else 'off', ctx.channel))
 
 
+def declared_overlay_assets(stage):
+    """Hash-bound mod patches are payloads, not standalone disc/BIOS images."""
+    allowed = set()
+    for manifest in sorted((Path(stage) / 'mods/bundled').glob('*/*/manifest.toml')):
+        for overlay in tomllib.loads(read_text(manifest)).get('overlay', []):
+            rel = PurePosixPath(overlay.get('file', ''))
+            if (rel.is_absolute() or '..' in rel.parts or not rel.parts or
+                    rel.parts[0] != 'assets' or rel.suffix.lower() != '.bin' or
+                    overlay.get('target') != 'disc_user'):
+                continue
+            digest = overlay.get('sha256', '')
+            expected = overlay.get('expected_sha256', '')
+            if not all(re.fullmatch(r'[0-9a-fA-F]{64}', h) for h in (digest, expected)):
+                continue
+            asset = manifest.parent.joinpath(*rel.parts).resolve()
+            if not asset.is_relative_to(manifest.parent.resolve()) or not asset.is_file():
+                fail('declared overlay asset missing or outside package: %s' % rel)
+            if sha256(asset).lower() != digest.lower():
+                fail('declared overlay asset hash mismatch: %s' % rel)
+            allowed.add(asset)
+    return allowed
+
+
 def payload_gates(stage, plat, exe_name):
     """Content that must never ship, whatever the title config says."""
     stage = Path(stage)
+    overlay_assets = declared_overlay_assets(stage)
     present = [name for name in BUILD_KIT if (stage / name).exists()]
     if present:
         fail('package contains build-kit/user content: %s' % ', '.join(present))
@@ -850,7 +874,8 @@ def payload_gates(stage, plat, exe_name):
         suffix = path.suffix.lower()
         if suffix in DISC_SUFFIXES:
             fail('disc/save data in package: %s' % rel)
-        if suffix in ('.bin', '.rom') and lower != 'bios/openbios.bin':
+        if (suffix in ('.bin', '.rom') and lower != 'bios/openbios.bin' and
+                path.resolve() not in overlay_assets):
             fail('binary image in package (only bios/openbios.bin may ship): %s' % rel)
         if re.match(r'scph.*\.(bin|rom)', leaf):
             fail('retail BIOS image in package: %s' % rel)
