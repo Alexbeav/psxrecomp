@@ -23,6 +23,15 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    foreach(_span_mode native reference)
+        add_executable(psx_${_span_mode}_span_test tests/test_psx_native_span.c)
+        target_include_directories(psx_${_span_mode}_span_test PRIVATE include)
+        target_compile_definitions(psx_${_span_mode}_span_test PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        if(_span_mode STREQUAL "native")
+            target_compile_definitions(psx_${_span_mode}_span_test PRIVATE PSX_NATIVE_CPU_SPANS=1)
+        endif()
+        add_test(NAME psx_${_span_mode}_span_test COMMAND psx_${_span_mode}_span_test)
+    endforeach()
     add_executable(gpu_fmv_hd_test tests/test_gpu_fmv_hd.cpp src/gpu_fmv_hd.c)
     target_include_directories(gpu_fmv_hd_test PRIVATE include ${PSX_SDL_INCLUDE_DIRS})
     target_compile_definitions(gpu_fmv_hd_test PRIVATE SDL_MAIN_HANDLED PSX_FMV_HD_TESTING=1
@@ -301,6 +310,11 @@ if(BUILD_TESTING)
                 --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
                 --ninja "${PSX_PROFILE_TEST_NINJA}")
             set_tests_properties(native_idle_wait_policy_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME native_cpu_spans_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_cpu_spans.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(native_cpu_spans_policy_test PROPERTIES RUN_SERIAL TRUE)
         endif()
         add_test(NAME host_launch_timings_protocol_test COMMAND ${CMAKE_COMMAND} -E env
             "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}" "${Python3_EXECUTABLE}"
