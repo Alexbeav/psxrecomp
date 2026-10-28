@@ -20,6 +20,7 @@ static uint8_t ram[2u << 20];
 static int scenario, stage, polls, seeks, reads, errors, callbacks, skips;
 static uint32_t error_codes[16];
 static uint64_t ready_at;
+static int pending_irq;
 #ifdef PSX_PGXP
 int gte_geometry_correction_lookup(uint32_t p,int32_t *x,int32_t *y) { (void)p;(void)x;(void)y;return 0; }
 int gte_geometry_correction_lookup_probe(uint32_t p,int32_t *x,int32_t *y) { (void)p;(void)x;(void)y;return 0; }
@@ -34,7 +35,8 @@ static void wh(uint32_t a,uint16_t v) { wb(a,(uint8_t)v);wb(a+1u,(uint8_t)(v>>8)
 void psx_devices_service_to_now(void) { psx_next_service_cycle=psx_cycle_count+1; }
 void psx_advance_cycles_slow(uint32_t n) { psx_cycle_count+=n; }
 uint32_t psx_idle_cycles_to_next_observable_event(void) { ++skips; return 16000; }
-void psx_check_interrupts_at(CPUState *cpu,uint32_t pc) { (void)cpu;(void)pc; psx_cycle_count+=32; }
+int psx_interrupt_delivery_needed(const CPUState *cpu) { (void)cpu;return pending_irq; }
+void psx_check_interrupts_at(CPUState *cpu,uint32_t pc) { (void)cpu;(void)pc; pending_irq=0;psx_cycle_count+=32; }
 void psx_break(CPUState *cpu,uint32_t code,uint32_t pc) { (void)cpu;(void)code;(void)pc;assert(0); }
 void psx_unaligned_access(CPUState *cpu,uint32_t addr,uint32_t pc) { (void)cpu;(void)addr;(void)pc;assert(0); }
 
@@ -72,8 +74,8 @@ static Outcome run(int native,int which,int restore_each_boundary) {
     for(unsigned step=0;cpu.pc!=0x80012340u;++step) {
         assert(step<6000000u);
         if(restore_each_boundary) {
-            /* Model a serializer copying guest CPU/RAM then destroying the
-             * live CPU. No native job state can hide in a host continuation. */
+            /* Reconstitute CPU at unchanged guest RAM. No native job state
+             * can depend on the abandoned host invocation. */
             CPUState saved=cpu;memset(&cpu,0,sizeof(cpu));cpu=saved;
         }
         if(cpu.pc==0xA0u) {
@@ -122,6 +124,9 @@ static Outcome run(int native,int which,int restore_each_boundary) {
     return result;
 }
 int main(void) {
+    CPUState interrupted={0};interrupted.pc=0xBFC03C10u;pending_irq=1;skips=0;
+    OpenBIOS_func_1FC03A78(&interrupted);
+    assert(interrupted.pc==0xBFC03BDCu&&pending_irq==0&&skips==0);
     for(int which=0;which<11;++which) {
         Outcome reference=run(0,which,0),native=run(1,which,0),restored=run(1,which,1);
         assert(memcmp(&reference,&native,sizeof(native))==0);

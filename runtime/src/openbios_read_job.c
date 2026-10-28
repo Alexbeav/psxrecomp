@@ -3,10 +3,10 @@
  * IRQ, thread switch, snapshot or rollback. Commands and TestEvent still use
  * the guest A0/B0 vectors, including installed hooks and error callbacks. */
 #include "cpu_state.h"
+#include "interrupts.h"
 #include "psx_cycles.h"
 
 extern void psx_lle_OpenBIOS_func_1FC03A78(CPUState *cpu);
-extern void psx_check_interrupts_at(CPUState *cpu, uint32_t resume_pc);
 /* Diagnostic totals only; never read by simulation or serialized as job state.
  * started, finished, failed, deadline waits, elapsed deadline-wait cycles. */
 uint64_t g_psx_openbios_read_jobs[5];
@@ -57,6 +57,13 @@ static int stock_event_poll(CPUState *cpu) {
 }
 
 static void wait(CPUState *cpu, uint32_t resume) {
+    cpu->pc = resume;
+    /* The deadline accessor describes future events. A delivery already due
+     * (including a deferred thread switch) must run before waiting again. */
+    if (psx_interrupt_delivery_needed(cpu)) {
+        psx_check_interrupts_at(cpu, resume);
+        return;
+    }
     uint32_t cycles = 32u;
     if (stock_event_poll(cpu)) {
         cycles = psx_idle_cycles_to_next_observable_event();
@@ -67,7 +74,6 @@ static void wait(CPUState *cpu, uint32_t resume) {
         ++g_psx_openbios_read_jobs[3];
         g_psx_openbios_read_jobs[4] += cycles;
     }
-    cpu->pc = resume;
     psx_advance_cycles(cycles);
     psx_check_interrupts_at(cpu, resume);
 }
