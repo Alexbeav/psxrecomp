@@ -11,7 +11,10 @@ extern void psx_check_interrupts_at(CPUState *cpu, uint32_t resume_pc);
 static void constant(CPUState *cpu, unsigned reg, uint32_t value) {
     cpu->gpr[reg] = value;
     /* Integer service values have exact halves, no inherited projection. */
-    PGXP_ALU(0x3C000000u | (reg << 16u), value, 0u, 0u);
+    PGXP_ALU(0x3C000000u | (reg << 16u) | (value >> 16u),
+             value & 0xFFFF0000u, 0u, 0u);
+    PGXP_ALU(0x34000000u | (reg << 21u) | (reg << 16u) | (value & 0xFFFFu),
+             value, value & 0xFFFF0000u, 0u);
 }
 
 static void call(CPUState *cpu, uint32_t vector, uint32_t selector,
