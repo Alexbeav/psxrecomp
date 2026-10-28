@@ -61,7 +61,7 @@ Own-build save/load checks were performed independently.
   choices repeatedly pass four 32-boundary cold and warm resim comparisons.
   Live-versus-restored RAM drift is still open: control `[32,0,32,0]`, native
   `[32,1,32,0]`. Original-binary boundary observations locate the sampled
-  differences at `0x90AC–0x90E4`; the candidate-only boundary differs in two words
+  differences at `0x90AC–0x9130`; the candidate-only boundary differs in two words
   also present in baseline failures. That is attribution, not proof of a
   harmless/shared cause. A diagnostic relink had masked the symptom and is
   excluded from that conclusion. No digest exclusions or guest-memory patches
