@@ -7,6 +7,9 @@
 
 extern void psx_lle_OpenBIOS_func_1FC03A78(CPUState *cpu);
 extern void psx_check_interrupts_at(CPUState *cpu, uint32_t resume_pc);
+/* Diagnostic totals only; never read by simulation or serialized as job state.
+ * started, finished, failed, deadline waits, elapsed deadline-wait cycles. */
+uint64_t g_psx_openbios_read_jobs[5];
 
 static void constant(CPUState *cpu, unsigned reg, uint32_t value) {
     cpu->gpr[reg] = value;
@@ -61,6 +64,8 @@ static void wait(CPUState *cpu, uint32_t resume) {
          * service replays masked intermediate events inside this interval. */
         if (cycles > 16384u) cycles = 16384u;
         if (cycles == 0u) cycles = 1u;
+        ++g_psx_openbios_read_jobs[3];
+        g_psx_openbios_read_jobs[4] += cycles;
     }
     cpu->pc = resume;
     psx_advance_cycles(cycles);
@@ -68,6 +73,8 @@ static void wait(CPUState *cpu, uint32_t resume) {
 }
 
 static void finish(CPUState *cpu, uint32_t result) {
+    ++g_psx_openbios_read_jobs[1];
+    if (result == UINT32_MAX) ++g_psx_openbios_read_jobs[2];
     uint32_t sp = cpu->gpr[29];
     cpu->gpr[31] = cpu->read_word(sp + 60u);
     PGXP_LOAD(0x8FBF003Cu, sp + 60u, cpu->gpr[31]);
@@ -99,6 +106,7 @@ void OpenBIOS_func_1FC03A78(CPUState *cpu) {
             psx_lle_OpenBIOS_func_1FC03A78(cpu);
             return;
         }
+        ++g_psx_openbios_read_jobs[0];
         uint32_t lba = cpu->gpr[5] + 150u;
         uint32_t sp = cpu->gpr[29] - 64u;
         cpu->write_word(sp + 60u, cpu->gpr[31]);
