@@ -67,6 +67,8 @@ static Outcome run(int native,int which,int restore_each_boundary) {
     const uint32_t handler[]={0x3C080000,0x250849CC,0x00095080,0x01485020,0x8D4A0000,0x240800B0,0x01400008,0};
     for(unsigned i=0;i<8;++i)ww(0x2AA0+i*4,handler[i]);
     ww(0x49F8,which==7?0x80012300u:0xBFC0574Cu);
+    if(which==8)ww(0xB0,0x08001234u);
+    if(which==9)ww(0x2AA0,0x08001234u);
     for(unsigned step=0;cpu.pc!=0x80012340u;++step) {
         assert(step<6000000u);
         if(restore_each_boundary) {
@@ -92,7 +94,8 @@ static Outcome run(int native,int which,int restore_each_boundary) {
             assert(cpu.gpr[9]==0x0Bu);++polls;psx_cycle_count+=128;
             unsigned event=(stage==1&&which==3)?2u:(stage==2&&which==5)?3u:
                 (stage==2&&(which==6||(which==4&&reads==1)))?2u:1u;
-            int ready=which==7?polls>=20:psx_cycle_count>=ready_at;
+            if(which==10)ww(0x49F8,0x80012300u); /* patch during the request */
+            int ready=which>=7?polls>=20:psx_cycle_count>=ready_at;
             cpu.gpr[2]=ready&&cpu.gpr[4]==event;
             if(cpu.gpr[2]) {
                 ++callbacks;
@@ -115,11 +118,11 @@ static Outcome run(int native,int which,int restore_each_boundary) {
     for(unsigned i=0;i<4;++i)result.payload[i]=rw(0x20000+i*4);
     memcpy(result.codes,error_codes,sizeof(error_codes));
     result.seek=seeks;result.read=reads;result.error=errors;result.callback=callbacks;
-    if(which==7)assert(skips==0);
+    if(which>=7)assert(skips==0);
     return result;
 }
 int main(void) {
-    for(int which=0;which<8;++which) {
+    for(int which=0;which<11;++which) {
         Outcome reference=run(0,which,0),native=run(1,which,0),restored=run(1,which,1);
         assert(memcmp(&reference,&native,sizeof(native))==0);
         assert(memcmp(&native,&restored,sizeof(native))==0);
