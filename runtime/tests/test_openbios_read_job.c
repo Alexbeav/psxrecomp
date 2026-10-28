@@ -22,6 +22,7 @@ static uint32_t error_codes[16];
 static uint64_t ready_at;
 static int pending_irq;
 #ifdef PSX_PGXP
+int psx_mod_gpu_dma_memory_contains(uint32_t addr,uint32_t bytes) { (void)addr;(void)bytes;return 0; }
 int gte_geometry_correction_lookup(uint32_t p,int32_t *x,int32_t *y) { (void)p;(void)x;(void)y;return 0; }
 int gte_geometry_correction_lookup_probe(uint32_t p,int32_t *x,int32_t *y) { (void)p;(void)x;(void)y;return 0; }
 #endif
