@@ -3,6 +3,7 @@
  * only the command/event device boundary, not either request algorithm. */
 #include "cpu_state.h"
 #include "psx_cycles.h"
+#include "pgxp.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +20,10 @@ static uint8_t ram[2u << 20];
 static int scenario, stage, polls, seeks, reads, errors, callbacks, skips;
 static uint32_t error_codes[16];
 static uint64_t ready_at;
+#ifdef PSX_PGXP
+int gte_geometry_correction_lookup(uint32_t p,int32_t *x,int32_t *y) { (void)p;(void)x;(void)y;return 0; }
+int gte_geometry_correction_lookup_probe(uint32_t p,int32_t *x,int32_t *y) { (void)p;(void)x;(void)y;return 0; }
+#endif
 static uint32_t rw(uint32_t a) { uint32_t v; memcpy(&v,ram+(a&0x1FFFFFu),4); return v; }
 uint32_t psx_read_word(uint32_t a) { return rw(a); }
 static void ww(uint32_t a,uint32_t v) { memcpy(ram+(a&0x1FFFFFu),&v,4); }
@@ -33,7 +38,11 @@ void psx_check_interrupts_at(CPUState *cpu,uint32_t pc) { (void)cpu;(void)pc; ps
 void psx_break(CPUState *cpu,uint32_t code,uint32_t pc) { (void)cpu;(void)code;(void)pc;assert(0); }
 void psx_unaligned_access(CPUState *cpu,uint32_t addr,uint32_t pc) { (void)cpu;(void)addr;(void)pc;assert(0); }
 
-typedef struct { uint32_t result,sp,callee[8],payload[4],codes[16]; int seek,read,error,callback; uint8_t msf[3]; } Outcome;
+typedef struct { uint32_t result,sp,callee[8],payload[4],codes[16]; int seek,read,error,callback; uint8_t msf[3];
+#ifdef PSX_PGXP
+    uint32_t shadow_flags[8];int32_t shadow_x[8],shadow_y[8];uint16_t shadow_z[8];
+#endif
+} Outcome;
 static Outcome run(int native,int which,int restore_each_boundary) {
     CPUState cpu={0};Outcome result={0};
     memset(ram,0,sizeof(ram));scenario=which;stage=polls=seeks=reads=errors=callbacks=skips=0;
@@ -42,6 +51,16 @@ static Outcome run(int native,int which,int restore_each_boundary) {
     cpu.gpr[29]=0x801F0000u;cpu.gpr[31]=0x80012340u;
     cpu.gpr[4]=0x80020000u;cpu.gpr[5]=12345;cpu.gpr[6]=3;
     for(int i=0;i<8;++i)cpu.gpr[16+i]=0x13570000u+i;
+#ifdef PSX_PGXP
+    pgxp_set_enabled(1);pgxp_set_cpu_mode(1);pgxp_invalidate_all();
+    for(unsigned i=0;i<8;++i) {
+        uint32_t packed=((20u+i)<<16u)|(10u+i);
+        cpu.gpr[16u+i]=packed;
+        pgxp_test_seed_gte_sxy(0,packed,(int32_t)((10u+i)*65536u+1234u),
+                               (int32_t)((20u+i)*65536u+2345u),100u+i,1);
+        psx_pgxp_cop2(&cpu,0x48006000u|((16u+i)<<16u),packed,0);
+    }
+#endif
     cpu.pc=0xBFC03A78u;
     ww(0x4BE0,1);ww(0x4BD4,2);ww(0x4BD8,3);
     ww(0xB0,0x24082AA0);ww(0xB4,0x01000008);ww(0xB8,0);
@@ -85,6 +104,14 @@ static Outcome run(int native,int which,int restore_each_boundary) {
     }
     result.result=cpu.gpr[2];result.sp=cpu.gpr[29];
     for(int i=0;i<8;++i)result.callee[i]=cpu.gpr[16+i];
+#ifdef PSX_PGXP
+    for(unsigned i=0;i<8;++i) {
+        int live;uint32_t value;
+        assert(pgxp_debug_shadow(1,16u+i,&live,&value,&result.shadow_flags[i],
+                                &result.shadow_x[i],&result.shadow_y[i],&result.shadow_z[i]));
+        assert(live&&value==cpu.gpr[16u+i]&&result.shadow_flags[i]);
+    }
+#endif
     for(unsigned i=0;i<4;++i)result.payload[i]=rw(0x20000+i*4);
     memcpy(result.codes,error_codes,sizeof(error_codes));
     result.seek=seeks;result.read=reads;result.error=errors;result.callback=callbacks;

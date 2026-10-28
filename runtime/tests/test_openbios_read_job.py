@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--generated', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cc', required=True)
+    parser.add_argument('--cxx', help='Also compare live callee-save precision with real pgxp.cpp')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     source = args.generated.read_text(encoding='utf-8')
@@ -42,6 +43,23 @@ def main():
                     str(root / 'runtime/src/openbios_read_job.c'), str(reference),
                     '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
+    if args.cxx:
+        objects = []
+        for name, path in [('fixture', root / 'runtime/tests/test_openbios_read_job.c'),
+                           ('native', root / 'runtime/src/openbios_read_job.c'),
+                           ('reference', reference),
+                           ('geometry', root / 'runtime/src/psx_ram_geometry.c')]:
+            obj = out / (name + '.o')
+            subprocess.run([args.cc, '-std=c11', '-O2', '-DPSX_NO_DEBUG_TOOLS=1',
+                            '-DPSX_PGXP=1', '-I' + str(root / 'runtime/include'),
+                            '-c', str(path), '-o', str(obj)], check=True)
+            objects.append(str(obj))
+        pgxp = out / 'pgxp.o'
+        subprocess.run([args.cxx, '-std=c++17', '-O2', '-I' + str(root / 'runtime/include'),
+                        '-c', str(root / 'runtime/src/pgxp.cpp'), '-o', str(pgxp)], check=True)
+        precision_exe = out / 'read_precision_contract.exe'
+        subprocess.run([args.cxx, *objects, str(pgxp), '-static', '-o', str(precision_exe)], check=True)
+        subprocess.run([str(precision_exe)], check=True)
     print('Generated BIOS SHA256:', hashlib.sha256(args.generated.read_bytes()).hexdigest())
 
 
