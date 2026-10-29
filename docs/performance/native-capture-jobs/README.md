@@ -55,7 +55,8 @@ The real serializer/loader and adapter fixtures exercise current-build restore,
 direct/staged VRAM, dirty mirror, 2/8MiB RAM, dynamic post-catch-up layout, odd
 arenas, growth failures preserving history, overflow, overwrite/drop/clear and
 warm allocation reuse. Original/native O0/O2 wire digests agree. Build-selector
-fixtures cover default/ON/OFF/REFERENCE, no-ring and old-API reference cases.
+fixtures cover default/ON/OFF/REFERENCE and no-ring cases. The real netplay
+adapter fixture also builds/runs REFERENCE against the actual old rbengine API.
 
 Actual native Ape QA performed jumping, its own disk save/load, F8 opening,
 host-pad selection/accept of the oldest full-ring entry, earlier guest-cycle and

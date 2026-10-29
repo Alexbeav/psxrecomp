@@ -257,8 +257,11 @@ if(BUILD_TESTING)
                 endif()
                 set(_ring_test "netplay_capture_ring_${_native}_test")
                 add_executable(${_ring_test} tests/test_netplay_capture_ring.c
-                    src/netplay_snap_ring.c src/capture_ring.c
+                    src/netplay_snap_ring.c
                     "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c")
+                if(_native)
+                    target_sources(${_ring_test} PRIVATE src/capture_ring.c)
+                endif()
                 target_include_directories(${_ring_test} PRIVATE include src
                     "${RECOMP_RBENGINE_ROOT}/include")
                 target_compile_definitions(${_ring_test} PRIVATE PSX_COSIM=1
