@@ -5,6 +5,7 @@ Run with --generated <OpenBIOS_full.c> --output <scratch> --cc <compiler>.
 """
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -58,7 +59,8 @@ def main():
         subprocess.run([args.cxx, '-std=c++17', '-O2', '-I' + str(root / 'runtime/include'),
                         '-c', str(root / 'runtime/src/pgxp.cpp'), '-o', str(pgxp)], check=True)
         precision_exe = out / 'read_precision_contract.exe'
-        subprocess.run([args.cxx, *objects, str(pgxp), '-static', '-o', str(precision_exe)], check=True)
+        subprocess.run([args.cxx, *objects, str(pgxp), *(['-static'] if os.name == 'nt' else []),
+                        '-o', str(precision_exe)], check=True)
         subprocess.run([str(precision_exe)], check=True)
     print('Generated BIOS SHA256:', hashlib.sha256(args.generated.read_bytes()).hexdigest())
 
