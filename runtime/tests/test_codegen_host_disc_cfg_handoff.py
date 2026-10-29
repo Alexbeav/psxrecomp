@@ -71,7 +71,7 @@ def main() -> int:
         probe_c.write_text(PROBE, encoding="utf-8")
         exe = tmp / ("probe.exe" if os.name == "nt" else "probe")
         build = subprocess.run(
-            [cc, "-std=gnu11", "-o", str(exe), str(probe_c),
+            [cc, "-std=gnu11", "-o", str(exe), str(probe_c), str(ROOT / "runtime/src/start_refusal.c"),
              '-DPSX_SETUP_BIOS_STEMS="SCPH1001"',
              '-DPSX_SETUP_FRAMEWORK_REL="psxrecomp"',
              "-I", str(ROOT / "host"),

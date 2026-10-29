@@ -3,6 +3,8 @@
 #include "psxrecomp_codegen_host.h"
 
 #include "psx_bios_known_images.h"
+#include "psx_setup_refusal.h"   /* the disc file setup refused last (PS1B-415) */
+#include "start_refusal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -62,6 +64,20 @@ static char g_toolchain_bin[1400];
 static char g_cli_toolchain_bin[1400];
 static int g_ready;
 static int g_relaunch_is_helper;
+/* The exit code of the last CLI run (run_cli_win / run_cli_posix); -1 when it
+ * could not be started or waited for. */
+static long g_cli_last_exit_code;
+/* 1 when the last CLI run said that the file it refused is the one given as
+ * --disc (psx_setup_refusal_line_names_given). */
+static int g_cli_refused_given_disc;
+/* The disc file "Generate" refused last (the CLI's exit code 3), as the
+ * player selected it; "" when none. Memory of this process only: nothing
+ * writes it to a file, and the game this host hands over to is another
+ * process. The disc panel's verdict follows it (host_disc_verify). */
+static char g_refused_disc[1024];
+/* The game program's own disc check, which host_disc_verify wraps. */
+static int (*g_inner_disc_verify)(const char* disc_path,
+                                  RecompLauncherCDiscVerify* out);
 /* Wizard BIOS pick (survives cwd-relative bios.cfg misses on Windows). */
 static char g_wizard_bios[1100];
 /* Set when heal removes a broken latest/ / stamp at wizard open. */
@@ -2341,6 +2357,8 @@ static int run_cli_win(const char* cmdline,
                        RecompLauncherCPrepareProgressFn on_progress,
                        void* progress_ctx, char* err_msg, size_t err_cap,
                        const char* fail_label) {
+    g_cli_last_exit_code = -1;
+    g_cli_refused_given_disc = 0;
     SECURITY_ATTRIBUTES sa;
     memset(&sa, 0, sizeof(sa));
     sa.nLength = sizeof(sa);
@@ -2408,6 +2426,8 @@ static int run_cli_win(const char* cmdline,
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
+    g_cli_refused_given_disc = tail.refused_given_disc;
+    g_cli_last_exit_code = (long)code;
     if (code == 0) return 1;
     cli_fail_msg(err_msg, err_cap, fail_label, (long)code, &tail);
     return 0;
@@ -2417,6 +2437,8 @@ static int run_cli_posix(char* const argv[],
                          RecompLauncherCPrepareProgressFn on_progress,
                          void* progress_ctx, char* err_msg, size_t err_cap,
                          const char* fail_label) {
+    g_cli_last_exit_code = -1;
+    g_cli_refused_given_disc = 0;
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         snprintf(err_msg, err_cap, "pipe() failed: %s", strerror(errno));
@@ -2468,6 +2490,8 @@ static int run_cli_posix(char* const argv[],
         return 0;
     }
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    g_cli_refused_given_disc = tail.refused_given_disc;
+    g_cli_last_exit_code = (long)code;
     if (code == 0) return 1;
     cli_fail_msg(err_msg, err_cap, fail_label, (long)code, &tail);
     return 0;
@@ -5019,6 +5043,32 @@ static int host_preflight_project_root(char* err_msg, size_t err_cap) {
     return 1;
 }
 
+/* The disc panel's check (PS1B-415). The game program judges the ISO header
+ * and the serial; "Generate" judges the data track against the kit. A file
+ * that Generate refused must not stand in the panel as "Disc verified" above
+ * the refusal: for that one file the verdict is "bad" (the headline "Disc
+ * verification failed"), until the player selects another file or a prepare
+ * of it succeeds. Everything else of the answer is the game program's. */
+static int host_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
+    const int answered = g_inner_disc_verify ? g_inner_disc_verify(disc_path, out) : 0;
+    if (answered && out && disc_path && disc_path[0] &&
+        psx_setup_refusal_at_check(g_refused_disc, disc_path)) {
+        out->verdict = 3;
+        /* The inner check recorded its verdict before this override. Keep
+         * the run report consistent with the final panel (PS1B-415). */
+        char row[PSX_START_LAUNCHER_ROW_CAP];
+        const char* expected = "";
+#if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)
+        expected = out->expected_serials;
+#endif
+        snprintf(row, sizeof(row),
+                 "verdict=refused serial=%s expected=%s tracks=%d; setup refused the selected disc",
+                 out->serial, expected, out->track_count);
+        psx_start_note_launcher("disc", row);
+    }
+    return answered;
+}
+
 static int host_prepare_generate(const char* source_path, char* out_path,
                                  size_t out_cap, char* err_msg, size_t err_cap,
                                  RecompLauncherCPrepareProgressFn on_progress,
@@ -5116,8 +5166,12 @@ static int host_prepare_generate(const char* source_path, char* out_path,
                  marker_name);
     }
     if (!run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
-                     "psxrecomp generate"))
+                     "psxrecomp generate")) {
+        psx_setup_refusal_after_prepare(g_refused_disc, sizeof(g_refused_disc),
+                                        source_path, g_cli_last_exit_code,
+                                        g_cli_refused_given_disc);
         return 0;
+    }
 #else
     char* argv[20];
     int argc = 0;
@@ -5144,9 +5198,17 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
     if (!run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
-                       "psxrecomp generate"))
+                       "psxrecomp generate")) {
+        psx_setup_refusal_after_prepare(g_refused_disc, sizeof(g_refused_disc),
+                                        source_path, g_cli_last_exit_code,
+                                        g_cli_refused_given_disc);
         return 0;
+    }
 #endif
+    /* The disc was accepted: a refusal remembered for it (the player replaced
+     * the file in place and pressed Generate again) is over. */
+    psx_setup_refusal_after_prepare(g_refused_disc, sizeof(g_refused_disc),
+                                    source_path, 0, 0);
 
     /* Stamp the success so apply() can tell "generate worked but the
      * launcher still cannot see its output" apart from a plain first run. */
@@ -6175,6 +6237,12 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     }
     gi->prepare_with_progress = host_prepare_generate;
     gi->prepare_use_selected_rom = 1;
+    /* The disc panel follows a file that Generate refused (PS1B-415). Wrapped
+     * once: apply can run more than once in a process. */
+    if (gi->disc_verify && gi->disc_verify != host_disc_verify) {
+        g_inner_disc_verify = gi->disc_verify;
+        gi->disc_verify = host_disc_verify;
+    }
     /* Number prefix is applied in the setup UI (BIOS adds a step). */
     gi->prepare_section_title = "Generate BIOS + game C & rebuild";
     gi->prepare_busy_status = "Generating BIOS + game sources…";

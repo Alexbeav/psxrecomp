@@ -32,6 +32,12 @@ start ends with `config_unreadable` before the launcher opens. A relative
 missing default is named from the executable directory. A build with no
 default configuration can still start without one.
 
+If setup refused the selected disc, the host updates `launcher_status.disc`
+after its final check. The row records `verdict=refused`, the serial, expected
+serials and track count, followed by `setup refused the selected disc`.
+This replaces the game check's earlier verdict for that file. Checking another
+file or successfully preparing it clears the remembered refusal.
+
 ## File names
 
 The report names a file by its **base name** only, never by its folder.

@@ -17,10 +17,14 @@
 #include <string.h>
 
 #include "psx_json_text.h"
+#include "psx_setup_refusal.h"
 
 typedef struct {
     char last[480];
     char last_err[480];
+    /* 1 when a row said that the file the CLI refused is the one given as
+     * --disc (psx_setup_refusal_line_names_given, PS1B-415). */
+    int refused_given_disc;
 } CliTail;
 
 static int cli_tail_line_is_error(const char* s) {
@@ -58,6 +62,8 @@ static void cli_tail_note(CliTail* t, const char* line) {
     if (line[0] == '{') {
         /* sdk_progress emits compact JSON: {"event":"error","message":...}. */
         is_error_event = strstr(line, "\"event\":\"error\"") != NULL;
+        if (psx_setup_refusal_line_names_given(line))
+            t->refused_given_disc = 1;
         if (!json_get_string(line, "message", msg, sizeof(msg)))
             return; /* structured row without text (e.g. result) */
         rec = msg;

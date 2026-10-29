@@ -432,7 +432,7 @@ def build_probe(tmp: Path, cc: str | None) -> tuple[Path | None, str]:
     probe_c.write_text(PROBE % {"host_c": str(HOST_C).replace("\\", "/")}, encoding="utf-8")
     probe = tmp / ("probe" + EXE)
     build = subprocess.run(
-        [cc, "-std=gnu11", "-o", str(probe), str(probe_c), '-DPSX_SETUP_BIOS_STEMS="SCPH5552"',
+        [cc, "-std=gnu11", "-o", str(probe), str(probe_c), str(ROOT / "runtime/src/start_refusal.c"), '-DPSX_SETUP_BIOS_STEMS="SCPH5552"',
          '-DPSX_SETUP_FRAMEWORK_REL="psxrecomp"', "-I", str(ROOT / "host"), "-I", str(ROOT / "runtime" / "include"),
          "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
