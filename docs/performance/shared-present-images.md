@@ -34,3 +34,11 @@ Performance qualification is tracked under `beads-wuhs`, campaign
 `beads-2wy8.1`, burndown G4. Component copy counts alone are not a built-game
 gain; record actual matched CPU/GPU results before promotion. Owner adoption
 checks remain bundled at the end of the campaign.
+
+Diagnostic builds can opt into `PSX_GL_CAPTURE_PERF=1`. Four buffered timestamp
+pairs bracket capture plus hold publication, ending before interval pacing.
+Results are harvested only when available; busy slots are retained and new
+scopes skipped. Missing entrypoints provide no passing result. The private
+diagnostic counters retain completed samples, total GPU nanoseconds and skipped
+or unavailable scopes for external A/B collection. This scope avoids treating
+the paced whole-present timer as GPU busy work. Release builds omit it.

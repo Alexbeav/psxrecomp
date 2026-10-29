@@ -733,6 +733,7 @@ static int pass_refuse_write(const char *what, int x, int y, int w, int h) {
     return 1;
 }
 static void interp_reset_history(void);
+static void completed_image_cost_reset(void);
 static int interp_present(float alpha);
 static void interp_present_source_interval(void);
 static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh);
@@ -6720,6 +6721,7 @@ void gl_renderer_shutdown(void) {
     s_depth24_skip_up = 0;
     rect_clear(&s_d24_skip_fb);
     hold_invalidate();
+    completed_image_cost_reset();
     s_hold_tex = 0;
     s_hold_fbo = 0;
     s_hold_tw = 0;
@@ -7942,6 +7944,68 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 }
 
 enum { INTERP_INACTIVE = 0, INTERP_REUSED = 1, INTERP_CAPTURED = 2 };
+/* Optional tight GPU attribution, ending before interval pacing. Timestamp
+ * pairs coexist with the scene timer and are harvested only when ready.
+ * Diagnostics layout: sequence, samples, total ns, unavailable polls,
+ * skipped scopes, supported. Release builds contain no queries/counters. */
+#ifndef PSX_NO_DEBUG_TOOLS
+static GLuint s_capture_gpu_q[4][2];
+static int s_capture_gpu_pending[4], s_capture_gpu_slot, s_capture_gpu_open = -1;
+static int s_capture_gpu_initialized;
+static _Atomic uint64_t s_capture_gpu_diag[6];
+static void completed_image_cost_begin(void) {
+    s_capture_gpu_open = -1;
+    if (!s_interp_enabled || s_interp_suspended) return;
+    if (!s_capture_gpu_initialized) {
+        s_capture_gpu_initialized = -1;
+        const char *enabled = getenv("PSX_GL_CAPTURE_PERF");
+        if (!enabled || enabled[0] != '1' || !p_glGenQueries ||
+            !p_glQueryCounter || !p_glGetQueryObjectiv || !p_glGetQueryObjectui64v) return;
+        p_glGenQueries(8, &s_capture_gpu_q[0][0]);
+        s_capture_gpu_initialized = 1;
+        atomic_store(&s_capture_gpu_diag[5], 1);
+    }
+    if (s_capture_gpu_initialized != 1) return;
+    int b = s_capture_gpu_slot;
+    if (s_capture_gpu_pending[b]) {
+        GLint ready = 0;
+        p_glGetQueryObjectiv(s_capture_gpu_q[b][1], GL_QUERY_RESULT_AVAILABLE, &ready);
+        if (!ready) {
+            atomic_fetch_add(&s_capture_gpu_diag[3], 1);
+            atomic_fetch_add(&s_capture_gpu_diag[4], 1);
+            return; /* Never reuse an unfinished query or wait for the GPU. */
+        }
+        GLuint64 start = 0, end = 0;
+        p_glGetQueryObjectui64v(s_capture_gpu_q[b][0], GL_QUERY_RESULT, &start);
+        p_glGetQueryObjectui64v(s_capture_gpu_q[b][1], GL_QUERY_RESULT, &end);
+        atomic_fetch_add(&s_capture_gpu_diag[0], 1);
+        atomic_fetch_add(&s_capture_gpu_diag[1], 1);
+        atomic_fetch_add(&s_capture_gpu_diag[2], end >= start ? end - start : 0);
+        atomic_fetch_add(&s_capture_gpu_diag[0], 1);
+        s_capture_gpu_pending[b] = 0;
+    }
+    p_glQueryCounter(s_capture_gpu_q[b][0], GL_TIMESTAMP);
+    s_capture_gpu_open = b;
+}
+static void completed_image_cost_end(void) {
+    if (s_capture_gpu_open < 0) return;
+    p_glQueryCounter(s_capture_gpu_q[s_capture_gpu_open][1], GL_TIMESTAMP);
+    s_capture_gpu_pending[s_capture_gpu_open] = 1;
+    s_capture_gpu_slot = (s_capture_gpu_open + 1) % 4;
+    s_capture_gpu_open = -1;
+}
+static void completed_image_cost_reset(void) {
+    memset(s_capture_gpu_q, 0, sizeof(s_capture_gpu_q));
+    memset(s_capture_gpu_pending, 0, sizeof(s_capture_gpu_pending));
+    for (int i = 0; i < 6; i++) atomic_store(&s_capture_gpu_diag[i], 0);
+    s_capture_gpu_initialized = s_capture_gpu_slot = 0;
+    s_capture_gpu_open = -1;
+}
+#else
+static void completed_image_cost_begin(void) {}
+static void completed_image_cost_end(void) {}
+static void completed_image_cost_reset(void) {}
+#endif
 /* Copy a stable display image out of the mutable VRAM/wide render target.
  * Positive means temporal blending owns this source-frame interval. Reused
  * FLIP history is distinct: hold-last must still capture the current source. */
@@ -10592,6 +10656,7 @@ static void present_vram_impl(int disp_x, int disp_y, int w, int h, int linear,
     if (lx != 0 || ly != 0 || lw != ww || lh != wh) {
         glClearColor(0.f,0.f,0.f,1.f); glClear(GL_COLOR_BUFFER_BIT);
     }
+    completed_image_cost_begin();
     int interp_pair = interp_capture(
         interp_fbo, src_x, disp_y, w, h, linear, force_4_3, GL_PRES_VRAM,
         disp_x, disp_y,
@@ -10600,6 +10665,7 @@ static void present_vram_impl(int disp_x, int disp_y, int w, int h, int linear,
         /* Temporal blending owns this stock frame interval. Capture hold-last
          * before pacing; every blend and Swap remains on this context/thread. */
         hold_publish_interpolated(interp_pair, src_fbo, src_x, disp_y, w, h, force_4_3, linear);
+        completed_image_cost_end();
         interp_present_source_interval();
         gl_perf_present_exit(0);
         present_dirty_rect(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1, 0);
@@ -10608,6 +10674,7 @@ static void present_vram_impl(int disp_x, int disp_y, int w, int h, int linear,
         s_last_dx = disp_x; s_last_dy = disp_y; s_last_dw = w; s_last_dh = h;
         return;
     }
+    completed_image_cost_end();
     present_bezel(ww, wh, lx, ly, lw, lh);
     {
         /* The hr surface may be allocated above the level it renders at
@@ -10773,12 +10840,14 @@ static int present_wide_fbo_impl(int disp_x, int disp_y, int disp_h, int linear)
     if (lx != 0 || ly != 0 || lw != ww || lh != wh) {
         glClearColor(0.f, 0.f, 0.f, 1.f); glClear(GL_COLOR_BUFFER_BIT);
     }
+    completed_image_cost_begin();
     int interp_pair = interp_capture(
         fbo, 0, disp_y, g_wide_w, disp_h, linear, 0, GL_PRES_WIDE,
         disp_x, disp_y,
         present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1));
     if (interp_pair) {
         hold_publish_interpolated(interp_pair, fbo, 0, disp_y, g_wide_w, disp_h, 0, linear);
+        completed_image_cost_end();
         interp_present_source_interval();
         gl_perf_present_exit(1);
         present_dirty_rect(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1, 0);
@@ -10788,6 +10857,7 @@ static int present_wide_fbo_impl(int disp_x, int disp_y, int disp_h, int linear)
         s_last_dw = g_wide_w; s_last_dh = disp_h;
         return 1;
     }
+    completed_image_cost_end();
     /* The surface is allocated at its own scale (s_wide_as), the level. */
     const float wext = (wide_as > s_out_scale && s_out_scale >= 1)
                            ? (float)wide_as / (float)s_out_scale : 1.0f;
