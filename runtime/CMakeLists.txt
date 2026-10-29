@@ -249,6 +249,26 @@ if(BUILD_TESTING)
             target_link_libraries(${_capture_test} PRIVATE ZLIB::ZLIB)
             add_test(NAME ${_capture_test} COMMAND ${_capture_test})
         endforeach()
+        if(EXISTS "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c")
+            file(READ "${RECOMP_RBENGINE_ROOT}/include/retcomm_rbengine/snap_ring.h" _capture_ring_header)
+            foreach(_native IN ITEMS 0 1)
+                if(_native AND NOT _capture_ring_header MATCHES "RBE_SNAP_CAPTURE_API_VERSION")
+                    continue() # Old dependency remains a supported reference build.
+                endif()
+                set(_ring_test "netplay_capture_ring_${_native}_test")
+                add_executable(${_ring_test} tests/test_netplay_capture_ring.c
+                    src/netplay_snap_ring.c src/capture_ring.c
+                    "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c")
+                target_include_directories(${_ring_test} PRIVATE include src
+                    "${RECOMP_RBENGINE_ROOT}/include")
+                target_compile_definitions(${_ring_test} PRIVATE PSX_COSIM=1
+                    PSX_HAS_RECOMP_NET=1 PSX_NATIVE_CAPTURE_JOBS=${_native})
+                target_compile_options(${_ring_test} PRIVATE -O2 -ffunction-sections -fdata-sections -UNDEBUG)
+                target_link_options(${_ring_test} PRIVATE -Wl,--gc-sections)
+                target_link_libraries(${_ring_test} PRIVATE ZLIB::ZLIB)
+                add_test(NAME ${_ring_test} COMMAND ${_ring_test})
+            endforeach()
+        endif()
         add_executable(boot_state_impl_tag_test tests/test_boot_state_handoff.c)
         target_include_directories(boot_state_impl_tag_test PRIVATE include src)
         target_compile_definitions(boot_state_impl_tag_test PRIVATE PSX_COSIM=1 PSX_SAVESTATE_IMPL_TAG=0x54474801u)
