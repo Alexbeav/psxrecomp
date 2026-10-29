@@ -13,6 +13,22 @@ struct PsxWindowFullscreen {
     bool cursor_visible = true;
 };
 
+/* Borderless on Windows/SDL3 is a normal window, so SDL's native fullscreen
+ * flag cannot protect it from a window-scale resize. Use the owned mode. */
+static inline int psx_window_resize_windowed(SDL_Window* window,
+                                            const PsxWindowFullscreen* state,
+                                            int width, int height)
+{
+    if (!window || !state || state->mode != 0 || width <= 0 || height <= 0)
+        return -1;
+#if defined(PSX_SDL3)
+    return SDL_SetWindowSize(window, width, height) ? 0 : -1;
+#else
+    SDL_SetWindowSize(window, width, height);
+    return 0;
+#endif
+}
+
 static inline int psx_window_fullscreen_set(SDL_Window* window,
                                            PsxWindowFullscreen* state, int mode)
 {

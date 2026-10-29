@@ -4,4 +4,4 @@
 # Pin H and pin I: aff1c6ef (Alexbeav/psxrecomp stage/pin-i; PIN-I-FIX-PILE.md "Base").
 # Next pin (PS1B-482): f998b0a, which adds the launcher module and its host adapter
 # (recomp_target_launcher_module_host) that PSX_LAUNCHER_MODULE needs; it descends from aff1c6ef.
-addc54c74c78a913e99b342f6b664a6e4e4c8369
+eccd4f56111f45b7bf4e22a4a983a88b555a626b

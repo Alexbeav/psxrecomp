@@ -7195,13 +7195,14 @@ static int runtime_ui_set_value(void*, const RecompRuntimeUiItem *item,
             psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, value);
     } else if (std::strcmp(item->key,
                            RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
-        if (value < 1 || value > 4) return 0;
-        g_video_win_w = value * 640;
-        if (sdl_window) {
-            int height = g_video_win_w * g_video_aspect_den /
-                         std::max(1, g_video_aspect_num);
-            SDL_SetWindowSize(sdl_window, g_video_win_w, height);
-        }
+        if (value < 1 || value > 4 || g_fullscreen != 0) return 0;
+        const int width = value * 640;
+        const int height = width * g_video_aspect_den /
+                           std::max(1, g_video_aspect_num);
+        if (sdl_window && psx_window_resize_windowed(
+                sdl_window, &s_window_fullscreen, width, height) != 0)
+            return 0;
+        g_video_win_w = width;
     } else if (std::strcmp(item->key,
                            RECOMP_RUNTIME_UI_KEY_LINEAR_FILTER) == 0) {
         g_video_aa = value != 0;
@@ -7353,6 +7354,8 @@ static int runtime_ui_run_action(void *opaque,
 
 static int runtime_ui_is_enabled(void*, const RecompRuntimeUiItem *item) {
     if (!item || !item->key) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0)
+        return g_fullscreen == 0 && s_window_fullscreen.mode == 0;
     if (std::strcmp(item->key, kRuntimeControllerRoute) == 0)
         return controller_port_swap_available();
     if (std::strcmp(item->key, kRuntimeDiscChange) == 0)
