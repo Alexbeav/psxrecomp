@@ -37,6 +37,8 @@ struct Identity {
     bool expected_serial_given = false, serial_matches = true;
 };
 struct Companion { bool ready = true; std::string message; };
+// The set's wrong-disc verdict (PS1B-403): what was read is none of the set's serials.
+static bool set_wrong_disc = false;
 static const char* reason(const Identity& id, const Companion& companion) {
     return ''' + match[1] + ''';
 }
@@ -60,6 +62,9 @@ int main() {
     id.sbi_warning.clear();
     id.netplay_detail = "ordinary retained reason";
     assert(!std::strcmp(reason(id, companion), id.netplay_detail.c_str()));
+    set_wrong_disc = true;
+    assert(!std::strcmp(reason(id, companion), "the disc does not carry the expected serial")
+           && "a disc outside the set's serials must give the wrong-serial reason");
 }
 '''
     with tempfile.TemporaryDirectory(prefix="missing_sbi_reason_", dir=scratch_root()) as scratch:
@@ -73,7 +78,7 @@ int main() {
             print(result.stderr, end="")
             if result.returncode:
                 raise RuntimeError(f"exit {result.returncode}: {command}")
-    print("MISSING_SBI_REASON_CONTROLS_PASS five actual expression controls")
+    print("MISSING_SBI_REASON_CONTROLS_PASS six actual expression controls")
 
 
 if __name__ == "__main__":
