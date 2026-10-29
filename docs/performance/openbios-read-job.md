@@ -1,7 +1,10 @@
 # Native OpenBIOS read request
 
-Experimental, default OFF: configure `-DPSX_NATIVE_OPENBIOS_READ=ON` in an
-ENHANCED build. REFERENCE and oracle builds retain the generated firmware.
+Enabled by default in ENHANCED builds. Configure
+`-DPSX_EXECUTION_PROFILE=REFERENCE` (or `-DPSX_NATIVE_OPENBIOS_READ=OFF`)
+to retain the original generated request. Oracle builds also retain the
+generated firmware. Existing CMake caches explicitly set to OFF remain OFF;
+set the option to ON to adopt this default in those build directories.
 The audited OpenBIOS image is
 `fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57`.
 Other BIOS images are unchanged; an unaudited OpenBIOS body fails configuration.
@@ -47,8 +50,9 @@ real PGXP engine. CTest registers the contract test when generated OpenBIOS is
 available, and a separate synthetic-source selection test when Ninja is present.
 
 Qualification belongs to `beads-wuhs` and the optimization campaign
-`beads-2wy8.1`. Actual matched built-game results must be recorded before
-promotion; owner adoption checks remain bundled at the end of the burndown.
+`beads-2wy8.1`. The contract checks and matched built-game results below support
+the ENHANCED default. Combined regression and owner adoption checks remain
+bundled at the end of the burndown before merge.
 
 ## Bounded measurements, 2026-10-28
 
@@ -59,6 +63,11 @@ runs are uncapped. Each game keeps its own rendering/features, hidden full
 OpenGL presenter, dummy output with audio emulation, normal CD timing multiplier
 and identical cold input setup. These are startup/loading checkpoints, not
 gameplay FPS measurements.
+
+The raw record describes the default-OFF recipe used during measurement.
+The later default-ON selection change leaves the native request unchanged;
+fresh-cache default, explicit OFF, REFERENCE and non-OpenBIOS selection are
+checked separately. Historical source and binary identities remain unchanged.
 
 | Game and enabled features | Checkpoint | Mean CPU-time reduction, blocks 1 / 2 | Assessment |
 | --- | --- | --- | --- |

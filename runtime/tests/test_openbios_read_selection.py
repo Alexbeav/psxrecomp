@@ -28,20 +28,25 @@ project(bios_binding C)
 set(PSXRECOMP_ROOT "{root.as_posix()}")
 include("${{PSXRECOMP_ROOT}}/cmake/psx_execution_profile.cmake")
 include("${{PSXRECOMP_ROOT}}/cmake/psx_openbios_read_job.cmake")
-add_executable(fixture OpenBIOS_full.c)
+set(FIXTURE_BIOS OpenBIOS_full.c CACHE STRING "Fixture BIOS source")
+add_executable(fixture ${{FIXTURE_BIOS}})
 psxrecomp_execution_profile(fixture)
 psxrecomp_openbios_read_job(fixture)
 get_target_property(_sources fixture SOURCES)
 file(WRITE "${{CMAKE_CURRENT_BINARY_DIR}}/selected.txt" "${{_sources}}")
 ''', encoding='utf-8')
 
-    def configure(name, profile, enabled, *, error=None):
+    def configure(name, profile, enabled=None, *, cached=None, other_bios=False, error=None):
         out = args.output.resolve() / name
-        result = subprocess.run([args.cmake, '-S', str(source), '-B', str(out),
-                                 '-G', 'Ninja', '-DCMAKE_C_COMPILER=' + args.cc,
-                                 '-DCMAKE_MAKE_PROGRAM=' + args.ninja,
-                                 '-DPSX_EXECUTION_PROFILE=' + profile,
-                                 '-DPSX_NATIVE_OPENBIOS_READ=' + enabled],
+        command = [args.cmake, '-S', str(source), '-B', str(out),
+                   '-G', 'Ninja', '-DCMAKE_C_COMPILER=' + args.cc,
+                   '-DCMAKE_MAKE_PROGRAM=' + args.ninja,
+                   '-DPSX_EXECUTION_PROFILE=' + profile]
+        if enabled is not None:
+            command.append('-DPSX_NATIVE_OPENBIOS_READ=' + enabled)
+        if other_bios:
+            command.append('-DFIXTURE_BIOS=RetailBIOS_full.c')
+        result = subprocess.run(command,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         (args.output / (name + '.log')).write_text(result.stdout, encoding='utf-8')
         if error:
@@ -50,19 +55,31 @@ file(WRITE "${{CMAKE_CURRENT_BINARY_DIR}}/selected.txt" "${{_sources}}")
             assert result.returncode == 0, result.stdout
             manifest = json.loads((out / 'psx_execution/fixture/manifest.json').read_text())
             native = any(x['name'] == 'openbios-block-read' for x in manifest['implementations'])
-            assert native == (profile == 'ENHANCED' and enabled == 'ON')
+            cache = (out / 'CMakeCache.txt').read_text()
+            effective = cached or enabled or 'ON'
+            assert 'PSX_NATIVE_OPENBIOS_READ:BOOL=' + effective in cache
+            assert native == (profile == 'ENHANCED' and effective == 'ON' and not other_bios)
             if native:
                 selected = (out / 'psx_execution/fixture/OpenBIOS_read_selected.c').read_text()
                 assert selected == body.replace('void OpenBIOS_func_1FC03A78(CPUState* cpu) {',
                                                  'void psx_lle_OpenBIOS_func_1FC03A78(CPUState* cpu) {', 1)
                 assert selected.count('OpenBIOS_func_1FC03A78(cpu);') == 2
             else:
-                assert 'openbios_read_job.c' not in (out / 'selected.txt').read_text()
+                selected = (out / 'selected.txt').read_text()
+                assert 'openbios_read_job.c' not in selected
+                assert ('RetailBIOS_full.c' if other_bios else 'OpenBIOS_full.c') in selected
         print(name, 'passed')
 
-    configure('default-off', 'ENHANCED', 'OFF')
+    configure('default-on', 'ENHANCED')
+    configure('explicit-off', 'ENHANCED', 'OFF')
+    # Reconfiguring an existing OFF cache must preserve the developer's choice.
+    configure('explicit-off', 'ENHANCED', cached='OFF')
     configure('native', 'ENHANCED', 'ON')
+    configure('reference-default', 'REFERENCE')
     configure('reference', 'REFERENCE', 'ON')
+    (source / 'RetailBIOS_full.c').write_text('void retail_bios(void) {}\n', encoding='utf-8')
+    configure('retail-bios-default', 'ENHANCED', other_bios=True)
+    configure('retail-bios-on', 'ENHANCED', 'ON', other_bios=True)
     bios.write_text(body.replace('fabe498f', '00000000'), encoding='utf-8')
     configure('wrong-image', 'ENHANCED', 'ON', error='audited BIOS image')
     bios.write_text(body.replace('void OpenBIOS_func_1FC03A78(CPUState* cpu) {',
