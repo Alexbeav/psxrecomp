@@ -123,9 +123,13 @@ static void disabled_channel(void) {
 static void partial_snapshot(int input) {
     reset();
     if(input) {
-        psx_write_word(0x100,0x30000006u);
-        for(unsigned i=1;i<=6;i++)psx_write_word(0x100+4*i,0xFE000000u);
-        kick(0,0x100,7,0);step(2);
+        psx_write_word(0x100,0x30000060u);
+        for(unsigned i=1;i<=96;i++)psx_write_word(0x100+4*i,0xFE000000u);
+        kick(0,0x100,97,0);step(37);
+        MDECDebugState partial;mdec_debug_get_state(&partial);
+        CHECK(partial.busy && partial.input_count>0);
+        CHECK(partial.input_count<partial.expected_halfwords);
+        CHECK(dma_read(CH0+8)&(1u<<24));
     } else {decode(2);kick(1,0x1000,192,0);step(37u*14u);CHECK(stores==37);}
     uint32_t dn=dma_snapshot_bytes(),mn=mdec_snapshot_bytes();
     uint8_t *ds=malloc(dn),*ms=malloc(mn);CHECK(ds && ms);if(!ds || !ms)exit(1);
@@ -147,19 +151,27 @@ static void partial_snapshot(int input) {
     CHECK(actual.output_pos==expected.output_pos && actual.output_size==expected.output_size);
     free(ds);free(ms);
 }
+static void scale_table(void) {
+    mdec_write(MDATA,0x60000000u);
+    for(unsigned i=0;i<32;i++)mdec_dma_write_word(0x20002000u);
+}
 static void live_input(void) {
-    reset();psx_write_word(0x100,0x30000006u);
+    uint32_t original[192];
+    reset();scale_table();decode(2);
+    CHECK(mdec_dma_read_words(original,192)==192);
+    reset();scale_table();psx_write_word(0x100,0x30000006u);
     for(unsigned i=1;i<=6;i++)psx_write_word(0x100+4*i,0xFE000000u);
     kick(0,0x100,7,0);step(2);
     /* The final input word has not been served in either policy. Its live
      * rewrite is consumed, not a snapshot taken at the kick. */
-    psx_write_word(0x118,0xFE000001u);finish(0);
+    psx_write_word(0x118,0xFE000100u);finish(0);
     CHECK(psx_cycle_count==7 && mdec_dma_read_ready());
     uint32_t live[192];CHECK(mdec_dma_read_words(live,192)==192);
-    reset();mdec_write(MDATA,0x30000006u);
-    for(unsigned i=0;i<6;i++)mdec_dma_write_word(i==5?0xFE000001u:0xFE000000u);
+    reset();scale_table();mdec_write(MDATA,0x30000006u);
+    for(unsigned i=0;i<6;i++)mdec_dma_write_word(i==5?0xFE000100u:0xFE000000u);
     uint32_t expected[192];CHECK(mdec_dma_read_words(expected,192)==192);
     CHECK(!memcmp(live,expected,sizeof live));
+    CHECK(memcmp(live,original,sizeof live)!=0);
 }
 int main(void) {
     output_case(0x1000,192,0,2);output_case(0x1000,7,0,2);
