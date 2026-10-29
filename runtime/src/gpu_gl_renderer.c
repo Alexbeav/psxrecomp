@@ -102,6 +102,7 @@
 #include "psx_openxr.h"
 #include "openxr_color.h"
 #include "present_thread.h"
+#include "host_deadline.h"
 
 #include "psx_sdl.h"
 #if defined(PSX_SDL3)
@@ -8184,6 +8185,12 @@ static int interp_present(float alpha) {
 }
 
 static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
+#if PSX_NATIVE_HOST_PACING
+    uint64_t waited = psx_host_wait_until(deadline, frequency, frequency);
+    if (!deadline || !frequency) return;
+    (void)s_idle_ticks_accum_fwd(waited);
+    if (s_dyn_on) s_dyn_ledger.idle_ticks += waited;
+#else
     uint64_t now, start;
     if (!deadline || !frequency) return;
     start = SDL_GetPerformanceCounter();
@@ -8203,6 +8210,7 @@ static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
         uint64_t us = (remain * 1000000u) / frequency;
         if (us > 300u) psx_host_sleep_micros((unsigned)(us - 200u));
     }
+#endif
 }
 
 static void interp_present_source_interval(void) {

@@ -18,6 +18,7 @@ include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_execution_profile.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_native_idle_wait.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_present_images.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_host_pacing.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_sha256_file.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_build_revision.cmake")
 
@@ -1695,6 +1696,7 @@ function(psxrecomp_add_runtime_target target)
     endif()
     psxrecomp_native_idle_wait(${target} ${PSXRT_NATIVE_IDLE_WAIT_SITES})
     psxrecomp_present_images(${target})
+    psxrecomp_host_pacing(${target})
     # audio_trace.c uses C11 atomics. Make the runtime's actual language
     # requirement explicit instead of relying on a parent project's global
     # CMAKE_C_STANDARD setting. cxx_std_17 likewise — game CMakeLists may omit
