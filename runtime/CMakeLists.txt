@@ -307,6 +307,11 @@ if(BUILD_TESTING)
                 --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
                 --ninja "${PSX_PROFILE_TEST_NINJA}")
             set_tests_properties(native_idle_wait_policy_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME media_jobs_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_media_jobs_policy.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(media_jobs_policy_test PROPERTIES RUN_SERIAL TRUE)
         endif()
         add_test(NAME host_launch_timings_protocol_test COMMAND ${CMAKE_COMMAND} -E env
             "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}" "${Python3_EXECUTABLE}"
