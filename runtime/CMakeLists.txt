@@ -291,6 +291,11 @@ if(BUILD_TESTING)
             --work-root "${CMAKE_CURRENT_BINARY_DIR}/hle-binding-fixtures")
         find_program(PSX_PROFILE_TEST_NINJA NAMES ninja ninja.exe)
         if(PSX_PROFILE_TEST_NINJA)
+            add_test(NAME present_image_selection_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_image_selection.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(present_image_selection_test PROPERTIES RUN_SERIAL TRUE)
             add_test(NAME execution_profile_test COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_execution_profile.py"
                 --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
@@ -405,6 +410,16 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-frame-gen-results")
         set_tests_properties(gl_frame_gen_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_shared_present_images_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_shared_present_images.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-shared-present-images-results")
+        set_tests_properties(gl_shared_present_images_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         # [video] texture_lod / anisotropic_filtering: off and untracked/
         # magnified prims are unchanged; minified world textures average
         # inside their UV bounds; render thread and PGXP depth agree.

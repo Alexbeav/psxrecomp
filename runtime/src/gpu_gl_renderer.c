@@ -1234,6 +1234,10 @@ static GLuint s_hold_fbo = 0;
 static int    s_hold_tw = 0, s_hold_th = 0; /* texture size in texels */
 static int    s_hold_force_4_3 = 0;
 static int    s_hold_linear = 0;
+/* Read-only completed image. Private s_hold_tex/FBO remain capture storage:
+ * upgrading a shared native hold to a composed drawable must never write into
+ * the temporal history texture it just sampled. All access is on the GL owner. */
+static struct { GLuint tex; int w, h; } s_hold_image;
 
 /* Post-load freeze probe (main.cpp): accumulate skip/swap/dirty marks. */
 static uint64_t s_probe_skip = 0;
@@ -1308,6 +1312,9 @@ static void hold_capture_drawable(void) {
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, ww, wh);
     glBindTexture(GL_TEXTURE_2D, 0);
     s_hold_kind = HOLD_DRAWABLE;
+    s_hold_image.tex = s_hold_tex;
+    s_hold_image.w = s_hold_tw;
+    s_hold_image.h = s_hold_th;
     s_hold_force_4_3 = 0;
     s_hold_linear = 0;
 }
@@ -1358,12 +1365,17 @@ static void hold_capture_native_fbo(GLuint src_fbo, int dx, int dy, int dw, int 
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
     s_hold_kind = HOLD_NATIVE;
+    s_hold_image.tex = s_hold_tex;
+    s_hold_image.w = s_hold_tw;
+    s_hold_image.h = s_hold_th;
     s_hold_force_4_3 = force_4_3 ? 1 : 0;
     s_hold_linear = linear ? 1 : 0;
 }
 
 static void hold_invalidate(void) {
     s_hold_kind = HOLD_NONE;
+    s_hold_image.tex = 0;
+    s_hold_image.w = s_hold_image.h = 0;
 }
 
 /* Defined after present_target_quad / letterbox helpers. */
@@ -7929,8 +7941,10 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
     if (swaps) *swaps = s_interp_swaps;
 }
 
+enum { INTERP_INACTIVE = 0, INTERP_REUSED = 1, INTERP_CAPTURED = 2 };
 /* Copy a stable display image out of the mutable VRAM/wide render target.
- * Returns true when temporal blending owns this source-frame interval. */
+ * Positive means temporal blending owns this source-frame interval. Reused
+ * FLIP history is distinct: hold-last must still capture the current source. */
 static int interp_capture(GLuint fbo, int x, int y, int w, int h,
                           int linear, int force_4_3, int source_path,
                           int origin_x, int origin_y, int redrawn) {
@@ -7953,7 +7967,7 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
                                         &s_interp_phase_lo, &s_interp_phase_hi);
         if (!new_frame) {
             s_interp_duplicates++;
-            return 1;
+            return INTERP_REUSED;
         }
         pass_note_new_frame(origin_x, origin_y, source_path, pw, ph);
     } else {
@@ -8005,7 +8019,31 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
     s_interp_force_4_3 = force_4_3;
     s_interp_source_path = source_path;
     s_interp_captures++;
-    return 1;
+    return INTERP_CAPTURED;
+}
+
+static void hold_publish_interpolated(int captured, GLuint source_fbo,
+                                      int x, int y, int w, int h,
+                                      int force_4_3, int linear) {
+#if defined(PSX_SHARED_PRESENT_IMAGES) && PSX_SHARED_PRESENT_IMAGES
+    if (captured == INTERP_CAPTURED) {
+        /* interp_capture is the sole history writer. Its two callers publish
+         * here immediately, without a yield or hold consumer in between.
+         * Rotation/reallocation on the next capture is followed by the same
+         * publication; reset alone leaves storage intact. No fence or copy is
+         * needed on this one ordered GL context. */
+        s_hold_image.tex = s_interp_tex[s_interp_cur];
+        s_hold_image.w = s_interp_w;
+        s_hold_image.h = s_interp_h;
+        s_hold_kind = HOLD_NATIVE;
+        s_hold_force_4_3 = force_4_3 ? 1 : 0;
+        s_hold_linear = linear ? 1 : 0;
+        return;
+    }
+#else
+    (void)captured;
+#endif
+    hold_capture_native_fbo(source_fbo, x, y, w, h, force_4_3, linear);
 }
 
 static void interp_draw_textures(GLuint prev_tex, GLuint curr_tex, float alpha,
@@ -10417,7 +10455,7 @@ int gl_renderer_present_hold_last(void) {
     GL_RT_SYNC("present_hold_last");
     int ww = 0, wh = 0;
     int lx, ly, lw, lh;
-    if (!s_ctx || !s_win || s_hold_kind == HOLD_NONE || !s_hold_tex)
+    if (!s_ctx || !s_win || s_hold_kind == HOLD_NONE || !s_hold_image.tex)
         return 0;
     SDL_GL_GetDrawableSize(s_win, &ww, &wh);
     if (ww < 1 || wh < 1)
@@ -10433,16 +10471,16 @@ int gl_renderer_present_hold_last(void) {
         ly = 0;
         lw = ww;
         lh = wh;
-        if (s_hold_tw > 0 && s_hold_th > 0 &&
-            ((int64_t)s_hold_tw * wh != (int64_t)s_hold_th * ww)) {
-            if ((int64_t)ww * s_hold_th > (int64_t)wh * s_hold_tw) {
-                lw = (int)(((int64_t)wh * s_hold_tw) / s_hold_th);
+        if (s_hold_image.w > 0 && s_hold_image.h > 0 &&
+            ((int64_t)s_hold_image.w * wh != (int64_t)s_hold_image.h * ww)) {
+            if ((int64_t)ww * s_hold_image.h > (int64_t)wh * s_hold_image.w) {
+                lw = (int)(((int64_t)wh * s_hold_image.w) / s_hold_image.h);
                 if (lw < 1) lw = 1;
                 lx = (ww - lw) / 2;
                 lh = wh;
                 ly = 0;
             } else {
-                lh = (int)(((int64_t)ww * s_hold_th) / s_hold_tw);
+                lh = (int)(((int64_t)ww * s_hold_image.h) / s_hold_image.w);
                 if (lh < 1) lh = 1;
                 ly = (wh - lh) / 2;
                 lw = ww;
@@ -10450,15 +10488,15 @@ int gl_renderer_present_hold_last(void) {
             }
         }
         /* v_flip=0: drawable capture is already screen-oriented. */
-        present_target_quad(s_hold_tex, s_hold_tw, s_hold_th,
-                            0, 0, s_hold_tw, s_hold_th, 0, lx, ly, lw, lh, 0, 0, 1);
+        present_target_quad(s_hold_image.tex, s_hold_image.w, s_hold_image.h,
+                            0, 0, s_hold_image.w, s_hold_image.h, 0, lx, ly, lw, lh, 0, 0, 1);
     } else {
         if (s_hold_force_4_3)
             letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
         else
             letterbox_rect(ww, wh, &lx, &ly, &lw, &lh);
-        present_target_quad(s_hold_tex, s_hold_tw, s_hold_th,
-                            0, 0, s_hold_tw, s_hold_th, s_hold_linear,
+        present_target_quad(s_hold_image.tex, s_hold_image.w, s_hold_image.h,
+                            0, 0, s_hold_image.w, s_hold_image.h, s_hold_linear,
                             lx, ly, lw, lh, 1, 1, 1);
         /* Upgrade to drawable after letterboxing once. Live+interp leaves
          * HOLD_NATIVE (no Swap on main); drawable path is the soak-proven
@@ -10561,7 +10599,7 @@ static void present_vram_impl(int disp_x, int disp_y, int w, int h, int linear,
     if (interp_pair) {
         /* Temporal blending owns this stock frame interval. Capture hold-last
          * before pacing; every blend and Swap remains on this context/thread. */
-        hold_capture_native_fbo(src_fbo, src_x, disp_y, w, h, force_4_3, linear);
+        hold_publish_interpolated(interp_pair, src_fbo, src_x, disp_y, w, h, force_4_3, linear);
         interp_present_source_interval();
         gl_perf_present_exit(0);
         present_dirty_rect(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1, 0);
@@ -10740,7 +10778,7 @@ static int present_wide_fbo_impl(int disp_x, int disp_y, int disp_h, int linear)
         disp_x, disp_y,
         present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1));
     if (interp_pair) {
-        hold_capture_native_fbo(fbo, 0, disp_y, g_wide_w, disp_h, 0, linear);
+        hold_publish_interpolated(interp_pair, fbo, 0, disp_y, g_wide_w, disp_h, 0, linear);
         interp_present_source_interval();
         gl_perf_present_exit(1);
         present_dirty_rect(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1, 0);
