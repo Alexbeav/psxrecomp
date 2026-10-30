@@ -139,6 +139,10 @@ baseline/generate/use and two siblings sharing all selected files in a
 subdirectory. It runs actual code to emit all three profiles, compares outputs,
 and checks prebuild artifact containment and driver stale/missing/configuration
 guards plus GCC's fatal missing
-profile/changed-CFG diagnostics. It is not automatically launched by unit-test
-discovery because it uses the shared compiler capacity pool. Retain its receipt
-and remove the exact disposable scratch tree after review.
+profile/changed-CFG diagnostics. Native GCC configurations with Python and Ninja
+register it as `runtime_hot_pgo_contract` in the BIOS-free recompiler CTest tree.
+It runs serially with at most two nested compiler jobs. Reserve compiler capacity
+for the CTest invocation. Each run retains a fresh work directory and receipt;
+`PSX_RUNTIME_HOT_PGO_TEST_SCRATCH_ROOT` selects their parent. Set a short parent
+for deep Windows build paths so the existing profile-path guard remains valid.
+Retain the receipt and remove the exact disposable scratch tree after review.
