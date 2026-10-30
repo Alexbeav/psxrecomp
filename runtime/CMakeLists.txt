@@ -1602,6 +1602,10 @@ if(BUILD_TESTING)
         include
         ../recompiler/lib/toml11)
     add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
+    add_executable(native_text_test tests/test_native_text.cpp
+        src/native_text.cpp third_party/json11/json11.cpp)
+    target_include_directories(native_text_test PRIVATE include)
+    add_test(NAME native_text_test COMMAND native_text_test)
 
     add_executable(netplay_peer_frontier_test tests/test_netplay_peer_frontier.c)
     target_include_directories(netplay_peer_frontier_test PRIVATE include)
@@ -1631,6 +1635,10 @@ if(BUILD_TESTING)
         include
         ../recompiler/include
         ../recompiler/lib/toml11)
+    if(PSX_RECOMP_UI AND EXISTS "${RECOMP_UI_ROOT}/src/recomp_launcher.h")
+        target_compile_definitions(mod_runtime_test PRIVATE RECOMP_LAUNCHER=1)
+        target_include_directories(mod_runtime_test PRIVATE "${RECOMP_UI_ROOT}/src")
+    endif()
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
     psxrecomp_sha256_file(mod_runtime_test)
     # Match the runtime's stack allowance for the remaining disc/mod helpers.
@@ -2343,6 +2351,10 @@ if(BUILD_TESTING)
             add_test(NAME gpu_gp0_history_guard_test
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_gp0_history_guard.py
+                             --cc ${CMAKE_C_COMPILER})
+            add_test(NAME debug_input_route_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_debug_input_route.py
                              --cc ${CMAKE_C_COMPILER})
             add_test(NAME memory_debug_trace_guard_test
                      COMMAND ${Python3_EXECUTABLE}
