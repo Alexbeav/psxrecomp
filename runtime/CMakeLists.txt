@@ -1627,6 +1627,30 @@ if(BUILD_TESTING)
         endif()
     endif()
     add_test(NAME mod_resident_test COMMAND mod_resident_test)
+    # Run the existing real ISO/effective-mod integration against owned blobs.
+    target_compile_definitions(mod_resident_test PRIVATE PSX_NATIVE_RESIDENT_PREPARATION=1)
+    foreach(_resident_mode 0 1)
+        add_executable(resident_preparation_${_resident_mode}_test
+            tests/test_resident_preparation.cpp src/psx_sha256.c)
+        target_include_directories(resident_preparation_${_resident_mode}_test PRIVATE include)
+        target_compile_features(resident_preparation_${_resident_mode}_test PRIVATE cxx_std_17)
+        target_compile_definitions(resident_preparation_${_resident_mode}_test PRIVATE
+            PSX_NATIVE_RESIDENT_PREPARATION=${_resident_mode} PSX_DISABLE_NATIVE_SHA256=1)
+    endforeach()
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME resident_preparation_whole_job COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_resident_preparation.py"
+            --reference $<TARGET_FILE:resident_preparation_0_test>
+            --native $<TARGET_FILE:resident_preparation_1_test>)
+        set_tests_properties(resident_preparation_whole_job PROPERTIES RUN_SERIAL TRUE)
+        if(PSX_PROFILE_TEST_NINJA)
+            add_test(NAME resident_preparation_policy COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_resident_preparation_policy.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(resident_preparation_policy PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endif()
 
     add_executable(mod_disc_read_session_test tests/test_mod_disc_read_session.cpp
         src/iso_reader.cpp src/cue_sheet.cpp)
