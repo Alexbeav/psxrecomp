@@ -276,7 +276,10 @@ authoritative CPU VRAM never sees them. A committed image cancels any
 
 It needs a netplay session on a forward frame and the OpenGL dual-raster
 presenter (a surface separate from the authoritative VRAM); it does not need
-frame interpolation. The status is `SESSION` offline, while resimulating, in
+frame interpolation. Catch-up pressure alone does not refuse a local view:
+that redraw selects the local player's camera and HUD, and refusing it would
+expose the canonical peer's image. A future catch-up optimization must preserve
+the local image when dropping a whole presentation. The status is `SESSION` offline, while resimulating, in
 rewind or lockstep replay; `BACKEND` without dual raster or in the
 high-resolution window; `NO_PRESENTER` without an OpenGL surface or with
 24-bit scanout; plus the usual `FAST_FORWARD`, `DISABLED` and `BUSY`.
@@ -433,3 +436,11 @@ saved context rather than resetting depth to zero. Normal-return verification
 also checks balance. This host context is never serialized in guest savestates.
 TCP render_pass_stats.last_abort_detail names skipped exits and remains latched
 across successes until session reset.
+
+Offline local-pair rendering retains the renderer's texture and memory admission
+limits. A selectable internal scale does not guarantee paired-view support:
+windowed high-resolution storage and other unsupported backends refuse the
+pair before invoking either view callback. The title must handle that refusal;
+ordinary/shared-frame duplication is presentation fallback, not proof that two
+independent player views rendered. The admitted full-VRAM path, including the
+4x default, uses the same all-or-nothing two-view transaction.
