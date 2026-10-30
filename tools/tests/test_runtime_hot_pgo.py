@@ -1,4 +1,4 @@
-"""Bounded real GCC/Ninja contract fixture, opt-in because it compiles programs.
+"""Bounded real GCC/Ninja contract fixture, with at most two compiler children.
 
 Run through the benchmark pool, for example:
   python tools/tests/test_runtime_hot_pgo.py --tools tools.json \
@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 
 def check_failure(action, expected):
@@ -183,13 +184,26 @@ endforeach()
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tools', type=Path, required=True)
-    parser.add_argument('--scratch', type=Path, required=True)
-    parser.add_argument('--receipt', type=Path, required=True)
+    scratch = parser.add_mutually_exclusive_group(required=True)
+    scratch.add_argument('--scratch', type=Path)
+    scratch.add_argument('--scratch-parent', type=Path,
+                         help='CTest mode: retain each fresh run and receipt under this directory')
+    parser.add_argument('--receipt', type=Path)
     args = parser.parse_args()
+    if args.scratch_parent:
+        if args.receipt:
+            parser.error('--scratch-parent retains its own per-run receipt; do not pass --receipt')
+        run = args.scratch_parent.resolve() / ('run-' + uuid.uuid4().hex[:8])
+        scratch, receipt = run / 'work', run / 'result.json'
+    else:
+        if args.receipt is None:
+            parser.error('--scratch requires --receipt')
+        scratch, receipt = args.scratch, args.receipt
+    print(json.dumps({'fixture_scratch': str(scratch), 'fixture_receipt': str(receipt)}), flush=True)
     # DLL lookup for the explicitly selected installed MinGW tools only.
     tools = json.loads(args.tools.read_text(encoding='utf-8'))
     os.environ['PATH'] = str(Path(tools['gcc']).parent) + os.pathsep + os.environ['PATH']
-    fixture(tools, args.scratch, args.receipt)
+    fixture(tools, scratch, receipt)
 
 
 if __name__ == '__main__':
