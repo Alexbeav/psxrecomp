@@ -103,6 +103,14 @@ and it shares an output directory with the real runtime.
 
 ### Declining a framework builtin (`EXCLUDE_BUILTIN_MODS`)
 
+Internal Resolution (`psx.enhancement.internal-resolution`) is required shared
+UI. It is included even when an older title sets `PSX_BUILTIN_MOD_ALLOWLIST`.
+Excluding it or providing a title-local package with that id fails configure:
+remove the stale exclusion/package and use the shared mod's saved option or
+its disabled state instead. This keeps fresh-profile 4x and the complete
+1x..32x selector consistent for current titles and newly scaffolded games.
+Player-installed packages and saved selections are not removed by staging.
+
 Every package under the framework's `mods/builtin/packages` targets
 `game_id = "*"`, so by default every title ships all of them. A title that does
 not want one — because it ships its own replacement, or because the feature is
@@ -1129,8 +1137,10 @@ immediates".
 
 Five framework packages replace what used to be Settings rows (owner decision,
 beads-eio.3.398; the rule is recomp-ui's docs/SETTINGS_STANDARD.md: anything
-that changes the game's picture, sound or play is a mod). Each targets `game_id = "*"`, is default-off, keeps save
-states shared, and declares its plugin `netplay = "host_only"` (below): it
+that changes the game's picture, sound or play is a mod). Each targets
+`game_id = "*"`, keeps save states shared, and declares its plugin
+`netplay = "host_only"` (below). Internal Resolution is enabled at fixed 4x on
+fresh profiles; the other four are default-off. Each
 changes only what this machine shows, plays or keeps, so it is the player's own
 in every netplay mode and never part of the plan fingerprint.
 
@@ -1140,19 +1150,28 @@ in every netplay mode and never part of the plan fingerprint.
 | `psx.enhancement.image-filtering` (Image Filtering) | `psx.image-filtering` | `smoothing`: default / smooth / sharp (default); `texture_filtering`: default / nearest / bilinear / xbr (default); `fmv_filtering`: default / nearest / bilinear / sharp / bicubic (default) |
 | `psx.enhancement.enhanced-audio` (Enhanced Audio) | `psx.enhanced-audio` | none: enabled = the high-quality SPU mix |
 | `psx.feature.rewind` (Rewind) | `psx.rewind` | `buffer`: 50 / 100 / 150 / 200 (50); `interval`: 1 / 4 / 8 / 12 / 15 (15) |
-| `psx.enhancement.internal-resolution` (Internal Resolution) | `psx.internal-resolution` | `resolution`: default / native / 720p / 1080p / 1440p / 4k / 5k / 8k / display / auto (default) |
+| `psx.enhancement.internal-resolution` (Internal Resolution) | `psx.internal-resolution` | `resolution`: 1x..32x (4x); retained choices default / native / 720p / 1080p / 1440p / 4k / 5k / 8k / display / auto |
 
 **The title's keys stay its baseline.** `[video] crt_filter`, `scanlines`,
 `scanline_strength`, `antialiasing` (the linear present scale; Smoothing is
 not the `antialiasing_mode` FXAA pass), `texture_filtering`, `fmv_filter` and
 `[audio] spu_hq`, and `[video] internal_resolution` (or the legacy
 `supersampling` factor) with `dynamic_resolution`, are what the title ships.
-With a mod off they apply unchanged; with it on, each option replaces its
-part, and an option at `default` ("Game default" in the launcher) keeps the
-baseline value. Scanline strength applies to the player's own scanlines
+With a mod on, each option replaces its part, and an option at `default`
+("Game default" in the launcher) keeps the baseline value. Disabled Internal
+Resolution selects native 1x and turns dynamic resolution off; the other
+mods leave their title baseline unchanged when disabled. Saved feature and
+option choices win over manifest defaults, including explicit Off, Game
+default and the previous height presets; no profile migration is needed.
+Scanline strength applies to the player's own scanlines
 (Scanlines = On); Game default keeps the title's scanlines and their strength.
 Enhanced Audio turns the high-quality mix on; with it off the title's `spu_hq`
-stands. Internal Resolution's Auto is Match display with dynamic resolution
+stands. Internal Resolution's 1x..32x choices request an exact integer factor,
+independent of title reference height and the legacy supersample multiplier.
+The renderer still clamps to hardware texture limits and its bounded memory
+budget; selecting 32x does not guarantee an admitted 32x surface or a frame
+rate. No memory-budget increase is implied. Auto is Match display with dynamic
+resolution
 (floor: the title's `dynamic_resolution_min`); a fixed choice turns dynamic
 resolution off. PGXP Precision needs 2x or more (720p and up at 240 lines) to
 be visible. A title mod's `psx_mod_set_internal_resolution` request still wins
