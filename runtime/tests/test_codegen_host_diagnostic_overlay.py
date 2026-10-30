@@ -125,7 +125,7 @@ def build_probe(tmp: Path, cc: str | None) -> tuple[Path | None, str]:
     build = subprocess.run(
         [cc, "-std=gnu11", "-o", str(probe), str(probe_c), '-DPSX_SETUP_BIOS_STEMS="SCPH5552"',
          '-DPSX_SETUP_FRAMEWORK_REL="psxrecomp"', "-I", str(ROOT / "host"), "-I", str(ROOT / "runtime" / "include"),
-         "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
+         "-I", str(ui / "src"), "-I", str(ui / "src" / "common"), str(ROOT / "runtime/src/start_refusal.c")],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     if build.returncode != 0:
         return None, "FAIL: could not build the host probe\n%s" % build.stderr[-2500:]
