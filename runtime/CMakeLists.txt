@@ -294,6 +294,12 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            add_test(NAME dma_mdec_jobs_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dma_mdec_jobs.py"
+                --cc "${CMAKE_C_COMPILER}")
+            set_tests_properties(dma_mdec_jobs_test PROPERTIES RUN_SERIAL TRUE)
+        endif()
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
@@ -337,6 +343,11 @@ if(BUILD_TESTING)
                 --ninja "${PSX_PROFILE_TEST_NINJA}"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/openbios-read-selection")
             set_tests_properties(openbios_read_selection_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME media_jobs_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_media_jobs_policy.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(media_jobs_policy_test PROPERTIES RUN_SERIAL TRUE)
         endif()
         if(NOT MSVC AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND
            EXISTS "${PSXRECOMP_ROOT}/generated/OpenBIOS_full.c")

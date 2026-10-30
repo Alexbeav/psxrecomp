@@ -22,6 +22,7 @@ include("${PSXRECOMP_ROOT}/cmake/psx_present_images.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_host_pacing.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_resident_preparation.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_openbios_read_job.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_media_jobs.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_sha256_file.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_build_revision.cmake")
 
@@ -1703,6 +1704,7 @@ function(psxrecomp_add_runtime_target target)
     psxrecomp_resident_preparation(${target})
     psxrecomp_native_cpu_spans(${target} ${PSXRT_GAME_GENERATED_FULL_C})
     psxrecomp_openbios_read_job(${target})
+    psxrecomp_media_jobs(${target})
     # audio_trace.c uses C11 atomics. Make the runtime's actual language
     # requirement explicit instead of relying on a parent project's global
     # CMAKE_C_STANDARD setting. cxx_std_17 likewise — game CMakeLists may omit
