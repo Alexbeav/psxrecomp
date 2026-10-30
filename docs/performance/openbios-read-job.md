@@ -94,3 +94,29 @@ are not performance samples. No failure was masked or patched for this change.
 Final combined regression/adoption, common netplay-profile qualification and
 normal-audio owner checks remain for the end-of-burndown handoff. This request
 does not close the remaining general firmware, card or transfer candidates.
+
+## Remaining event-service work, 2026-10-29
+
+The existing native blocking-read qualification above remains unchanged: Tomba
+shows a bounded startup CPU benefit; Ape is neutral/inconclusive. Its default
+selection, original 16 raw intervals and shared lifecycle findings are retained.
+
+A [current-package selector](openbios-event-selector-20261029.json) sampled one
+Ape cold start with native-read activity observed during sampling
+(13 requests completed without errors). One of 5,103 host leaf samples landed
+in DeliverEvent's generated body, about 0.0395% of sampled thread-cycle weight;
+the other seven primary bodies and continuation thunks had no leaf hits.
+The uncertain ancestor union was about 0.527% and is not additive CPU time.
+The complete fresh-process B0 census proves activity, including TestEvent and
+UnDeliverEvent; it does not count direct firmware calls or establish their cost.
+
+The original full selector failed after capture because this production
+DEBUG_OFF binary exposed no debug endpoint for the guest-cycle-profile export.
+Callback context and the final full GPU snapshot are unavailable, not zero.
+Independent review accepted only the retained host/census/read-activity/progress
+and clean-close subset. Most host leaf samples were DLL/helper work, so these
+figures are neither an exact family cost ceiling nor proof of zero cost.
+
+This observed window does not fund a large eight-service kernel prototype.
+It does not establish that general event/wait/callback work is complete, and it
+does not replace the combined regression/common-profile/owner handoff above.
