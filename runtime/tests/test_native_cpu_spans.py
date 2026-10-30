@@ -54,10 +54,12 @@ psxrecomp_native_cpu_spans(fixture "${{GENERATED_INPUT}}")
 
         def configure(name, profile, enabled, generated, ok=True):
             build = Path(temp) / name
-            output = run([args.cmake, '-S', str(source), '-B', str(build), '-G', 'Ninja',
-                          '-DCMAKE_C_COMPILER=' + args.cc, '-DCMAKE_MAKE_PROGRAM=' + args.ninja,
-                          '-DPSX_EXECUTION_PROFILE=' + profile,
-                          '-DPSX_NATIVE_CPU_SPANS=' + enabled, '-DGENERATED_INPUT=' + generated], ok=ok)
+            argv = [args.cmake, '-S', str(source), '-B', str(build), '-G', 'Ninja',
+                    '-DCMAKE_C_COMPILER=' + args.cc, '-DCMAKE_MAKE_PROGRAM=' + args.ninja,
+                    '-DPSX_EXECUTION_PROFILE=' + profile, '-DGENERATED_INPUT=' + generated]
+            if enabled is not None:
+                argv.append('-DPSX_NATIVE_CPU_SPANS=' + enabled)
+            output = run(argv, ok=ok)
             if not ok:
                 assert 'Regenerate game sources' in output or 'require materialized regenerated' in output, output
             return build
@@ -72,15 +74,19 @@ psxrecomp_native_cpu_spans(fixture "${{GENERATED_INPUT}}")
         native, hle = result(configure('native', 'ENHANCED', 'ON', 'generated.c'))
         reference, lle = result(configure('reference', 'REFERENCE', 'ON', 'missing.c'))
         disabled, unbound = result(configure('disabled', 'ENHANCED', 'OFF', 'stale.c'))
+        fresh_native, fresh_hle = result(configure('fresh-native', 'ENHANCED', None, 'generated.c'))
+        fresh_reference, fresh_lle = result(configure('fresh-reference', 'REFERENCE', None, 'missing.c'))
         assert native == [1, 1], native
         assert reference == [0, 0], reference
         assert disabled == [0, 0], disabled
+        assert fresh_native == native and fresh_hle['identity'] == hle['identity']
+        assert fresh_reference == reference and fresh_lle['identity'] == lle['identity']
         assert hle['identity'] != lle['identity']
         assert hle['implementations'][0]['name'] == lle['implementations'][0]['name'] == 'cpu-spans'
         assert not unbound['implementations']
         configure('stale', 'ENHANCED', 'ON', 'stale.c', ok=False)
         configure('missing', 'ENHANCED', 'ON', 'missing.c', ok=False)
-    print('PASS: relative generated inputs, native/reference/off execution, identity, and stale/missing rejection')
+    print('PASS: fresh native/reference defaults, explicit native/reference/off execution, identity, and stale/missing rejection')
 
 
 if __name__ == '__main__':

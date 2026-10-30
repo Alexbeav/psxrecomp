@@ -79,13 +79,18 @@ This is an integration primitive, not a standalone FPS improvement. Ape's
 packet producer is its first intended consumer. The original `gte_execute`
 always retains faithful timing in both profiles.
 
-## Experimental generated CPU spans
+## Generated CPU spans
 
-`-DPSX_NATIVE_CPU_SPANS=ON` with the ENHANCED profile selects an experimental
-native timing service for regenerated game and BIOS bodies. It is OFF by
-default and has no runtime selector. `PSX_NATIVE_CPU_SPANS=OFF` retains the
+The ENHANCED profile selects the qualified generated native timing service
+for regenerated game and BIOS bodies by default (`PSX_NATIVE_CPU_SPANS=ON`).
+It has no runtime selector. `PSX_NATIVE_CPU_SPANS=OFF` retains the
 original instruction timing; REFERENCE also always retains that timing even
 when the option is ON. Other implementation families remain independent.
+
+Fresh ENHANCED builds also select ordered OpenGL batching
+(`PSX_GL_BATCH_IMPL=HLE`). Fresh REFERENCE builds select `LLE`; an explicit
+cache choice remains available in either profile. Use separate build
+directories for each profile so a previous cache choice stays intentional.
 
 Regenerate the game with the current `psxrecomp-game` and regenerate each linked
 BIOS with `tools/regen_bios.sh --config bios/<profile>.toml` before selecting it.

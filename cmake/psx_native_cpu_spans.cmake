@@ -1,5 +1,5 @@
 include_guard(GLOBAL)
-option(PSX_NATIVE_CPU_SPANS "Experimental generated CPU span timing" OFF)
+option(PSX_NATIVE_CPU_SPANS "Use generated native CPU span timing in ENHANCED builds" ON)
 
 function(psxrecomp_native_cpu_spans target)
     if(NOT PSX_NATIVE_CPU_SPANS)

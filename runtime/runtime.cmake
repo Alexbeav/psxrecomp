@@ -656,7 +656,16 @@ endif()
 # primitive alone. HLE draws painter-ordered runs of opaque primitives and
 # blend modes 0/1/3 as one dual-source draw. Build-time only: use separate
 # build directories. Both tiers always compile.
-set(PSX_GL_BATCH_IMPL "LLE" CACHE STRING "OpenGL textured batching: LLE or HLE")
+# Fresh enhanced builds use the qualified ordered grouping policy. Keep a
+# separate reference build on the original policy and respect an explicit
+# cache choice supplied by the caller.
+if(PSX_EXECUTION_PROFILE STREQUAL "REFERENCE")
+    set(_psx_gl_batch_default "LLE")
+else()
+    set(_psx_gl_batch_default "HLE")
+endif()
+set(PSX_GL_BATCH_IMPL "${_psx_gl_batch_default}" CACHE STRING "OpenGL textured batching: LLE or HLE")
+unset(_psx_gl_batch_default)
 set_property(CACHE PSX_GL_BATCH_IMPL PROPERTY STRINGS LLE HLE)
 if(NOT PSX_GL_BATCH_IMPL MATCHES "^(LLE|HLE)$")
     message(FATAL_ERROR "PSX_GL_BATCH_IMPL must be LLE or HLE")
