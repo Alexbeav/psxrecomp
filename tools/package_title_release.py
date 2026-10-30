@@ -709,7 +709,7 @@ def build_selective_pgo(ctx, args, cache):
         configure_args.append('-D%s=%s' % (key, cache[key]))
     recipe = dict(source=str(ctx.root), build=str(ctx.runtime_build), framework=str(FRAMEWORK),
                   cmake=cache['CMAKE_COMMAND'], target=ctx.config.runtime_target, binary=binary,
-                  companions=[str(Path(binary).with_suffix('.execution.json'))],
+                  companions=[basename + '.execution.json'],
                   configure_args=['-G', cache['CMAKE_GENERATOR']] + configure_args)
     recipe_path = ctx.work / 'runtime-pgo-recipe.json'
     if recipe_path.exists():

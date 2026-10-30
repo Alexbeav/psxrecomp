@@ -418,6 +418,19 @@ class SelectiveReleasePgoTests(unittest.TestCase):
         (directory / 'generate.json').write_text('{}')
         return directory
 
+    def test_linux_dotted_basename_keeps_the_full_execution_sidecar_name(self):
+        ctx = self.ctx
+        ctx.tc.exe_suffix = ''
+        (ctx.runtime_build / 'psxrecomp_exe_name-psx-runtime.txt').write_text('Game.v2')
+        cache = dict(CMAKE_COMMAND='cmake', CMAKE_GENERATOR='Ninja', CMAKE_C_COMPILER='gcc',
+                     CMAKE_CXX_COMPILER='g++', CMAKE_MAKE_PROGRAM='ninja')
+        with mock.patch.object(ptr, 'run', side_effect=ptr.PackagingError('stop before any builder')):
+            with self.assertRaisesRegex(ptr.PackagingError, 'stop before any builder'):
+                ptr.build_selective_pgo(ctx, [], cache)
+        recipe = json.loads((ctx.work / 'runtime-pgo-recipe.json').read_text())
+        self.assertEqual(recipe['binary'], 'Game.v2')
+        self.assertEqual(recipe['companions'], ['Game.v2.execution.json'])
+
     def test_boot_profiles_require_normal_close_and_real_profile_validation(self):
         directory = self.training_files()
         process = mock.Mock(pid=123, returncode=None)
