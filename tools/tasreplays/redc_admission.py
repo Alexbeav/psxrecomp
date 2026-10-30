@@ -39,7 +39,7 @@ FIXED={
     FIRMWARE_NAME:'9c0421858e217805f4abe18698afea8d5aa36ff0727eb8484944e00eb5e7eadb',
     'fortranm,arandomgametaser-redc-psx-jillbestending.bk2':MOVIE_SHA,'original.bk2':MOVIE_SHA,
     'Observation291.dll':'dd4fcaf409a41132039e09d8c2a8490cf35da6a7056660eb5321cbb197cbbbff',
-    'source_control_nyma.py':'653bc42a0e8f08ae70cbead578ffd4ad672308ae30479764162ef3c3b7960d5f',
+    'source_control_nyma.py':'a2dad14552c3e79b44e37d7d3ddccf9445edd4ccd5998793e24f4daaaad68b87',
     'source_control_nyma.lua':'cc44363aff7c645e427764d3e5eeed8256e166ce517b6a310e9097bffbe34f4c',
     'observer-build.json':'4426c3aea6b6a755962f3499c73d06ede1078e40a57bb6d4b0f3b08836eeeae0',
 }
