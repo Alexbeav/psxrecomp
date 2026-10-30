@@ -23,6 +23,26 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    foreach(_native IN ITEMS 0 1)
+        add_executable(host_deadline_${_native}_test tests/test_host_deadline.c)
+        target_include_directories(host_deadline_${_native}_test PRIVATE include)
+        target_compile_definitions(host_deadline_${_native}_test PRIVATE PSX_NATIVE_HOST_PACING=${_native})
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(host_deadline_${_native}_test PRIVATE -UNDEBUG)
+        elseif(MSVC)
+            target_compile_options(host_deadline_${_native}_test PRIVATE /UNDEBUG)
+        endif()
+        add_test(NAME host_deadline_${_native}_test COMMAND host_deadline_${_native}_test)
+    endforeach()
+    foreach(_span_mode native reference)
+        add_executable(psx_${_span_mode}_span_test tests/test_psx_native_span.c)
+        target_include_directories(psx_${_span_mode}_span_test PRIVATE include)
+        target_compile_definitions(psx_${_span_mode}_span_test PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        if(_span_mode STREQUAL "native")
+            target_compile_definitions(psx_${_span_mode}_span_test PRIVATE PSX_NATIVE_CPU_SPANS=1)
+        endif()
+        add_test(NAME psx_${_span_mode}_span_test COMMAND psx_${_span_mode}_span_test)
+    endforeach()
     add_executable(gpu_fmv_hd_test tests/test_gpu_fmv_hd.cpp src/gpu_fmv_hd.c)
     target_include_directories(gpu_fmv_hd_test PRIVATE include ${PSX_SDL_INCLUDE_DIRS})
     target_compile_definitions(gpu_fmv_hd_test PRIVATE SDL_MAIN_HANDLED PSX_FMV_HD_TESTING=1
@@ -72,6 +92,11 @@ if(BUILD_TESTING)
     add_executable(overlay_memory_address_test tests/test_overlay_memory_address.c)
     target_include_directories(overlay_memory_address_test PRIVATE include)
     add_test(NAME overlay_memory_address_test COMMAND overlay_memory_address_test)
+    add_executable(mod_snapshot_test tests/test_mod_snapshot.c src/mod_snapshot.c)
+    target_include_directories(mod_snapshot_test PRIVATE include)
+    target_compile_options(mod_snapshot_test PRIVATE
+        $<IF:$<C_COMPILER_ID:MSVC>,/UNDEBUG,-UNDEBUG>)
+    add_test(NAME mod_snapshot_test COMMAND mod_snapshot_test)
     add_executable(mod_netplay_test tests/test_mod_netplay.c
         src/mod_netplay.c src/netplay_state_digest.c src/crc32.c src/psx_sha256.c)
     target_include_directories(mod_netplay_test PRIVATE include)
@@ -218,14 +243,72 @@ if(BUILD_TESTING)
         target_compile_options(ws_backdrop_scene_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections)
         target_link_options(ws_backdrop_scene_test PRIVATE -flto -Wl,--gc-sections)
         add_test(NAME ws_backdrop_scene_test COMMAND ws_backdrop_scene_test)
-        add_executable(boot_state_handoff_test tests/test_boot_state_handoff.c)
+        add_executable(boot_state_handoff_test tests/test_boot_state_handoff.c src/mod_snapshot.c)
         target_include_directories(boot_state_handoff_test PRIVATE include src)
         target_compile_definitions(boot_state_handoff_test PRIVATE PSX_COSIM=1)
         target_compile_options(boot_state_handoff_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
         target_link_options(boot_state_handoff_test PRIVATE -flto -Wl,--gc-sections)
         target_link_libraries(boot_state_handoff_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_handoff_test COMMAND boot_state_handoff_test)
-        add_executable(boot_state_impl_tag_test tests/test_boot_state_handoff.c)
+        add_executable(boot_state_native_capture_test tests/test_capture_writer.c src/mod_snapshot.c)
+        target_include_directories(boot_state_native_capture_test PRIVATE include src)
+        target_compile_definitions(boot_state_native_capture_test PRIVATE PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=1)
+        target_compile_options(boot_state_native_capture_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
+        target_link_options(boot_state_native_capture_test PRIVATE -flto -Wl,--gc-sections)
+        target_link_libraries(boot_state_native_capture_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME boot_state_native_capture_test COMMAND boot_state_native_capture_test)
+        add_executable(boot_state_reference_capture_test tests/test_capture_writer.c src/mod_snapshot.c)
+        target_include_directories(boot_state_reference_capture_test PRIVATE include src)
+        target_compile_definitions(boot_state_reference_capture_test PRIVATE PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=0)
+        target_compile_options(boot_state_reference_capture_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
+        target_link_options(boot_state_reference_capture_test PRIVATE -flto -Wl,--gc-sections)
+        target_link_libraries(boot_state_reference_capture_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME boot_state_reference_capture_test COMMAND boot_state_reference_capture_test)
+        foreach(_native IN ITEMS 0 1)
+            set(_capture_test "boot_state_capture_o0_${_native}_test")
+            add_executable(${_capture_test} tests/test_capture_writer.c src/mod_snapshot.c)
+            target_include_directories(${_capture_test} PRIVATE include src)
+            target_compile_definitions(${_capture_test} PRIVATE PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=${_native})
+            target_compile_options(${_capture_test} PRIVATE -O0 -ffunction-sections -fdata-sections -UNDEBUG)
+            target_link_options(${_capture_test} PRIVATE -Wl,--gc-sections)
+            target_link_libraries(${_capture_test} PRIVATE ZLIB::ZLIB)
+            add_test(NAME ${_capture_test} COMMAND ${_capture_test})
+        endforeach()
+        if(EXISTS "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c")
+            file(READ "${RECOMP_RBENGINE_ROOT}/include/retcomm_rbengine/snap_ring.h" _capture_ring_header)
+            foreach(_native IN ITEMS 0 1)
+                if(_native AND NOT _capture_ring_header MATCHES "RBE_SNAP_CAPTURE_API_VERSION")
+                    continue() # Old dependency remains a supported reference build.
+                endif()
+                set(_ring_test "netplay_capture_ring_${_native}_test")
+                add_executable(${_ring_test} tests/test_netplay_capture_ring.c
+                    src/mod_snapshot.c
+                    src/netplay_snap_ring.c
+                    "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c")
+                if(_native)
+                    target_sources(${_ring_test} PRIVATE src/capture_ring.c)
+                endif()
+                target_include_directories(${_ring_test} PRIVATE include src
+                    "${RECOMP_RBENGINE_ROOT}/include")
+                target_compile_definitions(${_ring_test} PRIVATE PSX_COSIM=1
+                    PSX_HAS_RECOMP_NET=1 PSX_NATIVE_CAPTURE_JOBS=${_native})
+                target_compile_options(${_ring_test} PRIVATE -O2 -ffunction-sections -fdata-sections -UNDEBUG)
+                target_link_options(${_ring_test} PRIVATE -Wl,--gc-sections)
+                target_link_libraries(${_ring_test} PRIVATE ZLIB::ZLIB)
+                add_test(NAME ${_ring_test} COMMAND ${_ring_test})
+            endforeach()
+        endif()
+        add_executable(mod_snapshot_boot_state_test
+            tests/test_mod_snapshot_boot_state.c src/mod_snapshot.c)
+        target_include_directories(mod_snapshot_boot_state_test PRIVATE include src)
+        target_compile_definitions(mod_snapshot_boot_state_test PRIVATE
+            PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=1)
+        target_compile_options(mod_snapshot_boot_state_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
+        target_link_options(mod_snapshot_boot_state_test PRIVATE -flto -Wl,--gc-sections)
+        target_link_libraries(mod_snapshot_boot_state_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME mod_snapshot_boot_state_test COMMAND mod_snapshot_boot_state_test)
+        add_executable(boot_state_impl_tag_test tests/test_boot_state_handoff.c src/mod_snapshot.c)
         target_include_directories(boot_state_impl_tag_test PRIVATE include src)
         target_compile_definitions(boot_state_impl_tag_test PRIVATE PSX_COSIM=1 PSX_SAVESTATE_IMPL_TAG=0x54474801u)
         target_compile_options(boot_state_impl_tag_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -233,7 +316,7 @@ if(BUILD_TESTING)
         target_link_libraries(boot_state_impl_tag_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_impl_tag_test COMMAND boot_state_impl_tag_test)
 
-        add_executable(boot_state_execution_test tests/test_boot_state_handoff.c)
+        add_executable(boot_state_execution_test tests/test_boot_state_handoff.c src/mod_snapshot.c)
         target_include_directories(boot_state_execution_test PRIVATE include src)
         target_compile_definitions(boot_state_execution_test PRIVATE PSX_COSIM=1)
         target_compile_options(boot_state_execution_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -274,6 +357,12 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            add_test(NAME dma_mdec_jobs_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dma_mdec_jobs.py"
+                --cc "${CMAKE_C_COMPILER}")
+            set_tests_properties(dma_mdec_jobs_test PROPERTIES RUN_SERIAL TRUE)
+        endif()
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
@@ -291,16 +380,51 @@ if(BUILD_TESTING)
             --work-root "${CMAKE_CURRENT_BINARY_DIR}/hle-binding-fixtures")
         find_program(PSX_PROFILE_TEST_NINJA NAMES ninja ninja.exe)
         if(PSX_PROFILE_TEST_NINJA)
+            add_test(NAME present_image_selection_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_image_selection.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(present_image_selection_test PROPERTIES RUN_SERIAL TRUE)
             add_test(NAME execution_profile_test COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_execution_profile.py"
                 --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
                 --ninja "${PSX_PROFILE_TEST_NINJA}")
             set_tests_properties(execution_profile_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME capture_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_capture_policy.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(capture_policy_test PROPERTIES RUN_SERIAL TRUE)
             add_test(NAME native_idle_wait_policy_test COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_idle_wait.py"
                 --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
                 --ninja "${PSX_PROFILE_TEST_NINJA}")
             set_tests_properties(native_idle_wait_policy_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME native_cpu_spans_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_cpu_spans.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(native_cpu_spans_policy_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME openbios_read_selection_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_openbios_read_selection.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/openbios-read-selection")
+            set_tests_properties(openbios_read_selection_test PROPERTIES RUN_SERIAL TRUE)
+            add_test(NAME media_jobs_policy_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_media_jobs_policy.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(media_jobs_policy_test PROPERTIES RUN_SERIAL TRUE)
+        endif()
+        if(NOT MSVC AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND
+           EXISTS "${PSXRECOMP_ROOT}/generated/OpenBIOS_full.c")
+            add_test(NAME openbios_read_contract_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_openbios_read_job.py"
+                --generated "${PSXRECOMP_ROOT}/generated/OpenBIOS_full.c"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/openbios-read-contract"
+                --cc "${CMAKE_C_COMPILER}" --cxx "${CMAKE_CXX_COMPILER}")
+            set_tests_properties(openbios_read_contract_test PROPERTIES RUN_SERIAL TRUE)
         endif()
         add_test(NAME host_launch_timings_protocol_test COMMAND ${CMAKE_COMMAND} -E env
             "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}" "${Python3_EXECUTABLE}"
@@ -405,6 +529,16 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-frame-gen-results")
         set_tests_properties(gl_frame_gen_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 300 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_shared_present_images_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_shared_present_images.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-shared-present-images-results")
+        set_tests_properties(gl_shared_present_images_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         # [video] texture_lod / anisotropic_filtering: off and untracked/
         # magnified prims are unchanged; minified world textures average
         # inside their UV bounds; render thread and PGXP depth agree.
@@ -639,6 +773,7 @@ if(BUILD_TESTING)
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
+            src/mod_snapshot.c
             src/psx_ram_geometry.c)
         target_include_directories(psx_ram_runtime_map_test PRIVATE include src)
         target_compile_options(psx_ram_runtime_map_test PRIVATE
@@ -660,6 +795,7 @@ if(BUILD_TESTING)
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
+            src/mod_snapshot.c
             src/psx_icache.c
             src/psx_ram_geometry.c)
         target_include_directories(isc_store_test PRIVATE include src)
@@ -683,6 +819,7 @@ if(BUILD_TESTING)
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
+            src/mod_snapshot.c
             src/pgxp.cpp
             src/psx_ram_geometry.c)
         target_include_directories(pgxp_untracked_store_test PRIVATE include src)
@@ -1465,6 +1602,10 @@ if(BUILD_TESTING)
         include
         ../recompiler/lib/toml11)
     add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
+    add_executable(native_text_test tests/test_native_text.cpp
+        src/native_text.cpp third_party/json11/json11.cpp)
+    target_include_directories(native_text_test PRIVATE include)
+    add_test(NAME native_text_test COMMAND native_text_test)
 
     add_executable(netplay_peer_frontier_test tests/test_netplay_peer_frontier.c)
     target_include_directories(netplay_peer_frontier_test PRIVATE include)
@@ -1494,6 +1635,10 @@ if(BUILD_TESTING)
         include
         ../recompiler/include
         ../recompiler/lib/toml11)
+    if(PSX_RECOMP_UI AND EXISTS "${RECOMP_UI_ROOT}/src/recomp_launcher.h")
+        target_compile_definitions(mod_runtime_test PRIVATE RECOMP_LAUNCHER=1)
+        target_include_directories(mod_runtime_test PRIVATE "${RECOMP_UI_ROOT}/src")
+    endif()
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
     psxrecomp_sha256_file(mod_runtime_test)
     # Match the runtime's stack allowance for the remaining disc/mod helpers.
@@ -1601,6 +1746,30 @@ if(BUILD_TESTING)
         endif()
     endif()
     add_test(NAME mod_resident_test COMMAND mod_resident_test)
+    # Run the existing real ISO/effective-mod integration against owned blobs.
+    target_compile_definitions(mod_resident_test PRIVATE PSX_NATIVE_RESIDENT_PREPARATION=1)
+    foreach(_resident_mode 0 1)
+        add_executable(resident_preparation_${_resident_mode}_test
+            tests/test_resident_preparation.cpp src/psx_sha256.c)
+        target_include_directories(resident_preparation_${_resident_mode}_test PRIVATE include)
+        target_compile_features(resident_preparation_${_resident_mode}_test PRIVATE cxx_std_17)
+        target_compile_definitions(resident_preparation_${_resident_mode}_test PRIVATE
+            PSX_NATIVE_RESIDENT_PREPARATION=${_resident_mode} PSX_DISABLE_NATIVE_SHA256=1)
+    endforeach()
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME resident_preparation_whole_job COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_resident_preparation.py"
+            --reference $<TARGET_FILE:resident_preparation_0_test>
+            --native $<TARGET_FILE:resident_preparation_1_test>)
+        set_tests_properties(resident_preparation_whole_job PROPERTIES RUN_SERIAL TRUE)
+        if(PSX_PROFILE_TEST_NINJA)
+            add_test(NAME resident_preparation_policy COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_resident_preparation_policy.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(resident_preparation_policy PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endif()
 
     add_executable(mod_disc_read_session_test tests/test_mod_disc_read_session.cpp
         src/iso_reader.cpp src/cue_sheet.cpp)
@@ -2003,6 +2172,16 @@ if(BUILD_TESTING)
     add_test(NAME netplay_load_probe_test COMMAND netplay_load_probe_test)
 
     if(PSXRECOMP_TEST_HAS_RBENGINE)
+        if(NOT MSVC)
+            add_executable(rewind_load_context_test tests/test_rewind_load_context.c)
+            target_include_directories(rewind_load_context_test PRIVATE include src)
+            target_compile_definitions(rewind_load_context_test PRIVATE PSX_HAS_RBENGINE_SNAP=1)
+            target_compile_options(rewind_load_context_test PRIVATE
+                -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
+            target_link_options(rewind_load_context_test PRIVATE -flto -Wl,--gc-sections)
+            target_link_libraries(rewind_load_context_test PRIVATE retcomm_rbengine)
+            add_test(NAME rewind_load_context_test COMMAND rewind_load_context_test)
+        endif()
         add_executable(netplay_hash_confirm_test
             tests/test_netplay_hash_confirm.c)
         target_include_directories(netplay_hash_confirm_test PRIVATE include)
@@ -2173,6 +2352,10 @@ if(BUILD_TESTING)
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_gp0_history_guard.py
                              --cc ${CMAKE_C_COMPILER})
+            add_test(NAME debug_input_route_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_debug_input_route.py
+                             --cc ${CMAKE_C_COMPILER})
             add_test(NAME memory_debug_trace_guard_test
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_memory_debug_trace_guard.py
@@ -2224,6 +2407,12 @@ if(BUILD_TESTING)
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
+        add_test(NAME host_pacing_policy_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pacing_policy.py
+                         --cmake ${CMAKE_COMMAND} --cc ${CMAKE_C_COMPILER}
+                         --generator "${CMAKE_GENERATOR}"
+                         --make-program "${CMAKE_MAKE_PROGRAM}")
         add_test(NAME present_skip_cadence_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_skip_cadence_guard.py)
