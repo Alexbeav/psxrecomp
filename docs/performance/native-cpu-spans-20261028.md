@@ -75,3 +75,7 @@ Keep this PR draft and the feature default OFF. Do not merge or promote based
 on CPU samples alone; resolve the remaining behavior/qualification findings and
 obtain the applicable owner playtest clearance. No release or title-default
 change is included.
+
+[Continuation evidence](native-cpu-spans-continuation-20261029.md) narrows the
+retained Tomba observation and records the finite, unqualified Ape confirmation
+attempt. Historical measurements and policy above remain unchanged.
