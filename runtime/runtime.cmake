@@ -2207,6 +2207,11 @@ function(psxrecomp_add_runtime_target target)
             PSX_ENABLE_BLOCK_CYCLES=1
         )
     endif()
+    # Resource lifetime is an authored title contract, never a player toggle.
+    # Resolve the property at generation time so a caller can set it after the
+    # runtime target is created. Unset preserves existing cached handles.
+    target_compile_definitions(${target} PRIVATE
+        "PSX_MOD_SESSION_RESOURCES=$<BOOL:$<TARGET_PROPERTY:PSX_MOD_SESSION_RESOURCES>>")
     if(PSX_SHELLWIN_INTERP)
         target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
     endif()
