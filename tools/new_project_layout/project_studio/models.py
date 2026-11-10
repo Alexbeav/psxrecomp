@@ -76,7 +76,7 @@ class AuditReport:
 
 @dataclass
 class MigrateOptions:
-    """User choices for apply (setup-host exclusively)."""
+    """User choices for apply (bundled releases: committed generated/ C)."""
 
     disc: str | None = None
     project_name: str | None = None

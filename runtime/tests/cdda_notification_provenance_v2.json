@@ -1,0 +1,74 @@
+{
+  "schema": "t172-cdda-notification-provenance-v2",
+  "base": "91ca382196ac9c74fa3da726ed0797746b557982",
+  "tested_commit": "e525e716659a479cf82d37fcf6878fc2d5edbd63",
+  "owned": [
+    "source_cdda_present",
+    "source_cdda_queue"
+  ],
+  "inputs": [
+    "T77 sanitized declaration/state/caller contract and opaque contract v1",
+    "pinned PSX-SPX primary documentation",
+    "independently authored opaque observations"
+  ],
+  "primary_reference": {
+    "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+    "path": "docs/cdromdrive.md",
+    "sha256": "b37a3d10752919788ca1cf2495fb199ca9ec9b3894ffd0c2c7b5ab5a4707cdbf"
+  },
+  "excluded_exposure": [
+    "original bodies/comments",
+    "inherited source-profile tests",
+    "root models/builders/harnesses/exports/headers/compiler diagnostics"
+  ],
+  "domain": {
+    "payload": "valid disjoint8bytes",
+    "type": [
+      0,
+      255
+    ],
+    "count": [
+      0,
+      8
+    ],
+    "enabled": "signed32",
+    "source_clock": "signed32",
+    "clock_and_ready_due": "uint64",
+    "irq": [
+      0,
+      255
+    ],
+    "response_read": [
+      0,
+      15
+    ],
+    "response_count": [
+      0,
+      16
+    ],
+    "oversized_count": "unsigned9..4294967295 abort before any state mutation/copy/callback, valid8byteinput and type0..255"
+  },
+  "observation_seams": [
+    "response_clear",
+    "response_push",
+    "source_clock_receive_ready",
+    "set_irq",
+    "fire_cdrom_irq"
+  ],
+  "preserved": [
+    "all surrounding source bytes",
+    "other source_cdda fields and pipe data",
+    "source notices and repository LICENSE",
+    "earlier accepted slices and gates"
+  ],
+  "limits": [
+    "null/alias/fullunsignedtype excluded; counts9..UINT32_MAX qualified only for fail-closed abort",
+    "broader snapshot states excluded",
+    "no callback reentrancy",
+    "no actual INTC/latch/timing/transport/start/stop execution",
+    "no hardware accuracy/audible-gameplay/formal clean-room/legal-clearance/quality claim"
+  ],
+  "supersedes_unaccepted_review": "b9275b8b679ddc2116a259ba3e7781f32ee5027f",
+  "abort_observation": "Instrumented abort records boundary and exits99; no claim that production exits99",
+  "correction": "Root review required original defensive count boundary despite initial valid-domain-only contract. Added abort guard before field mutation. All v1 evidence remains immutable and unaccepted."
+}

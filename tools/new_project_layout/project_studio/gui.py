@@ -294,7 +294,7 @@ def _ensure_gui_deps() -> str | None:
         if _ctk_importable():
             return None
         return (
-            "Frozen RetComM Studio build is missing customtkinter.\n"
+            "Frozen Retro Studio build is missing customtkinter.\n"
             "Reinstall from a release package, or run from source."
         )
 
@@ -376,7 +376,7 @@ class ProjectStudioApp:
     def __init__(self, ctk, *, initial_root: Path | None = None) -> None:
         self.ctk = ctk
         self.root = ctk.CTk()
-        self.root.title("RetComM Studio")
+        self.root.title("Retro Studio")
         self.root.geometry("1100x820")
         self.root.minsize(900, 640)
         # Maximize after the first map so WMs honor zoomed/fullscreen hints.
@@ -451,7 +451,9 @@ class ProjectStudioApp:
         self.np_netplay_var = tk.BooleanVar(value=True)  # players default = 2
         self.np_ci_var = tk.BooleanVar(value=True)
         self.np_boxart_var = tk.BooleanVar(value=True)
-        self.np_stage_var = tk.BooleanVar(value=True)
+        # Off by default — see NewProjectOptions.stage_disc. The project reads
+        # the dump from where the user keeps it instead of duplicating it.
+        self.np_stage_var = tk.BooleanVar(value=False)
         self.np_generate_var = tk.BooleanVar(value=True)
         self.np_build_var = tk.BooleanVar(value=True)
         self.np_github_var = tk.BooleanVar(value=False)
@@ -516,12 +518,12 @@ class ProjectStudioApp:
         header.pack(fill="x", padx=16, pady=(16, 8))
         ctk.CTkLabel(
             header,
-            text="RetComM Studio",
+            text="Retro Studio",
             font=ctk.CTkFont(size=22, weight="bold"),
         ).pack(side="left")
         ctk.CTkLabel(
             header,
-            text="Migrate, audit, and GitHub ops for setup-host game repos",
+            text="Migrate, audit, and GitHub ops for PSXRecomp game repos",
             text_color=("gray40", "gray65"),
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=(12, 0), pady=(6, 0))
@@ -655,7 +657,7 @@ class ProjectStudioApp:
         opts.pack(fill="x", padx=4, pady=4)
         ctk.CTkLabel(
             opts,
-            text="Options  ·  setup-host only",
+            text="Options  ·  bundled releases",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=12, pady=(10, 4))
 
@@ -705,7 +707,7 @@ class ProjectStudioApp:
 
         ctk.CTkLabel(
             opts,
-            text="Wizard + recomp-ui are always enabled. Releases are setup-host only (no prebuilt game C).",
+            text="Wizard + recomp-ui are always enabled. Releases build the committed generated/ C and ship the compiled game.",
             text_color=("gray40", "gray60"),
             font=ctk.CTkFont(size=12),
             wraplength=900,
@@ -910,7 +912,7 @@ class ProjectStudioApp:
             ("Netplay", self.np_netplay_var),
             ("CI", self.np_ci_var),
             ("Boxart", self.np_boxart_var),
-            ("Stage disc", self.np_stage_var),
+            ("Copy disc into project", self.np_stage_var),
             ("Generate", self.np_generate_var),
             ("Build", self.np_build_var),
             ("GitHub", self.np_github_var),
@@ -1121,7 +1123,7 @@ class ProjectStudioApp:
                     self._prompt_apply_updates(result)
                 elif not silent_if_current:
                     messagebox.showinfo(
-                        "RetComM Studio",
+                        "Retro Studio",
                         result.message or "Everything is up to date.",
                         parent=self.root,
                     )
@@ -1144,10 +1146,10 @@ class ProjectStudioApp:
             "Updates are available:\n\n"
             + "\n".join(lines)
             + "\n\nApply now?\n"
-            "(Toolchain installs into the shared RetComM cache used by the "
+            "(Toolchain installs into the shared Retro cache used by the "
             "launcher and game apps.)"
         )
-        if not messagebox.askyesno("RetComM Studio", body, parent=self.root):
+        if not messagebox.askyesno("Retro Studio", body, parent=self.root):
             return
 
         update_studio = bool(result.studio.available)
@@ -1175,14 +1177,14 @@ class ProjectStudioApp:
                 self._update_status_var.set("Update done" if not should_exit else "Restarting…")
                 if should_exit:
                     messagebox.showinfo(
-                        "RetComM Studio",
+                        "Retro Studio",
                         summary + "\n\nStudio will exit to finish the update.",
                         parent=self.root,
                     )
                     self.root.after(300, self.root.destroy)
                 else:
                     messagebox.showinfo(
-                        "RetComM Studio", summary, parent=self.root
+                        "Retro Studio", summary, parent=self.root
                     )
 
             self.root.after(0, done)
@@ -1933,7 +1935,7 @@ class ProjectStudioApp:
         ).pack(side="left")
         ctk.CTkLabel(
             rel,
-            text="Install & push CI writes psxrecomp setup-release.yml → "
+            text="Install & push CI writes psxrecomp game-release.yml → "
             ".github/workflows/release.yml, commits, pushes, and registers Actions.",
             text_color=("gray30", "gray70"),
             anchor="w",
@@ -2403,6 +2405,18 @@ class ProjectStudioApp:
             height=30,
             command=self._build_configure_and_build,
         ).pack(side="left", padx=8)
+        # Local export runs the SAME wrapper CI runs, so a zip made here and a
+        # released one are the same artifact by construction. It exists because
+        # "build it and look inside the package" had no button: the only route
+        # to a distributable was commit-and-wait-for-CI, which is how releases
+        # shipped with an empty Mods page without anyone noticing.
+        ctk.CTkButton(
+            brow,
+            text="Export release zip",
+            width=160,
+            height=30,
+            command=self._build_export,
+        ).pack(side="left")
 
         launch_box = ctk.CTkFrame(tab, corner_radius=10)
         launch_box.pack(fill="x", padx=4, pady=4)
@@ -2595,6 +2609,27 @@ class ProjectStudioApp:
             )
 
         self._build_run_bg("Build", go)
+
+    def _build_export(self) -> None:
+        """Bundle a distributable zip from the current build (mods included)."""
+        from .buildops import export_release
+
+        root = self._game_root()
+        if root is None:
+            return
+
+        def go():
+            return export_release(
+                root,
+                build_dir=self.build_dir_var.get().strip() or "build-release",
+                # Local export keeps developer-channel mods: the reason to
+                # export locally is to test what you are working on. CI drops
+                # them; `build export --exclude-dev-mods` reproduces that.
+                exclude_dev_mods=False,
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+
+        self._build_run_bg("Export release", go)
 
     def _build_configure_and_build(self) -> None:
         from .buildops import build, configure
@@ -4965,7 +5000,7 @@ class ProjectStudioApp:
         elif not self._git_dry():
             if not messagebox.askyesno(
                 "Project Studio",
-                "Install psxrecomp setup-release.yml as .github/workflows/release.yml,\n"
+                "Install psxrecomp game-release.yml as .github/workflows/release.yml,\n"
                 "commit, push to origin, and register Actions?\n\n"
                 f"{root}",
                 parent=self.root,

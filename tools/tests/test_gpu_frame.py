@@ -27,8 +27,15 @@ def _load(name):
 
 
 GF = _load("psx_gpu_frame")
-LAYERS = _load("gpu_frame_layers")
 DIFF = _load("gpu_frame_diff")
+LAYERS = None
+_layer_skip_reason = "optional image dependencies unavailable"
+try:
+    LAYERS = _load("gpu_frame_layers")
+except ModuleNotFoundError as error:
+    if error.name not in ("numpy", "PIL"):
+        raise
+    _layer_skip_reason += ": " + error.name
 
 
 def entry(seq, op, words, func="0x80012340", ot=0, ra="0x80011000"):
@@ -152,6 +159,7 @@ class TestAttribution(unittest.TestCase):
         self.assertIn("0.5B+0.5F", funcs["0x80001000"]["stp_modes"])
 
 
+@unittest.skipIf(LAYERS is None, _layer_skip_reason)
 class TestBlends(unittest.TestCase):
     def _one(self, semi, stp, base=100.0):
         c = LAYERS.Canvas(0, 0, 4, 4)
@@ -173,6 +181,7 @@ class TestBlends(unittest.TestCase):
         self.assertEqual(float(c.rgb[0, 0, 0]), 0.0)
 
 
+@unittest.skipIf(LAYERS is None, _layer_skip_reason)
 class TestRender(unittest.TestCase):
     def _dump(self):
         stream = [

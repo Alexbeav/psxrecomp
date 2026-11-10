@@ -1,0 +1,208 @@
+// SYSTEM.CNF beyond 16 MiB wins over unrelated early cdrom: strings.
+// The title's netplay disc rule holds for a .chd as for a cue (PS1B-294).
+#include "disc_identity.h"
+#include "disc_content_hash.h"
+#include <cassert>
+#include <cstdio>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+namespace fs=std::filesystem;
+static void both32(uint8_t* p,uint32_t value) {
+    for(unsigned i=0;i<4;i++) {p[i]=(uint8_t)(value>>(8*i));p[7-i]=p[i];}
+}
+static void fixture(const fs::path& path,bool raw,const std::string& boot="SLPS_009.98") {
+    const unsigned unit=raw?2352:2048,offset=raw?24:0;
+    std::ofstream file(path,std::ios::binary);
+    file.seekp(10000ull*unit-1);file.put(0);
+    if(raw) {
+        uint8_t sync[16]={};std::memset(sync+1,255,10);sync[15]=2;
+        file.seekp(0);file.write((char*)sync,sizeof sync);
+    }
+    auto write=[&](unsigned lba,const std::vector<uint8_t>& data) {
+        file.seekp((uint64_t)lba*unit+offset);
+        file.write((const char*)data.data(),data.size());
+    };
+    std::vector<uint8_t> pvd(2048);
+    pvd[0]=1;std::memcpy(pvd.data()+1,"CD001",5);pvd[6]=1;
+    auto* root=pvd.data()+156;root[0]=34;both32(root+2,20);both32(root+10,2048);
+    root[25]=2;root[28]=root[31]=root[32]=1;
+    write(16,pvd);
+    const std::string cnf="BOOT = cdrom:"+boot+";1\r\n";
+    std::vector<uint8_t> directory(2048);
+    directory[0]=46;both32(directory.data()+2,9000);both32(directory.data()+10,(uint32_t)cnf.size());
+    directory[28]=directory[31]=1;directory[32]=12;
+    std::memcpy(directory.data()+33,"SYSTEM.CNF;1",12);write(20,directory);
+    write(9000,std::vector<uint8_t>(cnf.begin(),cnf.end()));
+    const std::string decoy="BOOT = cdrom:SLUS_999.99;1\r\n";
+    write(40,std::vector<uint8_t>(decoy.begin(),decoy.end()));
+}
+// A mounted image as identify_disc describes it, without a file: the rule
+// reads only these fields. No .chd can be made here (libchdr only reads), so
+// the rule is exercised on the identity and the branch on a broken file.
+static PSXRecompV4::DiscIdentity mounted(bool chd,bool cue,int tracks,const char* fp) {
+    PSXRecompV4::DiscIdentity id;
+    id.opened=id.has_header=id.toc_opened=true;
+    id.from_chd=chd;id.from_cue=cue;id.track_count=tracks;id.disc_fp=fp;
+    return id;
+}
+static void netplay_rule() {
+    using namespace PSXRecompV4;
+    const char* good="ab77cc9d";const char* other="3ad066bd";
+    const std::string wrong_dump="Disc TOC fingerprint does not match this build's required dump.";
+    NetplayDiscExpect kit;                 // what every netplay kit writes
+    kit.require_cue=true;kit.required_tracks=1;kit.required_disc_fp=good;
+
+    auto chd=mounted(true,false,1,good);   // the right .chd: accepted
+    apply_netplay_disc_expect(chd,kit);
+    assert(chd.netplay_ok && chd.netplay_detail.empty());
+
+    chd=mounted(true,false,1,other);       // a wrong .chd: the sentence a wrong cue gets
+    apply_netplay_disc_expect(chd,kit);
+    assert(!chd.netplay_ok && chd.netplay_detail==wrong_dump);
+
+    auto cue=mounted(false,true,1,good);   // cue: unchanged
+    apply_netplay_disc_expect(cue,kit);
+    assert(cue.netplay_ok);
+    cue=mounted(false,true,1,other);
+    apply_netplay_disc_expect(cue,kit);
+    assert(!cue.netplay_ok && cue.netplay_detail==wrong_dump);
+
+    auto bin=mounted(false,false,1,good);  // a bare .bin: still refused by require_cue
+    apply_netplay_disc_expect(bin,kit);
+    assert(!bin.netplay_ok && bin.netplay_detail.find("requires the full .cue")!=std::string::npos);
+    cue=mounted(false,true,1,good);cue.cue_fallback=true;
+    apply_netplay_disc_expect(cue,kit);
+    assert(!cue.netplay_ok);
+
+    NetplayDiscExpect many=kit;many.required_tracks=27;
+    chd=mounted(true,false,27,good);       // a multi-track .chd: accepted
+    apply_netplay_disc_expect(chd,many);
+    assert(chd.netplay_ok);
+    chd=mounted(true,false,1,good);        // a .chd with too few tracks: refused
+    apply_netplay_disc_expect(chd,many);
+    assert(!chd.netplay_ok && chd.netplay_detail.find("27")!=std::string::npos);
+
+    chd=mounted(true,false,1,good);chd.toc_opened=false;
+    apply_netplay_disc_expect(chd,kit);    // a .chd whose TOC did not open: refused
+    assert(!chd.netplay_ok);
+}
+// identify_disc must reach the rule from its .chd branch: a file that is not
+// a CHD cannot be opened, and with a rule given it is not valid for netplay.
+static void broken_chd(const fs::path& root) {
+    const auto image=root/"broken.chd";
+    {std::ofstream file(image,std::ios::binary);file<<"not a chd";}
+    PSXRecompV4::NetplayDiscExpect kit;
+    kit.require_cue=true;kit.required_tracks=1;kit.required_disc_fp="ab77cc9d";
+    auto id=PSXRecompV4::identify_disc(image,"",0,false,false,&kit);
+    assert(id.from_chd && !id.opened && !id.netplay_ok && !id.netplay_detail.empty());
+    id=PSXRecompV4::identify_disc(image,"",0,false,false);
+    assert(id.from_chd && !id.netplay_ok);
+    fs::remove(image);
+}
+// An uncompressed CHD v5 fixture with one MODE2_RAW track. The libchdr
+// decoder is the independent format reader; expected identity is the raw BIN.
+static void raw_chd(const fs::path& raw,const fs::path& output) {
+    const unsigned frames=(unsigned)(fs::file_size(raw)/2352), unit=2448;
+    const std::string meta="TRACK:1 TYPE:MODE2_RAW SUBTYPE:NONE FRAMES:"+std::to_string(frames)+
+        " PREGAP:0 PGTYPE:MODE2_RAW PGSUB:NONE POSTGAP:0";
+    const unsigned meta_at=124+4*frames;
+    const unsigned first=(meta_at+16+(unsigned)meta.size()+1+unit-1)/unit;
+    std::vector<uint8_t> prefix((size_t)first*unit);
+    auto be=[&](size_t at,uint64_t value,unsigned bytes) {
+        for(unsigned i=0;i<bytes;i++)prefix[at+bytes-1-i]=(uint8_t)(value>>(8*i));
+    };
+    std::memcpy(prefix.data(),"MComprHD",8);be(8,124,4);be(12,5,4);
+    be(32,(uint64_t)frames*unit,8);be(40,124,8);be(48,meta_at,8);
+    be(56,unit,4);be(60,unit,4);
+    for(unsigned i=0;i<frames;i++)be(124+4*i,first+i,4);
+    std::memcpy(prefix.data()+meta_at,"CHT2",4);be(meta_at+4,meta.size()+1,4);
+    std::memcpy(prefix.data()+meta_at+16,meta.c_str(),meta.size()+1);
+    std::ofstream file(output,std::ios::binary);file.write((char*)prefix.data(),prefix.size());
+    std::ifstream source(raw,std::ios::binary);std::vector<char> sector(unit);
+    for(unsigned i=0;i<frames;i++){source.read(sector.data(),2352);file.write(sector.data(),sector.size());}
+}
+int main() {
+    auto root=fs::temp_directory_path()/ ("psx-disc-identity-"+std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directory(root);
+    for(bool raw:{false,true}) {
+        auto image=root/(raw?"disc.bin":"disc.iso");fixture(image,raw);
+        auto id=PSXRecompV4::identify_disc(image,"",0,false,false);
+        assert(id.opened && id.has_header && id.detected_serial=="SLPS-00998" && id.region=="NTSC-J");
+        std::string digest, error;
+        assert(PSXRecompV4::disc_content_sha256(image,digest,&error));
+        const std::vector<std::string> required{digest};
+        assert(PSXRecompV4::required_disc_content_matches(image,required,&error));
+        if(raw) {
+            auto cue=root/"renamed.cue";
+            {std::ofstream file(cue);file<<"FILE \"disc.bin\" BINARY\n TRACK 01 MODE2/2352\n INDEX 01 00:00:00\n";}
+            std::string cue_digest;
+            assert(PSXRecompV4::disc_content_sha256(cue,cue_digest,&error) && cue_digest==digest);
+            assert(PSXRecompV4::required_disc_content_matches(cue,required,&error));
+            auto chd=root/"lossless.chd";raw_chd(image,chd);
+            std::string chd_digest;
+            assert(PSXRecompV4::disc_content_sha256(chd,chd_digest,&error) && chd_digest==digest);
+            assert(PSXRecompV4::required_disc_content_matches(chd,required,&error));
+            const std::vector<std::string> required_fps{id.disc_fp};
+            assert(!id.disc_fp.empty());
+            assert(PSXRecompV4::identify_disc(cue,"",0,false,false).disc_fp==id.disc_fp);
+            assert(PSXRecompV4::identify_disc(chd,"",0,false,false).disc_fp==id.disc_fp);
+            assert(PSXRecompV4::required_disc_content_matches(image,required,&error,required_fps));
+            assert(PSXRecompV4::required_disc_content_matches(cue,required,&error,required_fps));
+            assert(PSXRecompV4::required_disc_content_matches(chd,required,&error,required_fps));
+            auto write_cue=[&](const std::string& body){std::ofstream file(cue);file<<body;};
+            const std::string original_cue="FILE \"disc.bin\" BINARY\n TRACK 01 MODE2/2352\n INDEX 01 00:00:00\n";
+            auto audio=root/"extra-audio.bin";
+            {std::ofstream f(audio,std::ios::binary);std::vector<char> silence(2352*2);f.write(silence.data(),silence.size());}
+            write_cue(original_cue+"FILE \"extra-audio.bin\" BINARY\n TRACK 02 AUDIO\n INDEX 01 00:00:00\n");
+            // Data-track bytes still match; the altered mounted disc must not.
+            assert(PSXRecompV4::required_disc_content_matches(cue,required,&error));
+            assert(!PSXRecompV4::required_disc_content_matches(cue,required,&error,required_fps));
+            write_cue("FILE \"disc.bin\" BINARY\n TRACK 01 MODE2/2352\n INDEX 01 00:00:01\n");
+            assert(!PSXRecompV4::required_disc_content_matches(cue,required,&error,required_fps));
+            // The current CUE reader treats data-track MODE1/2352 as the
+            // same raw2352 mount; descriptive text alone is not content.
+            write_cue("FILE \"disc.bin\" BINARY\n TRACK 01 MODE1/2352\n INDEX 01 00:00:00\n");
+            assert(PSXRecompV4::required_disc_content_matches(cue,required,&error,required_fps));
+            write_cue(original_cue);fs::remove(audio);
+            assert(PSXRecompV4::required_disc_content_matches(cue,required,&error,required_fps));
+            // A decoded-sector read failure must reject instead of accepting
+            // a hash of the readable prefix.
+            fs::resize_file(chd,fs::file_size(chd)-1000);
+            assert(!PSXRecompV4::required_disc_content_matches(chd,required,&error));
+            fs::remove(chd);
+            // A modified non-EXE asset retains valid ISO/serial metadata. Full
+            // original-image policy must reject it with every mod switched off.
+            {std::fstream file(image,std::ios::binary|std::ios::in|std::ios::out);file.seekp(9999ull*2352+100);file.put(1);}
+            auto modified=PSXRecompV4::identify_disc(cue,"SLPS-00998",0,false,false);
+            assert(modified.has_header && modified.serial_matches);
+            assert(!PSXRecompV4::required_disc_content_matches(cue,required,&error));
+            assert(error.find("Use the verified original disc")!=std::string::npos);
+            // Recheck bytes when the same selected filename changes.
+            {std::fstream file(image,std::ios::binary|std::ios::in|std::ios::out);file.seekp(9999ull*2352+100);file.put(0);}
+            assert(PSXRecompV4::required_disc_content_matches(cue,required,&error));
+            fs::remove(cue);
+        }
+        assert(!PSXRecompV4::required_disc_content_matches(root/"missing.bin",required,&error));
+        assert(!PSXRecompV4::required_disc_content_matches({},required,&error));
+        assert(PSXRecompV4::required_disc_content_matches(image,{},&error));
+    }
+    for (const auto& boot : {"SLUSP012.06", "SLUSP013.46", "SLUS_005.94"}) {
+        const std::string serial = std::string(boot) == "SLUSP012.06" ? "SLUS-01206"
+            : std::string(boot) == "SLUSP013.46" ? "SLUS-01346" : "SLUS-00594";
+        for (bool raw : {false,true}) {
+            auto image=root/(raw?"disc.bin":"disc.iso");fixture(image,raw,boot);
+            auto id=PSXRecompV4::identify_disc(image,serial,0,false,false);
+            if (id.detected_serial!=serial || id.region!="NTSC-U" || !id.serial_matches) {
+                std::fprintf(stderr,"FAIL: boot serial %s -> %s, region %s\n",boot,id.detected_serial.c_str(),id.region.c_str());
+                return 1;
+            }
+        }
+    }
+    netplay_rule();broken_chd(root);
+    fs::remove(root/"disc.iso");fs::remove(root/"disc.bin");fs::remove(root);
+}

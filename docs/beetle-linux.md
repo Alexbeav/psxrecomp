@@ -16,15 +16,20 @@ Pin the checkout to the last compatible commit — the same base
 git clone https://github.com/libretro/beetle-psx-libretro.git beetle-psx
 cd beetle-psx
 git checkout 5759277b          # "audit pass" — last C++-tree base we target
-patch -p1 < ../docs/beetle_wtrace_hook.patch
-patch -p1 < ../docs/beetle_sio_trace_hook.patch
-patch -p1 < ../docs/beetle_cdcmd_trace_hook.patch
-# cdcmd re-inserts the wtrace globals + typedefs — drop the duplicate block
-# in libretro.cpp / mednafen/psx/psx.h if the build errors on redefinition.
-# Also needed (not yet in docs/*.patch): rtrace/irq callbacks, guest-cycle
-# accumulator, PS_CDC::PSXRecomp_GetDecodeVolume, cdc/dma irq peeks. Apply
-# from a prior local beetle-psx tree or re-land those hooks by hand.
+for p in wtrace_hook sio_trace_hook cdcmd_trace_hook rtrace_irq_hook \
+         guest_cycles_hook cdc_dma_peek_hook spu_event_hook; do
+    git apply ../docs/beetle_$p.patch    # in this order; each builds on the last
+done
 ```
+
+Every hook `beetle_libretro.cpp` and `beetle_debug_server.c` link against is
+now in `docs/beetle_*.patch` (added 2026-09-29): the rtrace/IRQ callbacks, the
+guest-cycle clock and the per-instruction PC hook behind `cyc_watch`, the
+CDC/DMA IRQ peeks, `PS_CDC::PSXRecomp_GetDecodeVolume` and the SPU event
+calls. `beetle_cdcmd_trace_hook.patch` is now a diff on top of the wtrace and
+SIO patches, so there is no duplicate block to remove. `beetle-macos.md` has a
+table of what each patch adds. The set was verified from a fresh clone on
+macOS; this Linux recipe has not been re-run with it.
 
 `beetle_cdcmd_trace_hook.patch` adds a CD-command trace callback (fires per
 command dispatch in cdc.cpp) exposed as the `cdrom_cmd_dump` / `cdrom_cmd_reset`
@@ -43,16 +48,26 @@ make platform=unix STATIC_LINKING=1 HAVE_LIGHTREC=0 -j"$(nproc)"
 cp mednafen_psx_libretro.so libmednafen_psx.a
 
 cd ../runtime
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF -DPSX_DEBUG_TOOLS=ON
+# Current master's runtime configure also needs the lib/recomp-net and
+# lib/retcomm-rbengine submodules (git submodule update --init ..., or
+# -DPSX_REWIND=OFF) and recompiled BIOS C. psx-beetle links no recompiled
+# code, so -DPSXRECOMP_ALLOW_NO_BIOS=ON skips the BIOS check
+# (beetle-macos.md, step 3).
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF -DPSX_DEBUG_TOOLS=ON \
+      -DPSXRECOMP_ALLOW_NO_BIOS=ON
 ninja -C build psx-beetle
 
 # Run (SDL window; use software renderer if GL context is flaky).
 # Beetle looks for lowercase scph5501.bin in the BIOS directory (SHA1
 # 0555C6FA… — SCPH-5501). Symlink or copy next to SCPH1001.BIN.
-# Default debug port is 4380 (override with --port).
+# psxrecomp's bios/openbios.bin works under that name too; see
+# beetle-macos.md ("BIOS") for the silent fallback to Beetle's own OpenBIOS.
+# Default debug port is 4382 (override with --port).
 SDL_RENDER_DRIVER=software ./runtime/build/psx-beetle ../bios/SCPH1001.BIN --disc <game.cue> --port 4380
 
-# Headless (if xvfb is installed):
+# Headless: SDL's dummy video driver needs no X server.
+# SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software ./runtime/build/psx-beetle ...
+# Or, if xvfb is installed:
 # xvfb-run -a ./runtime/build/psx-beetle ../bios/SCPH1001.BIN --disc <game.cue>
 ```
 

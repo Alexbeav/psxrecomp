@@ -36,6 +36,39 @@ CAP_NAME = "overlay_captures.json"
 CACHE_SUB = "cache"
 EVIDENCE_FIELDS = ("executed_pcs", "dispatch_entry_pcs",
                    "static_dispatch_entry_pcs", "function_entry_pcs", "seeds")
+# Capture schema v3 (docs/SEGMENT_AWARE_CODE.md §5.7): the segments each
+# dispatch entry entered through, {"kuseg": [...], "kseg0": [...],
+# "kseg1": [...]}, each PC spelled in its segment. A record without it is
+# KSEG0 only.
+SEGMENT_FIELD = "dispatch_entry_segments"
+SEGMENT_BASES = {"kuseg": 0x00000000, "kseg0": 0x80000000, "kseg1": 0xA0000000}
+
+
+def _explicit_segments(record):
+    """The record's dispatch segments with the v2 default made explicit:
+    a dispatch entry that no segment list names is a KSEG0 entry."""
+    out = {name: set() for name in SEGMENT_BASES}
+    labelled = set()
+    for name, pcs in (record.get(SEGMENT_FIELD) or {}).items():
+        for pc in pcs or []:
+            out.setdefault(name, set()).add(pc)
+            labelled.add(_address(pc, SEGMENT_FIELD) & 0x1FFFFFFF)
+    for pc in record.get("dispatch_entry_pcs", []) or []:
+        phys = _address(pc, "dispatch_entry_pcs") & 0x1FFFFFFF
+        if phys not in labelled:
+            out["kseg0"].add("0x%08X" % (0x80000000 | phys))
+    return out
+
+
+def _union_segments(target, record):
+    """Fold `record`'s segments into `target` (call before unioning
+    dispatch_entry_pcs). Only when either side carries segments: merging v2
+    records keeps them v2, and a v2 side's entries stay KSEG0 entries."""
+    if SEGMENT_FIELD not in target and SEGMENT_FIELD not in record:
+        return
+    a, b = _explicit_segments(target), _explicit_segments(record)
+    target[SEGMENT_FIELD] = {name: sorted(a.get(name, set()) | b.get(name, set()))
+                             for name in SEGMENT_BASES}
 
 def _variant_key(region):
     b = region.get("bytes_b64", "") or ""
@@ -68,6 +101,7 @@ def _load_list(path):
                 index[k] = dict(r)
             else:
                 tgt = index[k]
+                _union_segments(tgt, r)
                 for fld in ("executed_pcs", "dispatch_entry_pcs",
                             "function_entry_pcs", "seeds"):
                     tgt[fld] = sorted(set(tgt.get(fld, [])) |
@@ -209,7 +243,7 @@ def _compact_region(region, drop_invalid_evidence=False):
         run_hi = min(phys_hi, ((previous + 1) << 12) + 4)
         compact = {k: v for k, v in region.items()
                    if k not in EVIDENCE_FIELDS and
-                      k not in ("load_addr", "size", "bytes_b64")}
+                      k not in ("load_addr", "size", "bytes_b64", SEGMENT_FIELD)}
         compact["load_addr"] = "0x%08X" % (load + run_lo - phys_lo)
         compact["size"] = run_hi - run_lo
         compact["bytes_b64"] = base64.b64encode(
@@ -217,6 +251,11 @@ def _compact_region(region, drop_invalid_evidence=False):
         for field in EVIDENCE_FIELDS:
             compact[field] = sorted({text for phys, text in parsed[field]
                                      if run_lo <= phys < run_hi})
+        if isinstance(region.get(SEGMENT_FIELD), dict):
+            compact[SEGMENT_FIELD] = {
+                name: sorted(pc for pc in pcs or []
+                             if run_lo <= (_address(pc, SEGMENT_FIELD) & 0x7FFFFF) < run_hi)
+                for name, pcs in region[SEGMENT_FIELD].items()}
         runs.append(compact)
         if page is None:
             break
@@ -244,6 +283,7 @@ def compact_capture_manifest(source, output=None, drop_invalid_evidence=False):
                 index[key] = record
                 continue
             target = index[key]
+            _union_segments(target, record)
             for field in EVIDENCE_FIELDS:
                 target[field] = sorted(set(target.get(field, [])) |
                                        set(record.get(field, [])))
@@ -511,6 +551,7 @@ def merge_capture_regions(vault_json, src):
                 new_pcs += len(r.get("executed_pcs", []))
             else:
                 tgt = index[k]
+                _union_segments(tgt, r)
                 for fld in ("executed_pcs", "dispatch_entry_pcs",
                             "static_dispatch_entry_pcs",
                             "function_entry_pcs", "seeds"):

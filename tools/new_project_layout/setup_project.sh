@@ -9,7 +9,7 @@
 #   --stage-disc          Copy full cue+bins into repo disc/ (large; optional)
 #   --no-stage-disc       Default: probe in place, extract boot EXE only
 #   --psxrecomp-ref / --recomp-ui-ref / --recomp-net-ref / URLs
-#   --github-owner <org>  README download-badge owner (default TechnicallyComputers)
+#   --github-owner <org>  README download-badge owner (default RetroPortingToolKit)
 #   --github-repo <name>  README download-badge repo (default project name)
 #
 # Everything else is prompted on a TTY (or passed via flags / --yes defaults):
@@ -41,6 +41,7 @@ TEMPLATE_DIR="$SCRIPT_DIR/templates"
 PROBE_DISC="$SCRIPT_DIR/probe_disc.py"
 FILL_TOKENS="$SCRIPT_DIR/fill_tokens.py"
 FETCH_BOXART="$SCRIPT_DIR/fetch_boxart.py"
+WRITE_RECOMP_JSON="$SCRIPT_DIR/write_recomp_json.py"
 
 NAME=""
 DISC=""
@@ -75,7 +76,7 @@ PSXRECOMP_REF="master"
 RECOMP_UI_REF="master"
 RECOMP_NET_REF="${RECOMP_NET_REF:-}"
 PSXRECOMP_URL="${PSXRECOMP_URL:-https://github.com/mstan/psxrecomp.git}"
-RECOMP_UI_URL="${RECOMP_UI_URL:-https://github.com/mstan/recomp-ui.git}"
+RECOMP_UI_URL="${RECOMP_UI_URL:-https://github.com/RetroPortingToolKit/recomp-ui.git}"
 
 # Track whether bools were set on the CLI (so prompts can skip).
 SET_RECOMP_UI=0
@@ -272,10 +273,10 @@ fi
 
 if [ -z "$GITHUB_OWNER" ]; then
     if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
-        GITHUB_OWNER=TechnicallyComputers
+        GITHUB_OWNER=RetroPortingToolKit
     else
         prompt_line "GitHub owner / org (README download badges)" GITHUB_OWNER \
-            "TechnicallyComputers"
+            "RetroPortingToolKit"
     fi
 fi
 if [ -z "$GITHUB_REPO" ]; then
@@ -341,8 +342,8 @@ if [ "$ENABLE_RECOMP_UI" -eq 0 ]; then
     echo "  (recomp-ui declined — skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
 else
     if [ "$SET_WIZARD" -eq 0 ]; then
-        # Default ON: setup-host CI zips need the wizard (FORCE_SETUP_HOST
-        # without PSX_SETUP_WIZARD opens no first-run UI).
+        # Default ON: the wizard is the first-run disc picker of the shipped
+        # (compiled) game.
         if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
             ENABLE_WIZARD=1
         else
@@ -387,14 +388,6 @@ if [ "$SET_CI" -eq 0 ]; then
     fi
 fi
 
-# Setup-host release CI needs PSX_SETUP_WIZARD (FORCE_SETUP_HOST alone is not enough).
-if [ "${ENABLE_CI:-0}" -eq 1 ] && [ "${ENABLE_RECOMP_UI:-0}" -eq 1 ] &&
-   [ "${ENABLE_WIZARD:-0}" -eq 0 ]; then
-    echo "error: release CI requires the first-run setup wizard." >&2
-    echo "  Pass --enable-wizard (or omit --no-wizard)." >&2
-    exit 1
-fi
-
 if [ "$SET_BOXART" -eq 0 ]; then
     if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
         FETCH_BOXART_FLAG=0
@@ -407,7 +400,7 @@ if [ "$SET_GENERATE" -eq 0 ]; then
     if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
         DO_GENERATE=0
     else
-        prompt_yn "Run Generate now (emitters + OpenBIOS + game C)?" DO_GENERATE 0
+        prompt_yn "Run Generate now (emitters + OpenBIOS + game C; generated/ is committed for release CI)?" DO_GENERATE 0
     fi
 fi
 
@@ -512,7 +505,7 @@ fi
 
 if [ "$ENABLE_NETPLAY" -eq 1 ]; then
     # PSX_NETPLAY defaults RNET_ENABLE_ICE=ON; recomp-net FetchContents
-    # libjuice via pinned URL (not git) so RetComM AppImage builds configure.
+    # libjuice via pinned URL (not git) so Retro AppImage builds configure.
     printf '%s\n' \
 'if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
     set(PSX_NETPLAY ON CACHE BOOL
@@ -620,7 +613,7 @@ chmod +x "$ROOT/tools/sync_symbols.py"
 if [ -f "$TEMPLATE_DIR/raid-discord.png" ]; then
     cp "$TEMPLATE_DIR/raid-discord.png" "$ROOT/.github/raid-discord.png"
 fi
-# Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
+# Empty mod catalog tree (build stages mods/preloaded/packages → <exe>/mods/bundled).
 cat > "$ROOT/mods/preloaded/README.md" <<'EOF'
 # Preloaded mods
 
@@ -632,9 +625,15 @@ packages/<package-id>/<version>/
   …
 ```
 
-Build wiring copies `mods/preloaded` next to the game executable as `mods/`.
-Install player `.psxmod` archives through the launcher Mods manager instead of
-committing them here. See `psxrecomp/docs/MOD_PACKAGES.md`.
+Build wiring copies `mods/preloaded/packages` next to the game executable as
+`mods/bundled/`. That tree is build output: every build wipes and re-stages it,
+so nothing you place there by hand survives.
+
+Player-installed `.psxmod` archives live in `mods/installed/`, which the
+launcher owns and no build ever touches. Install them through the launcher Mods
+manager rather than committing them here.
+
+See `psxrecomp/docs/MOD_PACKAGES.md`.
 EOF
 : > "$ROOT/mods/preloaded/packages/.gitkeep"
 
@@ -645,7 +644,7 @@ if [ "$ENABLE_RECOMP_UI" -eq 1 ]; then
 fi
 git submodule update --init --recursive
 
-# RetComM-themed default app icon (Windows .ico + PNG for packaging).
+# Retro-themed default app icon (Windows .ico + PNG for packaging).
 if [ -d psxrecomp/assets ]; then
     mkdir -p "$ROOT/assets"
     for _icon in psxrecomp.svg psxrecomp.png psxrecomp.ico; do
@@ -699,14 +698,19 @@ if [ "$ENABLE_NETPLAY" -eq 1 ] && [ ! -f psxrecomp/lib/recomp-net/CMakeLists.txt
 fi
 
 echo "== Packager stub =="
-fill_template "$TEMPLATE_DIR/package_setup_release.sh.in" \
-    "$ROOT/scripts/package_setup_release.sh"
-chmod +x "$ROOT/scripts/package_setup_release.sh"
+fill_template "$TEMPLATE_DIR/package_release.sh.in" \
+    "$ROOT/scripts/package_release.sh"
+fill_template "$TEMPLATE_DIR/package_prebuilt_release.sh.in" "$ROOT/scripts/package_prebuilt_release.sh"
+fill_template "$TEMPLATE_DIR/release.toml.in" "$ROOT/packaging/release.toml"
+fill_template "$TEMPLATE_DIR/START_HERE.txt.in" "$ROOT/packaging/release/START_HERE.txt"
+fill_template "$TEMPLATE_DIR/AppRun.in" "$ROOT/packaging/linux/AppRun"
+fill_template "$TEMPLATE_DIR/app.desktop.in" "$ROOT/packaging/linux/$ZIP_PREFIX.desktop"
+chmod +x "$ROOT/scripts/package_release.sh" "$ROOT/scripts/package_prebuilt_release.sh" "$ROOT/packaging/linux/AppRun"
 
 CI_WORKFLOW_OK=0
 if [ "$ENABLE_CI" -eq 1 ]; then
     echo "== CI release workflow =="
-    WF_SRC="$ROOT/psxrecomp/docs/ci/templates/setup-release.yml"
+    WF_SRC="$ROOT/psxrecomp/docs/ci/templates/game-release.yml"
     if [ -f "$WF_SRC" ]; then
         mkdir -p "$ROOT/.github/workflows"
         python3 "$FILL_TOKENS" "$WF_SRC" "$ROOT/.github/workflows/release.yml" \
@@ -828,6 +832,15 @@ print(m.group(1) if m else "")
         ;;
 esac
 
+# Community metadata (https://recomp.fyi/spec) — serial from the probe if it ran.
+echo "== Writing .recomp.json =="
+python3 "$WRITE_RECOMP_JSON" "$ROOT/.recomp.json" \
+    --game "$GAME_NAME" \
+    --project "$NAME" \
+    --region "$REGION" \
+    --probe-json "$ROOT/disc_probe.json" \
+    || echo "warning: .recomp.json not written" >&2
+
 if [ "$FETCH_BOXART_FLAG" -eq 1 ]; then
     echo "== Fetching libretro boxart =="
     CUE_HINT="${DISC_BASENAME:-$GAME_NAME}"
@@ -865,6 +878,9 @@ if [ -f "$ROOT/catalog_identity.json" ]; then
 fi
 if [ -f "$ROOT/disc_probe.json" ]; then
     git add disc_probe.json || true
+fi
+if [ -f "$ROOT/.recomp.json" ]; then
+    git add .recomp.json || true
 fi
 if [ "$HAS_BOXART" -eq 1 ]; then
     git add launcher_assets/img/boxart.tga launcher_assets/img/boxart.png launcher_assets/img/BOXART_SOURCE.txt || true
@@ -945,7 +961,15 @@ if [ "$DO_GENERATE" -eq 1 ]; then
         python3 psxrecomp/psxrecomp_cli.py generate "$@"
     ) && GENERATED_OK=1
     if [ "$GENERATED_OK" -eq 1 ]; then
-        echo "  generate OK (generated/ is gitignored — not committed)"
+        # Release CI builds the compiled game from this tree, so it is part
+        # of the repo, not a local by-product.
+        if git add generated 2>/dev/null && \
+           git -c user.email=setup@localhost -c user.name=setup \
+               commit -q -m "Add generated game C" 2>/dev/null; then
+            echo "  generate OK (generated/ committed — release CI builds from it)"
+        else
+            echo "  generate OK — commit generated/ before tagging a release: git add generated"
+        fi
     else
         echo "warning: generate failed — fix seeds/disc and re-run generate by hand." >&2
         DO_BUILD=0
@@ -1067,17 +1091,18 @@ elif [ "$GENERATED_OK" -eq 1 ]; then
 
        $BUILD_HINT"
 else
-    STEP2="Build emitters, Generate, then playable runtime:
+    STEP2="Build emitters, Generate (and commit it — release CI builds from generated/), then playable runtime:
 
        ./psxrecomp/tools/ci/build_emitters.sh
        python3 psxrecomp/psxrecomp_cli.py generate \\
          --config game.toml --project-root . --disc \"$GEN_DISC_HINT\"
+       git add generated && git commit -m 'Add generated game C'
        $BUILD_HINT"
 fi
 
 CI_NOTE="CI workflow not installed (declined)."
 if [ "$ENABLE_CI" -eq 1 ] && [ "$CI_WORKFLOW_OK" -eq 1 ]; then
-    CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; submodule gitlinks pin the build)."
+    CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; builds the committed generated/ C into the shipped game; submodule gitlinks pin the build)."
     if [ "$GITHUB_PUSHED" -eq 1 ]; then
         CI_NOTE="$CI_NOTE Pushed — open Actions → Release builds (workflow_dispatch)."
     fi

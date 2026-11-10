@@ -1,0 +1,642 @@
+/* Resident control-flow-patch ownership harness.
+ *
+ * Links the real overlay loader and the real memory.c store path / text guard
+ * against a shard that tools/compile_overlays.py built from the SF2 17e9bbaa0
+ * fixture: resident boot text at 0x80010000 whose JALR at 0x80010008 is
+ * patched to NOP. Device and MMIO paths are not reachable from these stores
+ * and abort if touched.
+ *
+ * Every step prints one line; main() returns non-zero on the first ownership
+ * that differs from the expected table.
+ */
+#define PSX_OVERLAY_DLL_BUILD 1
+#include "overlay_loader.h"
+#undef PSX_OVERLAY_DLL_BUILD
+
+#include "card_data_writes.h"
+#include "cdrom.h"
+#include "crash_trace.h"
+#include "data_shards.h"
+#include "debug_server.h"
+#include "dma.h"
+#include "fntrace.h"
+#include "gpu.h"
+#include "render_pass.h"
+#include "render_pass_plan.h"
+#include "kernel_patch_ranges.h"
+#include "lockstep.h"
+#include "mdec.h"
+#include "parity_trace.h"
+#include "psx_cycles.h"
+#include "dirty_ram_interp.h"
+#include "interp_report.h"
+#include "psx_bios_image.h"
+#include "psx_icache.h"
+#include "inactive_icache_seams.h"
+#include "sio.h"
+#include "source_gpu_runtime.h"
+#include "spu.h"
+#include "timers.h"
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define JALR_T1_T0 0x01204009u
+#define NOP 0x00000000u
+#define THIRD_WORD 0x24030007u   /* addiu v1, zero, 7: neither the resident word nor the patch */
+#define FOURTH_WORD 0x24030009u  /* addiu v1, zero, 9: the second cached unit's value */
+#define RA_SENTINEL 0x80020000u
+
+static void unreachable(const char *what) {
+    fprintf(stderr, "unexpected device path: %s\n", what);
+    abort();
+}
+
+/* ---- memory.c environment ---------------------------------------------- */
+uint32_t g_overlay_region_floor = 0x00010800u;
+uint32_t g_text_image_lo = 0x00010000u;
+uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS];
+uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS];
+uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS];
+int g_dma_exec_depth;
+int g_dma_cur_ch = -1;
+uint32_t g_dma_cur_madr, g_dma_cur_bcr, g_dma_initiator_pc;
+volatile int g_ds_recording;
+int g_ls_mode, g_ls_replay_active, g_ls_suppress_record;
+int g_ram_read_watch_active;
+CPUState *debug_cpu_ptr;
+PsxBiosImageInfo psx_bios_image;
+const PsxKernelBody *psx_bios_kernel_bodies;
+uint32_t psx_bios_kernel_body_count;
+const PsxKernelPatchRange *psx_bios_kernel_patch_ranges;
+uint32_t psx_bios_kernel_patch_range_count;
+
+int psx_kernel_patch_cmp(const PsxKernelPatchRange *ranges, uint32_t n,
+                         const uint8_t *ram, const uint8_t *rom,
+                         uint32_t ram_lo, uint32_t rom_off,
+                         uint32_t lo, uint32_t hi, uint64_t *skips_out) {
+    (void)ranges; (void)n; (void)ram; (void)rom; (void)ram_lo; (void)rom_off;
+    (void)lo; (void)hi; (void)skips_out;
+    unreachable("kernel patch compare");
+    return 0;
+}
+int psx_kernel_patch_ends_at(const PsxKernelPatchRange *ranges, uint32_t n,
+                             uint32_t phys) {
+    (void)ranges; (void)n; (void)phys; return 0;
+}
+int card_data_writes_check(uint32_t phys, uint32_t value, uint8_t width) {
+    (void)phys; (void)value; (void)width; return 0;
+}
+void debug_server_trace_mmio_read(uint32_t addr, uint32_t val, uint8_t width) {
+    (void)addr; (void)val; (void)width;
+}
+void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width) {
+    (void)addr; (void)val; (void)width;
+}
+void debug_server_trace_ram_read_watch(uint32_t phys, uint32_t val) {
+    (void)phys; (void)val;
+}
+void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
+                                    uint32_t new_val, uint8_t width) {
+    (void)phys; (void)old_val; (void)new_val; (void)width;
+}
+void parity_trace_note_write(uint32_t addr, uint32_t width, uint32_t pc) {
+    (void)addr; (void)width; (void)pc;
+}
+int fntrace_is_game_started(void) { return 1; }
+int source_gpu_runtime_active(void) { return 0; }
+void source_gpu_runtime_latch_bltz(uint32_t pc, int taken) {
+    (void)pc; (void)taken; unreachable("compiled BLTZ latch");
+}
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc,
+                    int in_delay_slot) {
+    (void)cpu; (void)code; (void)pc; (void)in_delay_slot;
+    unreachable("compiled guest BREAK");
+}
+void ds_note_dma_write(void) {}
+void ds_note_read(uint32_t addr, uint32_t size) { (void)addr; (void)size; }
+void ds_note_write(uint32_t addr, uint32_t size) { (void)addr; (void)size; }
+uint32_t ls_read_hook(uint32_t addr, int size, uint32_t real_val) {
+    (void)addr; (void)size; return real_val;
+}
+void ls_write_hook(uint32_t addr, int size, uint32_t val) {
+    (void)addr; (void)size; (void)val;
+}
+void psx_icache_isolated_store(uint32_t addr, uint32_t cache_control) {
+    (void)addr; (void)cache_control; unreachable("isolated cache store");
+}
+void psx_irq_refresh_cause_ip2(void) {}
+void psx_devices_mmio_sync(void) { unreachable("mmio sync"); }
+uint32_t cdrom_read(uint32_t a) { (void)a; unreachable("cdrom"); return 0; }
+void cdrom_write(uint32_t a, uint32_t v) { (void)a; (void)v; unreachable("cdrom"); }
+uint32_t dma_read(uint32_t a) { (void)a; unreachable("dma"); return 0; }
+void dma_write(uint32_t a, uint32_t v) { (void)a; (void)v; unreachable("dma"); }
+void dma_write_masked(uint32_t a, uint32_t v, uint32_t m) {
+    (void)a; (void)v; (void)m; unreachable("dma");
+}
+uint32_t gpu_read_gpuread(void) { unreachable("gpu"); return 0; }
+uint32_t gpu_read_gpustat(void) { unreachable("gpu"); return 0; }
+void gpu_set_gp0_source(uint32_t a) { (void)a; }
+void gpu_write_gp0(uint32_t v) { (void)v; unreachable("gpu"); }
+void gpu_write_gp1(uint32_t v) { (void)v; unreachable("gpu"); }
+uint32_t mdec_read(uint32_t a) { (void)a; unreachable("mdec"); return 0; }
+void mdec_write(uint32_t a, uint32_t v) { (void)a; (void)v; unreachable("mdec"); }
+void sio_card_handoff_on_imask(uint32_t o, uint32_t n) { (void)o; (void)n; }
+uint32_t sio_read(uint32_t a) { (void)a; unreachable("sio"); return 0; }
+void sio_tick(int c) { (void)c; }
+void sio_write(uint32_t a, uint32_t v) { (void)a; (void)v; unreachable("sio"); }
+uint32_t spu_read(uint32_t a) { (void)a; unreachable("spu"); return 0; }
+void spu_write(uint32_t a, uint32_t v) { (void)a; (void)v; unreachable("spu"); }
+uint32_t timers_read(uint32_t a) { (void)a; unreachable("timers"); return 0; }
+void timers_write(uint32_t a, uint32_t v) { (void)a; (void)v; unreachable("timers"); }
+int timers_source_hblank_counter_read(uint32_t a) { (void)a; return 0; }
+int timers_source_raster_enabled(void) { return 0; }
+
+/* ---- overlay_loader.c environment (as overlay_pair_dedup_harness.c) ----- */
+uint32_t g_debug_current_func_addr;
+/* This unit and the runtime sources linked into it are built with
+ * PSX_OVERLAY_DLL_BUILD, where cpu_state.h maps g_debug_last_store_pc onto
+ * *g_psx_last_store_pc_p (ABI v24). Give the pointer real storage. */
+static uint32_t s_host_store_pc;
+uint32_t *g_psx_last_store_pc_p = &s_host_store_pc;
+int g_exec_phase;
+int g_idle_note_suppress;
+int g_psx_call_bail;
+uint64_t g_psx_bail_first, g_psx_bail_resolved;
+uint64_t s_frame_count;
+/* memory.c bumps the device-state generation on every MMIO write. Its
+ * definition lives in psx_cycles.c, which cannot be compiled into this
+ * unit (its header takes the overlay-DLL branch here). MMIO is unreachable
+ * from the stores under test, so the counter is a fixture global. */
+uint64_t g_psx_device_gen;
+
+void ds_init(const char *cache_dir, const char *game_id) {
+    (void)cache_dir; (void)game_id;
+}
+int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
+    (void)cpu; (void)addr; (void)stop; return 0;
+}
+void dirty_ram_xprobe_call_note(CPUState *cpu, uint32_t target,
+                                uint32_t ra, uint8_t phase) {
+    (void)cpu; (void)target; (void)ra; (void)phase;
+}
+void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t ra) {
+    (void)cpu; (void)addr; (void)ra;
+}
+void psx_check_interrupts(CPUState *cpu) { (void)cpu; }
+void psx_check_interrupts_at(CPUState *cpu, uint32_t pc) { (void)cpu; (void)pc; }
+int psx_interrupt_delivery_needed(const CPUState *cpu) { (void)cpu; return 0; }
+int psx_get_in_exception(void) { return 0; }
+uint64_t psx_exception_setjmp_epoch(void) { return 0; }
+void psx_restore_state_escape(void) {}
+void psx_rfe_mark_escape(void) {}
+int psx_syscall(CPUState *cpu, uint32_t code) { (void)cpu; (void)code; return 0; }
+void psx_unknown_dispatch(CPUState *cpu, uint32_t addr, uint32_t phys) {
+    (void)cpu; (void)addr; (void)phys;
+}
+void psx_advance_cycles(uint32_t cycles) { (void)cycles; }
+uint64_t psx_get_cycle_count(void) { return 0; }
+int psx_cycle_replay_begin(uint64_t cycle) { (void)cycle; return 1; }
+uint64_t psx_cycle_replay_end(void) { return 0; }
+uint32_t psx_cyc_load_word(CPUState *cpu, uint32_t addr, uint32_t rt,
+                           uint32_t mask) {
+    (void)cpu; (void)addr; (void)rt; (void)mask; return 0;
+}
+uint16_t psx_cyc_load_half(CPUState *cpu, uint32_t addr, uint32_t rt,
+                           uint32_t mask) {
+    (void)cpu; (void)addr; (void)rt; (void)mask; return 0;
+}
+int psx_icache_shadow_record_begin(void) { return 1; }
+int psx_icache_shadow_replay_begin(void) { return 1; }
+void psx_icache_shadow_replay_end(void) {}
+void psx_icache_shadow_abort(void) {}
+void psx_cpu_step_boundary_fn(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address;
+}
+int psx_cpu_step_boundary_enabled(int include_replay) {
+    (void)include_replay; return 0;
+}
+void psx_fatal_halt(const char *reason) {
+    fprintf(stderr, "psx_fatal_halt: %s\n", reason);
+    abort();
+}
+void psx_icache_fetch(CPUState *cpu, uint32_t addr) { (void)cpu; (void)addr; }
+void psx_icache_fetch_fn(CPUState *cpu, uint32_t addr) { psx_icache_fetch(cpu, addr); }
+void psx_muldiv_set(CPUState *cpu, uint32_t latency) { (void)cpu; (void)latency; }
+void psx_muldiv_stall(CPUState *cpu) { (void)cpu; }
+uint32_t psx_mult_latency_s(uint32_t rs) { (void)rs; return 1; }
+uint32_t psx_mult_latency_u(uint32_t rs) { (void)rs; return 1; }
+void psx_gte_stall(CPUState *cpu) { (void)cpu; }
+void psx_gte_read(CPUState *cpu, uint32_t rt) { (void)cpu; (void)rt; }
+int psx_slice_block(CPUState *cpu, uint32_t addr, uint32_t cycles,
+                    int side_effects) {
+    (void)cpu; (void)addr; (void)cycles; (void)side_effects; return 0;
+}
+int psx_slice_block_impl(CPUState *cpu, uint32_t addr, uint32_t cycles,
+                         int side_effects) {
+    return psx_slice_block(cpu, addr, cycles, side_effects);
+}
+void gte_execute(CPUState *cpu, uint32_t cmd) { (void)cpu; (void)cmd; }
+uint32_t gte_read_data(CPUState *cpu, uint8_t reg) { (void)cpu; (void)reg; return 0; }
+uint32_t gte_read_ctrl(CPUState *cpu, uint8_t reg) { (void)cpu; (void)reg; return 0; }
+void gte_write_data(CPUState *cpu, uint8_t reg, uint32_t val) {
+    (void)cpu; (void)reg; (void)val;
+}
+void gte_write_ctrl(CPUState *cpu, uint8_t reg, uint32_t val) {
+    (void)cpu; (void)reg; (void)val;
+}
+int32_t psx_ws_plane_nx(int32_t nx) { return nx; }
+uint32_t psx_ws_xclip_bound(uint32_t vanilla) { return vanilla; }
+void gte_precision_store_word(uint32_t addr, uint8_t reg) { (void)addr; (void)reg; }
+void gte_precision_speculative_begin(void) {}
+void gte_precision_speculative_end(void) {}
+int gte_replay_side_effects_begin(void) { return 1; }
+void gte_replay_side_effects_end(void) {}
+int ls_shadow_record_begin(void) { return 1; }
+int ls_shadow_record_end(uint32_t *ops, int *exc) {
+    if (ops) *ops = 0;
+    if (exc) *exc = 0;
+    return 1;
+}
+int ls_shadow_replay_begin(void) { return 1; }
+int ls_shadow_replay_end(uint32_t *ops, int *kind, uint32_t *pc,
+                         uint32_t *addr, uint32_t *expected,
+                         uint32_t *actual) {
+    (void)ops; (void)kind; (void)pc; (void)addr; (void)expected; (void)actual;
+    return 1;
+}
+void ls_shadow_abort(void) {}
+int psx_ws_backdrop_x(int x) { return x; }
+int psx_ws_x_margin(void) { return 0; }
+void psx_ws_sprite_tag(CPUState *cpu) { (void)cpu; }
+uint32_t psx_ws_backdrop_value(uint32_t orig, int end, int cols) {
+    (void)end; (void)cols; return orig;
+}
+int32_t psx_ws_depth_bound(int32_t imm) { return imm; }
+int32_t psx_ws_player_x_bound(int32_t vanilla) { return vanilla; }
+int32_t psx_ws_screen_x_bound(int32_t vanilla) { return vanilla; }
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address; return 0;
+}
+int psx_netplay_is_resimulating(void) { return 0; }
+uint32_t psx_ws_angle_widen(uint32_t vanilla) { return vanilla; }
+uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
+    (void)forced; return vanilla;
+}
+uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
+                                  uint32_t object, int32_t x, int32_t z, int32_t y) {
+    (void)site; (void)object; (void)x; (void)z; (void)y; return vanilla;
+}
+void psx_pgxp_load(CPUState *cpu, uint32_t i, uint32_t a, uint32_t v) {
+    (void)cpu; (void)i; (void)a; (void)v;
+}
+void psx_pgxp_store(CPUState *cpu, uint32_t i, uint32_t a, uint32_t v) {
+    (void)cpu; (void)i; (void)a; (void)v;
+}
+void psx_pgxp_alu(CPUState *cpu, uint32_t i, uint32_t r, uint32_t s, uint32_t t) {
+    (void)cpu; (void)i; (void)r; (void)s; (void)t;
+}
+void psx_pgxp_muldiv(CPUState *cpu, uint32_t i, uint32_t h, uint32_t l,
+                     uint32_t s, uint32_t t) {
+    (void)cpu; (void)i; (void)h; (void)l; (void)s; (void)t;
+}
+void psx_pgxp_cop2(CPUState *cpu, uint32_t i, uint32_t v, uint32_t a) {
+    (void)cpu; (void)i; (void)v; (void)a;
+}
+
+/* ---- The static resident owner, as main_psx.cpp emits it --------------- */
+/* Resident function 0x80010008 (JALR t1 / addiu v0 / jr ra / delay) and its
+ * post-call continuation 0x80010010 share one exact CFG range. */
+static const uint32_t k_resident_ranges[] = { 0x80010008u, 16u };
+
+int psx_game_text_native_ok(uint32_t addr) {
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (phys != 0x00010008u && phys != 0x00010010u) return 0;
+    return dirty_ram_text_native_ok_ranges_from(k_resident_ranges, 1u, addr);
+}
+
+/* ---- Scenario ------------------------------------------------------------ */
+extern int g_psx_cps_mode;
+extern uint8_t *memory_get_ram_ptr(void);
+extern void overlay_loader_bad_entry_stats(uint32_t *owner, uint32_t *pc,
+                                           uint64_t *count);
+extern void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
+                                          uint32_t len);
+extern void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
+extern int overlay_loader_dispatch(CPUState *cpu, uint32_t addr);
+extern void psx_write_word(uint32_t addr, uint32_t val);
+
+static uint8_t s_ref[0x800];
+static int s_failures;
+
+typedef struct {
+    int static_ok;
+    int window;
+    int native;
+    int bad_entry;
+} Ownership;
+
+static Ownership observe(uint32_t pc) {
+    Ownership o;
+    uint64_t bad_before = 0, bad_after = 0;
+    uint32_t owner = 0, bad_pc = 0;
+    CPUState cpu;
+    memset(&cpu, 0, sizeof(cpu));
+    cpu.gpr[2] = 0xDEADu;
+    cpu.gpr[9] = 0x80030000u;
+    cpu.gpr[31] = RA_SENTINEL;
+    o.static_ok = psx_game_text_native_ok(pc);
+    o.window = overlay_cache_window_contains(pc & 0x1FFFFFFFu);
+    overlay_loader_bad_entry_stats(&owner, &bad_pc, &bad_before);
+    o.native = overlay_loader_dispatch(&cpu, pc);
+    overlay_loader_bad_entry_stats(&owner, &bad_pc, &bad_after);
+    o.bad_entry = bad_after != bad_before;
+    if (o.native && (cpu.pc != RA_SENTINEL || cpu.gpr[2] != 1u)) {
+        fprintf(stderr, "native run at 0x%08X returned pc=0x%08X v0=0x%X\n",
+                pc, cpu.pc, cpu.gpr[2]);
+        s_failures++;
+    }
+    return o;
+}
+
+static void step(const char *name, uint32_t pc, Ownership want) {
+    uint32_t word = memory_get_ram_ptr()[0x10008] |
+                    (uint32_t)memory_get_ram_ptr()[0x10009] << 8 |
+                    (uint32_t)memory_get_ram_ptr()[0x1000A] << 16 |
+                    (uint32_t)memory_get_ram_ptr()[0x1000B] << 24;
+    Ownership got = observe(pc);
+    int ok = got.static_ok == want.static_ok && got.window == want.window &&
+             got.native == want.native && got.bad_entry == want.bad_entry;
+    printf("%-34s pc=%08X word@10008=%08X static_native_ok=%d window=%d "
+           "shard_native=%d foreign_interior=%d registered=%d %s\n",
+           name, pc, word, got.static_ok, got.window, got.native,
+           got.bad_entry, overlay_loader_registered_count(),
+           ok ? "ok" : "UNEXPECTED");
+    if (!ok) s_failures++;
+}
+
+/* One dispatch without a line of its own: the shard must run native exactly when
+ * `want_native` says so. */
+static void expect_native(const char *what, uint32_t pc, int want_native) {
+    Ownership got = observe(pc);
+    if (got.native != want_native) {
+        printf("%-34s pc=%08X shard_native=%d, expected %d UNEXPECTED\n", what, pc, got.native, want_native);
+        s_failures++;
+    }
+}
+
+static void load_resident_image(void) {
+    static const uint32_t words[] = {
+        0x27BDFFF0u, 0x11111111u, JALR_T1_T0, 0x24020001u, 0x03E00008u, NOP,
+    };
+    for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+        s_ref[i * 4] = (uint8_t)words[i];
+        s_ref[i * 4 + 1] = (uint8_t)(words[i] >> 8);
+        s_ref[i * 4 + 2] = (uint8_t)(words[i] >> 16);
+        s_ref[i * 4 + 3] = (uint8_t)(words[i] >> 24);
+    }
+    memcpy(memory_get_ram_ptr() + 0x10000u, s_ref, sizeof(s_ref));
+    dirty_ram_register_text_image(0x10000u, s_ref, sizeof(s_ref));
+}
+
+/* ---- The bound on loads for rewritten text (PS1B-421) -------------------- */
+/* The cache holds two units for the entry 0x80010008: one built from the NOP
+ * patch and one from FOURTH_WORD. Both modes start from the resident image and
+ * patch it with CPU stores, so the page is modified text outside the capture
+ * window throughout. */
+static void print_load_counters(const char *when, uint64_t *loads_out,
+                                uint32_t *bound_pages_out, uint32_t *limit_out) {
+    uint64_t loads = 0, taken = 0, load_us = 0;
+    uint32_t backed = 0, backoff_limit = 0, bound_pages = 0, load_limit = 0;
+    overlay_loader_get_modified_text(&loads, &taken, &backed, &backoff_limit);
+    overlay_loader_get_modified_text_loads(&load_us, &bound_pages, &load_limit);
+    printf("%s: loads=%llu load_bound_pages=%u load_limit=%u taken_out=%llu\n",
+           when, (unsigned long long)loads, bound_pages, load_limit,
+           (unsigned long long)taken);
+    *loads_out = loads;
+    *bound_pages_out = bound_pages;
+    *limit_out = load_limit;
+}
+
+/* The limit leaves room: the second unit loads when its bytes arrive, and the
+ * first runs again when its bytes come back (Digimon World 2 loads two). */
+static void mode_two_units(void) {
+    uint64_t loads = 0;
+    uint32_t bound_pages = 0, limit = 0;
+    psx_write_word(0x80010008u, NOP);
+    step("two units: first value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    psx_write_word(0x80010008u, FOURTH_WORD);
+    step("two units: second value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    psx_write_word(0x80010008u, NOP);
+    step("two units: first value again", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("two units", &loads, &bound_pages, &limit);
+    if (loads != 2 || bound_pages != 0 || limit < 2) {
+        printf("two units: load counters UNEXPECTED\n");
+        s_failures++;
+    }
+}
+
+/* Run with PSX_OVERLAY_MODTEXT_LOAD_LIMIT=1. The first unit takes the page's
+ * one load. The second unit's bytes then stay with the interpreter, each such
+ * dispatch counts under the bound's reason, and the first unit still runs when
+ * its bytes come back. */
+static void mode_load_bound(void) {
+    extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+    uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
+    uint64_t loads = 0;
+    uint32_t bound_pages = 0, limit = 0;
+    psx_write_word(0x80010008u, NOP);
+    step("load bound: first value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    step("load bound: first value again", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("load bound, after the first unit", &loads, &bound_pages, &limit);
+    if (limit != 1 || loads != 1 || bound_pages != 1) {
+        printf("load bound: counters after the first unit UNEXPECTED\n");
+        s_failures++;
+    }
+    psx_write_word(0x80010008u, FOURTH_WORD);
+    step("load bound: second value", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("load bound: second value again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    overlay_loader_get_miss_reasons(above, kernel);
+    printf("load bound: %llu dispatches counted under modified_text_load_bound\n",
+           (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND]);
+    if (above[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND] != 2 || kernel[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND] != 0) {
+        printf("the load bound's miss reason UNEXPECTED\n");
+        s_failures++;
+    }
+    psx_write_word(0x80010008u, NOP);
+    step("load bound: first value back", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("load bound, at the end", &loads, &bound_pages, &limit);
+    if (loads != 1 || bound_pages != 1) {
+        printf("load bound: counters at the end UNEXPECTED\n");
+        s_failures++;
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "usage: %s <cache-root> <game-id> <config-hash> [two-units|load-bound]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 5 && strcmp(argv[4], "two-units") != 0 && strcmp(argv[4], "load-bound") != 0) {
+        fprintf(stderr, "unknown mode: %s\n", argv[4]);
+        return 2;
+    }
+    uint32_t config_hash = (uint32_t)strtoul(argv[3], NULL, 16);
+    load_resident_image();
+    overlay_loader_init(argv[1], argv[2], config_hash);
+    printf("loader: lazy_manifests=%d msg=%s\n",
+           overlay_loader_lazy_manifest_count(), overlay_loader_last_msg());
+    if (overlay_loader_lazy_manifest_count() < 1) {
+        fprintf(stderr, "the patched shard was not indexed\n");
+        return 1;
+    }
+    if (argc == 5) {
+        if (strcmp(argv[4], "two-units") == 0) mode_two_units();
+        else mode_load_bound();
+        if (s_failures) {
+            fprintf(stderr, "FAIL: %s: %d mismatch(es); loader: %s\n",
+                    argv[4], s_failures, overlay_loader_last_msg());
+            return 1;
+        }
+        printf("PASS: %s\n", argv[4]);
+        return 0;
+    }
+
+    /* 1. Pristine resident text: static code owns; the patched shard cannot. */
+    step("pristine", 0x80010008u, (Ownership){1, 0, 0, 0});
+
+    /* 2. Guest CPU store JALR->NOP (the game patching its own text). The page is
+     *    text_modified and not dirty, so it stays outside the capture window. The
+     *    loader's lazy load admits the exact entry and the shard runs native on
+     *    exact bytes, as for the load-path patch of step 3 (PS1B-421). The old
+     *    call-return PC is not an entry: the interpreter owns it, and under CPS it
+     *    fails closed as a foreign interior entry. */
+    psx_write_word(0x80010008u, NOP);
+    step("cpu-store patch: entry", 0x80010008u, (Ownership){0, 0, 1, 0});
+    step("cpu-store patch: old call return", 0x80010010u, (Ownership){0, 0, 0, 0});
+    g_psx_cps_mode = 1;
+    step("cpu-store patch: old return, cps", 0x80010010u, (Ownership){0, 0, 0, 1});
+    g_psx_cps_mode = 0;
+
+    /* 2a. A third value stored after the shard ran native: the shard is taken out
+     *     at the next dispatch and stays out; the patch bytes stored again
+     *     revalidate it. */
+    psx_write_word(0x80010008u, THIRD_WORD);
+    step("third value: entry", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("third value: entry again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    psx_write_word(0x80010008u, NOP);
+    step("cpu-store patch again: entry", 0x80010008u, (Ownership){0, 0, 1, 0});
+
+    /* 2b. A page that keeps changing. Each round stores the third value (the
+     *     shard is taken out) and the patch again (it revalidates), until the
+     *     page has had its limit of take-outs. From then on the patch bytes do
+     *     not bring the shard back: the page stays with the interpreter. */
+    {
+        uint64_t loads = 0, taken = 0;
+        uint32_t backed = 0, limit = 0;
+        int rounds = 0;
+        overlay_loader_get_modified_text(&loads, &taken, &backed, &limit);
+        printf("modified text before the rounds: loads=%llu taken_out=%llu backed_off_pages=%u limit=%u\n",
+               (unsigned long long)loads, (unsigned long long)taken, backed, limit);
+        if (loads != 1 || taken != 1 || backed != 0 || limit < 2) {
+            printf("modified text counters before the rounds UNEXPECTED\n");
+            s_failures++;
+        }
+        while (taken < limit && rounds < 1000) {
+            rounds++;
+            psx_write_word(0x80010008u, THIRD_WORD);
+            expect_native("round: third value", 0x80010008u, 0);
+            psx_write_word(0x80010008u, NOP);
+            overlay_loader_get_modified_text(&loads, &taken, &backed, &limit);
+            expect_native("round: patch again", 0x80010008u, taken < limit ? 1 : 0);
+        }
+        printf("modified text after %d rounds: loads=%llu taken_out=%llu backed_off_pages=%u limit=%u\n",
+               rounds, (unsigned long long)loads, (unsigned long long)taken, backed, limit);
+        if (taken != limit || backed != 1 || rounds != (int)limit - 1) {
+            printf("modified text counters after the rounds UNEXPECTED\n");
+            s_failures++;
+        }
+    }
+    step("backed off: patch bytes", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("backed off: patch bytes again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    /* Every dispatch a backed-off page costs is counted under its own reason:
+     * the last round's dispatch of the patch bytes and the two above. */
+    {
+        extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                    uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+        uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
+        overlay_loader_get_miss_reasons(above, kernel);
+        printf("backed off: %llu dispatches counted under modified_text_backoff\n",
+               (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_BACKOFF]);
+        if (above[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 3 || kernel[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 0) {
+            printf("the back-off's miss reason UNEXPECTED\n");
+            s_failures++;
+        }
+    }
+
+    /* 3. The same bytes delivered through a load path that marks the page
+     *    executable (CD DMA / data-shard publication). The page is dirty from
+     *    here on, so it is in the capture window and the back-off of 2b, which
+     *    is for pages outside it, no longer applies. */
+    dirty_ram_mark_executable_range(0x10000u, 0x18u);
+    step("loaded patch: entry", 0x80010008u, (Ownership){0, 1, 1, 0});
+    g_psx_cps_mode = 1;
+    step("loaded patch: old call return", 0x80010010u, (Ownership){0, 1, 0, 1});
+    g_psx_cps_mode = 0;
+
+    /* 4. Guest restores the JALR: static owns again, the shard must not run. */
+    psx_write_word(0x80010008u, JALR_T1_T0);
+    step("restored: entry", 0x80010008u, (Ownership){1, 1, 0, 0});
+
+    /* 5. Patch again after restore: the shard revalidates on exact bytes. */
+    psx_write_word(0x80010008u, NOP);
+    step("re-patched: entry", 0x80010008u, (Ownership){0, 1, 1, 0});
+
+    if (s_failures) {
+        fprintf(stderr, "FAIL: %d ownership mismatch(es); loader: %s\n",
+                s_failures, overlay_loader_last_msg());
+        return 1;
+    }
+    printf("PASS: resident control-flow patch ownership\n");
+    return 0;
+}
+
+
+/* Explicit inactive modern collaborators. RAM geometry and byte stores are
+ * linked from real production owners; no render pass, cache-isolated store,
+ * replay shadow or mod bank is selected by this finite ownership fixture. */
+uint32_t g_dirty_ram_dispatch_seg_bitmap[PSX_CODE_SEGMENT_COUNT][DIRTY_RAM_EXEC_BITMAP_WORDS];
+int g_psx_render_pass_active;
+int render_pass_mmio_read_allowed(uint32_t phys, uint32_t width) {
+    (void)phys; (void)width; unreachable("render pass MMIO"); return 0;
+}
+int render_pass_store_to(const RenderPassStoreTarget *t, uint32_t a, uint32_t v, uint32_t w) {
+    (void)t; (void)a; (void)v; (void)w; unreachable("render pass store"); return 0;
+}
+void psx_icache_isc_store(uint32_t biu, uint32_t addr, uint32_t value) {
+    (void)biu; (void)addr; (void)value; unreachable("isolated cache store");
+}
+void ls_shadow_record_unreplayable(void) { unreachable("shadow cache store"); }
+void pgxp_invalidate_word(uint32_t addr) { (void)addr; unreachable("PGXP cache store"); }
+void psx_cpu_charge(uint32_t cycles) { psx_advance_cycles(cycles); }
+int psx_ws_masked_reject(uint32_t flags, uint32_t mask) { return (flags & mask) != 0; }
+int psx_ws_nclip_branch(uint32_t pc, uint32_t word, int32_t mac0, int vanilla) {
+    (void)pc; (void)word; (void)mac0; return vanilla;
+}
+int32_t psx_ws_cull_scale(int32_t bound, int32_t half) { (void)half; return bound; }
+int32_t gte_nclip_exact_sign(int32_t mac0, uint32_t pc) {
+    (void)pc; return (mac0 > 0) - (mac0 < 0);
+}
+void psx_mod_instruction(CPUState *cpu, uint32_t pc, uint32_t word) {
+    (void)cpu; (void)pc; (void)word;
+}
+uint32_t psx_mod_memory_address(const CPUState *cpu, uint32_t pc, uint32_t word, uint32_t addr) {
+    (void)cpu; (void)pc; (void)word; return addr;
+}
+uint32_t psx_mod_immediate_select(uint32_t group) { (void)group; return 0; }
+int psx_mod_try_function_replacement(CPUState *cpu, uint32_t addr) {
+    (void)cpu; (void)addr; return 0;
+}

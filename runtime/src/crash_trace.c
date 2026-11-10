@@ -38,8 +38,11 @@
 #include <time.h>
 
 #include "cpu_state.h"
+#include "psx_memory.h"
 #include "psx_bss.h"
 #include "crash_trace.h"
+#include "start_refusal.h"
+#include "psx_segment_miss.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
 
@@ -53,7 +56,11 @@ static const char *kReportPath = "psx_last_run_report.json";
 #ifndef PSX_BUILD_REV
 #define PSX_BUILD_REV "unknown"
 #endif
+#ifdef PSX_BUILD_IMPLEMENTATIONS
+static const char *kBuildId = PSX_BUILD_REV " (" __DATE__ " " __TIME__ ") implementations=" PSX_BUILD_IMPLEMENTATIONS;
+#else
 static const char *kBuildId = PSX_BUILD_REV " (" __DATE__ " " __TIME__ ")";
+#endif
 
 /* CPU state pointer (set by debug server at init). */
 extern CPUState *debug_cpu_ptr;
@@ -82,6 +89,7 @@ extern void     overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidat
                                             uint32_t *last_write_addr,
                                             uint32_t *last_write_size,
                                             int *regions, uint32_t *revalidations);
+extern void overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp);
 extern int      psx_netplay_is_resimulating(void);
 
 /* Frame counter from debug_server.c (non-static). */
@@ -115,6 +123,7 @@ extern uint64_t crash_trace_unknown_seq_get(void);
 
 /* Dirty-RAM block log (defined in dirty_ram_interp.c). */
 #include "dirty_ram_interp.h"
+#include "interp_report.h"
 
 /* JSON helpers. Hand-rolled to avoid allocations on the SEH path. */
 
@@ -166,8 +175,9 @@ static int crash_peek_guest(uint32_t vaddr, uint8_t *dst, int len) {
         return len;
     }
     if (phys < 0x00800000u && g_psx_ram) {
-        uint32_t folded = phys & 0x1FFFFFu;
-        if (folded + (uint32_t)len > 0x200000u) len = (int)(0x200000u - folded);
+        uint32_t folded = psx_ram_canonical_offset(phys);
+        if (folded + (uint32_t)len > psx_ram_live_bytes())
+            len = (int)(psx_ram_live_bytes() - folded);
         if (len <= 0) return 0;
         memcpy(dst, g_psx_ram + folded, (size_t)len);
         return len;
@@ -225,6 +235,19 @@ static const char *s_exit_origin = "unknown";
 
 void psx_crash_trace_set_exit_origin(const char *origin) {
     if (origin) s_exit_origin = origin;
+}
+
+/* PS1B-400: the player's settings.toml as main() found it. The sentence is
+ * PSX_SETTINGS_BOOT_KEYS_NOTICE (crash_trace.h). */
+static int s_settings_file_format = 0;
+static int s_settings_current_format = 0;
+static int s_settings_boot_keys_ignored = 0;
+
+void psx_crash_trace_note_settings(int file_format, int current_format,
+                                   int boot_keys_ignored) {
+    s_settings_file_format = file_format;
+    s_settings_current_format = current_format;
+    s_settings_boot_keys_ignored = boot_keys_ignored ? 1 : 0;
 }
 
 /* ── Native call-stack snapshot ──────────────────────────────────────────
@@ -427,6 +450,169 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         g_dirty_ram_last_unsupported_entry_sp,
         g_dirty_ram_last_unsupported_insns);
 
+    {
+        /* Room for every byte written as a six-character escape. */
+        static char refusal[6 * (PSX_START_REFUSAL_KIND_CAP + PSX_START_REFUSAL_TITLE_CAP +
+                                 PSX_START_REFUSAL_TEXT_CAP) + 64];
+        static char rows[2 * 6 * PSX_START_LAUNCHER_ROW_CAP + 64];
+        if (psx_start_refusal_json(refusal, sizeof(refusal)) <= 0)
+            snprintf(refusal, sizeof(refusal), "null");
+        if (psx_start_launcher_status_json(rows, sizeof(rows)) <= 0)
+            snprintf(rows, sizeof(rows), "null");
+        append_str(buf, sizeof(buf), &pos, "  \"start_refused\": ");
+        append_str(buf, sizeof(buf), &pos, refusal);
+        append_str(buf, sizeof(buf), &pos, ",\n  \"launcher_status\": ");
+        append_str(buf, sizeof(buf), &pos, rows);
+        static char disc_warning[6 * PSX_START_REFUSAL_TEXT_CAP + 4];
+        if (psx_disc_warning_json(disc_warning, sizeof(disc_warning)) <= 0)
+            snprintf(disc_warning, sizeof(disc_warning), "null");
+        append_str(buf, sizeof(buf), &pos, ",\n  \"disc_warning\": ");
+        append_str(buf, sizeof(buf), &pos, disc_warning);
+        append_str(buf, sizeof(buf), &pos, ",\n");
+    }
+
+    /* PS1B-417: a ChangeThread that a game calls inside an exception handler
+     * switches threads at the call. `switches` counts the calls that named
+     * another block of the thread table, `same_thread` the calls that named
+     * the current thread, `not_taken` the calls that named another thread and
+     * were left as a return (a target outside the table, a nested delivery,
+     * the fiber bridge). Of the first switch: `first_epc` is where the thread
+     * was interrupted, `first_frame` the frame, `first_target` the block it
+     * named. A release start shows here whether its title uses this form. */
+    {
+        extern void psx_changethread_in_handler_stats(uint32_t out[6]);
+        uint32_t ct[6] = {0};
+        psx_changethread_in_handler_stats(ct);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"changethread_in_handler\": {\n"
+            "    \"switches\": %u,\n"
+            "    \"same_thread\": %u,\n"
+            "    \"not_taken\": %u,\n"
+            "    \"first_epc\": \"0x%08X\",\n"
+            "    \"first_frame\": %u,\n"
+            "    \"first_target\": \"0x%08X\"\n"
+            "  },\n",
+            ct[0], ct[1], ct[2], ct[3], ct[5], ct[4]);
+    }
+
+    /* PS1B-391: which addresses ran interpreted, whether the text guard is
+     * armed and what it refused, and why the overlay loader had no native
+     * unit. The loader's disp_interp is one number; a product has no debug
+     * server to ask for more. Everything here is read from counters the
+     * runtime keeps anyway (interp_report.h). */
+    {
+        extern uint64_t g_dirty_ram_native_handoffs;
+        extern void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
+        extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                    uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+        static char id_report[16 * 1024];
+        PsxInterpReportInput in;
+        memset(&in, 0, sizeof(in));
+        in.guard_armed      = dirty_ram_text_image_range(&in.guard_lo, &in.guard_hi);
+        in.foreign_pages    = dirty_ram_text_foreign_pages();
+        in.native_blocked   = dirty_ram_text_native_blocked();
+        in.diverged_pages   = dirty_ram_text_diverged_pages();
+        dirty_ram_text_exact_mismatch_stats(&in.exact_mismatches, in.exact_last);
+        in.kernel_end       = DIRTY_RAM_KERNEL_WINDOW_END;
+        in.text_lo          = g_text_image_lo;
+        in.text_hi          = g_overlay_region_floor;
+        in.blocks_run       = g_dirty_ram_blocks_run;
+        in.insns_run        = g_dirty_ram_insns_run;
+        in.aborts           = g_dirty_ram_aborts;
+        in.guard_yields     = g_dirty_ram_guard_yields;
+        in.native_handoffs  = g_dirty_ram_native_handoffs;
+        in.table            = g_dirty_ram_pc_table;
+        in.table_size       = DIRTY_RAM_PC_TABLE_SIZE;
+        overlay_loader_get_miss_reasons(in.miss[0], in.miss[1]);
+        dirty_ram_pc_table_preload(&in.preload);
+        if (psx_interp_report_json(id_report, (int)sizeof(id_report), &in) <= 0)
+            snprintf(id_report, sizeof(id_report), "{}");
+        append_str(buf, sizeof(buf), &pos, "  \"interp_detail\": ");
+        append_str(buf, sizeof(buf), &pos, id_report);
+        append_str(buf, sizeof(buf), &pos, ",\n");
+    }
+
+    /* PS1B-391: the queue of outgoing overlay snapshots. Its counts were one
+     * stdout line at a normal quit; a start that ends on a timer or a crash
+     * never printed it, so no stored start could show what the cap costs. */
+    {
+        extern int overlay_capture_queue_report_json(char *out, int cap);
+        char queue_report[512];
+        if (overlay_capture_queue_report_json(queue_report, (int)sizeof(queue_report)) <= 0)
+            snprintf(queue_report, sizeof(queue_report), "{}");
+        append_str(buf, sizeof(buf), &pos, "  \"overlay_capture_queue\": ");
+        append_str(buf, sizeof(buf), &pos, queue_report);
+        append_str(buf, sizeof(buf), &pos, ",\n");
+    }
+
+    /* PS1B-400: what the start found in the player's settings.toml. When the
+     * loader dropped fast_boot / bios_hle lines (a file from before
+     * settings_format 2, PS1B-360), main() says so on stdout only, which a
+     * product does not keep. */
+    append_fmt(buf, sizeof(buf), &pos,
+        "  \"settings\": {\"file_format\": %d, \"current_format\": %d, "
+        "\"boot_keys_ignored\": %d, \"notice\": \"%s\"},\n",
+        s_settings_file_format, s_settings_current_format, s_settings_boot_keys_ignored,
+        s_settings_boot_keys_ignored ? PSX_SETTINGS_BOOT_KEYS_NOTICE : "");
+
+    /* PS1B-306: kernel bless decides whether relocated kernel routines run
+     * their compiled bodies or the interpreter, so the report states it.
+     * `state` is -1 before the first kernel-window dispatch, 0 off, 1 on.
+     * `native_hits` counts kernel dispatches served by a blessed body; those
+     * never reach the overlay loader, so they are not in its disp_native.
+     * An oversized table (disabled_by_overflow) is refused at start-up. */
+    {
+        uint32_t kb_entries = 0, kb_capacity = 0;
+        int kb_fits = psx_kernel_bless_table_fits(&kb_entries, &kb_capacity);
+        uint64_t kb[8] = {0};
+        uint64_t kp[5] = {0};
+        psx_kernel_bless_stats(kb);
+        psx_kernel_bless_paranoid_stats(kp);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"kbless\": {\n"
+            "    \"table_entries\": %u,\n"
+            "    \"capacity\": %u,\n"
+            "    \"disabled_by_overflow\": %d,\n"
+            "    \"state\": %d,\n"
+            "    \"off_reason\": \"%s\",\n"
+            "    \"clean\": %llu,\n"
+            "    \"mismatch\": %llu,\n"
+            "    \"native_hits\": %llu,\n"
+            "    \"verifies\": %llu,\n"
+            "    \"invalidations\": %llu,\n"
+            "    \"paranoid\": %llu,\n"
+            "    \"paranoid_checks\": %llu,\n"
+            "    \"paranoid_bytes\": %llu,\n"
+            "    \"paranoid_stale_clean\": %llu,\n"
+            "    \"paranoid_stale_mismatch\": %llu\n"
+            "  },\n",
+            kb_entries, kb_capacity, kb_fits ? 0 : 1,
+            psx_kernel_bless_state(),
+            psx_kernel_bless_off_reason(),
+            (unsigned long long)kb[1], (unsigned long long)kb[2],
+            (unsigned long long)kb[3], (unsigned long long)kb[4],
+            (unsigned long long)kb[5],
+            (unsigned long long)kp[0], (unsigned long long)kp[1],
+            (unsigned long long)kp[2], (unsigned long long)kp[3],
+            (unsigned long long)kp[4]);
+    }
+
+    /* PS1B-408: a BREAK that entered the guest's own exception vector ran the
+     * game's handler where the run ended before. The count, and the PC and
+     * code of the first one, show that it happened. */
+    {
+        extern void psx_break_guest_vector_stats(uint32_t out[3]);
+        uint32_t bg[3] = {0};
+        psx_break_guest_vector_stats(bg);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"break_guest_vector\": {\n"
+            "    \"count\": %u,\n"
+            "    \"first_pc\": \"0x%08X\",\n"
+            "    \"first_code\": \"0x%05X\"\n"
+            "  },\n",
+            bg[0], bg[1], bg[2]);
+    }
+
 #ifdef _WIN32
     if (seh_info) {
         EXCEPTION_POINTERS *info = (EXCEPTION_POINTERS *)seh_info;
@@ -584,6 +770,35 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, "},\n");
     }
 
+    /* RAM 0..15 as the game found it at entry: the kernel's stub words
+     * (PSX-SPX, "Garbage Area at Address 00000000h"). A game that reads
+     * through a null pointer sees them. null: no game entry in this process. */
+    {
+        extern int memory_low_ram_at_entry(uint8_t out[16]);
+        uint8_t low[16];
+        if (memory_low_ram_at_entry(low)) {
+            append_str(buf, sizeof(buf), &pos, "  \"low_ram_at_entry\": \"");
+            for (int i = 0; i < 16; i++)
+                append_fmt(buf, sizeof(buf), &pos, "%s%02x", i && !(i & 3) ? " " : "", low[i]);
+            append_str(buf, sizeof(buf), &pos, "\",\n");
+        } else {
+            append_str(buf, sizeof(buf), &pos, "  \"low_ram_at_entry\": null,\n");
+        }
+    }
+
+    /* CD read streams that ended before their first sector (PS1B-317): a
+     * long run means the game restarts a read that never delivers. */
+    {
+        extern void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent,
+                                            uint32_t *longest_run);
+        uint32_t starts = 0, silent = 0, longest_run = 0;
+        cdrom_silent_read_stats(&starts, &silent, &longest_run);
+        append_fmt(buf, sizeof(buf), &pos,
+                   "  \"cdrom\": {\"read_starts\": %u, \"silent_reads\": %u, "
+                   "\"silent_run_max\": %u},\n",
+                   starts, silent, longest_run);
+    }
+
     /* Host overlay-DLL / resim gate at FAIL-FAST. Distinguishes "CD DMA never
      * finished" from "rollback froze registration mid-splash load". */
     {
@@ -597,6 +812,15 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         overlay_loader_get_counters(&loads, &invalidations, NULL,
                                     &disp_native, &disp_interp, &stale_blocked,
                                     NULL, NULL, NULL, NULL, &revalidations);
+        uint64_t kernel_native = 0, kernel_interp = 0;
+        overlay_loader_get_kernel_window_dispatch(&kernel_native, &kernel_interp);
+        PsxInterpPreload preload;
+        dirty_ram_pc_table_preload(&preload);
+        uint64_t interp_preload = 0;
+        for (int place = 0; place < 2; ++place)
+            for (int reason = 0; reason < PSX_INTERP_MISS_REASONS; ++reason)
+                interp_preload += preload.miss[place][reason];
+        if (!preload.game_started) interp_preload = disp_interp;
         int frozen = overlay_loader_load_frozen();
         int resim = psx_netplay_is_resimulating();
         append_fmt(buf, sizeof(buf), &pos,
@@ -616,7 +840,13 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             "    \"revalidations\": %u,\n"
             "    \"stale_blocked\": %llu,\n"
             "    \"disp_native\": %llu,\n"
-            "    \"disp_interp\": %llu\n"
+            "    \"disp_interp\": %llu,\n"
+            "    \"disp_interp_preload\": %llu,\n"
+            "    \"disp_interp_after_game_entry\": %llu,\n"
+            "    \"disp_native_kernel\": %llu,\n"
+            "    \"disp_interp_kernel\": %llu,\n"
+            "    \"disp_native_overlay\": %llu,\n"
+            "    \"disp_interp_overlay\": %llu\n"
             "  },\n",
             overlay_loader_get_inprogress(),
             frozen, resim,
@@ -626,7 +856,13 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             loads, invalidations, revalidations,
             (unsigned long long)stale_blocked,
             (unsigned long long)disp_native,
-            (unsigned long long)disp_interp);
+            (unsigned long long)disp_interp,
+            (unsigned long long)interp_preload,
+            (unsigned long long)psx_interp_after_entry(disp_interp, interp_preload, preload.game_started),
+            (unsigned long long)kernel_native,
+            (unsigned long long)kernel_interp,
+            (unsigned long long)(disp_native - kernel_native),
+            (unsigned long long)(disp_interp - kernel_interp));
     }
 
     /* Recursion fingerprint (build-independent GUEST addresses): the func entered
@@ -774,6 +1010,32 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, "]\n  },\n");
     }
 
+    /* segment misses (docs/SEGMENT_AWARE_CODE.md §5.5): static game text
+     * entered at a PC whose compiled row is in another segment, each run
+     * interpreted (kind "game"), and compiled BIOS windows entered in another
+     * segment than their body's, each run through the home body (kind
+     * "bios", §5.4). Top 50 PCs by count. */
+    {
+        enum { kRows = 50 };
+        uint32_t addrs[kRows], homes[kRows], kinds[kRows];
+        uint64_t counts[kRows];
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, kRows);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"segment_misses\": {\n"
+            "    \"total\": %llu,\n"
+            "    \"unique\": %u,\n"
+            "    \"top\": [",
+            (unsigned long long)psx_segment_miss_total(), psx_segment_miss_unique());
+        for (uint32_t i = 0; i < n; i++) {
+            append_fmt(buf, sizeof(buf), &pos,
+                "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu,"
+                "\"kind\":\"%s\"}",
+                i == 0 ? "" : ",", addrs[i], homes[i], (unsigned long long)counts[i],
+                psx_segment_miss_kind_name(kinds[i]));
+        }
+        append_str(buf, sizeof(buf), &pos, "]\n  },\n");
+    }
+
     /* dirty_block_log tail (last 100) */
     {
         uint64_t total = g_dirty_ram_block_log_seq;
@@ -878,7 +1140,11 @@ static void psx_signal_handler(int sig) {
  * exit(0) so __gcov_exit / instr-profile writers run. Not async-signal-safe;
  * acceptable for intentional train/Ctrl+C stop. */
 static void psx_soft_exit_handler(int sig) {
-    (void)sig;
+    /* Tag the origin so the report distinguishes a train-script kill or
+     * Ctrl+C from an untagged exit() (which stays "unknown" on purpose). */
+    psx_crash_trace_set_exit_origin(sig == SIGINT  ? "signal_sigint" :
+                                    sig == SIGTERM ? "signal_sigterm" :
+                                                     "signal_soft");
     exit(0);
 }
 
@@ -894,6 +1160,12 @@ static LONG WINAPI psx_seh_handler(EXCEPTION_POINTERS *info) {
 static BOOL WINAPI psx_console_ctrl_handler(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT ||
         type == CTRL_CLOSE_EVENT) {
+        /* A console torn down under the game (terminal crash, window X)
+         * used to report as atexit/unknown — indistinguishable from an
+         * SDL window close. Name the event. */
+        psx_crash_trace_set_exit_origin(type == CTRL_CLOSE_EVENT ? "console_close" :
+                                        type == CTRL_BREAK_EVENT ? "console_ctrl_break" :
+                                                                   "console_ctrl_c");
         exit(0);
         return TRUE;
     }

@@ -1,0 +1,347 @@
+/* Per-field sentinel round-trip for the four comparison-profile wire sections:
+ * BS_SEC_GPU_SERVICE, BS_SEC_DMA_SRC, BS_SEC_IRQ_TIMING, BS_SEC_TIMER_SRC.
+ *
+ * Why per-FIELD sentinels: a value reused across same-width neighbours hides a
+ * writer/reader field-ORDER divergence. That is exactly what shipped in
+ * source_gpu_service_wire_read(), where `error` and the two word arrays were
+ * consumed at the wrong offsets while both directions still totalled 240 bytes,
+ * so section_shape_ok() and the _Static_assert(sizeof) both passed. Every field
+ * here therefore carries a DISTINCT sentinel with its field index baked in.
+ *
+ * Method: build the canonical byte image in the writer's field order (names and
+ * widths are the writer's, transcribed below), read() it into the module globals,
+ * write() it back, and require the image to reproduce byte-for-byte. A reader
+ * that consumes the tail in a different order cannot round-trip.
+ *
+ * The section codecs live in module translation units that own their state, so
+ * this TU links those four TUs; the driver (test_boot_state_section_wire.py)
+ * supplies link stubs for their unrelated external references.
+ *
+ * The prototypes are declared here rather than pulled from the runtime headers:
+ * those headers are compiled with the module build's relaxed warning set, and
+ * -Werror on this TU is part of the contract. They must match
+ * runtime/include/{source_gpu_runtime,dma,interrupts,timers}.h.
+ */
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "dirty_ram_interp.h"
+#include "pst_wire.h"
+
+uint32_t source_gpu_service_wire_bytes(void);
+void     source_gpu_service_wire_write(uint8_t *out);
+int      source_gpu_service_wire_read(const uint8_t *in, uint32_t len);
+int      source_gpu_service_perturb(const char *field);
+extern int g_source_gpu_runtime_enabled;
+uint32_t dma_src_wire_bytes(void);
+void     dma_src_wire_write(uint8_t *out);
+int      dma_src_wire_read(const uint8_t *in, uint32_t len);
+uint32_t interrupts_timing_wire_bytes(void);
+void     interrupts_timing_wire_write(uint8_t *out);
+int      interrupts_timing_wire_read(const uint8_t *in, uint32_t len);
+uint32_t timers_source_wire_bytes(void);
+void     timers_source_wire_write(uint8_t *out);
+int      timers_source_wire_read(const uint8_t *in, uint32_t len);
+
+typedef struct { const char *name; unsigned width; unsigned repeat; } Field;
+typedef struct {
+    const char *section;
+    const Field *fields;
+    unsigned     count;
+    uint32_t   (*bytes)(void);
+    void       (*write)(uint8_t *);
+    int        (*read)(const uint8_t *, uint32_t);
+} Section;
+
+#define F(n, w)     { n, w, 1u }
+#define REP(n, w, r) { n, w, r }
+
+/* ---- canonical field order, transcribed from each writer ---- */
+static const Field gpu_service_fields[] = {
+    F("clock.cycle", 8),               F("clock.gpu_deadline", 8),
+    F("clock.dma_deadline", 8),        F("clock.frame_request_cycle", 8),
+    F("clock.zero_reached", 4),        F("clock.frame_pending", 4),
+    F("clock.frame_returns", 4),       F("command.budget", 4),
+    F("command.count", 4),             F("command.phase", 4),
+    F("command.command", 4),           F("command.last_update", 8),
+    F("command.clip_x0", 4),           F("command.clip_y0", 4),
+    F("command.clip_x1", 4),           F("command.clip_y1", 4),
+    F("command.offset_x", 4),          F("command.offset_y", 4),
+    F("command.draw_mode", 4),         F("command.texture_window", 4),
+    F("command.mask_bits", 4),         F("command.display_mode", 4),
+    F("command.dma_direction", 4),     F("command.field_valid", 4),
+    F("command.skip_field", 4),        F("command.first_triangles", 4),
+    F("command.second_triangles", 4),
+    F("command.pline", 4),             F("command.pline_command", 4),
+    F("command.pline_color", 4),       F("command.pline_vertex", 4),
+    REP("command.polygon_words", 4, 12),
+    F("command.transfer_words", 4),    F("command.dispatch.kind", 4),
+    F("command.dispatch.count", 4),    REP("command.dispatch.words", 4, 12),
+    F("command.error", 4),
+    REP("command.queue", 4, 32),
+};
+
+#define DSM_FIELDS(m)     F(m ".running", 1),    F(m ".halts_cpu", 1),  F(m ".stage", 1),   F(m ".held", 1),     F(m ".cursor", 4),     F(m ".words_left", 4), F(m ".blk_words", 4),     F(m ".blk_pos", 4),    F(m ".node_count", 4), F(m ".link", 4),     F(m ".credit", 4),     F(m ".served_until", 8)
+static const Field dma_src_fields[] = {
+    DSM_FIELDS("otc"), DSM_FIELDS("upload"), DSM_FIELDS("ll"),
+    DSM_FIELDS("cd"),  DSM_FIELDS("spu"), DSM_FIELDS("mdec_in"), DSM_FIELDS("mdec_out"),
+    F("wait.live", 4), F("wait.published", 4), F("mdec.clock", 8),
+};
+
+static const Field irq_timing_fields[] = {
+    F("field_clock.remainder", 4),            F("field_clock.line_phase", 4),
+    F("field_clock.field", 4),                F("field_clock.current_cycles", 4),
+    F("input_route_raster_pending", 4),       F("last_sio_seq_seen", 4),
+    F("last_sio_progress_cycle", 8),          F("post_exception_cooldown_until", 8),
+    F("source_irq_slot.pc", 4),               F("source_irq_slot.target", 4),
+    F("source_irq_slot.cause", 4),            F("defer_switch.from", 4),
+    F("defer_switch.target", 4),              F("defer_switch.pending", 4),
+};
+
+static const Field timer_src_fields[] = {
+    F("timer1.mode", 4),       F("timer1.counter", 4), F("timer1.target", 4),
+    F("timer1.counting", 4),   F("timer1.blank", 4),   F("timer1.cycle", 8),
+    F("timer2.counter", 4),    F("timer2.mode", 4),    F("timer2.target", 4),
+    F("timer2.divider", 4),    F("timer2.irq_done", 4),F("timer2.counting", 4),
+    F("timer2.elapsed", 4),    F("timer2.deadline", 4),
+};
+
+static const Section sections[] = {
+    { "GPU_SERVICE", gpu_service_fields,
+      (unsigned)(sizeof gpu_service_fields / sizeof gpu_service_fields[0]),
+      source_gpu_service_wire_bytes, source_gpu_service_wire_write,
+      source_gpu_service_wire_read },
+    { "DMA_SRC", dma_src_fields,
+      (unsigned)(sizeof dma_src_fields / sizeof dma_src_fields[0]),
+      dma_src_wire_bytes, dma_src_wire_write, dma_src_wire_read },
+    { "IRQ_TIMING", irq_timing_fields,
+      (unsigned)(sizeof irq_timing_fields / sizeof irq_timing_fields[0]),
+      interrupts_timing_wire_bytes, interrupts_timing_wire_write,
+      interrupts_timing_wire_read },
+    { "TIMER_SRC", timer_src_fields,
+      (unsigned)(sizeof timer_src_fields / sizeof timer_src_fields[0]),
+      timers_source_wire_bytes, timers_source_wire_write,
+      timers_source_wire_read },
+};
+#define SECTION_CAP 512u
+#define POISON 0xAAu
+
+static int failures = 0;
+static void check(int cond, const char *what) {
+    if (!cond) { fprintf(stderr, "FAIL: %s\n", what); ++failures; }
+}
+
+/* Distinct per field: the field index is folded into every byte, so every
+ * same-width neighbour differs. */
+static uint64_t field_value(unsigned field_index, unsigned width) {
+    uint64_t v = 0xA5A5A5A5A5A5A5A5ULL ^
+                 ((uint64_t)(field_index + 1u) * 0x0101010101010101ULL);
+    if (width < 8u) v &= (UINT64_C(1) << (width * 8u)) - 1u;
+    return v;
+}
+
+/* Validated fields need legal sentinels. Keep unrestricted queue/packet words
+ * distinct; booleans and enums cannot all be unique. No decoder bound is
+ * relaxed to admit the fixture. */
+static int seeded_constant(const char *name, unsigned width, uint8_t *out) {
+    static const struct { const char *name; uint64_t value; } valid[] = {
+        {"clock.cycle", 1000}, {"clock.gpu_deadline", 1011},
+        {"clock.dma_deadline", 1013}, {"clock.frame_request_cycle", 901},
+        {"clock.zero_reached", 1}, {"clock.frame_pending", 0},
+        {"command.count", 32}, {"command.phase", 0},
+        {"command.command", 0xA1}, {"command.last_update", 987},
+        {"command.clip_x0", 10}, {"command.clip_y0", 20},
+        {"command.clip_x1", 30}, {"command.clip_y1", 40},
+        {"command.offset_x", 101}, {"command.offset_y", 102},
+        {"command.draw_mode", 0x1234}, {"command.texture_window", 0x54321},
+        {"command.mask_bits", 2}, {"command.display_mode", 0xA5},
+        {"command.dma_direction", 3}, {"command.field_valid", 1},
+        {"command.skip_field", 0}, {"command.pline", 1},
+        {"command.pline_command", 0x55}, {"command.transfer_words", 0},
+        {"command.dispatch.kind", 0}, {"command.dispatch.count", 9},
+        {"command.error", 0}, {"defer_switch.pending", 1},
+    };
+    for (unsigned i = 0; i < sizeof valid / sizeof valid[0]; ++i) {
+        if (strcmp(name, valid[i].name) != 0) continue;
+        for (unsigned b = 0; b < width; ++b)
+            out[b] = (uint8_t)(valid[i].value >> (8u * b));
+        return 1;
+    }
+    return 0;
+}
+
+static void expand_name(char *dst, size_t cap, const char *name,
+                        unsigned repeat, unsigned idx) {
+    if (repeat > 1u) snprintf(dst, cap, "%s[%u]", name, idx);
+    else             snprintf(dst, cap, "%s", name);
+}
+
+/* Fills the canonical image; returns its total byte length, or ~0u on overflow. */
+static unsigned build_image(const Section *s, uint8_t *buf) {
+    unsigned off = 0;
+    char label[96];
+    for (unsigned f = 0; f < s->count; ++f) {
+        for (unsigned r = 0; r < s->fields[f].repeat; ++r) {
+            unsigned w = s->fields[f].width;
+            if (off + w > SECTION_CAP) return ~0u;
+            expand_name(label, sizeof label, s->fields[f].name,
+                        s->fields[f].repeat, r);
+            if (!seeded_constant(label, w, buf + off)) {
+                uint64_t v = field_value(off / 4u, w);
+                for (unsigned b = 0; b < w; ++b)
+                    buf[off + b] = (uint8_t)(v >> (8u * b));
+            }
+            off += w;
+        }
+    }
+    return off;
+}
+
+/* Names the field containing byte offset `off`. */
+static void label_at(const Section *s, unsigned off, char *dst, size_t cap) {
+    unsigned cursor = 0;
+    char label[96];
+    for (unsigned f = 0; f < s->count; ++f) {
+        for (unsigned r = 0; r < s->fields[f].repeat; ++r) {
+            unsigned w = s->fields[f].width;
+            if (off < cursor + w) {
+                expand_name(label, sizeof label, s->fields[f].name,
+                            s->fields[f].repeat, r);
+                snprintf(dst, cap, "%s @%u", label, cursor);
+                return;
+            }
+            cursor += w;
+        }
+    }
+    snprintf(dst, cap, "past-end @%u", off);
+}
+
+static void run_section(const Section *s) {
+    uint8_t in[SECTION_CAP], out[SECTION_CAP], poisoned[SECTION_CAP];
+    char label[128];
+    char what[256];
+
+    unsigned encoded = build_image(s, in);
+    uint32_t declared = s->bytes();
+    int accepted;
+    unsigned touched;
+
+    snprintf(what, sizeof what, "%s: canonical image fits", s->section);
+    check(encoded != ~0u, what);
+    if (encoded == ~0u) return;
+
+    /* 1. declared section length must equal the bytes actually encoded. A gap
+     *    leaves the section tail unwritten (and in boot_state.c uninitialized). */
+    snprintf(what, sizeof what,
+             "%s: declared wire size (%u) equals encoded size (%u)",
+             s->section, (unsigned)declared, encoded);
+    check(encoded == declared, what);
+
+    /* 2. the writer must touch exactly `encoded` bytes of the payload. */
+    memset(poisoned, POISON, sizeof poisoned);
+    s->write(poisoned);
+    touched = 0;
+    for (unsigned i = 0; i < encoded; ++i)
+        if (poisoned[i] != POISON) touched = i + 1u;
+    snprintf(what, sizeof what, "%s: writer emits every declared byte (%u)",
+             s->section, encoded);
+    check(touched == encoded, what);
+    for (unsigned i = encoded; i < sizeof poisoned; ++i) {
+        if (poisoned[i] != POISON) {
+            snprintf(what, sizeof what, "%s: writer overruns its declared size",
+                     s->section);
+            check(0, what);
+            break;
+        }
+    }
+
+    /* 3. canonical image -> read -> write must reproduce every field. */
+    accepted = s->read(in, declared);
+    snprintf(what, sizeof what, "%s: read accepts the canonical image", s->section);
+    check(accepted == 1, what);
+
+    memset(out, 0, sizeof out);
+    s->write(out);
+    for (unsigned i = 0; i < encoded; ++i) {
+        if (in[i] != out[i]) {
+            label_at(s, i, label, sizeof label);
+            snprintf(what, sizeof what,
+                     "%s: byte %u (%s) differs after read->write (0x%02X -> 0x%02X)",
+                     s->section, i, label, in[i], out[i]);
+            check(0, what);
+            break;
+        }
+    }
+}
+
+static void put_value(uint8_t *image, unsigned offset, unsigned width, uint64_t value) {
+    for (unsigned b = 0; b < width; ++b) image[offset + b] = (uint8_t)(value >> (8u * b));
+}
+
+static void check_gpu_perturb(void) {
+    uint8_t in[SECTION_CAP], out[SECTION_CAP], expected[SECTION_CAP];
+    const unsigned size = build_image(&sections[0], in);
+    static const struct { const char *name; unsigned offset, width; uint64_t value; } cases[] = {
+        {"service_cycle", 0, 8, 1001},
+        {"service_frame_returns", 40, 4, 6},
+        {"service_budget", 44, 4, 3001},
+        {"service_budget_debt", 44, 4, (uint32_t)(int32_t)-997000}
+    };
+    const char *invalid[] = {NULL, "", "unknown"};
+    put_value(in, 40, 4, 5);
+    put_value(in, 44, 4, 3000);
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        check(source_gpu_service_wire_read(in, size), "GPU perturb baseline accepted");
+        g_source_gpu_runtime_enabled = 0;
+        check(!source_gpu_service_perturb(cases[i].name), "GPU perturb rejects disabled service");
+        source_gpu_service_wire_write(out);
+        check(!memcmp(in, out, size), "disabled perturb preserves all fields");
+        g_source_gpu_runtime_enabled = 1;
+        check(source_gpu_service_perturb(cases[i].name), cases[i].name);
+        memcpy(expected, in, size);
+        put_value(expected, cases[i].offset, cases[i].width, cases[i].value);
+        source_gpu_service_wire_write(out);
+        check(!memcmp(expected, out, size), "perturb changes only its real wire field");
+    }
+    check(source_gpu_service_wire_read(in, size), "GPU invalid baseline accepted");
+    for (unsigned i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        check(!source_gpu_service_perturb(invalid[i]), "GPU perturb rejects invalid field");
+        source_gpu_service_wire_write(out);
+        check(!memcmp(in, out, size), "invalid perturb preserves all fields");
+    }
+    for (unsigned i = 0; i < 2; ++i) {
+        put_value(in, 44, 4, i ? (uint32_t)INT32_MIN : INT32_MAX);
+        check(source_gpu_service_wire_read(in, size), "GPU budget limit baseline accepted");
+        check(!source_gpu_service_perturb(i ? "service_budget_debt" : "service_budget"),
+              "GPU perturb rejects signed budget overflow");
+        source_gpu_service_wire_write(out);
+        check(!memcmp(in, out, size), "budget overflow rejection preserves all fields");
+    }
+    g_source_gpu_runtime_enabled = 0;
+}
+
+int main(void) {
+    for (unsigned i = 0; i < sizeof sections / sizeof sections[0]; ++i)
+        run_section(&sections[i]);
+    check_gpu_perturb();
+    {
+        uint8_t in[DIRTY_RAM_CHECKPOINT_BYTES],out[DIRTY_RAM_CHECKPOINT_BYTES];
+        const uint32_t fields[9]={1,0x80012344u,1,0x80045678u,1,0,0,0,0};
+        PstW w;pst_w_init(&w,in,sizeof in);
+        for(unsigned i=0;i<9;i++)check(pst_w_u32(&w,fields[i]),"CPU_EXEC sentinel encode");
+        check(dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC read");
+        check(dirty_ram_checkpoint_pc(0)==fields[1],"CPU_EXEC exact instruction PC");
+        check(dirty_ram_checkpoint_resume_pending(),"CPU_EXEC pending continuation");
+        dirty_ram_checkpoint_write(out);
+        check(!memcmp(in,out,sizeof in),"CPU_EXEC round trip with live branch");
+        in[20]=32;
+        check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid load register");
+        in[20]=0;in[8]=2;
+        check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid branch state");
+        check(!dirty_ram_checkpoint_read(in,sizeof in-1),"CPU_EXEC rejects truncated continuation");
+    }
+    if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
+    puts("PASS: per-field sentinel round-trip for GPU_SERVICE, DMA_SRC, "
+         "IRQ_TIMING, TIMER_SRC");
+    return 0;
+}

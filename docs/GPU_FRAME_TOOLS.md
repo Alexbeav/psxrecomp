@@ -12,7 +12,7 @@ tools/gpu_parity.py          frame-locked image parity vs DuckStation
 tools/tests/test_gpu_frame.py
 ```
 
-RetComM Studio's **Frames** tab is a viewer and launcher over exactly these
+Retro Studio's **Frames** tab is a viewer and launcher over exactly these
 artifacts. It never decodes a GP0 packet itself, so a headless capture and the
 GUI can never disagree about what a frame contained.
 
@@ -28,6 +28,34 @@ opaque and the vignette is missing" stayed a description of a screenshot rather
 than a pointer at a function.
 
 ---
+
+## Hidden OpenGL validation
+
+`--headless` uses the software rasterizer even when the game config requests
+OpenGL. For an OpenGL rendering investigation, use `--headless-opengl` with an
+isolated `--debug-port` and `--memcard-dir`. This explicit mode creates a hidden
+SDL OpenGL context and initializes only SDL video; it does not open an audio
+device, enumerate controllers, sample host input, or show the launcher.
+
+A failed context/pipeline initialization exits with an error instead of silently
+using software. Verify the `hidden OpenGL headless enabled` startup record and a
+successful `gl_fbo_peek` query. The existing `present_image_ring_stats` /
+`present_image_ring_get` captures read the native-wide GL surface during gameplay
+and CPU-synchronized GL VRAM for native 4:3 frames. They contain the displayed
+band before fitting to a host window; `present_shot` remains unavailable.
+
+For temporal presentation bugs, freeze capture with `capture_mark` (`op=mark`)
+and inspect `oldest_sequence` through `newest_sequence` from
+`present_image_ring_stats`. Fetch each image with `present_image_ring_get`
+(`sequence=N`, `path="image.png"`); the response includes its guest `frame`.
+Several extra or held presentations can share that frame number. The legacy
+`frame=N` lookup retrieves only one matching image, so it cannot establish that
+all extra presentations have a stable HUD. Release the mark when done.
+
+The hidden window does not select an adaptive display aspect. Set the desired
+aspect explicitly with `display_aspect` for each comparison. A capture that
+repeats establishes repeatability; correctness still needs appropriate camera
+coverage and comparison against the reported defect.
 
 ## The provenance rule
 
@@ -96,7 +124,7 @@ grep -E '^(PSX_DEBUG_TOOLS|CMAKE_BUILD_TYPE):' build-release/CMakeCache.txt
 `CMAKE_BUILD_TYPE` on an **existing** build dir does *not* flip it. Pass the
 `-D` explicitly, or start a fresh build dir.
 
-In RetComM Studio this is the **Build tab → Debug tools** row: a selector that
+In Retro Studio this is the **Build tab → Debug tools** row: a selector that
 injects the flag, a **Configure for debugging** button that sets Release + ON in
 one click, and a status line that reads the configured build dir and says
 whether the server will be there. The Frames tab shows the same line when it
@@ -287,6 +315,23 @@ and its build scripts may not be patched. See `tools/duckstation/README.md`.
 
 Both instances must be driven identically — same disc, same starting state.
 Parity between two runs that were not driven the same way means nothing.
+
+---
+
+## 24-bit scanout position
+
+`gpu_state` reports `screen_offset_y` for 24-bit display output. The runtime
+derives this value from the GP1(07h) vertical display range.
+
+A positive value moves the decoded scanout down. A negative value moves it up.
+The reference point is the PAL or NTSC broadcast centre, not the window edge.
+
+The 24-bit presenter stages the visible source rows inside the full PAL or NTSC
+active canvas. Rows before or after active video are clipped once. Black canvas
+rows preserve the GP1(07h) position without dropping additional FMV content.
+
+Use `present_shot`, not `screenshot`, to validate letterbox placement.
+`screenshot` captures the display buffer before the window-fit stage.
 
 ---
 

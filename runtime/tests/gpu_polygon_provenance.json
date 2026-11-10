@@ -1,0 +1,93 @@
+{
+  "status": "Independent helper; measured baseline and caller gates pass, independent review pending",
+  "scope": "Polygon ordered spans and work helper only; renderer callers unchanged",
+  "source_boundary": "No old helper bodies, implementation-bearing headers, emulator source, or source-profile tests read. Whole header replaced mechanically.",
+  "inputs": [
+    "Declaration and caller-only contract from T77",
+    "PSX-SPX graphicsprocessingunitgpu.md at a253f078553f83b4e540f087abf0c28d954b6293",
+    "Independently authored black-box matrix gpu-polygon-experiments-v1.json"
+  ],
+  "observations": "15520 baseline cases, 96885 ordered spans. Independent rational Python model matches all measured spans and work.",
+  "limitations": [
+    "Measured baseline compatibility is not hardware accuracy",
+    "Renderer gate uses cold texture state, scale1, and synthetic VRAM; persistent cache/full command queue/dirty tracking/scaled rendering remain outside this gate",
+    "No host performance qualification",
+    "No legal clearance or formal clean-room claim"
+  ],
+  "task": "T172",
+  "base": "5c59b2205a17ef8c7cab833620029d6c4ffce1f7",
+  "tested_commit": "d86fd81952cbc8a6329f25296256d1a32b553927",
+  "validation": {
+    "catalog": {
+      "cases": 15520,
+      "spans": [
+        96885,
+        96885
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "c78cdda436c68e080e01f429eec1318d2490ee82eba41f7d3a28aa0e3509a99f",
+        "c78cdda436c68e080e01f429eec1318d2490ee82eba41f7d3a28aa0e3509a99f"
+      ],
+      "examples": []
+    },
+    "holdouts": {
+      "cases": 16470,
+      "spans": [
+        1162863,
+        1162863
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "a11d559bd44e19224e28570d5df789411ee334cef1f229711ed8d07a621f1471",
+        "a11d559bd44e19224e28570d5df789411ee334cef1f229711ed8d07a621f1471"
+      ],
+      "examples": []
+    },
+    "renderer": {
+      "cases": 400,
+      "changed_pixels": [
+        79715,
+        79715
+      ],
+      "different_fields": {},
+      "reconstructed_vram_hashes_verified": true,
+      "normalized_sha256": [
+        "282be8ae2b131bfb8721432547442c3c471170f33040cd8fef4a05683649b3f9",
+        "282be8ae2b131bfb8721432547442c3c471170f33040cd8fef4a05683649b3f9"
+      ]
+    },
+    "negative_controls": {
+      "controls": 24,
+      "all_detected": true,
+      "results": {
+        "spans_missing": true,
+        "spans_identity": true,
+        "spans_work": true,
+        "spans_work_type": true,
+        "spans_cost": true,
+        "spans_cost_type": true,
+        "spans_order": true,
+        "spans_argument_0": true,
+        "spans_argument_1": true,
+        "spans_argument_2": true,
+        "spans_argument_3": true,
+        "render_missing": true,
+        "render_identity": true,
+        "render_result": true,
+        "render_result_type": true,
+        "render_extra_work": true,
+        "render_extra_work_type": true,
+        "render_changed_count": true,
+        "render_changed_count_type": true,
+        "render_order": true,
+        "render_argument_0": true,
+        "render_argument_1": true,
+        "render_argument_2": true,
+        "render_hash": true
+      }
+    }
+  },
+  "rejected_hypothesis": "Whole traversal clipping exit disagreed in three signed-coordinate-wrap work cases; independently observed phase-local exit matches.",
+  "preservation": "Only source_gpu_polygon_projection.h production body replaced; all renderer callers, serialization and root LICENSE unchanged"
+}

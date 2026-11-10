@@ -1,0 +1,27 @@
+{
+  "schema": "t172-cd-reset-provenance-v1",
+  "base": "5c4f7374ab99ef96545afb0d6271c938a5659a90",
+  "tested_commit": "4d84a7c0aa3797da799b9085a32eb3c805e183c6",
+  "receipt": "L:\\AgentData\\codex-long-runs\\20260919-t172-independent-runtime\\evidence\\validation-receipt-cd-reset-v2.json",
+  "receipt_sha256": "79776918b3a27709b67bb16d1b2f48129281eea61f2202c588351a30e35b7a9d",
+  "authorship": "Independent implementation from sanitized declarations, primary PSX-SPX context, own opaque experiments and independent model. No unowned runtime body/header/test or root tool implementation/log read.",
+  "scope": "Only process_source_reset; actual accepted head helper preserved. Synthetic readiness and recording-only response/IRQ/SPU/XA dependencies; no actual internals or command lifecycle qualification.",
+  "domain_note": "Initial head due fulluint64; other ordinary clock/reset_due/elapsed constraints preserved. Additional exact active hold valid0 phase0..2 clock=reset_due=2**64-451584 sentinel probe only. All traces freshly collected with corrected adapter.",
+  "identity_note": "Inherited head_sha256 and selected_header_sha256 identify reset fragment. dependencies_sha256 binds actual head helper. seek_header_sha256 ancillary unused export.",
+  "validation": {
+    "cases": 14272,
+    "rows": 14272,
+    "events": 29108,
+    "negative_controls": 76,
+    "compile_checks": 7
+  },
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "limitations": [
+    "No real media or hardware claim",
+    "No fullrestore or legal claim",
+    "No source reset initiation or process_pending ownership",
+    "Root exact revision review required before root-only push"
+  ],
+  "supersedes_held_review": "6285fb9ae465c147598656ec4f8df6d44e9c54e7",
+  "guard_correction": "Preserve inactive zero deadline after exact unsigned wrap. Root review identified omitted continuation guard outside original bounded tests; corrected guard and independent wrap regression preserve phase1..3 with no callbacks."
+}

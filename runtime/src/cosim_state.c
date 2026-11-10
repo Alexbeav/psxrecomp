@@ -13,6 +13,7 @@
  * and compiled-vs-compiled gates.
  */
 #include "cosim_state.h"
+#include "psx_memory.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,6 +32,7 @@ static inline uint64_t fnv_u64(uint64_t h, uint64_t v) { return fnv(h, &v, 8); }
 extern CPUState *debug_cpu_ptr;
 extern uint8_t  *memory_get_ram_ptr(void);
 extern uint8_t  *memory_get_scratchpad_ptr(void);
+extern void      psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 extern uint32_t  i_stat;
 extern uint32_t  i_mask;
 extern uint64_t  psx_cycle_count;
@@ -50,18 +52,21 @@ extern uint64_t interrupts_cosim_hash(uint64_t seed);
 /* renderer-agnostic VRAM readback (sw renderer = cheap memcpy). */
 extern void gr_vram_transfer_out(int x, int y, int w, int h, uint16_t *dst);
 
-#define RAM_SIZE   (2u * 1024u * 1024u)
+/* Hash the live RAM (retail 2 MiB unless the 8 MB mod is on); page tables are
+ * sized for the host backing. */
+#define RAM_SIZE   psx_ram_live_bytes()
 #define SPAD_SIZE  (1024u)
 #define PAGE       4096u
-#define RAM_PAGES  (RAM_SIZE / PAGE)      /* 512 */
+#define RAM_PAGES_CAP (PSX_MAIN_RAM_BACKING_BYTES / PAGE)
+#define RAM_PAGES  (RAM_SIZE / PAGE)
 #define VRAM_W 1024
 #define VRAM_H 512
 #define VRAM_SIZE ((uint32_t)(VRAM_W * VRAM_H * 2))   /* 1 MB */
 #define VRAM_PAGES (VRAM_SIZE / PAGE)     /* 256 */
 
 /* ---- incremental RAM page hashes ---- */
-static uint64_t s_ram_page_h[RAM_PAGES];
-static uint8_t  s_ram_page_dirty[RAM_PAGES];
+static uint64_t s_ram_page_h[RAM_PAGES_CAP];
+static uint8_t  s_ram_page_dirty[RAM_PAGES_CAP];
 static int      s_ram_all_dirty = 1;
 
 /* ---- VRAM: full-recompute when dirty (draws are periodic, not per-block) ---- */
@@ -155,6 +160,7 @@ uint64_t cosim_state_hash(CosimSubHashes *sub) {
     /* apply pending gate-4 injection to live state */
     if (s_inj_ram_phys >= 0 && (uint32_t)s_inj_ram_phys < RAM_SIZE) {
         ram[s_inj_ram_phys] ^= s_inj_ram_xor; cosim_note_ram_write((uint32_t)s_inj_ram_phys, 1);
+        psx_kernel_bless_note_range((uint32_t)s_inj_ram_phys, 1u);   /* raw RAM write */
         s_inj_ram_phys = -1;
     }
     if (s_inj_reg >= 0 && cpu) {

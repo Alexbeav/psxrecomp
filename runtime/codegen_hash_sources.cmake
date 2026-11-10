@@ -18,6 +18,7 @@
 # overlay-cache hazard (same class as the "ws emission not in cg hash" gap).
 set(PSXRECOMP_CODEGEN_HASH_SRCS
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/code_generator.cpp
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/load_value_emission.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/mips_decoder.cpp
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/control_flow.cpp
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/basic_block.cpp
@@ -33,6 +34,40 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/function_discovery.cpp
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/function_discovery.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/gte_register_classification.h
+    # Shared instruction detector changes alter emitted overlay substitutions.
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/ws_backdrop_detect.h
+    # The shared cycle-cost header decides emitted code too: both emitters fold
+    # psx_cyc_dep_res_mask into literals and gate fetch-charge emission on
+    # psx_fetch_uncached.
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_instr_cost.h
+
+    # --- image view + walker headers ------------------------------------------
+    # Same gap as the .cpp/.h note above, one level down. The image VIEW decides
+    # what the emitter is even allowed to see: ps1_exe_parser.h now carries two
+    # distinct bounds (the READ bound end_address() and the ANALYSIS bound
+    # analysis_end_address(), which stops short of an overlay capture's trailing
+    # delay-slot guard words), and ps1_exe_parser.cpp decodes the producer's
+    # guard-byte declaration. A change confined to either would move every
+    # overlay shard's CFG while leaving the cg tag untouched — precisely the
+    # stale-but-same-tag hazard this list exists to prevent. The walker/analysis
+    # headers are listed for the same reason: their structs and bounds helpers
+    # are part of the emitter contract even when the .cpp files do not move.
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/ps1_exe_parser.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/ps1_exe_parser.cpp
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/control_flow.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/function_analysis.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/basic_block.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/code_generator.h
+
+    # --- Root policy ------------------------------------------------------------
+    # compile_overlays.py decides which captured PCs become walk roots, alias
+    # entries or interpreter-only PCs (the seed classifier, the no-split guard
+    # and default-on root enrichment all live there). Roots are hard caps, so
+    # the same bytes and the same emitter produce DIFFERENT shards under a
+    # different root policy: a shard built before the no-split guard can carry
+    # a mis-split host (beads-eio.3.177). Hashing the classifier moves the cache
+    # namespace whenever the policy changes, so such shards are never reused.
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/tools/compile_overlays.py
 
     # --- Shard COMPILE surface -------------------------------------------------
     # The cg tag must invalidate on anything a shard compiles/links against, not
@@ -43,10 +78,12 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     # runtime (the recurring "header change broke the shards" class). Folding the
     # compile surface in makes such a change reshard SAME-TREE instead of breaking
     # silently. overlay_api.h pulls cpu_state.h and its cycle-helper headers; the
-    # .inc is the shim every shard links against.
+    # .inc is the shim every shard links against; ws_cull_edge.h is the edge-cull
+    # math the .inc includes.
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_api.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/cpu_state.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/pgxp_hooks.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cyc.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cycles.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/ws_cull_edge.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_dispatch_preamble.c.inc)

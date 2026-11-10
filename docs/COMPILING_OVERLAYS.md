@@ -1,5 +1,9 @@
 # Compiling overlays from `overlay_captures.json`
 
+For ahead-of-time extraction from original disc files, start with the
+[AOT sharding guide](AOT_SHARDING.md). The compiler accepts disc-derived records
+as well as runtime captures; a playthrough is not required for supported producers.
+
 **Audience:** developers preparing a release who want to ship as much
 native-compiled overlay coverage as possible, plus modders and players who want
 to pre-build coverage for their own machine.
@@ -14,6 +18,25 @@ to pre-build coverage for their own machine.
 >
 > ⚠️ **Privacy:** `overlay_captures.json` contains snapshots of the game's own
 > code read from *your* disc. Keep it private — do not post it publicly.
+
+### Enriching runtime captures with conservative walk roots
+
+Runtime capture records PCs it dispatched to, not trusted function boundaries:
+continuations and jump-table cases can be valid dispatch PCs in the middle of a
+function. For continuation-passing titles, derive portable root evidence from
+the captured bytes before compiling rather than placing game addresses in TOML:
+
+```sh
+python psxrecomp/tools/enrich_overlay_captures.py \
+    --captures <exe-dir>/overlay_captures.json \
+    --out <exe-dir>/overlay_captures.enriched.json
+```
+
+The tool writes `static_discovery_entry_pcs`; it never rewrites the
+runtime-owned `function_entry_pcs`. It admits only framed entries plus direct
+`jal`/dense in-image pointer targets that pass the compiler's bounded CFG
+proof. `compile_overlays.py` validates them again, so uncertain data stays
+interpreted. Pass the enriched file to `compile_overlays.py --captures`.
 
 §0 frames the production goal; §1 builds the gcc cache you ship; §2 bakes
 overlays straight into the executable.
@@ -75,7 +98,7 @@ shards up automatically.
 | `--captures` | The `overlay_captures.json` to read. If the runtime set `PSX_OVERLAY_CAPTURES`, that wins; for a manual run pass this explicitly. |
 | `--game-toml` | Reads the game id (used in the cache path) and the `[widescreen]` site lists. |
 | `--recompiler` | `psxrecomp-game.exe`. **Must be built from the same source tree** — a stale binary is rejected up front (see "Staleness guard"). |
-| `--runtime-include` | The runtime `include/` dir. Supplies the codegen version + hash that namespace the cache. Also supplies the default `--project-root`. |
+| `--runtime-include` | The runtime `include/` dir. Supplies the codegen version and the packaged fallback hash that namespace the cache. A development run first uses the exact emitter build's adjacent hash header. Also supplies the default `--project-root`. |
 | `--project-root` | The root the recompiler resolves the BIOS profile against. Defaults to the framework root derived from `--runtime-include`, which is right for every normal invocation — pass it only if that derivation is wrong. See "Packaged configs" below. |
 | `--out-dir` | Cache root. Point it at the `cache` folder next to the exe. |
 | `--gcc` | Absolute path to your mingw gcc, e.g. `C:/msys64/mingw64/bin/gcc.exe`. gcc gives the best-optimized shards. |
@@ -90,7 +113,15 @@ CPU architectures, and codegen versions never mix:
 ```
 <out-dir>/<game-id>/<gcc|tcc>/<os>-<arch>/cg<N>_<hash>/<phys>_<crc>.dll
                                                         <phys>_<crc>.ranges
+                                                        seg-kuseg/<phys>_<crc>.dll
+                                                        seg-kseg1/<phys>_<crc>.dll
 ```
+
+Overlay code that runs at KUSEG or KSEG1 PCs gets its own shard, compiled for
+that segment, in the `seg-kuseg/` or `seg-kseg1/` subdirectory: a capture
+records the segment each entry entered through, and each segment's entries
+compile separately (docs/SEGMENT_AWARE_CODE.md §5.7). KSEG0 shards keep the
+layout above.
 
 e.g. `cache/SLUS-01395/gcc/win-x64/cg7_1a2b3c4d/000E7000_B476006F.dll`. The
 loader computes the exact same path, so if you build into the right game's cache
@@ -118,10 +149,43 @@ python psxrecomp/tools/compile_overlays.py \
     --cps
 ```
 
-Output: `generated/overlays_static.c`, containing every in-overlay
-`func_XXXXXXXX` plus an auto-generated `psx_overlay_dispatch()` switch. Add that
-file to the runtime build (it's a normal translation unit) and rebuild the exe.
-No `cache/` folder and no DLL loading are involved at runtime.
+Output: `generated/overlays_static.c` — the auto-generated, content-validated
+`psx_overlay_dispatch()` plus an extern prototype for every compiled entry —
+and **one translation unit per overlay** beside it, `overlays_static_0000.c`,
+`overlays_static_0001.c`, … (each carries its own `#include`s and a private
+symbol namespace, so it compiles standalone). Point the runtime build at
+`overlays_static.c` (`GAME_OVERLAY_STATIC_C` in `psxrecomp_add_game_runtime`);
+`runtime.cmake` globs the sibling parts with `CONFIGURE_DEPENDS`, so a run that
+changes the part count needs no reconfigure. No `cache/` folder and no DLL
+loading are involved at runtime.
+
+Why split: a whole title's overlays make a single C file of hundreds of MB
+(BoF3: 309 MB, 8.6 M lines), which one `gcc` invocation compiles on one core.
+Per-overlay units build across every core, and because the tool only rewrites
+a part whose content changed, an incremental rebuild recompiles only the
+overlays that changed. `--static-single-file` restores the monolithic output.
+
+The tool side parallelizes too: `--jobs N` (default cores−2) runs each
+capture's recompile + audit in a process pool and merges results in capture
+order, so the emitted C is byte-identical to `--jobs 1`.
+
+**Isolated interior fragments are per (entry, image).** After the region
+compiles, every captured `dispatch_entry_pcs` address that no compiled host
+serves gets its own isolated `dispatch_root` shard — one per *capture that
+observed it*, built from that capture's bytes, because the dispatcher's CRC
+gate only ever accepts a variant against the bytes it was compiled from. Two
+captures of one band that both list an address are two demands. (Keying on
+the bare address, as the pass once did, let one occupant's fragment mark the
+address served for every occupant of the band, so only one occupant per band
+ever got fragments.) The fragment compiles run on the same `--jobs` pool.
+A fragment whose bytes decode as data fails the generated-C audit
+deterministically; that verdict is memoized in
+`<out-dir>/interior_fail_memo.txt` (keyed by image bytes, entry, guard,
+`game.toml`, CPS) and counted as *skipped* — safe coverage loss, since only
+the occupant that really ran the address can serve it. `--force-interior PC`
+retries a memoized entry; delete the memo file to retry everything. Only a
+non-deterministic failure (recompiler exit, missing output) is a shard
+failure.
 
 **Trade-off vs. the DLL cache:** `--static` is a fixed snapshot chosen at build
 time — it will *not* grow as the player explores new areas. The DLL cache (§0/§1)
@@ -129,14 +193,26 @@ is the mechanism that keeps improving with play. Use `--static` when you want a
 single self-contained binary with a known coverage set baked in; use the DLL
 cache for everything else.
 
+**From the original disc, on the player's machine.** A title whose images are
+verified in an `aot/overlays.json` profile does not need captures:
+`tools/aot_overlay_pipeline.py static` extracts, compiles and audits them from
+the disc itself. When the profile declares `"static_output":
+"generated/overlays_static.c"`, `psxrecomp_cli.py generate` runs that step for
+the player after it writes the game C, and reuses the output when no input
+changed. If `GAME_OVERLAY_STATIC_C` names a file that does not exist while game
+C is linked, configure prints a warning. The build is not silently left
+without it. See [AOT_SHARDING.md](AOT_SHARDING.md) → *Linking recipes into the
+runtime*.
+
 ---
 
 ## Staleness guard (read this if it refuses to run)
 
 The recompiler *binary* and the codegen *source* are tied together by a hash.
-Before compiling anything, the script runs `psxrecomp-game.exe --codegen-hash`
-and compares it to the hash baked into `--runtime-include`. If they differ — or
-the binary is too old to support the flag — it **aborts** rather than silently
+Before compiling anything, the script runs `psxrecomp-game.exe --codegen-hash`.
+A development run compares it with the build-owned header beside that exact
+emitter. A packaged run falls back to the staged `--runtime-include` header.
+If they differ — or the binary is too old to support the flag — it **aborts** rather than silently
 emitting shards with stale codegen (a real bug class: read-tag matches,
 semantics are old). The fix is always the same:
 
@@ -145,6 +221,18 @@ cmake --build psxrecomp/recompiler/build --target psxrecomp-game
 ```
 
 Rebuild the recompiler from the current tree, then re-run.
+
+The baked hash lives in `runtime/include/overlay_codegen_hash.h`, which the
+runtime build writes. On a tree whose runtime has never been built it is
+absent and the check reads 0. `aot_overlay_pipeline.py static` writes it first
+from the same sources. For a manual run, build the runtime once, or write it
+directly:
+
+```sh
+cmake -DPSXRECOMP_CODEGEN_HASH_ROOT=psxrecomp \
+      -DOUT=psxrecomp/runtime/include/overlay_codegen_hash.h \
+      -P psxrecomp/runtime/hash_codegen.cmake
+```
 
 ---
 
@@ -247,5 +335,6 @@ shard-compile failure is visible in-game, not only in the provider's console.
   `<os>-<arch>` folder match the runtime you're launching, and that `--cps`
   matched the runtime build.
 
-Design/rationale for the whole system lives in `overlay-recompilation-design.md`,
-`overlay-plan.md`, and `FEATURES.md` in this folder.
+Design/rationale for the whole system lives in
+`internal/overlay-recompilation-design.md` and `internal/overlay-plan.md`;
+`FEATURES.md` is in this folder.

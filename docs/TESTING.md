@@ -1,5 +1,25 @@
 # Testing
 
+`display_ring_capture_test` executes the production historical capture/get and
+scanout functions against authored full 480-line and packed 24-bit images at
+O0/O2. It checks every RGB byte, stored geometry after live state changes,
+CPU/FBO selection, stale-frame refusal and all 32,768 raw 15-bit colors. Raw
+scanout uses full-range bit replication (white is 255, not 248), matching the
+raw color table. PNG encoding, GL readback, configuration selection and RPC
+transport are boundary stubs; this does not qualify a title or GL presentation.
+The command-line fixture is registered for GNU-style compiler frontends only.
+
+The hidden GL filter, HD replacement and present-ring fixtures accept either
+static or shared SDL3, preferring static when both are available. Their CTest
+records distinguish applied replacement pixels and kept/discarded render passes
+from CPU-only texture metadata checks. They use a synthetic guest clock and do
+not exercise a title's CPU, input or movie route.
+
+The private paired-source verification wrapper also accepts `-Phase ui-build`
+with `-Target`, and `-Phase ui-test` with `-IncludeTests`. These reuse the existing
+`build-ui` configuration, host checks, claim, serial driver and evidence records;
+they do not configure or modify a shipped launcher.
+
 ## Running the tests
 
 ```sh
@@ -8,7 +28,7 @@ cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
 
-That is the whole thing. 38 tests, under 5 seconds, and it needs **no BIOS dump,
+The recompiler suite needs **no BIOS dump,
 no disc image, and no generated code** — a plain recompiler build is enough. This
 is the check to run before opening a PR.
 
@@ -43,6 +63,21 @@ python recompiler/tests/test_overlay_guard_codegen.py \
 > argument.
 
 ## What the suite covers
+
+The runtime tree also registers `spu_signed_nibble_test`. It checks 5,824 decoded
+samples from authored blocks: all sixteen signed nibbles, shifts zero through
+twelve, and filter zero. It links the real CRC implementation and does not run
+the separately disabled historical SPU fidelity suite. Compile the same fixture
+as C11 with `-fsanitize=shift -fno-sanitize-recover=shift` and a compiler that
+supplies its sanitizer runtime to detect undefined negative shifts as well as
+amplitude differences. Ordinary sample checks alone do not detect that C error.
+
+Run the registered runtime check with
+`ctest --test-dir runtime/build -R '^spu_signed_nibble_test$' --output-on-failure`.
+
+The opt-in source-SPU selectors, authored fixtures and modern snapshot integration
+are documented in [source SPU profile](source-spu-profile.md). Their results do
+not replace default DSP checks or strict replay qualification.
 
 | Group | Where | Needs |
 |---|---|---|
@@ -98,3 +133,28 @@ alternative existed. The `ctest` suite above is a candidate: it is hermetic
 (no BIOS, no disc, no network), takes under five seconds, and is currently
 green. Restoring a per-PR check on top of it is a smaller decision than
 restoring the old one.
+
+The [source CD profiles](source-cd-profile.md) add maintained command/drive rows,
+complete synthetic CDDA transcripts with per-operation snapshot round trips,
+source-context corruption checks and recorded-sector SubQ fixtures. Their O0/O2
+comparisons retain their bounded provenance and do not replace strict replay
+or hardware audio qualification.
+
+The [optional MDEC source profile](source-mdec-profile.md) registers authored FIFO, pipeline, DMA, snapshot and clean scalar fixtures at explicit optimization levels; default decoder and title qualification limits are separate.
+
+The [optional source bus](source-bus-profile.md) adds shared GPU/CD/SPU/OTC/MDEC
+service and register tests, independent software raster rows, configured-state
+rejection and active per-operation snapshot continuation at O0/O2. Its real-CD
+fixture links the production CD controller, DMA and event clock against authored
+synthetic backing. The generated-native test executes emitted C for an authored
+MIPS function while DMA owns the bus. Default/source overlay flavors and BIOS
+module compiler flags are tested separately. These checks do not establish a
+title route, listening quality, hardware timing or replay-oracle qualification.
+
+The private paired-consumer wrapper `tools/preserved_consumer_verify.ps1` accepts `-NoOp -VerifyBuildKind` to check graph classification without starting a payload. Build admission uses the measured runtime-only kind only for a configured non-LTO runtime/resource/link plan; unknown, reconfiguration, generated-game or dependency work keeps the full-build estimate. Each actual build retains its plan, measurement reference, exact admission snapshot, wrapper commit/hash and sampled peak; refused starts retain the same evidence.
+
+The private signed-nibble verifier accepts `--source-root` (the serial wrapper's
+`-SourceRoot`) to read the decoder, authored fixture and CRC from a separate
+source tree. Compiler and scratch outputs still use the owning lane's existing
+SDK and local pair directory. This supports exact-base negative controls without
+changing the working decoder. No replay or audible-device check is implied.

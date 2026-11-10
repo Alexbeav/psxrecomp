@@ -1,0 +1,25 @@
+/* Compile the production hand-off unchanged; expose only this fixture's entry. */
+#include "@COMPILED_SOURCE@"
+/* source_gpu_runtime_active() gates the interpreter's slot take too. */
+void ws_cull_handoff_enable_source(void) { enabled = 1; }
+/* source_gpu_runtime_init calls this same token reset before enabling the owner. */
+void ws_cull_handoff_initialize(void) { @TOKEN_RESET@ enabled = 1; }
+void ws_cull_handoff_latch(uint32_t branch_pc, int taken) {
+    @DIRECT_LATCH@
+}
+void ws_cull_handoff_without_latch(CPUState *cpu, uint32_t slot_pc) {
+    compiled_irq_handoff(cpu, slot_pc);
+}
+void ws_cull_handoff_boundary(CPUState *cpu, uint32_t slot_pc) {
+    cpu_boundary(cpu, slot_pc, psx_get_cycle_count());
+}
+void ws_cull_handoff_reentrant(CPUState *cpu, uint32_t slot_pc) {
+    s_handoff_active = 1;
+    cpu_boundary(cpu, slot_pc, psx_get_cycle_count());
+    s_handoff_active = 0;
+}
+void ws_cull_handoff_compiled(CPUState *cpu, uint32_t slot_pc, int generated_taken) {
+    enabled = 1;
+    @GENERATED_LATCH@
+    compiled_irq_handoff(cpu, slot_pc);
+}

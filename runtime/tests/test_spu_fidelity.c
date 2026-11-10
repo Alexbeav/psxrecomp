@@ -73,7 +73,7 @@ static int16_t g_render_buf[4096 * 2];
 static void render_n(int frames) {
     while (frames > 0) {
         int n = frames > 4096 ? 4096 : frames;
-        spu_render(g_render_buf, n);
+        spu_render_block(g_render_buf, n);
         frames -= n;
     }
 }
@@ -308,7 +308,7 @@ static void test_reverb_write_gating_and_cd_path(void) {
     /* Reverb tail: CD input stops; the wet path must keep the output alive
      * (this is the reverb-on-CD-only / FMV behaviour in one assert). */
     memset(g_render_buf, 0, sizeof(g_render_buf));
-    spu_render(g_render_buf, 64);
+    spu_render_block(g_render_buf, 64);
     CHECK(buf_has_nonzero(g_render_buf, 64 * 2));
 }
 
@@ -375,7 +375,7 @@ static void test_noise_generator(void) {
     setup_voice(0, 0x0600, 0x3FFF, 0x3FFF);
     wr(R_KON_LO, 0x0001);
     memset(g_render_buf, 0, sizeof(g_render_buf));
-    spu_render(g_render_buf, 512);
+    spu_render_block(g_render_buf, 512);
     CHECK(!buf_has_nonzero(g_render_buf, 512 * 2));
 
     /* Noise mode: same setup + NON bit -> non-silent, non-constant output. */
@@ -387,7 +387,7 @@ static void test_noise_generator(void) {
     wr(R_NON_LO, 0x0001);
     wr(R_KON_LO, 0x0001);
     memset(g_render_buf, 0, sizeof(g_render_buf));
-    spu_render(g_render_buf, 512);
+    spu_render_block(g_render_buf, 512);
     CHECK(buf_has_nonzero(g_render_buf, 512 * 2));
 
     /* Count distinct left-channel values: the LFSR must keep moving. */
@@ -425,7 +425,7 @@ static void test_direct_volume_decode(void) {
     wr(R_MAINVOLL, 0x3FFF);
     wr(R_MAINVOLR, 0x3FFF);
     push_cd_const(1, 0x1000, 0x1000);
-    spu_render(g_render_buf, 1);
+    spu_render_block(g_render_buf, 1);
     CHECK(g_render_buf[0] == 4094);
     CHECK(g_render_buf[1] == 4094);
 }
@@ -439,13 +439,22 @@ static void test_sweep_rise_and_fall(void) {
     render_n(64);
     int16_t mid = sweep_voice_env[0][0].level;
     CHECK(mid > 0);
-    CHECK((int16_t)rd(vreg(0, 0)) == mid);   /* guest read sees the live level */
+    /* The sweep-mode register reads back as written; the live level is in
+     * the current-volume register [ORACLE FIXTURE S4: v1 volume L (sweep
+     * C07F) reads C07F, 1E04h holds the level]. */
+    CHECK(rd(vreg(0, 0)) == (0x8000 | 0x0020));
+    CHECK((int16_t)rd(0x1F801E00u) == mid);
     render_n(64);
     int16_t late = sweep_voice_env[0][0].level;
     CHECK(late > mid);
 
-    /* Decrease sweep starts from the current (direct-set) level and falls. */
+    /* Decrease sweep starts from the current (direct-set) level and falls.
+     * The direct write reaches the level at the next sample tick [ORACLE
+     * FIXTURE S4: 1E06h reads the old value right after a fixed write], so
+     * the sweep needs that tick first (PSX-SPX: setting the initial level
+     * with Bit15=0 then the sweep "works only if there's a suitable delay"). */
     wr(vreg(0, 1), 0x3FFF);                  /* direct: level 0x7FFE */
+    render_n(1);
     CHECK(sweep_voice_env[0][1].level == 0x7FFE);
     wr(vreg(0, 1), 0x8000 | 0x2000 | 0x0020); /* sweep, decrease, rate 0x20 */
     render_n(64);
@@ -481,12 +490,19 @@ static void test_capture_buffer_contents(void) {
     }
     CHECK(capture_pos == 8);
 
+    /* SPUSTAT bit 11 reports the half of the slot stored on the latest tick:
+     * it sets on the tick that stores slot 256 and clears on the tick that
+     * stores slot 0 [ORACLE FIXTURE E8c, set S-spu/E8c, tsv sha256 f43c38e3...]. */
     render_n(508);                   /* 512 total -> exactly one wrap */
     CHECK(capture_pos == 0);
-    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* first half again */
-    render_n(256);
+    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* slot 511 just stored */
+    render_n(1);
+    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* slot 0 stored: first half */
+    render_n(255);
     CHECK(capture_pos == 0x200);
-    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* second half */
+    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* slot 255 stored */
+    render_n(1);
+    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* slot 256 stored: second half */
 }
 
 /* ==== 5. Savestate round-trip =============================================== */
@@ -533,7 +549,7 @@ static void test_savestate_roundtrip(void) {
 
     /* Timeline A. */
     static int16_t out_a[256 * 2], out_b[256 * 2];
-    spu_render(out_a, 256);
+    spu_render_block(out_a, 256);
     CHECK(buf_has_nonzero(out_a, 256 * 2));   /* noise + reverb tail audible */
 
     /* State moved on... */
@@ -553,7 +569,7 @@ static void test_savestate_roundtrip(void) {
     CHECK(sweep_voice_env[6][0].divider == sweep_div_0);
     CHECK(rev_out_l == rev_out_l_0);
 
-    spu_render(out_b, 256);
+    spu_render_block(out_b, 256);
     CHECK(memcmp(out_a, out_b, sizeof(out_a)) == 0);
 
     /* A truncated blob is rejected. */

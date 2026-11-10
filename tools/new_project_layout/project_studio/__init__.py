@@ -1,6 +1,6 @@
 """PSXRecomp Project Studio — audit / plan / apply for New Project Layout.
 
-Setup-host releases only (no prebuilt game-C packaging path).
+Bundled releases: generated/ is committed and CI ships the compiled game.
 """
 
 from __future__ import annotations

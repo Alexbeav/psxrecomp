@@ -1,5 +1,7 @@
 # Building PSXRecomp
 
+Fork contributors must also follow the [public push policy](PUBLIC_PUSH_POLICY.md).
+
 PSXRecomp builds natively on **Windows** (MSVC or MinGW/MSYS2), **macOS** (Apple
 Silicon & Intel), and **Linux**. There are two things you can build:
 
@@ -35,9 +37,18 @@ project ships no game data.
 | **ELFIO** | vendored `recompiler/lib/ELFIO` | ELF parsing (recompiler only) |
 | **rabbitizer** | vendored `recompiler/lib/rabbitizer` | MIPS instruction decoding (recompiler only) |
 | **TinyCC (TCC) 0.9.27** | Not in this repo — downloaded at release-packaging time and bundled beside the game exe in `overlay_toolchain/`. | Toolchain-free overlay compilation for players (run as a subprocess) |
-| **Python 3** | System (development) or an embedded copy bundled in releases | Runs `tools/compile_overlays.py` in the overlay pipeline |
+| **Python 3.9+** | System (development) or an embedded copy bundled in releases | Runs `tools/compile_overlays.py` in the overlay pipeline |
 | **OpenGL** | System (`opengl32` on Windows; `find_package(OpenGL)` elsewhere) | The GL renderer |
 | **Vulkan** | Headers only, **on by default** (`PSX_ENABLE_VULKAN=ON`) — built when the SDK tools are available, otherwise skipped; loaded dynamically via SDL. Shader compilation needs `glslc` from the Vulkan SDK. Pass `-DPSX_ENABLE_VULKAN=OFF` to exclude it. | The experimental Vulkan renderer |
+
+
+The build host's Python floor is **3.9**, the system `python3` on RHEL/Rocky 9,
+Debian 11, Ubuntu 20.04 and macOS 13/14. `psxrecomp_cli.py` and everything it
+imports or spawns must stay importable there — the ctest `cli_python_floor`
+enforces it, because a failed import only degrades overlays to interpreted with
+a warning rather than failing the build. Pre-3.11 also needs `pip install tomli`
+to run `tools/compile_overlays.py` itself. Releases bundle their own 3.13
+interpreter, so players are unaffected either way.
 
 Developers building overlays locally just need `gcc` on `PATH` (the `gcc` tier);
 the bundled `tcc` matters only for end-user release packages.
@@ -72,6 +83,9 @@ git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
 pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
                    mingw-w64-x86_64-ninja mingw-w64-x86_64-ccache
 ```
+A Windows host often has more than one MinGW runtime on `PATH`. Read
+[`WINDOWS_TOOLCHAIN_TRAPS.md`](WINDOWS_TOOLCHAIN_TRAPS.md) before the first
+build: its recipe puts the build toolchain first on `PATH` in every shell.
 
 **macOS:**
 ```sh
@@ -86,6 +100,17 @@ sudo apt install build-essential cmake ninja-build
 These are the SDL3-default prerequisites. For the SDL2 fallback, additionally
 install `mingw-w64-x86_64-SDL2`, `sdl2`, or `libsdl2-dev` respectively, plus
 `pkg-config` outside MSVC.
+
+**macOS from Linux (osxcross):** `cmake/toolchain-macos-osxcross.cmake`
+cross-builds a game for macOS (x86_64 or arm64) on a Linux host. Build
+[osxcross](https://github.com/tpoechtrager/osxcross) with an Apple SDK
+packaged from a Mac you own, then configure the game with:
+```sh
+cmake -S . -B build-macos-x64 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=psxrecomp/cmake/toolchain-macos-osxcross.cmake \
+  -DPSX_DARWIN_ARCH=x86_64 -DOSXCROSS_ROOT=/opt/osxcross
+```
+The toolchain hides the host's pkg-config files from the macOS build.
 
 ## Build the framework
 
@@ -116,6 +141,12 @@ cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build runtime/build --target psx-runtime
 ```
 
+The recompiler writes `runtime/include/overlay_codegen_hash.h` inside its build
+directory. A runtime build writes its copy inside that runtime build directory.
+Neither build changes the source checkout. Setup packaging copies the exact
+recompiler-built header into the staged SDK. The runtime and overlay compiler
+use the value to reject a stale `psxrecomp-game` binary.
+
 On Linux/macOS, `tools/setup_dev.sh` performs the same source-checkout setup:
 
 ```sh
@@ -135,7 +166,8 @@ After step 1 above — no BIOS or disc needed — verify the tree is sane:
 cd recompiler/build && ctest --output-on-failure
 ```
 
-38 tests, under five seconds. See [`TESTING.md`](TESTING.md).
+CTest reports the enabled and disabled tests for this source. See
+[`TESTING.md`](TESTING.md).
 
 On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generator
 (e.g. `-G "Unix Makefiles"`); everything else is identical.
@@ -156,10 +188,18 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 | `PSX_DEPS_OFFLINE` | OFF (env `PSX_DEPS_OFFLINE=1` flips it) | Never download a dependency. A dependency that is not vendored in `third_party/` and has no pre-extracted source tree becomes a hard error naming the missing archive, instead of a fetch that stalls behind a proxy. |
 | `PSX_THIRD_PARTY_DIR` | `<framework>/third_party` | Where vendored dependency archives are looked up (`deps.manifest` lives there). |
 | `PSX_STATIC_RUNTIME` | ON for MinGW Release | Self-contained exe (statically links SDL + libgcc/libstdc++) |
+| `PSX_LAUNCHER_MODULE` | OFF | Load the launcher from the prebuilt recomp-ui module named by `RECOMP_LAUNCHER_MODULE_FILE` (`recomp-launcher-v1.dll` on Windows) instead of compiling it in. Needs SDL3 as one shared library: set `PSX_STATIC_RUNTIME=OFF` and give a shared SDL3 (`SDL3_DIR`, or let `PSX_SDL3_FETCH` build it shared). The module, `SDL3.dll` and the launcher assets are staged beside the exe. |
 | `PSX_RECOMP_UI` | ON | Wire a downstream game's pinned recomp-ui launcher; set OFF for headless/generated builds |
 | `PSX_ENABLE_VULKAN` | **ON** | Build the experimental Vulkan renderer when the SDK tools are present (skipped if not). Pass `OFF` to exclude it outright. |
 | `PSX_NETPLAY` | OFF | Link recomp-net + lobby; advertise full netplay UI (multiplayer titles) |
 | `PSX_SETUP_WIZARD` | OFF | Advertise first-run setup wizard + Generate & rebuild in recomp-ui |
+
+Distributors can bundle normal and diagnostic executables from the same source
+and generated inputs. Start the normal executable by default. To collect a
+report, close the game and start the diagnostic executable with the same user
+settings and saves. Switching between these already-built executables requires
+a restart, not a compiler. With `PSX_DEBUG_TOOLS=OFF`, the freeze heartbeat does
+not start its background thread or write periodic snapshots.
 
 See [SDL backends](SDL_BACKENDS.md) for the fallback command and the initial
 SDL3/SDL2 game A/B results.
@@ -187,6 +227,55 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target psx-runtime
 ./build/psx-runtime --game game.toml --disc tomba/tomba.cue
 ```
+
+### Split generated C
+
+The recompiler emits a game's generated C as several parallel-compilable
+translation units rather than one monolithic `<serial>_full.c`:
+
+- `<serial>_decls.h` — shared declarations: the runtime extern prologue, the
+  `static inline` unaligned load/store helpers, and forward declarations for
+  every `func_*` and `psx_alias_body_*`.
+- `<serial>_full_00.c` … `<serial>_full_NN.c` — function-body shards of roughly
+  40k lines each, each one `#include`ing the decls header.
+
+Alias-group host bodies (`psx_alias_body_*`) are externally linked rather than
+emitted into whichever shard happens to reference them, so a shard boundary can
+fall anywhere and shards carry no atomicity constraint.
+
+Measured on Tomba when this landed: a 41 MB single translation unit became 36
+shards, and an `-O3` build went from 4m35s to 51s at `-j16` (~5.4x). The
+generated function bytes are unchanged — this is purely how the same code is
+partitioned across files.
+
+**Game CMakeLists need no manual glob.** `psxrecomp_add_game_runtime()` in
+`runtime/runtime.cmake` takes `GEN_FULL_GLOB` as a multi-value argument and
+expands it itself:
+
+```cmake
+psxrecomp_add_game_runtime(psx-runtime
+  GEN_MARKER    "generated/SLUS_01234_dispatch.c"
+  GEN_FULL_GLOB "generated/SLUS_01234_full_*.c"
+  ...)
+```
+
+Each pattern is made absolute against `CMAKE_CURRENT_SOURCE_DIR` if it is not
+already, expanded with `file(GLOB)`, and the hits are concatenated into the
+`GAME_GENERATED_FULL_C` list. A pattern like `*_full_*.c` therefore picks up
+however many shards a regeneration produced, and `*_full*.c` additionally
+matches a transitional monolithic `<serial>_full.c` — so a game that has not
+been regenerated yet keeps building unchanged.
+
+If the globs match nothing, `runtime.cmake` falls back in two steps: it uses
+`GEN_FULL_FALLBACK` when the title sets it, and otherwise derives
+`<serial>_full.c` from the dispatch marker by substituting `_dispatch.c` with
+`_full.c`. So an unconfigured title still resolves to the monolith it used to
+name explicitly.
+
+One caveat: that `file(GLOB)` is a plain glob, not `CONFIGURE_DEPENDS`. Adding
+or removing shards (which is what regenerating with a different shard count
+does) changes the source list, and CMake will not notice on its own — re-run
+`cmake -S . -B build` after a regeneration that changes the shard count.
 
 ## Linking the framework
 
@@ -323,3 +412,43 @@ OpenBIOS incompatibility. See [`BIOS_SELECTION.md`](BIOS_SELECTION.md).
 
 OpenBIOS seeds come from its ELF symbol tables (no Ghidra pass needed):
 see the pin + regeneration recipe in `bios/OpenBIOS.toml`.
+
+Retail seed files are regenerated from a clean checkout, your own dumps under
+`bios/` and a built `psxrecomp-bios`. No Ghidra export is involved:
+
+```bash
+# SCPH1001 reference corpus: vectors, A0/B0/C0 kernel-table targets, discovery
+# call targets, unreferenced post-return functions, plus the committed
+# recompiler/seeds/bios_curated_seeds.json. Every seed records its provenance.
+python tools/bios_seed_corpus.py generate --profile bios/SCPH1001.toml --report seeds-report.md
+
+# Kernel-only derived corpora (their shells differ from SCPH1001)
+python tools/filter_bios_seeds.py --reference-seeds recompiler/seeds/phase2_ghidra_seeds.json \
+    --reference-rom bios/SCPH1001.BIN --target-rom bios/EUR-PSX-SCPH5552.bin \
+    --target-name SCPH5552 --target-profile bios/SCPH5552.toml \
+    --out recompiler/seeds/phase2_ghidra_seeds_SCPH5552.json
+python tools/filter_bios_seeds.py --reference-seeds recompiler/seeds/phase2_ghidra_seeds.json \
+    --reference-rom bios/SCPH1001.BIN --target-rom bios/SCPH5500.BIN \
+    --target-name SCPH5500 --target-profile bios/SCPH5500.toml \
+    --out recompiler/seeds/phase2_ghidra_seeds_SCPH5500.json
+
+# Consistency (ROM checks skip when the images are absent)
+python -m unittest tests.test_bios_seed_corpus -v
+```
+
+To find out what an address is before seeding it, run
+`python tools/bios_seed_corpus.py classify --profile bios/SCPH5552.toml --addresses 0xBFC0C0B0`.
+A `block_leader` is already a dispatchable continuation. A `mid_block` or
+`delay_slot` address is not a callable entry, so do not seed it: find what
+published that PC.
+
+### Controller capacity and live port routing
+
+`psxrecomp_add_game_runtime(MAX_PLAYERS 1)` retains two compiled controller
+slots so the runtime menu can move a controller between the two physical
+console ports. The `players` value in `game.toml` still describes the game.
+Requests from 2 through 8 retain their specified capacity. A custom build with
+`PSX_MAX_PLAYERS=1` disables live routing to avoid indexing a missing port.
+Changing compiled capacity can change the SIO save-state section size; states
+from an earlier one-slot build are not qualified as compatible. Memory cards
+keep their existing file format.

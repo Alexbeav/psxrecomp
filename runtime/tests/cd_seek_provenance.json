@@ -1,0 +1,39 @@
+{
+  "task": "T172",
+  "status": "Independent numerical compatibility helper; exact baseline and holdout gates pass",
+  "base": "a38c2c1efc89d5adfff01738a106bf93d060ba50",
+  "sources": [
+    {
+      "path": "I:\\Projects\\PSX-References\\research-and-documentation\\psx-spx\\docs\\cdromdrive.md",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "sha256": "b37a3d10752919788ca1cf2495fb199ca9ec9b3894ffd0c2c7b5ab5a4707cdbf",
+      "lines_read": [
+        "510-589",
+        "616-653",
+        "1864-1936"
+      ],
+      "scope": "Primary hardware context only; no deterministic emulator timing formula supplied"
+    }
+  ],
+  "exposure": "Primary hardware documentation and independently authored baseline input/output experiments. Old CD function/comment bodies and emulator/profile tests not read. Existing declaration only read for mechanical signature whitespace verification.",
+  "scope": "Only deterministic source_seek_lower_bound calculation; profile input retained. Caller jitter/state/scheduling untouched.",
+  "model_evidence": "evidence/cd-seek-v2-inferred-model-v2.json; constants inferred from baseline outputs, not hardware timing guarantees",
+  "rejected_hypothesis": "Distance always uses supplied origin:710cases failed; motor-off distance instead uses origin0",
+  "validation": {
+    "tested_commit": "e0711885723e2a18e55ceb524cb86057bd62ca27",
+    "cases": 119940,
+    "holdout_pairs": 20000,
+    "saturation_boundary_cases": 780,
+    "exact_baseline": true,
+    "normalized_sha256": "2eb04507b75222571385cc7b67dd60c5468a9e51c665593798d2023427cd2ad0",
+    "initial_repeat_cases": 23144,
+    "matrix_sha256": "1a32c92a097765e3af4b51199cdcec83a5b0b6bf79164c20aeac464ebe7ec10e"
+  },
+  "preservation": "One helper include and pinned function/comment span replaced; every other original cdrom.c byte preserved mechanically",
+  "unresolved": [
+    "Command/sector pipeline, caller jitter and drive-head updates not qualified by pure-function tests",
+    "Signed32 extrema are representation stress, not physical disc addresses",
+    "Hardware timing calibration and remaining audit inventory"
+  ],
+  "legal_claim": "None; simple numerical similarity alone is not a definitive copyright finding"
+}

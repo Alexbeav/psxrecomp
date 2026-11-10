@@ -1,0 +1,34 @@
+[
+  {
+    "file": "M1-M5.tsv",
+    "sha256": "53719006a71e455d9c93a168452c3aaad2d0782c961613106e0336b3c2dc24c7",
+    "rows": 54,
+    "selection": "Byte-identical full authored fixture set"
+  },
+  {
+    "file": "M10-boundaries.tsv",
+    "sha256": "089ea174fce590b3a2ac338b3d8c43b4682669a7c5f459bb89fbb02418eabb63",
+    "rows": 185,
+    "parent_sha256": "f9e409e0abcf1d1dabca347decb268b35c48b19e7e11fb3b0e1494f14b460915"
+  },
+  {
+    "file": "M11-controls.tsv",
+    "sha256": "92084cc19c2b1c623ac8804eab3729dbafef34870674daf7180f6497c0e3fb8d",
+    "rows": 432,
+    "parent_sha256": "7ffe415609a69047c9a64702113a10a1e1229076a6efa9efdc0ecb1c699611fa"
+  },
+  {
+    "selection": "Exact and DC-only independently observed macroblocks; raw block bytes retained in rows, raster conversion independently checked.",
+    "parent_request_sha256": "91cff48b0ce4497e7aaf6fb1e4a205480e8cf84040b5980d4d02fb2fe917c1e9",
+    "rows": 2,
+    "file": "M12.tsv",
+    "sha256": "f6d90301fcad7fd1ccbb95dac973c6ec93f6be429eecaf3958e3c045c2fa3059"
+  },
+  {
+    "parent_request_sha256": "3bc3903a82c545de782f7f6c575b608025b3a38c4d6e177c1fde866dd71d2aae",
+    "file": "M13.tsv",
+    "sha256": "07d48a2d801ee0b2570cb62fb56ba6c6ca68d1d5dd451a08fd4b875ca91cf52c",
+    "rows": 48,
+    "selection": "All48 authored controls. Raw64-byte CPU MMIO outputs; all four fresh stock/observer outputs agree for each case. No conversion or expected-value model."
+  }
+]

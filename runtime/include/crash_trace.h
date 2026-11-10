@@ -36,6 +36,22 @@ void psx_fatal_halt(const char *reason);
  * external reader can tell a fatal halt from a wedge. NULL = healthy. */
 extern const char *g_psx_fatal_reason;
 
+/* What main() found in the player's settings.toml, for the run report
+ * (PS1B-400): the file's settings_format (0 when the file or the line is
+ * absent), the format this build writes, and whether fast_boot / bios_hle
+ * lines were dropped as an old launcher's echo (PS1B-360). The report then
+ * carries a "settings" object with a sentence for that case. */
+void psx_crash_trace_note_settings(int file_format, int current_format,
+                                   int boot_keys_ignored);
+
+/* The sentence for that case, in the run report and on stdout (wording
+ * accepted by Alex, 2026-10-02). It goes into a JSON string as it is: no
+ * quote, no backslash, no control character. */
+#define PSX_SETTINGS_BOOT_KEYS_NOTICE \
+    "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. " \
+    "The two lines are ignored and the game's own values are used. " \
+    "To choose a value yourself, save the settings once in the launcher and add the line again."
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,6 +1,7 @@
 /* beetle_main.cpp — psx-beetle entry point.
  * Standalone harness around Beetle PSX libretro core. SDL window for
- * Beetle's framebuffer, keyboard input, TCP debug server on port 4380. */
+ * Beetle's framebuffer, keyboard input, TCP debug server on port 4382
+ * (--port N). */
 
 #include "psx_sdl.h"
 #include "frame_pacing.h"
@@ -15,6 +16,7 @@ int  beetle_init(const char* bios_path);
 int  beetle_init_with_disc(const char* bios_path, const char* disc_path);
 int  beetle_wtrace_arm(uint32_t lo, uint32_t hi);
 int  beetle_rtrace_arm(uint32_t lo, uint32_t hi);
+void beetle_cyc_watch_arm(uint32_t anchor_raw, uint32_t end_raw, int n);
 void beetle_shutdown(void);
 void beetle_run_frame(uint16_t pad1_buttons);
 int  beetle_get_framebuffer(uint32_t **out_pixels, unsigned *out_w, unsigned *out_h);
@@ -151,6 +153,20 @@ int main(int argc, char** argv) {
 #ifndef PSX_NO_DEBUG_TOOLS
     beetle_debug_server_init(dbg_port);
     std::fprintf(stdout, "psx-beetle: debug server on port %d\n", dbg_port);
+
+    /* PSX_CYC_WATCH="<pc>" or "<pc>-<end>" + PSX_CYC_WATCH_N (default 16):
+     * arm cyc_watch before the first frame, as psx-runtime does, so boot
+     * anchors are recorded from power-on on both backends. */
+    if (const char* cw = std::getenv("PSX_CYC_WATCH"); cw && cw[0]) {
+        char* e = nullptr;
+        uint32_t pc  = (uint32_t)std::strtoul(cw, &e, 0);
+        uint32_t end = (e && *e == '-') ? (uint32_t)std::strtoul(e + 1, nullptr, 0) : 0u;
+        const char* ns = std::getenv("PSX_CYC_WATCH_N");
+        int n = (ns && ns[0]) ? (int)std::strtol(ns, nullptr, 0) : 16;
+        beetle_cyc_watch_arm(pc, end, n);
+        std::fprintf(stdout, "psx-beetle: cyc_watch armed from boot pc=0x%08X end=0x%08X n=%d\n",
+                     pc, end, n);
+    }
 #endif
 
     /* General control-flow parity trace (oracle producer). Armed from boot via
@@ -250,6 +266,13 @@ int main(int argc, char** argv) {
          * sustain unlocked rate (turbo). */
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         if (keys && keys[SDL_SCANCODE_TAB]) continue;
+        /* PSX_BEETLE_UNPACED=1: no wall-clock pacing, for headless oracle
+         * runs (guest timing is unaffected; only the host waits less). */
+        static const int unpaced = [] {
+            const char* u = std::getenv("PSX_BEETLE_UNPACED");
+            return (u && u[0] && u[0] != '0') ? 1 : 0;
+        }();
+        if (unpaced) continue;
         constexpr double FRAME_MS = 1000.0 / 59.94;
         static FramePacer pacer = { 0 };
         frame_pacer_wait(&pacer, FRAME_MS);

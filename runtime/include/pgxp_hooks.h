@@ -1,7 +1,7 @@
 #ifndef PGXP_HOOKS_H
 #define PGXP_HOOKS_H
 
-/* PGXP dataflow-shadowing hook surface (ENHANCEMENTS.md G1.2/G1.3).
+/* PGXP dataflow-shadowing hook surface (docs/ENHANCEMENTS.md G1.2/G1.3).
  *
  * The runtime keeps a host-only "shadow" of sub-pixel GTE projection results
  * and follows them BY PROVENANCE as the game moves them through registers and
@@ -33,7 +33,7 @@
  * LICENSING: this is a clean-room implementation of the publicly documented
  * PGXP technique (psx-spx, public design write-ups). Do NOT port code from
  * the vendored duckstation/ (CC BY-NC-ND) or beetle-psx/ (GPL) trees; they
- * are black-box behavioral oracles only. See ENHANCEMENTS.md G1.
+ * are black-box behavioral oracles only. See docs/ENHANCEMENTS.md G1.
  */
 
 #include <stdint.h>
@@ -51,7 +51,8 @@ struct CPUState;
  *   load:   rt <- [addr]; value = loaded word/half/byte (post-extension)
  *   store:  [addr] <- rt; value = the stored word/half/byte
  *   alu:    rd/rt <- op(s1, s2); result = the written value (also LUI, HILO
- *           moves and MOVE idioms — the body decodes the class from instr)
+ *           moves, MOVE idioms and MFC0/CFC0 — the body decodes the class
+ *           from instr)
  *   muldiv: HI/LO <- op(s1, s2)
  *   cop2:   MFC2/CFC2/MTC2/CTC2 (addr = 0) and LWC2/SWC2 (addr = guest addr);
  *           value = the transferred word

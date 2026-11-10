@@ -7,10 +7,11 @@ import argparse
 import os
 import pathlib
 import platform
-import re
 import shutil
 import subprocess
+import sys
 import tempfile
+from unittest.mock import patch
 import zlib
 
 
@@ -23,21 +24,12 @@ RESIDENT = "psxrecomp bios resident shard v1\n"
 
 
 def codegen_leaf() -> str:
-    api = (RUNTIME / "include" / "overlay_api.h")
-    hash_header = (RUNTIME / "include" / "overlay_codegen_hash.h")
-    version = "0"
-    code_hash = "00000000"
-    if api.is_file():
-        match = re.search(r"PSX_OVERLAY_CODEGEN_VER\s+(\d+)",
-                          api.read_text(encoding="utf-8"))
-        if match:
-            version = match.group(1)
-    if hash_header.is_file():
-        match = re.search(r"PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]{8})",
-                          hash_header.read_text(encoding="utf-8"))
-        if match:
-            code_hash = match.group(1).lower()
-    return f"cg{version}_{code_hash}"
+    sys.path.insert(0, str(ROOT / "tools"))
+    import compile_overlays
+    # The synthetic loader uses a zero config hash; serialize its namespace
+    # with the production owner so new namespace fields cannot go stale here.
+    with patch.object(compile_overlays, "overlay_config_hash", return_value=0):
+        return compile_overlays.cache_tag(str(RUNTIME / "include"), "", "")
 
 
 def arch_abi() -> str:
@@ -57,7 +49,7 @@ def arch_abi() -> str:
 
 
 def run(command: list[str], *, cwd: pathlib.Path | None = None) -> None:
-    result = subprocess.run(command, cwd=cwd, text=True,
+    result = subprocess.run(command, cwd=cwd, text=True, encoding="utf-8", errors="replace",
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise RuntimeError(
@@ -65,6 +57,7 @@ def run(command: list[str], *, cwd: pathlib.Path | None = None) -> None:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     if result.stdout.strip():
+        sys.stdout.reconfigure(encoding="utf-8")
         print(result.stdout.strip())
 
 
@@ -92,8 +85,10 @@ def compile_fixture(gcc: str, out: pathlib.Path, *, instance: int,
     run(command)
 
 
-def compile_harness(gcc: str, out: pathlib) -> None:
+def compile_harness(gcc: str, out: pathlib, *, codegen_hash: int | None = None) -> None:
     platform_defines = ["-D_GNU_SOURCE"] if platform.system() != "Windows" else []
+    if codegen_hash is not None:
+        platform_defines.append(f"-DPSX_OVERLAY_CODEGEN_HASH=0x{codegen_hash:08x}u")
     command = [
         gcc, "-std=c11", "-O0", "-Wall", "-Wextra",
         "-DPSX_NO_DEBUG_TOOLS",
@@ -103,6 +98,7 @@ def compile_harness(gcc: str, out: pathlib) -> None:
         str(RUNTIME / "src" / "overlay_loader.c"),
         str(RUNTIME / "src" / "overlay_path_canon.c"),
         str(RUNTIME / "src" / "overlay_posix.c"),
+        str(RUNTIME / "src" / "host_span_ring.c"),
         str(RUNTIME / "src" / "crc32.c"),
         str(TESTS / "overlay_pair_dedup_harness.c"), "-o", str(out),
     ]

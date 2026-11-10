@@ -42,12 +42,14 @@ def make_psxexe():
     for offset in (0x100, 0x200, 0x1100):
         for i, word in enumerate((0x27BDFFF0, 0x03E00008, 0x27BD0010)):
             put32(text, offset + i * 4, word)
-    # Valid primary opcodes with unsupported SPECIAL subfields followed by a
-    # return: discovery admits the entry, then production emission correctly
+    # Valid primary opcodes with unsupported COP0 memory transfers followed by
+    # a return: discovery admits the entry, then production emission correctly
     # demotes the >=50%-untranslatable body to a fail-closed data stub.
+    # Undefined SPECIAL words are now intentionally emitted as compatible
+    # no-ops, so they no longer exercise the untranslatable-data guard.
     for i, word in enumerate((
             0x27BDFFF0,
-            0x00000001, 0x00000001, 0x00000001, 0x00000001, 0x00000001,
+            0xC0000000, 0xC0000000, 0xC0000000, 0xC0000000, 0xC0000000,
             jal(LOAD + 0x100), 0,
             0x03E00008, 0x27BD0010)):
         put32(text, 0x300 + i * 4, word)
@@ -55,6 +57,7 @@ def make_psxexe():
 
 
 def write_config(path, discovery="reachable", text_size="0x1000"):
+    (pathlib.Path(path).parent / ".gitignore").touch()
     discovery_line = (f'discovery = "{discovery}"\n'
                       if discovery is not None else "")
     with open(path, "w", encoding="utf-8") as f:
@@ -75,7 +78,7 @@ out_dir = "generated"
 
 def run(recompiler, config):
     return subprocess.run(
-        [recompiler, "--config", config], capture_output=True, text=True)
+        [recompiler, "--config", config], capture_output=True, text=True, encoding="utf-8")
 
 
 def main():

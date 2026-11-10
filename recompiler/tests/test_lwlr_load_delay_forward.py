@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""Recompiler codegen regression test: a pending load forwards into LWL/LWR.
-
-LWL/LWR take their destination register as BOTH the merge base and the
-destination, and they read that base late enough to receive the forwarded
-result of an immediately preceding load. MIPS-I therefore exempts them from
-the load delay: after
-
-    lw   $t0, 12($a3)
-    lwr  $t0, 10($a3)
-
-the LWR merges into the word the LW just fetched, not the stale $t0. The
-interpreter already models this (dirty_ram_interp.c, the s_ld_pend LWL/LWR
-exemption -- without it Tomba 2 wedged at boot), so an emitter that does not
-forward puts native and interpreted execution in disagreement.
-
-The load-delay pair emitter defers a load's writeback into psx_ldd_<addr>.
-Before the fix the LWL/LWR successor merged cpu->gpr[rt], which still held the
-pre-load value, AND the deferred writeback was then discarded because the
-successor architecturally writes rt -- so the loaded word vanished entirely.
-
-Asserts the merge operand names the deferred temp and that no discard is
-emitted for that site.
-
-Usage:  python test_lwlr_load_delay_forward.py [--recompiler <psxrecomp-game>]
-Exit 0 = PASS.
-"""
+"""Check CFG emission uses CPU-owned LWL/LWR forwarding; test_load_delay_l1 executes it."""
 import argparse, glob, os, re, struct, subprocess, sys, tempfile
 
 LOAD = 0x80010000
@@ -88,34 +63,10 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         src = generate(args.recompiler, tmp)
 
-    temp = "psx_ldd_%08X" % LOAD          # the deferred load sits at LOAD
-    failures = []
-
-    # The pair must actually be modeled, otherwise this test proves nothing.
-    if "MIPS-I load-delay pair" not in src:
-        failures.append("no load-delay pair block emitted; the dependent "
-                        "lw/lwr pair was not modeled at all")
-
-    # The LWL/LWR merge operand must be the deferred temp, not the raw GPR.
-    merge = re.search(r"psx_lwr\(cpu,\s*[^,]+,\s*([A-Za-z0-9_\[\]>c\-\.]+)\s*,", src)
-    if not merge:
-        failures.append("no psx_lwr call found in the emitted body")
-    elif merge.group(1) != temp:
-        failures.append("psx_lwr merge operand is %r, expected the forwarded "
-                        "temp %r (a stale merge base drops the pending load)"
-                        % (merge.group(1), temp))
-
-    # ...and the deferred writeback must NOT be discarded: the merge consumed it.
-    if re.search(r"\(void\)%s\s*;" % re.escape(temp), src):
-        failures.append("deferred load %s is discarded; the LWL/LWR merge "
-                        "already consumed it, so the load would vanish" % temp)
-
-    if failures:
-        for f in failures:
-            print("FAIL: " + f)
-        raise SystemExit(1)
-
-    print("LWL/LWR load-delay forwarding test passed (merge base = %s)" % temp)
+    assert "psx_load_value_arm(cpu, 8u" in src, "load did not arm CPUState"
+    assert "psx_load_value_merge(cpu, 8u)" in src, "merge ignored pending value"
+    assert "psx_ldd_" not in src, "block-local delayed value still emitted"
+    print("LWL/LWR forwards the CPU-owned pending value")
 
 
 if __name__ == "__main__":

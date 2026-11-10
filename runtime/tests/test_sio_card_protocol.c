@@ -30,11 +30,17 @@
 
 #include "sio.h"
 #include "memcard.h"
+#include "psx_netplay.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 /* ---- Stubs for sio.c's external dependencies ---- */
 uint32_t i_stat = 0;
@@ -44,9 +50,7 @@ uint32_t g_debug_last_store_pc = 0;
 int psx_get_in_exception(void) { return 0; }
 uint8_t psx_read_byte(uint32_t addr) { (void)addr; return 0; }
 uint32_t psx_read_word(uint32_t addr) { (void)addr; return 0; }
-/* sio.c gates card-transfer deferral on `psx_get_cycle_count() < deadline`
- * (s_card_ct_defer_until_cyc). A constant clock would defer forever and stall
- * the state machine, so the stub advances monotonically. */
+/* Advance the synthetic guest clock so SIO shift and ACK deadlines elapse. */
 uint64_t psx_get_cycle_count(void) {
     static uint64_t t;
     return t += 64;
@@ -55,6 +59,9 @@ uint32_t memory_get_sr(void) { return 0; }
 void debug_server_poll(void) {}
 void debug_server_log_sio_write(uint32_t addr, uint32_t value, uint8_t width) {
     (void)addr; (void)value; (void)width;
+}
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
 }
 void starvation_ring_record(uint8_t kind, uint8_t tx, uint8_t rx,
                             uint16_t ctrl, uint16_t stat, uint8_t active_device,
@@ -251,7 +258,11 @@ static void test_card_read_sector_0(void) {
      * only public entry. Let's symlink/copy our file as card1.mcd. */
     f = fopen("test_dir/card1.mcd", "wb");
     if (!f) {
-        system("mkdir test_dir 2>/dev/null || mkdir -p test_dir");
+#ifdef _WIN32
+        (void)_mkdir("test_dir");
+#else
+        (void)mkdir("test_dir", 0755);
+#endif
         f = fopen("test_dir/card1.mcd", "wb");
     }
     assert(f);
@@ -312,6 +323,37 @@ static void test_flag_clears_on_write(void) {
 
     EXPECT_EQ("post_write.prefix",       0xFF, card_xchg(0x81, 0));
     EXPECT_EQ("post_write.flag_clear",   0x00, card_xchg(0x52, 0));
+}
+
+static int accept_extension(int card, const uint8_t* base, const uint8_t* tail,
+                            uint32_t size) {
+    (void)card; (void)base; (void)tail; (void)size;
+    return 0;
+}
+static int refuse_extension_save(int card, const uint8_t* base, uint8_t* tail,
+                                 uint32_t capacity) {
+    (void)card; (void)base; (void)tail; (void)capacity;
+    return -1;
+}
+
+static void test_rejected_save_reports_failure(void) {
+    uint8_t before[128], after[128], data[128], rx[140];
+    sio_init();
+    memcard_set_extension_codec(accept_extension, refuse_extension_save);
+    memcard_init("test_dir");
+    FILE* f = fopen("test_dir/card1.mcd", "rb");
+    EXPECT_EQ("rejected.before_read", 128, f ? fread(before, 1, 128, f) : 0);
+    if (f) fclose(f);
+    memset(data, 0x92, sizeof data);
+    EXPECT_EQ("rejected.count", 138, run_card_write(0, 0, data, rx));
+    EXPECT_EQ("rejected.end", 0x4E, rx[137]);
+    EXPECT_EQ("rejected.flush_result", -2, memcard_last_flush_result(0));
+    f = fopen("test_dir/card1.mcd", "rb");
+    EXPECT_EQ("rejected.after_read", 128, f ? fread(after, 1, 128, f) : 0);
+    if (f) fclose(f);
+    EXPECT_EQ("rejected.disk_unchanged", 0, memcmp(before, after, 128));
+    memcard_set_extension_codec(NULL, NULL);
+    memcard_init("test_dir");
 }
 
 /* Test 3: pad-poll mid-card-read — does our SIO model preserve card state? */
@@ -416,8 +458,57 @@ static void test_cycle_paced_exact_boundaries(void) {
     EXPECT_EQ("paced.tick.irq", irq_sio0, i_stat & irq_sio0);
 }
 
+/* Local input publishes RX/RY through the ordinary pad state/stick/type APIs.
+ * Pin the actual wire order, P2 independence and idle-boundary type change. */
+static void test_local_pad_report_delivery(void) {
+    PsxNetPad p1 = {0xA55A, 0x11, 0xE7, 0xF1, 0x17, 1, 1};
+    PsxNetPad p2 = {0x3C81, 0x33, 0x55, 0x99, 0xAA, 1, 1};
+    EXPECT_EQ("pad.blob.size", 8, sizeof(PsxNetPad));
+    sio_init();
+    sio_connect_pad(0); sio_connect_pad(1);
+    sio_set_pad_analog(0, 1, 128, 128, 128, 128);
+    sio_set_pad_analog(1, 1, 128, 128, 128, 128);
+    sio_set_pad_state_slot(0, p1.buttons);
+    sio_set_pad_sticks(0, p1.lx, p1.ly, p1.rx, p1.ry);
+    sio_request_pad_type(0, p1.analog);
+    sio_set_pad_state_slot(1, p2.buttons);
+    sio_set_pad_sticks(1, p2.lx, p2.ly, p2.rx, p2.ry);
+    sio_request_pad_type(1, p2.analog);
+    card_deselect(0);
+    EXPECT_EQ("pad.p1.prefix", 0xFF, card_xchg(0x01, 0));
+    EXPECT_EQ("pad.p1.id", 0x73, card_xchg(0x42, 0));
+    /* A frame's requested type cannot truncate an already-started report. */
+    sio_request_pad_type(0, 0);
+    EXPECT_EQ("pad.p1.marker", 0x5A, card_xchg(0, 0));
+    EXPECT_EQ("pad.p1.buttons.low", 0x5A, card_xchg(0, 0));
+    EXPECT_EQ("pad.p1.buttons.high", 0xA5, card_xchg(0, 0));
+    EXPECT_EQ("pad.p1.rx", 0xF1, card_xchg(0, 0));
+    EXPECT_EQ("pad.p1.ry", 0x17, card_xchg(0, 0));
+    EXPECT_EQ("pad.p1.lx", 0x11, card_xchg(0, 0));
+    EXPECT_EQ("pad.p1.ly", 0xE7, card_xchg(0, 0));
+    card_deselect(0);
+    EXPECT_EQ("pad.digital.prefix", 0xFF, card_xchg(0x01, 0));
+    EXPECT_EQ("pad.digital.id", 0x41, card_xchg(0x42, 0));
+    EXPECT_EQ("pad.digital.marker", 0x5A, card_xchg(0, 0));
+    EXPECT_EQ("pad.digital.buttons.low", 0x5A, card_xchg(0, 0));
+    EXPECT_EQ("pad.digital.buttons.high", 0xA5, card_xchg(0, 0));
+    card_deselect(1);
+    EXPECT_EQ("pad.p2.prefix", 0xFF, card_xchg(0x01, 1));
+    EXPECT_EQ("pad.p2.id", 0x73, card_xchg(0x42, 1));
+    EXPECT_EQ("pad.p2.marker", 0x5A, card_xchg(0, 1));
+    EXPECT_EQ("pad.p2.buttons.low", 0x81, card_xchg(0, 1));
+    EXPECT_EQ("pad.p2.buttons.high", 0x3C, card_xchg(0, 1));
+    EXPECT_EQ("pad.p2.rx", 0x99, card_xchg(0, 1));
+    EXPECT_EQ("pad.p2.ry", 0xAA, card_xchg(0, 1));
+    EXPECT_EQ("pad.p2.lx", 0x33, card_xchg(0, 1));
+    EXPECT_EQ("pad.p2.ly", 0x55, card_xchg(0, 1));
+    card_deselect(1);
+}
+
 int main(int argc, char **argv) {
     fprintf(stderr, "=== sio card protocol tests ===\n");
+    test_local_pad_report_delivery();
+    fprintf(stderr, "test_local_pad_report_delivery: %d/%d ok\n", g_checks-g_failures, g_checks);
 
     if (argc == 2 && strcmp(argv[1], "exact-boundaries") == 0) {
         test_cycle_paced_exact_boundaries();
@@ -441,6 +532,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "test_flag_clears_on_write:          %d/%d ok\n",
             (g_checks - prev_checks) - (g_failures - prev_fails),
             g_checks - prev_checks);
+
+    test_rejected_save_reports_failure();
 
     prev_checks = g_checks; prev_fails = g_failures;
     test_pad_poll_during_card_read();

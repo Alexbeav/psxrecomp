@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<iso_project image_name="bresume.bin" cue_sheet="bresume.cue" no_xa="0">
+	<track type="data" xa_edc="true" new_type="true">
+		<identifiers
+			system      = "PLAYSTATION"
+			application = "PLAYSTATION"
+			volume      = "BRES00101"
+			volume_set  = "BRES00101"
+			publisher   = "PSXRECOMP"
+			data_preparer= "MKPSXISO"
+			copyright   = "SYSTEM.CNF;1"
+		/>
+		<license file="license_data.dat"/>
+		<directory_tree>
+			<file name="system.cnf"  type="data" source="SYSTEM.CNF"/>
+			<file name="bres_001.01" type="data" source="../bios_resume_testrom.exe"/>
+		</directory_tree>
+	</track>
+</iso_project>

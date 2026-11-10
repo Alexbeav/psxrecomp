@@ -18,22 +18,56 @@
 #define PSXRECOMP_DMA_H
 
 #include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Source service owner: GPU, CD, SPU and OTC channel work at the supplied actual
+ * runtime cycle, including DMA writes and frame returns between periodic
+ * events. No register/input/state override is performed. */
+void dma_source_gpu_service_at(uint64_t cycle);
+void dma_source_gpu_service_at_exact(uint64_t cycle); /* MDEC contract harness only */
+/* E survey (M2 apparatus): are the three source-DMA state machines holding live
+ * mid-transfer state at this frame boundary? 1 = live. */
+void dma_source_dma_live(int *upload, int *ll, int *spu);
+/* BS_SEC_DMA_SRC: the four source-DMA state machines, field by field (140 B). */
+uint32_t dma_src_wire_bytes(void);
+int dma_src_perturb(const char *field);
+int      dma_src_active(void);
+void     dma_src_wire_write(uint8_t *out);
+int      dma_src_wire_read(const uint8_t *in, uint32_t len);
+
 void     dma_init(void);
+uint32_t dma_cpu_read_penalty(void); /* Optional source upload's bus-read wait. */
+/* Source-profile CPU owner calls after prior-instruction service, before fetch.
+ * Direct device fixtures retain the live wait until this owner is entered. */
+void     dma_cpu_read_wait_boundary(void);
+/* Source-profile CPU owns the halt between instruction fetch attempts. */
+int      dma_cpu_otc_halted(void);
+/* OTC or manual, non-chopped CD DMA in the source profile. */
+int      dma_cpu_source_halted(void);
 uint32_t dma_read(uint32_t addr);
 void     dma_write(uint32_t addr, uint32_t val);
 void     dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask);
 void     dma_advance(uint32_t cycles);
+/* Authored source-MDEC points; no assumed external grid phase. */
+void dma_source_mdec_service_at_exact(uint64_t cycles);
+int dma_snapshot_validate(const uint8_t *,uint32_t);
+int dma_source_transfer_active(void);
+unsigned dma_source_transfer_active_mask(void);
+void dma_source_gpu_service_at(uint64_t cycle);
+void dma_source_gpu_service_at_exact(uint64_t cycle);
+int dma_cpu_source_halted(void);
+uint32_t dma_cpu_read_penalty(void);
+void dma_cpu_read_wait_boundary(void);
+
 /* Cycle-budgeted precise event slicing: guest CPU cycles until a DELIVERABLE
  * DMA IRQ (bit3 unmasked in i_mask). UINT32_MAX if none. */
 uint32_t dma_cycles_to_irq(uint32_t i_mask);
-/* Mask-blind scheduler boundary: next DMA word movement or delayed completion,
- * not merely the final IRQ. RAM-producing DMA must become visible at its
- * per-word due cycle even when guest code polls ordinary RAM instead of DICR. */
+/* Mask-blind scheduler boundary: next selected DMA publication or delayed
+ * completion, not merely the final IRQ. REFERENCE exposes individual words;
+ * native MDEC jobs coalesce to a FIFO-sized minimum publication threshold.
+ * A late service consumes all overdue ready words rather than losing credit. */
 uint32_t dma_cycles_to_internal_event(void);
 /* Strict deliverability form for wait-loop elision: unlike the conservative
  * scheduler bound, ignores channel completions whose DICR IRQ is disabled. */
@@ -41,6 +75,15 @@ uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask);
 uint32_t dma_get_dicr(void);
 uint32_t dma_get_dpcr(void);
 int      dma_cdrom_transfer_active(void);
+int      dma_gpu_linked_list_active(void);
+/* RAM-side effects of a completed CD-ROM (ch3) transfer of host-supplied
+ * sector data, for seamless-loading adapters serving a game's own CdGetSector
+ * or read loop: overlay capture before the first word, per-word RAM stores
+ * under DMA attribution, executable-page invalidation, the CD DMA log (when
+ * lba >= 0) and overlay capture on completion. Channel registers, IRQs and
+ * guest timing are untouched. dest/bytes word aligned; returns 0 if the span
+ * leaves live RAM. */
+int      dma_host_cdrom_write(uint32_t dest, const uint8_t* src, uint32_t bytes, int lba);
 
 typedef struct DMAChannelDebugState {
     uint32_t madr;
@@ -59,6 +102,7 @@ typedef struct DMADebugState {
 
 typedef struct DMATraceEntry {
     uint64_t seq;
+    uint64_t cycle; /* Passive event timestamp; no device advancement. */
     uint32_t frame;
     uint32_t kind;
     uint32_t channel;
@@ -113,11 +157,75 @@ typedef struct DMACDROMHistoryEntry {
     uint32_t last_words[DMA_CDROM_HISTORY_WORDS];
 } DMACDROMHistoryEntry;
 
+/* GPU (CH2) linked-list / ordering-table walk observability.
+ *
+ * These counters make DMA2 geometry loss countable without screenshots:
+ *   - starts_dropped: the guest asked for a new OT transfer while the previous
+ *     walk was still running. start_async_gpu_linked_list() returns early in
+ *     that case, so a whole ordering table is never sent to GP0.
+ *   - chcr_reads_in_walk: guest polls of CHCR(2) while the linked-list walk is
+ *     still active, useful for distinguishing timeout loops from blind aborts.
+ */
+typedef struct {
+    uint32_t pc;      /* guest PC of the CHCR store that aborted the walk */
+    uint32_t chcr;    /* CHCR value after that store */
+    uint32_t nodes;   /* ordering-table nodes walked before the abort */
+    uint32_t words;   /* DMA words read before the abort, including headers */
+    uint32_t cycles;  /* guest cycles the walk had been running */
+    uint32_t polls;   /* guest reads of CHCR(2) during this walk */
+} DMAGpuOtCancel;
+
+#define DMA_GPU_OT_CANCEL_RING 8
+
+typedef struct {
+    uint64_t starts;
+    uint64_t starts_dropped;
+    uint64_t completes;
+    uint64_t cancels;
+    uint32_t nodes_last;
+    uint32_t nodes_max;
+    uint32_t words_last;
+    uint32_t words_max;
+    uint64_t cycles_last;
+    uint64_t cycles_max;
+    uint8_t  active;
+    uint64_t chcr_reads_total;
+    uint64_t chcr_reads_in_walk;
+    uint32_t initiator_pc;
+    uint32_t cancel_ring_count;
+    DMAGpuOtCancel cancel_ring[DMA_GPU_OT_CANCEL_RING];
+} DMAGpuOtStats;
+
 uint64_t dma_debug_get_trace(const DMATraceEntry** out_entries);
 void dma_debug_clear_trace(void);
 void dma_debug_get_state(DMADebugState* out);
+void dma_debug_get_gpu_ot_stats(DMAGpuOtStats* out);
 uint64_t dma_debug_get_cdrom_history(const DMACDROMHistoryEntry** out_entries);
 void dma_debug_clear_cdrom_history(void);
+
+/* Always-on record of every CPU hold for a kicked GPU linked-list walk
+ * (the kicking store returns only when the walk ends). Ring is the newest
+ * DMA_GPU_HOLD_RING_CAP holds; stats are cumulative since boot. */
+#define DMA_GPU_HOLD_RING_CAP 4096u
+typedef struct {
+    uint64_t seq;
+    uint64_t cycle;         /* guest cycle at the kick */
+    uint32_t held_cycles;   /* guest cycles the CPU was held */
+    uint32_t words;         /* list words the walk moved during the hold */
+    uint32_t steps;         /* advance+service iterations the hold ran */
+    uint32_t host_us;       /* host wall time spent inside the hold */
+    uint32_t frame;
+    uint32_t kick_pc;       /* guest store PC that kicked the walk */
+    uint32_t madr;
+    uint8_t  in_exception;  /* kick came from inside an exception handler */
+    uint8_t  still_active;  /* hold ended with the walk still running */
+} DMAGpuHoldEntry;
+typedef struct {
+    uint64_t count, held_cycles, host_us, words, steps;
+    uint64_t exc_count, exc_held_cycles, exc_host_us;
+} DMAGpuHoldStats;
+void dma_debug_get_gpu_hold(DMAGpuHoldStats *out_stats,
+                            const DMAGpuHoldEntry **out_ring);
 
 #ifdef __cplusplus
 }

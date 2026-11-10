@@ -103,12 +103,33 @@ void psx_clear_return_to_lobby(void);
  * resume (see below) for the first post-resume frame. */
 void psx_scheduler_resume_at(uint32_t resume_pc);
 
+/* Same-thread ReturnFromException that the host stack cannot continue
+ * (PS1B-324): unwind to psx_scheduler_run and dispatch resume_pc with the
+ * registers the return loaded. can_resume_at is 0 outside the scheduler loop,
+ * under the fiber bridge, or for a PC dispatch cannot enter; the caller then
+ * keeps its previous behaviour. rfe_resume never returns. origin_pc is the
+ * interrupted PC, for the publish ring (0 = none). */
+struct CPUState;
+int  psx_scheduler_can_resume_at(uint32_t resume_pc);
+void psx_scheduler_rfe_resume(struct CPUState* cpu, uint32_t resume_pc,
+                              uint32_t origin_pc);
+
 /* After resume_at, dispatch is top-level — there is no abandoned mid-block
  * native chain under the resume PC. Sentinel same-thread RFE must not publish
  * pc=0 / "continue live chain" (that is GUEST_EXIT). Active until the first
  * finish_frame / explicit clear. Shared by savestate, selfcheck, and RB. */
 int  psx_scheduler_top_level_resume_active(void);
 void psx_scheduler_top_level_resume_clear(void);
+
+/* BS_SEC_SCHED wire: logical scheduler state that is not stored in guest RAM.
+ * The one-level return TCB is required when a yielded target later returns to
+ * its caller; omitting it can leave a restored title in a live BIOS loop even
+ * though CPU/RAM/device restoration succeeded. Three reserved words stay zero. */
+#define PSX_SCHEDULER_SNAPSHOT_BYTES 16u
+int psx_scheduler_snapshot_validate(const uint8_t *in, uint32_t len, const uint8_t *ram);
+void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len);
+int  psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len,
+                                 struct CPUState *cpu);
 
 /* HLE-tier standing subsystem replacement (CLAUDE.md §0 amendments
  * 2026-06-29 + 2026-07-02). 1 = deterministic TCB scheduler (default, both

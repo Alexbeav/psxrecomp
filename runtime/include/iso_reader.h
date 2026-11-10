@@ -55,7 +55,10 @@ struct CDTrack {
                          // Single-FILE cues: equals the .bin-relative INDEX time.
                          // Multi-FILE cues (redump "(Track N).bin" dumps): the
                          // owning file's first disc sector plus its INDEX time.
-    uint32_t pregap_lba; // disc-relative INDEX 00, or INDEX 01 when absent
+                         // Either way, plus every cue PREGAP/POSTGAP before it
+                         // (gaps the dump does not store).
+    uint32_t pregap_lba; // disc-relative start of the track's pregap: its cue
+                         // PREGAP if any, else INDEX 00, else INDEX 01
 };
 
 /**
@@ -67,9 +70,23 @@ struct CDTrack {
 struct BinSegment {
     std::string   path;          // resolved on-disk path
     std::ifstream file;          // opened for the reader's lifetime
-    uint32_t      start_lba;     // first disc-relative sector of this file
+    uint32_t      start_lba;     // disc sector of this file's first stored sector
     uint32_t      sector_count;  // sectors stored in this file
     bool          raw;           // 2352-byte raw sectors (BIN) vs 2048 (ISO)
+};
+
+/**
+ * A contiguous run of disc sectors. A stored span maps onto sectors of one
+ * BinSegment; a virtual span is a cue PREGAP/POSTGAP that the dump does not
+ * store and that reads back as zero (silence), as the CHD path already does.
+ * Without PREGAP/POSTGAP lines each file is exactly one stored span, so the
+ * disc layout is the plain concatenation of the files.
+ */
+struct BinSpan {
+    uint32_t disc_start;    // first disc-relative sector
+    uint32_t sector_count;
+    int      segment;       // index into segments_, or -1 for a virtual gap
+    uint32_t file_sector;   // first sector within the segment's file
 };
 
 class ISOReader {
@@ -90,6 +107,18 @@ public:
      * @return true if opened successfully, false otherwise
      */
     bool Open(const std::string& filename);
+
+    /**
+     * Sector geometry of the first stored file behind an image, decided the
+     * same way Open() decides it: a .cue's TRACK mode is authoritative; a bare
+     * file is raw when sector 0 starts with the CD sync pattern. File length
+     * is never the evidence (raw dumps can be a multiple of 2048).
+     * @param path .cue or bare .bin/.iso/.img
+     * @param raw  set to true for 2352-byte raw sectors, false for 2048
+     * @return false when the image cannot be opened or its geometry is not
+     *         mountable (conflicting or MODE2/2336 track modes)
+     */
+    static bool FirstFileIsRaw(const std::string& path, bool* raw);
 
     /**
      * Close the currently open file
@@ -118,6 +147,8 @@ public:
      * those sectors so the CD controller can retain its last valid Q packet.
      */
     bool ReadSubChannelQ(uint32_t lba, uint8_t* buffer, bool* valid) const;
+    /* Optional source-clock wire: INDEX00 pregaps, reserved byte and big-endian CRC. */
+    bool ReadSourceSubChannelQ(uint32_t lba,uint8_t* buffer,bool* valid) const;
     bool HasSubChannelReplacements() const { return !subq_replacements_.empty(); }
 
     /**
@@ -220,10 +251,10 @@ private:
     std::vector<ISOFileEntry> ListFilesByLBA(uint32_t lba, uint32_t dir_size);
 
     /**
-     * Helper: find the BinSegment containing a disc-relative LBA.
-     * @return segment pointer, or nullptr when lba is past the disc end
+     * Helper: find the span containing a disc-relative LBA.
+     * @return span pointer, or nullptr when lba is past the disc end
      */
-    BinSegment* SegmentForLBA(uint32_t lba);
+    const BinSpan* SpanForLBA(uint32_t lba) const;
 
     bool LoadSBICompanion(const std::string& image_path);
 
@@ -233,6 +264,8 @@ private:
     RootDirectoryInfo root_dir_;
     std::vector<CDTrack> tracks_;   // from the .cue TOC; >=1 entry after Open()
     std::vector<BinSegment> segments_;  // cue FILE entries in disc order; >=1 after Open()
+    std::vector<BinSpan> spans_;        // disc layout over segments_ + cue gaps
+    uint32_t disc_sector_count_ = 0;    // BIN/CUE: end of the last span
     std::unique_ptr<CHDState> chd_; // present only for a directly mounted CHD
     std::unordered_map<uint32_t, std::array<uint8_t, 12>> subq_replacements_;
 };

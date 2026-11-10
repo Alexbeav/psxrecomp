@@ -4,6 +4,7 @@
 
 #include "psx_sdl.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -20,6 +21,8 @@ extern "C" int overlay_capture_test_provider_pending(void);
 extern "C" {
 uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS]{};
 uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS]{};
+uint32_t g_dirty_ram_dispatch_seg_bitmap[PSX_CODE_SEGMENT_COUNT]
+                                        [DIRTY_RAM_EXEC_BITMAP_WORDS]{};
 uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS]{};
 uint64_t g_dirty_ram_insns_run = 0;
 uint64_t g_dirty_window_dispatches = 0;
@@ -53,10 +56,13 @@ bool bit_is_set(const uint32_t *bitmap, uint32_t phys) {
     return ((bitmap[word >> 5] >> (word & 31u)) & 1u) != 0;
 }
 
-void set_exec(uint32_t phys) {
+/* An interpreted dispatch at `phys`, entered through segment `seg` (0 KUSEG,
+ * 1 KSEG0, 2 KSEG1), as dirty_ram_dispatch_inner records it. */
+void set_exec(uint32_t phys, int seg = 1) {
     const uint32_t word = phys >> 2;
     g_dirty_ram_exec_pc_bitmap[word >> 5] |= 1u << (word & 31u);
     g_dirty_ram_dispatch_pc_bitmap[word >> 5] |= 1u << (word & 31u);
+    g_dirty_ram_dispatch_seg_bitmap[seg][word >> 5] |= 1u << (word & 31u);
     const uint32_t page = phys >> 12;
     g_dirty_ram_exec_page_bitmap[page >> 5] |= 1u << (page & 31u);
     g_dirty_pages[page >> 5] |= 1u << (page & 31u);
@@ -67,24 +73,37 @@ void set_dirty_page(uint32_t phys) {
     g_dirty_pages[page >> 5] |= 1u << (page & 31u);
 }
 
-bool wait_for_failed_write() {
-    for (int i = 0; i < 200; ++i) {
+/* The snapshot is written on a worker thread, and the test polls for its
+ * result. The poll used to stop after 200 tries of 5 ms, about one second. On
+ * a loaded host at lowered priority the worker had not finished by then, and
+ * the test failed with nothing wrong in the code under test: 2 of 50 runs on
+ * the Windows gate host (PS1B-392). The wait now ends when the state is there,
+ * as before, or after a ceiling far above any honest run. A run that reaches
+ * the ceiling still fails. */
+constexpr std::chrono::seconds kWaitCeiling(120);
+
+template <typename Ready>
+bool wait_until(Ready ready) {
+    const auto deadline = std::chrono::steady_clock::now() + kWaitCeiling;
+    for (;;) {
         overlay_autocapture_tick();
-        if (overlay_capture_test_write_state() == 0 &&
-            overlay_capture_test_write_attempts() >= 1u)
-            return true;
+        if (ready()) return true;
+        if (std::chrono::steady_clock::now() >= deadline) return false;
         SDL_Delay(5);
     }
-    return false;
+}
+
+bool wait_for_failed_write() {
+    return wait_until([] {
+        return overlay_capture_test_write_state() == 0 &&
+               overlay_capture_test_write_attempts() >= 1u;
+    });
 }
 
 bool wait_for_provider_pending() {
-    for (int i = 0; i < 200; ++i) {
-        overlay_autocapture_tick();
-        if (overlay_capture_test_provider_pending()) return true;
-        SDL_Delay(5);
-    }
-    return false;
+    return wait_until([] {
+        return overlay_capture_test_provider_pending() != 0;
+    });
 }
 
 std::string read_all(const std::filesystem::path &path) {
@@ -147,7 +166,7 @@ int main() {
     overlay_autocapture_set_enabled(1);
     g_ram[0x10000] = 0x11;
     overlay_capture_on_dma(0x10000u, 4u, &g_ram[0x10000]);
-    set_exec(0x10000u);
+    set_exec(0x10000u, 0);   /* this epoch enters 0x10000 at KUSEG */
     g_dirty_window_dispatches = 128u;
     g_dirty_ram_insns_run = 100000u;
     s_frame_count = 120u;
@@ -173,6 +192,9 @@ int main() {
     if (first_epoch.find("0x80010000") == std::string::npos ||
         first_epoch.find("0x80010004") != std::string::npos)
         return fail("retried file did not preserve the immutable old epoch", root);
+    /* The background writer formats the segments it copied with the epoch. */
+    if (first_epoch.find("\"kuseg\": [\"0x00010000\"]") == std::string::npos)
+        return fail("the retried epoch lost its dispatch segments", root);
 
     /* Retry only the provider start. No RAM snapshot or evidence clear should
      * occur, and acceptance must be recorded exactly once. */
@@ -189,10 +211,33 @@ int main() {
      * long coverage sessions grow by gigabytes. */
     set_dirty_page(0x11000u);
     g_ram[0x11000] = 0x77;
+    /* Schema v3 (docs/SEGMENT_AWARE_CODE.md §5.7): each dispatch entry's
+     * segments, spelled in the segment. 0x10008 is entered at KUSEG and
+     * KSEG1, 0x1000C at KSEG1 only; dispatch_entry_pcs keeps its v2 KSEG0
+     * spelling of every entry. */
+    set_exec(0x10008u, 0);
+    set_exec(0x10008u, 2);
+    set_exec(0x1000Cu, 2);
+    /* 0x10000's KUSEG entry belonged to the first epoch, which the accepted
+     * snapshot cleared; now it is entered at KSEG0 only. */
+    set_exec(0x10000u, 1);
     overlay_capture_write_json();
     const std::string final_epoch = read_all(capture);
     if (final_epoch.find("\"size\": 8196") != std::string::npos)
         return fail("final snapshot included dirty unexecuted pages", root);
+    if (final_epoch.find("\"schema\": \"psxrecomp overlay capture v3\"") ==
+            std::string::npos)
+        return fail("capture is not schema v3", root);
+    if (final_epoch.find("\"dispatch_entry_pcs\": [\"0x80010000\", \"0x80010004\", "
+                         "\"0x80010008\", \"0x8001000C\"]") == std::string::npos)
+        return fail("dispatch_entry_pcs lost its v2 meaning", root);
+    if (final_epoch.find("\"dispatch_entry_segments\": {"
+                         "\"kuseg\": [\"0x00010008\"], "
+                         "\"kseg0\": [\"0x80010000\", \"0x80010004\"], "
+                         "\"kseg1\": [\"0xA0010008\", \"0xA001000C\"]}") ==
+            std::string::npos)
+        return fail("dispatch_entry_segments does not name each entry's segments "
+                    "(or kept a cleared epoch's segment)", root);
 
     overlay_capture_wait_pending();
     std::filesystem::remove_all(root, ignored);

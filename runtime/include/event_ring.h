@@ -7,7 +7,7 @@
  * mode (native-overlay / dirty-RAM-interp / static), and the in-progress
  * native overlay function. The goal is to diff two runs of the SAME route
  * (native-overlay OFF vs ON) and find the FIRST interrupt/DMA ordering
- * divergence relative to game code (PRINCIPLES.md #3, handoff Priority 2).
+ * divergence relative to game code (docs/internal/PRINCIPLES.md #3, handoff Priority 2).
  *
  * Design: ALWAYS-ON (Release too), eviction-bounded ring. Records EDGES /
  * EVENTS, never per-poll samples — native code calls psx_check_interrupts at
@@ -23,6 +23,7 @@
 #define PSXRECOMP_EVENT_RING_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -114,6 +115,9 @@ void event_ring_record_aux(uint16_t kind, uint8_t detail, uint32_t aux);
 /* Write the whole live window (oldest->newest) as a JSON array to `path`.
  * Returns entries written, or -1 on open failure. No TCP size limit. */
 int  event_ring_dump_file(const char *path);
+/* Same retained window, written to a caller-owned stream. Does not close it.
+ * Allows capture tools to enforce exclusive creation before exporting. */
+int  event_ring_dump_stream(FILE *stream);
 
 /* Emit a bounded JSON tail (most-recent `max_entries`, oldest->newest) into
  * `out`. Returns bytes written. For quick TCP inspection. */

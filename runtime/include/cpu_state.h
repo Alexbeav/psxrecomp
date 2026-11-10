@@ -38,33 +38,61 @@ typedef struct CPUState {
 
     /* Mult/div completion deadline (absolute guest cycle). Set by MULT/MULTU/
      * DIV/DIVU to psx_cycle_count()+latency; a later MFLO/MFHI stalls (advances
-     * cycles) until this deadline — faithful R3000A behavior (Beetle
-     * muldiv_ts_done). Appended at END so prior field offsets are unchanged. */
+     * cycles) until this deadline (R3000A deferred HI/LO; latencies are
+     * oracle-fixture values, see psx_cycles.c). Appended at END so prior
+     * field offsets are unchanged. */
     uint64_t muldiv_ts_done;
 
     /* GTE (COP2) command completion deadline (absolute guest cycle). A GTE
-     * command sets this to psx_cycle_count()+(cost-1) (cost from gte.cpp per-op
-     * returns; -1 because the COP2 instruction's own +1 base is charged
-     * separately). Back-to-back commands serialize (set stalls to the prior
-     * deadline first); any COP2 register access (MFC2/CFC2/MTC2/CTC2/LWC2/SWC2)
-     * stalls until it — faithful R3000A behavior (Beetle gte_ts_done).
+     * command sets this to psx_cycle_count()+(cycles-1) (cycle counts from
+     * PSX-SPX and oracle fixtures, see psx_cycles.c; -1 because the COP2
+     * instruction's own +1 base is charged separately). Back-to-back commands
+     * serialize (set stalls to the prior deadline first); any COP2 register
+     * access (MFC2/CFC2/MTC2/CTC2/LWC2/SWC2) stalls until it.
      * Appended at END so prior field offsets are unchanged. */
     uint64_t gte_ts_done;
 
-    /* ---- R3000A load-delay pipeline interlock (Beetle ReadAbsorb/ReadFudge/
-     * LDAbsorb/LDWhich) — TIMING ONLY; the load VALUE delay is handled by the
-     * existing load-delay correctness path. See psx_cyc.h + accuracy/
-     * load_readfudge_ldabsorb.md. Models: a load's data-access cost becomes a
+    /* ---- R3000A load-delay pipeline interlock (our oracle-fitted model;
+     * receipts in accuracy/load_readfudge_ldabsorb.md) — TIMING ONLY; the
+     * load VALUE delay is handled by the existing load-delay correctness path.
+     * See psx_cyc.h. Models: a load's data-access cost becomes a
      * per-register "give-back" (read_absorb) that following instructions consume
      * instead of charging their own +1 base; plus the +2 "fudge" charged on a
      * load whose predecessor committed no load. Appended at END so prior field
      * offsets are unchanged (precompiled overlay DLLs bake offsets). */
-    uint8_t  read_absorb[33];   /* ReadAbsorb[0..31] + [32]=0x20 DO_LDS dummy slot */
-    uint8_t  read_absorb_which; /* ReadAbsorbWhich: GPR the last committed load wrote */
-    uint8_t  read_fudge;        /* ReadFudge: last committed load's dest reg, or 0x20 = none */
-    uint8_t  ld_which_t;        /* LDWhich (timing): pending load dest reg, 0x20 = none */
-    uint32_t ld_absorb;         /* LDAbsorb: pending load's give-back (region+completion) */
+    uint8_t  read_absorb[33];   /* give-back per GPR [0..31]; [32] = 0x20, the "no register" slot */
+    uint8_t  read_absorb_which; /* GPR the last committed load wrote */
+    uint8_t  read_fudge;        /* last committed load's dest reg, or 0x20 = none */
+    uint8_t  ld_which_t;        /* timing: pending load dest reg, 0x20 = none */
+    uint32_t ld_absorb;         /* pending load's give-back (region+completion) */
+    /* Value pipeline, independent of the timing credit above. rt=0 is empty.
+     * age=0: successor still reads old GPR; age=1: successor has executed. */
+    uint32_t load_value_rt, load_value, load_value_age;
 } CPUState;
+
+static inline void psx_load_value_commit(CPUState *cpu) {
+    if (cpu->load_value_rt) cpu->gpr[cpu->load_value_rt] = cpu->load_value;
+    cpu->load_value_rt = cpu->load_value_age = 0;
+    cpu->gpr[0] = 0;
+}
+static inline void psx_load_value_begin(CPUState *cpu) {
+    if (cpu->load_value_rt) {
+        if (cpu->load_value_age) psx_load_value_commit(cpu);
+        else cpu->load_value_age = 1;
+    }
+}
+static inline void psx_load_value_cancel(CPUState *cpu, uint32_t rt) {
+    if (rt && cpu->load_value_rt == rt) cpu->load_value_rt = cpu->load_value_age = 0;
+}
+static inline uint32_t psx_load_value_merge(const CPUState *cpu, uint32_t rt) {
+    return rt && cpu->load_value_rt == rt ? cpu->load_value : cpu->gpr[rt];
+}
+static inline void psx_load_value_arm(CPUState *cpu, uint32_t rt, uint32_t value) {
+    if (cpu->load_value_rt && cpu->load_value_rt != rt) psx_load_value_commit(cpu);
+    cpu->load_value_rt = rt;
+    cpu->load_value = value;
+    cpu->load_value_age = 0;
+}
 
 /* Overlay DLLs batch per-instruction cycle charges in a DLL-local accumulator.
  * A guest store is an observation boundary: MMIO handlers must see the cycle
@@ -74,10 +102,31 @@ typedef struct CPUState {
  * Static recompiled code and the interpreter share host cycle state directly,
  * so their barrier compiles to nothing. */
 #ifdef PSX_OVERLAY_DLL_BUILD
-void overlay_flush_cycles(void);
+/* Kept here rather than in psx_cycles.h because cpu_state.h is the first
+ * generated-code include that declares the store barrier.  The preamble is
+ * inserted after all generated includes, so both declaration and definition
+ * must carry the same export attribute for Clang. */
+#  if defined(_WIN32)
+#    define PSX_OVERLAY_EXPORT __declspec(dllexport)
+#  else
+#    define PSX_OVERLAY_EXPORT __attribute__((visibility("default")))
+#  endif
+PSX_OVERLAY_EXPORT void overlay_flush_cycles(void);
 static inline void psx_store_cycle_barrier(void) { overlay_flush_cycles(); }
 #else
 static inline void psx_store_cycle_barrier(void) { }
+#endif
+
+/* Source bus ownership needs an exact PC before each fetch. Generated source
+ * carries this call under a default-off diagnostic build option. */
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+#ifdef PSX_OVERLAY_DLL_BUILD
+PSX_OVERLAY_EXPORT
+#endif
+void source_gpu_runtime_cpu_boundary(CPUState *,uint32_t);
+#define psx_source_bus_boundary(cpu,pc) source_gpu_runtime_cpu_boundary((cpu),(pc))
+#else
+#define psx_source_bus_boundary(cpu,pc) ((void)0)
 #endif
 
 /* Faithful exception-return (fix B) — defined in runtime/src/interrupts.c. The
@@ -115,12 +164,14 @@ void psx_rfe_escape_check(CPUState* cpu);
  * post-syscall code (the guest's own jr $ra); legacy callers ignore the return
  * value and rely on cpu->pc (0 = handled, resume at caller). */
 extern int psx_syscall(CPUState* cpu, uint32_t code);
+extern int psx_guest_syscalls_active(void);
 extern void psx_arith_overflow(CPUState* cpu);
 /* Mult/div completion-stall timing (psx_cycles.c). MULT/MULTU/DIV/DIVU call
- * psx_muldiv_set with their latency (DIV/DIVU = 37; MULT/MULTU via the latency
- * helpers, indexed on the first operand magnitude). MFLO/MFHI call
+ * psx_muldiv_set with their latency (DIV/DIVU = PSX_DIV_LATENCY; MULT/MULTU via
+ * the latency helpers, indexed on the first operand magnitude). MFLO/MFHI call
  * psx_muldiv_stall, which advances guest cycles to the deadline if not yet
  * reached. Faithful only with per-instruction cycle charging. */
+#define PSX_DIV_LATENCY 37u  /* [ORACLE FIXTURE F2] stall 38 - 1; see psx_cycles.c */
 extern void     psx_muldiv_set(CPUState* cpu, uint32_t latency);
 extern void     psx_muldiv_stall(CPUState* cpu);
 extern uint32_t psx_mult_latency_s(uint32_t rs);   /* MULT  (signed)   */
@@ -139,12 +190,16 @@ extern uint32_t psx_mult_latency_u(uint32_t rs);   /* MULTU (unsigned) */
 extern void     psx_gte_set(CPUState* cpu, uint32_t latency);
 extern void     psx_gte_stall(CPUState* cpu);
 /* MFC2/CFC2 GTE register read: stall to the deadline AND arm the load-delay
- * give-back (ld_absorb=gte_ts_done-now, ld_which_t=rt) — Beetle MFC2/CFC2. */
+ * give-back (ld_absorb=gte_ts_done-now, ld_which_t=rt). */
 extern void     psx_gte_read(CPUState* cpu, uint32_t rt);
-extern uint32_t psx_gte_cmd_latency(uint32_t cmd);  /* cost-1 for the 6-bit op  */
+extern uint32_t psx_gte_cmd_latency(uint32_t cmd);  /* cycles-1 for the 6-bit op */
 
 extern void psx_unaligned_access(CPUState* cpu, uint32_t addr, uint32_t pc);
 extern void psx_break(CPUState* cpu, uint32_t code, uint32_t pc);
+/* Compiled game BREAK: enter the guest vector, or keep the fatal trap policy.
+ * Delay-slot BREAK remains fatal because branch EPC/BD is not supported. */
+extern void psx_game_break(CPUState* cpu, uint32_t code, uint32_t pc,
+                           int in_delay_slot);
 /* Fail-closed native entry guard: a function's CPS entry-switch calls this when
  * dispatched at a PC that is not one of its legal entries (foreign interior PC
  * from a range-ownership mismatch). The function returns without executing; the
@@ -212,6 +267,11 @@ extern void     gte_precision_tracking_set(int enabled);
  * unchanged — this is a visual-only enhancement, default off. */
 extern void     gte_geometry_correction_set(int enabled);
 extern int      gte_geometry_correction_enabled(void);
+/* Frame generation's vertex sources (gte.cpp): 0 = unknown. */
+extern void     gte_fg_source_set(int enabled);
+extern int      gte_fg_source_enabled(void);
+typedef struct GteFgSrc { uint32_t id, ra; int32_t p[3], h; } GteFgSrc;
+extern int      gte_fg_source_lookup(uint32_t packed, GteFgSrc out[2]);
 /* Corrected vertices consumed since the last gte_geometry_correction_set —
  * the "is this actually doing anything on this title" counter. */
 extern uint32_t gte_geometry_correction_hits(void);
@@ -220,16 +280,26 @@ extern uint32_t gte_geometry_correction_hits(void);
 extern void     gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
                                               uint32_t *miss_unrecorded,
                                               uint32_t *miss_ambiguous);
+/* Same position-cache lookup without changing geometry-correction counters;
+ * reserved for non-rendering probes that inspect a vertex before drawing. */
+extern int      gte_geometry_correction_lookup_probe(uint32_t packed,
+                                                      int32_t *x16,
+                                                      int32_t *y16);
 
 /* Exact NCLIP audit coverage: precise = all three SXY shadows are coherent and
  * word-validated; fallback = native integer-only; disagreements counts cases
  * where sub-pixel and guest-visible integer signs differ. MAC0 stays native. */
 extern void     gte_nclip_precise_stats(uint64_t *hits, uint64_t *fallbacks,
                                         uint64_t *disagreements);
-/* Title-scoped widescreen cull consumer. Returns the exact tracked NCLIP sign
- * only when it belongs to the supplied native MAC0; otherwise preserves the
- * native comparison. This does not change guest-visible GTE state. */
-extern int      gte_nclip_precise_bltz(int32_t native_mac0);
+extern int      gte_nclip_native_wide_sign(int32_t native_mac0, int* sign);
+extern int      gte_nclip_native_wide_previous_sign(int32_t native_mac0, int* sign);
+extern int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla);
+/* Title-scoped widescreen cull consumer ([widescreen.cull] nclip_exact_sites).
+ * Returns the sign (-1/0/1) the branch at `pc` should test: the exact tracked
+ * NCLIP sign only when it belongs to the supplied native MAC0, otherwise the
+ * native sign. Counts per-site use (gte_nclip_stats.h). Does not change
+ * guest-visible GTE state. */
+extern int32_t  gte_nclip_exact_sign(int32_t native_mac0, uint32_t pc);
 
 /* PGXP dataflow-shadowing hook macros (PGXP_LOAD/STORE/ALU/MULDIV/COP2).
  * The emitter writes them unconditionally; they expand to real calls only
@@ -272,12 +342,37 @@ extern uint64_t *g_psx_bail_resolved_p;
 #define g_psx_call_bail     (*g_psx_call_bail_p)
 #define g_psx_bail_first    (*g_psx_bail_first_p)
 #define g_psx_bail_resolved (*g_psx_bail_resolved_p)
+/* The store-PC breadcrumb the emitter writes before every guest store is the
+ * runtime's, not the DLL's (ABI v24, overlay_api.h last_store_pc). */
+extern uint32_t *g_psx_last_store_pc_p;
+#define g_debug_last_store_pc (*g_psx_last_store_pc_p)
 #else
 extern int      g_psx_call_bail;
 extern uint64_t g_psx_bail_first;      /* contract violations detected      */
 extern uint64_t g_psx_bail_resolved;   /* unwinds resolved at a call site   */
 extern uint64_t g_psx_bail_flattened;  /* unwinds flattened at outermost    */
 extern uint64_t g_psx_bail_anomaly;    /* bail flag seen where impossible   */
+#endif
+
+/* ==========================================================================
+ * Execution segment of the running game code.
+ *
+ * The game image is recompiled at its KSEG0 address, but a PS-X EXE may run
+ * from another segment: its header can load and enter it at KUSEG
+ * (0x00010000...), and a jump table or pointer can send it to KSEG1. The
+ * R3000A links, publishes EPC and tags the instruction cache with the virtual
+ * PC it is running at, so every PC-valued constant in game code is emitted
+ * as PSX_EXEC_PC(constant): the KSEG0 constant XORed with the segment bits of
+ * the address the game dispatcher entered at (0 when it entered at KSEG0).
+ * psx_dispatch_game_compiled sets it around each entry and restores it.
+ * Overlay DLLs are emitted without PSX_EXEC_PC and keep KSEG0 constants.
+ * Defined in runtime/src/traps.c.
+ * ========================================================================== */
+#ifdef PSX_OVERLAY_DLL_BUILD
+#define PSX_EXEC_PC(a) ((uint32_t)(a))
+#else
+extern uint32_t g_psx_exec_seg_xor;
+#define PSX_EXEC_PC(a) ((uint32_t)(a) ^ g_psx_exec_seg_xor)
 #endif
 
 /* Deduped wild-return source ledger (traps.c). Not present in overlay DLLs
@@ -290,14 +385,19 @@ extern void psx_bail_record(uint32_t site_ra, uint32_t site_sp,
 /* Validate a direct call site after the callee's C return.
  * Returns 1 if the caller must `return;` immediately (bail in progress),
  * 0 if the continuation is valid.  site_ra = the call's return address,
- * site_sp = guest $sp recorded immediately before the call. */
+ * site_sp = guest $sp recorded immediately before the call.
+ *
+ * The return PC is compared in full, segment included
+ * (docs/SEGMENT_AWARE_CODE.md §5.5): site_ra is the link the call wrote, in
+ * the segment of the body that made it, and a guest returning to another
+ * segment's alias of the call site did not return to that body. The BIOS
+ * dispatch loop (full_function_emitter.cpp) applies the same rule. */
 static inline int psx_call_contract(CPUState* cpu, uint32_t site_ra,
                                     uint32_t site_sp) {
     if (g_psx_call_bail) {
         /* An inner frame began a bail unwind.  Resolve here iff the guest's
          * arrival state matches this site's contract. */
-        if (((cpu->pc ^ site_ra) & 0x1FFFFFFFu) == 0 &&
-            cpu->gpr[29] == site_sp) {
+        if (cpu->pc == site_ra && cpu->gpr[29] == site_sp) {
             g_psx_call_bail = 0;
             g_psx_bail_resolved++;
             cpu->pc = 0;
@@ -305,8 +405,7 @@ static inline int psx_call_contract(CPUState* cpu, uint32_t site_ra,
         }
         return 1;
     }
-    if (cpu->gpr[29] != site_sp ||
-        ((cpu->gpr[31] ^ site_ra) & 0x1FFFFFFFu) != 0) {
+    if (cpu->gpr[29] != site_sp || cpu->gpr[31] != site_ra) {
         /* First detection: the callee C-returned but the guest did not
          * return here.  $ra holds the wild jr's true destination (the
          * longjmp-return emission sets cpu->pc = $ra before returning,

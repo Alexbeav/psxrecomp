@@ -1,0 +1,21 @@
+{
+  "schema": "t172-cd-head-provenance-v2",
+  "base": "e49a31f6804ff12c72adb1c830a9fd2cfe5550b2",
+  "tested_commit": "5f3f8dd6a26e2991d0e3f8b7120c0f39872ce4aa",
+  "owned_function": "static void source_drive_head_update(void)",
+  "authority": "Sanitized root storage/caller/domain contract and independent opaque probes; pinned primary references in cd-head-preflight-v1.json.",
+  "receipt": "..\\evidence\\validation-receipt-cd-head-v2.json",
+  "receipt_sha256": "1727837ca808ded5720c4080900d3b11c4a70d808f9d020adb768adc2a9009fc",
+  "totals": {
+    "cases": 12048,
+    "rows": 12048
+  },
+  "negative_controls": 33,
+  "full_translation_unit_checks": 7,
+  "scope": "Only source_drive_head_update, all nine state fields observed. Unrelated globals checked by surrounding-source preservation only. Full signed32 target when hold0; hold nonzero target<=INT32_MAX-2. Wide threshold arithmetic, bounded LBA and uint64 clock domains, at most4096 updates. Excludes overflow, deadline wrap/nontermination and arbitrary restore; no hardware timing, full drive, caller integration or legal claim.",
+  "exposure": "Initial absent-input traceback exposed only collector line19 m=json.loads(a.matrix.read_text());cases=m['cases']. Root classified input-loader only and allowed continuation. No original helper/harness/model bodies or compiler logs read. Subsequent tools captured.",
+  "fixture_correction": "Initial fresh holdout-v1 had eight negative clocks from zero deadlines; collector rejected it. Corrected bounded holdout-v2 passes, prior artifact retained.",
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "publication": "Pending T77 independent review and publication; no worker push.",
+  "correction": "Root held beb7f4ef82 for new signed target-1 overflow at INT32_MIN even without due update. Cast target to int64_t before arithmetic; expanded target boundaries and all normal traces regenerated under updated adapter. Full signed32 target hold0; nonzero hold excludes above INT32_MAX-2. No prior local evidence overwritten."
+}

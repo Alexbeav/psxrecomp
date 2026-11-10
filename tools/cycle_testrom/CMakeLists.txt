@@ -15,8 +15,13 @@ set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH
 
 include("${PSXRECOMP_ROOT}/runtime/runtime.cmake")
 
-set(GAME_GENERATED_FULL
-    "${CMAKE_CURRENT_SOURCE_DIR}/generated/cycle_testrom.exe_full.c")
+# psxrecomp-game writes the recompiled text as shards (<exe>_full_NN.c).
+file(GLOB GAME_GENERATED_FULL
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/cycle_testrom.exe_full_*.c")
+if(NOT GAME_GENERATED_FULL)
+    message(FATAL_ERROR "cycle_testrom: no generated/cycle_testrom.exe_full_*.c; "
+        "run psxrecomp-game --config game.toml --project-root ../.. first (README)")
+endif()
 set(GAME_GENERATED_DISPATCH
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/cycle_testrom.exe_dispatch.c")
 

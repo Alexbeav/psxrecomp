@@ -3,7 +3,7 @@
 # into an existing setup-host release stage directory.
 #
 # Title packagers copy the host exe, game sources, and framework tree first,
-# then call this to finish the RetComM/wizard-complete zip layout.
+# then call this to finish the Retro/wizard-complete zip layout.
 #
 # Usage:
 #   stage_setup_sdk.sh --stage <stage-dir> [options]
@@ -19,6 +19,7 @@
 #   --runtime-bin DIR       MinGW runtime DLL search dir (repeatable)
 #   --search-dir DIR        Extra DLL search dir (repeatable)
 #   --require-cli           Require psxrecomp_cli.py after overlays (default on)
+#   --omit-openbios         Remove OpenBIOS assets for a retail-BIOS-only recipe
 #
 # Env aliases for toolchain dir (first wins):
 #   PSXRECOMP_TOOLCHAIN_DIR, TOOLCHAIN_DIR, BPE_TOOLCHAIN_DIR
@@ -39,6 +40,7 @@ HOST_EXE=""
 RUNTIME_BINS=()
 SEARCH_DIRS=()
 REQUIRE_CLI=1
+OMIT_OPENBIOS=0
 
 usage() {
   sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
@@ -59,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --search-dir) SEARCH_DIRS+=("${2:?}"); shift 2 ;;
     --require-cli) REQUIRE_CLI=1; shift ;;
     --no-require-cli) REQUIRE_CLI=0; shift ;;
+    --omit-openbios) OMIT_OPENBIOS=1; shift ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage
@@ -192,6 +195,27 @@ chmod +x "${STAGE}/psxrecomp/recompiler/build/$(basename "${GAME_BIN}")" 2>/dev/
 chmod +x "${STAGE}/psxrecomp/recompiler/build/$(basename "${BIOS_BIN}")" 2>/dev/null || true
 echo "staged emitters from ${GAME_BIN%/*}"
 
+# The codegen hash is build output. Keep framework source trees read-only and
+# stage the header produced beside the exact emitter, including multi-config
+# layouts where the executable lives in a Release/ subdirectory.
+CODEGEN_HASH_HDR=""
+for _hash_root in "${GAME_BIN%/*}" "$(dirname "${GAME_BIN%/*}")"; do
+  _hash_candidate="${_hash_root}/runtime/include/overlay_codegen_hash.h"
+  if [[ -f "${_hash_candidate}" ]]; then
+    CODEGEN_HASH_HDR="${_hash_candidate}"
+    break
+  fi
+done
+if [[ -z "${CODEGEN_HASH_HDR}" ]]; then
+  echo "error: emitter build has no runtime/include/overlay_codegen_hash.h" >&2
+  echo "  rebuild psxrecomp-game from the selected framework source" >&2
+  exit 1
+fi
+mkdir -p "${STAGE}/psxrecomp/runtime/include"
+cp -a "${CODEGEN_HASH_HDR}" \
+  "${STAGE}/psxrecomp/runtime/include/overlay_codegen_hash.h"
+echo "staged codegen hash from ${CODEGEN_HASH_HDR}"
+
 cat >"${STAGE}/psxrecomp/retcomm-sdk.json" <<'EOF'
 {
   "cli": "psxrecomp_cli.py",
@@ -201,12 +225,24 @@ cat >"${STAGE}/psxrecomp/retcomm-sdk.json" <<'EOF'
 }
 EOF
 
-for f in OpenBIOS.toml openbios.bin OpenBIOS.LICENSE SCPH1001.toml; do
-  if [[ ! -f "${STAGE}/psxrecomp/bios/${f}" ]]; then
-    echo "error: missing psxrecomp/bios/${f} in staged tree" >&2
-    exit 1
-  fi
-done
+if command -v python3 >/dev/null 2>&1; then
+  SDK_PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  SDK_PYTHON=python
+else
+  echo "error: Python is required to check the staged BIOS policy" >&2
+  exit 1
+fi
+bios_args=()
+if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+  # Run after overlays so they cannot restore an unwanted BIOS surface.
+  for bios_root in "${STAGE}/bios" "${STAGE}/psxrecomp/bios"; do
+    rm -f "${bios_root}/openbios.bin" "${bios_root}/OpenBIOS.toml" \
+          "${bios_root}/OpenBIOS.LICENSE"
+  done
+  bios_args+=(--omit-openbios)
+fi
+"${SDK_PYTHON}" "${SCRIPT_DIR}/check_setup_bios_assets.py" "${STAGE}" "${bios_args[@]}"
 
 if [[ "${REQUIRE_CLI}" -eq 1 && ! -f "${STAGE}/psxrecomp/psxrecomp_cli.py" ]]; then
   echo "error: missing psxrecomp/psxrecomp_cli.py in staged tree" >&2
@@ -232,7 +268,7 @@ if [[ -n "${TOOLCHAIN_DIR}" && -d "${TOOLCHAIN_DIR}" ]]; then
   fi
   echo "bundled toolchain from ${TOOLCHAIN_DIR}"
 elif [[ "${ALLOW_NO_TOOLCHAIN}" -eq 1 ]]; then
-  echo "note: no embedded toolchain/ — RetComM/wizard will download cmake-clang-v1" \
+  echo "note: no embedded toolchain/ — Retro/wizard will download cmake-clang-v1" \
        "(or accept an offline zip / system cmake)" >&2
 else
   echo "error: toolchain dir required (pass --toolchain-dir or set PSXRECOMP_TOOLCHAIN_DIR)" >&2

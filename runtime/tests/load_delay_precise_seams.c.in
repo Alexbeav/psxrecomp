@@ -1,0 +1,12 @@
+extern int g_psx_precise_slice;
+int psx_slice_block_impl(CPUState*,uint32_t,uint32_t,int);
+int psx_get_in_exception(void){return 0;}
+uint64_t g_psx_device_gen;int g_psx_deadline_cache;
+uint32_t cycles_to_next_event(void){return 0xffffffffu;}
+uint32_t source_gpu_runtime_cycles_to_event(void){return 0xffffffffu;}
+int psx_is_dispatchable(uint32_t p){(void)p;return 1;}
+int g_psx_slice_irq_handoff,g_psx_slice_slot_take,g_psx_call_bail;
+uint32_t g_psx_cyc_batch,g_psx_cyc_batch_limit;uint32_t *g_psx_cyc_local_acc;
+uint64_t psx_get_cycle_count(void){return psx_cycle_count;}
+int dirty_ram_is_dirty(uint32_t p){(void)p;return 1;}
+void psx_publish_note(uint32_t k,uint32_t p,uint32_t a){(void)k;(void)p;(void)a;}

@@ -1,0 +1,14 @@
+{
+ "schema":"t172-xa-resampler-provenance-v1",
+ "base":"f315dbb3079cc075a6ee5916b601d7be3a673f44",
+ "tested_commit":"92ad7f7138d0d50331299b9e8fba0e52af6b1b1e",
+ "owned":["xa_resample_to_44100"],
+ "primary_reference":{"revision":"a253f078553f83b4e540f087abf0c28d954b6293","path":"docs/cdromformat.md","sha256":"d391c98d5156b41edb15759e56b21e5619f73b12e2a541d9806f4bb68c981950"},
+ "inputs":["T77 declaration/caller and opaque contract v1","pinned primary hardware documentation","independently authored opaque observations"],
+ "excluded_exposure":["old implementation/comments","inherited source-profile tests","restricted builders/harnesses/generated headers/source exports/compiler diagnostics"],
+ "compatibility_target":"Pinned GCC16.1.0 O0/O2 baseline observations. Baseline signed32 product overflow is not portable C semantics; replacement explicitly wraps product to signed32, divides toward zero and wraps result to signed16.",
+ "bounds":{"in_frames_max":4032,"max_frames_max":9408,"positive_rates":[18900,37800],"negative_arguments":"signed32 through zero","input_samples":8064,"output_samples":18816,"null":"either buffer may be null per contract","alias":"disjoint"},
+ "arithmetic_proof":"For admitted positive calls, count numerator is at most 4032*44100+37800-1=177848999, and output position at most 9407*37800=355584600. Signed16 delta is within +/-65535, product is evaluated in int64 then converted to uint32 modulo 2^32. Unsigned bits are mapped into int64 signed32 range by subtraction, so division is defined. Final low16 bits are mapped into int16 range before conversion. Index bounds follow duration ceiling and capacity cap.",
+ "preserved":["all source bytes outside installed region","original file notices and LICENSE","previous accepted slices"],
+ "limits":["no hardware interpolation correction","no persistent state/reset/restore claim","no transport or audible-gameplay claim","no formal clean-room/legal-clearance/quality claim"]
+}

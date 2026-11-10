@@ -16,11 +16,15 @@ extern "C" {
  * when OSD is gated off.
  */
 
-/* Top-left text toast. duration_ms <= 0 uses 2000. */
+/* Top-left text toast. duration_ms <= 0 uses 2000. A message longer than a
+ * line breaks into at most three lines (host_osd_wrap.h). */
 void host_osd_push(const char *msg, int duration_ms);
 
 /* Persistent top-left status text. Passing NULL/empty clears it. */
 void host_osd_set_status(const char *msg);
+/* Independent diagnostic rows; NULL/empty clears a row. Host presentation
+ * only, retaining runtime toasts/status and leaving guest VRAM untouched. */
+void host_osd_set_diagnostics(const char *first, const char *second);
 
 /* Right-side vertical volume bar (percent clamped 0..100). */
 void host_osd_show_volume(int percent, int duration_ms);
@@ -38,6 +42,9 @@ int host_osd_needs_present(void);
  * deciding neither is active), call host_osd_present_done(). */
 int host_osd_image(const uint32_t **pixels, int *w, int *h);          /* text */
 int host_osd_volume_image(const uint32_t **pixels, int *w, int *h);   /* bar */
+/* Replay REC badge (top right): shown while visible is 1; the caller blinks it. */
+void host_osd_set_rec(int visible);
+int host_osd_rec_image(const uint32_t **pixels, int *w, int *h);
 void host_osd_present_done(void);
 
 /* Software / SDL_Renderer path: draw overlays over the current backbuffer. */

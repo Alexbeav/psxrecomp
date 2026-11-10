@@ -49,7 +49,8 @@ void usage(const char* program) {
         "--output <directory> [--name <title>]\n\n"
         "The output contains generated game/BIOS C, game.toml, CMakeLists.txt,\n"
         "and build scripts. No compiler toolchain is bundled.\n"
-        "Supported BIOS: OpenBIOS, SCPH1001, SCPH101, SCPH5552 (any 512 KiB PS1 BIOS dump).\n",
+        "Supported BIOS: OpenBIOS, SCPH1001, SCPH101, SCPH5500, SCPH5501, SCPH5552\n"
+        "(any 512 KiB PS1 BIOS dump).\n",
         program);
 }
 
@@ -155,6 +156,8 @@ const BiosProfile& select_bios_profile(const fs::path& bios_path) {
         {"OPENBIOS", {"OpenBIOS.toml", "OpenBIOS"}},
         {"SCPH1001", {"SCPH1001.toml", "SCPH1001"}},
         {"SCPH101",  {"SCPH101.toml",  "SCPH101"}},
+        {"SCPH5500", {"SCPH5500.toml", "SCPH5500"}},
+        {"SCPH5501", {"SCPH5501.toml", "SCPH5501"}},
         {"SCPH5552", {"SCPH5552.toml", "SCPH5552"}},
     };
     const std::string token = PSXRecompV4::bios_model_token(bios_path);
@@ -163,7 +166,8 @@ const BiosProfile& select_bios_profile(const fs::path& bios_path) {
     }
     throw std::runtime_error(
         "unsupported BIOS filename '" + bios_path.filename().string() +
-        "' (expected openbios.bin, SCPH1001.BIN, SCPH101.BIN, or SCPH5552.BIN)");
+        "' (expected openbios.bin, SCPH1001.BIN, SCPH101.BIN, SCPH5500.BIN, "
+        "SCPH5501.BIN, or SCPH5552.BIN)");
 }
 
 fs::path find_bios_profile(const fs::path& framework,
@@ -312,11 +316,11 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         find_bios_profile(framework_source, bios_profile);
 
     std::set<uint32_t> seeds = {image.entry_point()};
-    for (uint32_t address = image.load_address(); address + 4 <= image.end_address(); address += 4) {
+    for (uint32_t address = image.load_address(); address + 4 <= image.analysis_end_address(); address += 4) {
         auto word = image.read_word(address);
         if (!word || ((*word >> 26) & 0x3F) != 0x03) continue;
         uint32_t target = (address & 0xF0000000u) | ((*word & 0x03FFFFFFu) << 2);
-        if (target >= image.load_address() && target < image.end_address()) seeds.insert(target);
+        if (target >= image.load_address() && target < image.analysis_end_address()) seeds.insert(target);
     }
     std::string seed_text = fmt::format("# Auto-generated JAL targets for {}\n", serial);
     for (uint32_t seed : seeds) seed_text += fmt::format("0x{:08X}\n", seed);

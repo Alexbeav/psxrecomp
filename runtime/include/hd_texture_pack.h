@@ -25,6 +25,13 @@ enum HdTextureLookupStatus {
     HD_TEXTURE_LOOKUP_AMBIGUOUS = 2
 };
 
+/* Palette identity of an indexed replacement, named TTTTTTTT-index.png: its
+ * red channel holds CLUT indices (alpha 0 = transparent) and the renderer
+ * resolves them through the live CLUT of each draw, so one image serves every
+ * palette the game draws the texture with (highlights, fades). An exact
+ * TTTTTTTT-PPPPPPPP image still wins for its own palette. */
+#define HD_TEXTURE_PALETTE_INDEXED 0xFFFFFFFFu
+
 typedef struct HdTexturePackInfo {
     const char* asset_root;       /* valid until hd_texture_pack_destroy */
     const char* replacement_root; /* valid until hd_texture_pack_destroy */
@@ -88,6 +95,12 @@ int hd_texture_pack_lookup(const HdTexturePack* pack,
                            uint32_t palette_hash,
                            HdTexturePackEntry* out_entry);
 
+/* The pack's identity: a hash of its replacement keys (nonzero), equal for
+ * two loads of the same pack. Binds saved residency to the pack. */
+uint32_t hd_texture_pack_identity(const HdTexturePack* pack);
+/* 1 when any replacement (any palette) is keyed by this upload hash. */
+int hd_texture_pack_has_texture(const HdTexturePack* pack, uint32_t texture_hash);
+
 /* Standard reflected IEEE CRC-32 (polynomial 0xEDB88320, initial/final XOR
  * 0xFFFFFFFF), feeding each uint16_t explicitly low byte then high byte. */
 uint32_t hd_texture_crc32_words_le(const uint16_t* words, size_t word_count);
@@ -103,6 +116,8 @@ uint32_t hd_texture_hash_clut(const uint16_t* vram,
 /* Upload bytes are row-major logical upload words, independent of destination
  * wrapping. Tracking invalidates/splits every intersected older residency.
  * Width <= 1024 and height <= 512; X/Y may wrap. */
+int hd_texture_pack_debug_uploads_at(const HdTexturePack* pack, unsigned x, unsigned y,
+                                     char* out, size_t cap);
 int hd_texture_pack_track_upload(HdTexturePack* pack,
                                  uint16_t x,
                                  uint16_t y,
@@ -174,6 +189,27 @@ typedef struct HdTexturePixels {
 
 void hd_texture_pack_set_decode_budget(HdTexturePack* pack,
                                        size_t budget_bytes);
+/* Elective full preload: decode unambiguous replacements up front and pin
+ * them, bounded by max_bytes of decoded RGBA in aggregate and by max_threads
+ * concurrent decodes (the caller's thread included). Pinned images are kept
+ * outside the on-demand decode budget, which stays as configured. Images not
+ * preloaded (over the cap, unreadable, malformed, a worker failure) are left
+ * to the normal asynchronous, budgeted decode path; nothing is marked failed
+ * by the preload. Returns 1 when every image was preloaded, 0 for a partial
+ * preload (see out), -1 on error. Repeated calls count already pinned images
+ * without reading/decoding them again; max_bytes caps the pack's total pinned
+ * residency. A cap smaller than existing residency is rejected with -1 and
+ * the existing residency reported; it does not discard live pinned images. */
+typedef struct HdTexturePreloadResult {
+    int requested;      /* unambiguous replacements considered */
+    int loaded;         /* resident and pinned, including earlier calls */
+    int over_budget;    /* skipped: the aggregate max_bytes was reached */
+    int failed;         /* unreadable, malformed, too large, or worker error */
+    int worker_errors;  /* of failed: a decode that threw (caught) */
+    size_t bytes;       /* total decoded RGBA pinned by this pack */
+} HdTexturePreloadResult;
+int hd_texture_pack_preload(HdTexturePack* pack, size_t max_bytes,
+                            unsigned max_threads, HdTexturePreloadResult* out);
 int hd_texture_pack_request_decode(HdTexturePack* pack,
                                    uint32_t texture_hash,
                                    uint32_t palette_hash);

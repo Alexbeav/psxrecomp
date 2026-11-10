@@ -15,7 +15,8 @@ set. It is **game-agnostic** — point it at any title's capture directory.
 
 The runtime writes one JSON per distinct overlay body it has ever mapped to
 `<exe_dir>/overlay_captures.json.d/<contenthash>.json`
-(schema `psxrecomp overlay capture v2`):
+(schema `psxrecomp overlay capture v3`; v3 adds the segments each dispatch
+entry entered through, which this tool does not need):
 
 | field | meaning |
 |---|---|
@@ -197,5 +198,5 @@ Recommended split of labour:
 ## Related
 
 - `docs/config_schema.md` — `[widescreen.cull]` schema
-- `WIDESCREEN.md` — native-wide / adaptive view design
+- `docs/WIDESCREEN.md` — native-wide / adaptive view design
 - `docs/COMPILING_OVERLAYS.md` — how captures become compiled overlay DLLs

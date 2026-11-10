@@ -170,7 +170,7 @@ def netplay_configured(root: Path) -> bool:
 
 
 def ci_workflow_present(root: Path) -> bool:
-    """True if setup-host ``.github/workflows/release.yml`` exists."""
+    """True if ``.github/workflows/release.yml`` exists."""
     root = root.expanduser().resolve()
     return (root / ".github" / "workflows" / "release.yml").is_file()
 
@@ -297,7 +297,7 @@ def build_token_map(
         "EXE_BASENAME": exe_basename(title),
         "ZIP_PREFIX": zp,
         "GITHUB_OWNER": sanitize_github_name(
-            (github_owner or "").strip() or "TechnicallyComputers"
+            (github_owner or "").strip() or "RetroPortingToolKit"
         ),
         "GITHUB_REPO": sanitize_github_name((github_repo or "").strip() or name),
         "DISC_HINT": f"your legally owned {game} disc",

@@ -36,7 +36,7 @@ core — and forbids per-game patches / symptom-workarounds / `game.toml` hacks
 *as a way to fake faithfulness*. It does NOT forbid them forever: once the
 faithful core is proven, per-game shims/hacks are the legitimate tool of the
 *enhancement* phase — accelerated load times (toward 0), widescreen, etc. (see
-`ENHANCEMENTS.md`). Likewise **LLE is the BASELINE, not an absolute**: a
+`docs/ENHANCEMENTS.md`). Likewise **LLE is the BASELINE, not an absolute**: a
 faithful, Beetle-validated HLE *subsystem replacement* is permitted at a genuine
 LLE landmine (non-determinism with no hardware analog, or profound performance
 loss), never as the starting point — see §0's amendment below and
@@ -66,7 +66,9 @@ recompile yet". If a BIOS function cannot be recompiled, the recompiler
 is wrong and must be fixed. The interpreter does not exist. Do not
 write one.
 
-There is **no HLE BIOS layer** in v4. No `bios.c` with case branches
+For the faithful reference, the BIOS remains recompiled code. The historical
+no-HLE restriction below is superseded for deliberate replacements by the owner
+HLE policy in this section. Historically there was **no HLE BIOS layer** in v4. No `bios.c` with case branches
 intercepting A0/B0/C0 vectors. No C reimplementations of `OpenEvent` or
 `StartCard` or `alloc_kernel_memory`. The BIOS IS the recompiled C
 output of `SCPH1001.BIN`. If a BIOS routine misbehaves, the answer is
@@ -81,76 +83,19 @@ stubs. Hand-delivering an event because the chain handler isn't
 installed is a stub wearing a costume and is the worst kind because it
 hides the missing integration.
 
-**AMENDMENT 2026-06-29 — LLE-first baseline; a faithful HLE _subsystem
-replacement_ is permitted (the three prohibitions above are the DEFAULT, not an
-absolute ban on all HLE).** LLE / the recompiled BIOS is the BASELINE and the
-spirit — architect as much as possible that way. But a whole subsystem MAY be
-swapped for a host-side HLE reimplementation when, and ONLY when, ALL of these
-hold: (1) the LLE path has a genuine landmine there — non-determinism with no
-hardware analog (e.g. the host coroutine/fiber cooperative-thread scheduler), or
-profound performance loss — not mere inconvenience; (2) the replacement is
-GENERAL (every game, keyed to the documented PSX kernel/hardware mechanism),
-never per-game; (3) it operates on the REAL guest structures (TCB / EvCB /
-queues in guest RAM) and reproduces the DOCUMENTED mechanism
-(`docs/psx_bios_disasm.txt` / PSX-SPX), not a guess; (4) it is continuously
-validated against the independent Beetle oracle. This is a deliberate SUBSYSTEM
-REPLACEMENT on top of a proven LLE baseline — NEVER the starting point or sole
-implementation (HLE-first leaves "half an ecosystem"). It does NOT relax the
-no-stubs / no-faking rule: the forbidden "HLE BIOS shim that hand-delivers the
-answer the BIOS would have produced" (above) stays forbidden, because it fakes
-the result and no oracle checks it. Discriminator — "if my reimplementation is
-wrong, what happens?": "the game misbehaves / a recompiler bug stays hidden" ⇒
-forbidden; "we diverge loudly from Beetle / fall back to the faithful path" ⇒
-permitted. **Faithfulness is the FOUNDATION, not the destination:** once the
-faithful core is proven, the goals are accelerated load times (toward 0) and
-enhancements (widescreen), where per-game shims/hacks become legitimate
-(`ENHANCEMENTS.md`). Per-game hacks remain forbidden during foundation work.
-
-**AMENDMENT 2026-07-02 — HLE is a standing, swappable TIER (the gbarecomp
-model), not just a per-landmine carve-out.** This goes further than the
-2026-06-29 amendment (which permits HLE only as a targeted subsystem
-replacement at an LLE landmine). User-directed pivot: psxrecomp now carries a
-first-class High-Level Emulation tier alongside LLE, modeled on
-`F:/Projects/gbarecomp/gbarecomp` (`src/runtime/bios_hle.{h,cpp}`, commits
-23a57ce + 168e313):
-
-1. **Two selectable backends. AMENDMENT 2026-07-06 — HLE is now the DEFAULT, but
-   this changes NOTHING institutional.** We still BUILD LLE: the recompiled BIOS
-   is the foundation we architect against, the reference implementation, and the
-   oracle — fully linked, load-bearing, selectable, and the thing every accuracy
-   check runs against. HLE is a QoL layer we lay ON TOP (instant boot-skip for
-   players); the faithful LLE core is proven, so defaulting the convenience on is
-   an enhancement-phase load-time win, not an architecture change. Mechanically
-   this only flips the framework runtime default `bios_hle` false→true
-   (`config_loader.h`); opt OUT per-game with `[runtime] bios_hle = false` or env
-   `PSX_BIOS_HLE=0`. A null-by-default hook intercepts BIOS service dispatch
-   before the recompiled BIOS runs; a startup banner names the active backend.
-   With HLE off the build is byte-identical to a build without the tier. Keep new
-   bring-up and all verification on LLE; HLE-default is the shipping convenience.
-2. **LLE remains the reference implementation and the oracle.** It stays fully
-   linked, load-bearing, and selectable; every BIOS call the HLE layer does
-   not implement transparently falls through to the recompiled BIOS, so HLE is
-   never load-bearing beyond what it covers and never becomes the verification
-   oracle.
-3. **HLE boot is THE boot-skip mechanism.** Skipping BIOS boot = synthesize
-   the exact post-boot kernel handoff state (kernel tables, vectors, EvCB/TCB,
-   per-mode state) and jump to the game entry; the recompiled BIOS stays
-   linked for exception/IRQ dispatch and call fallback. This deprecates the
-   previous fast-boot mechanism. LLE always plays the real boot.
-4. **No-stubs still stands, unchanged.** Every HLE implementation must be a
-   real, validated implementation of the documented kernel mechanism
-   (`docs/psx_bios_disasm.txt` / PSX-SPX, Beetle-oracle-checked), operating on
-   the real guest structures — never a "return the answer the BIOS would have
-   produced" fake. The discriminator from the 2026-06-29 amendment applies to
-   every handler.
-5. **The HLE layer is an observability surface.** It carries always-on ring
-   buffers (calls, routes, arguments, results) queryable via the TCP debug
-   server, per rule 3 and the global ring-buffer rule.
-
-If you find yourself wanting to violate any of the above three
-paragraphs **beyond the two amendments just above**,
-**stop and re-read docs/internal/PLAN.md**. Every prior attempt failed by
-violating exactly these rules under pressure.
+**Owner HLE policy, 2026-10-06.** The older HLE amendments are superseded by
+`F:/Projects/recomp-template/HLE.md` and [the build integration](docs/HLE_EXECUTION.md).
+Keep LLE buildable and runnable as the correctness reference. Qualified HLE is
+the default performance implementation, selected at build time. Preserve actual
+caller inputs, outputs, required memory/register effects, continuation and
+observable completion ordering. Batching, native/GPU algorithms, private host
+state, caching and approximate internal timing are allowed. Small practically
+unnoticeable differences are already authorized. HLE need not support every game,
+dual-execute, retain a live LLE state or provide a runtime switch. Compare exact
+outputs exactly, intentional approximations within their declared contract, and
+measure useful performance. Missing effects, false success and material gameplay
+changes remain defects. Faithful-core accuracy requirements apply to the LLE
+reference, not to unobserved HLE internals.
 
 ---
 
@@ -510,3 +455,31 @@ all handle install-at-runtime code this way. PSXRecomp v4 follows suit.
 Implementation lives in `runtime/src/dirty_ram_interp.c` (or similar). It
 is intentionally small (~300 LOC), modular, and isolated. It does NOT
 expand into a general-purpose CPU emulator.
+
+---
+
+## 19. A qualified behaviour is registered in the same commit that qualifies it
+
+A TAS replay qualifies a source *tree*. The accuracy changes that tree depends on then
+travel through cherry-picks, stacked branches and upstream merges, where a hunk can be
+dropped without any build or unit test noticing. This has happened twice and cost days:
+
+- `b1413e71`'s four-line `dirty_ram_interp.c` hunk was lost in the PR #361 → split rebase
+  and found only by a full Bio Hazard replay divergence.
+- `155003cb`, save-state capture and compatible-build resume, was lost in the *same* rebase
+  and nobody noticed for two days, because nothing was watching for it.
+
+So: **when a change is qualified by a replay, register it in
+`tools/tasreplays/qualified-hunks.json` in the same commit.** Use
+`qualified_hunks.py seed --commit <sha> --id <id> --titles <titles>`. If a later change
+supersedes a registered hunk's exact lines, re-pin it with `--as-of HEAD` rather than
+deleting it; that is the evolved-hunk case.
+
+`build_cache.stage_tools` runs the check, so **every title adapter's `setup` now refuses to
+build a candidate from a tree that dropped a registered behaviour.** You cannot forget by
+accident. A loss that is genuinely known is recorded in the registry's `known_absent` map
+with a written reason and reported as a debt rather than refusing; nothing may be marked
+absent silently, and clearing a debt means porting the behaviour back and deleting the entry.
+
+Presence proves nothing about behaviour. Absence is a definite finding. Read
+`docs/tasreplays/LANE.md` before working the lane.

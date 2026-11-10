@@ -1,0 +1,1 @@
+This interface candidate has no final source adaptation profile. Build with current public source references and existing packaged Core.json/UI.json pins has not been verified. The next integration will reuse the existing proven packaged-pin builder; modern v2 source adaptation is separate ongoing work.

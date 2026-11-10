@@ -10,6 +10,8 @@
 #include <stdio.h>
 
 int g_ls_replay_active = 0;
+int g_boot_state_cpu_timing_restored = 0;
+int psx_mod_host_output_scope(void) { return 0; }
 int g_ls_mode = 0;
 int g_precise_mode = 0;
 int g_psx_call_bail = 0;
@@ -117,3 +119,5 @@ int main(void) {
                     "idle skip bounded by the SPU sample deadline\n");
     return 0;
 }
+
+#include "source_bus_inactive_clock.inc"

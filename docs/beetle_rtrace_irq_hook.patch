@@ -1,0 +1,144 @@
+diff --git a/libretro.cpp b/libretro.cpp
+index e9c867c8..0924113d 100644
+--- a/libretro.cpp
++++ b/libretro.cpp
+@@ -512,6 +512,8 @@ FrontIO *PSX_FIO = NULL;
+ psxrecomp_wtrace_cb_t  g_psxrecomp_wtrace_cb  = NULL;
+ psxrecomp_fntrace_cb_t g_psxrecomp_fntrace_cb = NULL;
+ psxrecomp_cdcmd_cb_t   g_psxrecomp_cdcmd_cb   = NULL;
++psxrecomp_rtrace_cb_t  g_psxrecomp_rtrace_cb  = NULL;
++psxrecomp_irq_cb_t     g_psxrecomp_irq_cb     = NULL;
+ 
+ MultiAccessSizeMem<512 * 1024, uint32, false> *BIOSROM = NULL;
+ MultiAccessSizeMem<65536, uint32, false> *PIOMem = NULL;
+diff --git a/mednafen/psx/cpu.cpp b/mednafen/psx/cpu.cpp
+index ea01b8bc..cbfd20dc 100644
+--- a/mednafen/psx/cpu.cpp
++++ b/mednafen/psx/cpu.cpp
+@@ -1426,6 +1426,10 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+          uint32_t value = ReadMemory<uint32>(timestamp, address, false, true);
+          GTE_WriteDR(rt, value);
+ 
++         /* PSXRecomp oracle hook: load trace. */
++         if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++          g_psxrecomp_rtrace_cb(address, value, PC, GPR[31], 4);
++
+          if (PGXP_GetModes() & PGXP_MODE_GTE)
+             PGXP_GTE_LWC2(instr, value, address);
+ 
+@@ -2244,6 +2248,9 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 
+ 	LDWhich = rt;
+ 	LDValue = (int32)ReadMemory<int8>(timestamp, address);
++	/* PSXRecomp oracle hook: load trace. */
++	if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	 g_psxrecomp_rtrace_cb(address, LDValue & 0xFFu, PC, GPR[31], 1);
+ 
+ 	if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+ 		PGXP_CPU_LB(instr, LDValue, address);
+@@ -2268,6 +2275,9 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 
+         LDWhich = rt;
+ 	LDValue = ReadMemory<uint8>(timestamp, address);
++	/* PSXRecomp oracle hook: load trace. */
++	if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	 g_psxrecomp_rtrace_cb(address, LDValue, PC, GPR[31], 1);
+ 
+ 	if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+ 		PGXP_CPU_LBU(instr, LDValue, address);
+@@ -2301,6 +2311,9 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 
+ 	 LDWhich = rt;
+          LDValue = (int32)ReadMemory<int16>(timestamp, address);
++	 /* PSXRecomp oracle hook: load trace. */
++	 if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	  g_psxrecomp_rtrace_cb(address, LDValue & 0xFFFFu, PC, GPR[31], 2);
+ 	}
+ 	if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+ 		PGXP_CPU_LH(instr, LDValue, address);
+@@ -2334,6 +2347,9 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 
+ 	 LDWhich = rt;
+          LDValue = ReadMemory<uint16>(timestamp, address);
++	 /* PSXRecomp oracle hook: load trace. */
++	 if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	  g_psxrecomp_rtrace_cb(address, LDValue, PC, GPR[31], 2);
+ 	}
+ 
+ 	if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+@@ -2369,6 +2385,9 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 
+ 	 LDWhich = rt;
+          LDValue = ReadMemory<uint32>(timestamp, address);
++	 /* PSXRecomp oracle hook: load trace. */
++	 if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	  g_psxrecomp_rtrace_cb(address, LDValue, PC, GPR[31], 4);
+ 	}
+ 
+ 	if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+@@ -2504,6 +2523,10 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 		 break;
+ 	}
+ 
++	/* PSXRecomp oracle hook: load trace (merged register value). */
++	if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	 g_psxrecomp_rtrace_cb(address, LDValue, PC, GPR[31], 4);
++
+         if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+ 	   PGXP_CPU_LWL(instr, LDValue, address);
+ 
+@@ -2583,6 +2606,10 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+ 		 break;
+ 	}
+ 
++	/* PSXRecomp oracle hook: load trace (merged register value). */
++	if(MDFN_UNLIKELY(g_psxrecomp_rtrace_cb))
++	 g_psxrecomp_rtrace_cb(address, LDValue, PC, GPR[31], 4);
++
+         if (PGXP_GetModes() & PGXP_MODE_MEMORY)
+ 	   PGXP_CPU_LWR(instr, LDValue, address);
+ 
+diff --git a/mednafen/psx/irq.cpp b/mednafen/psx/irq.cpp
+index 029b9f84..d99dbbb3 100644
+--- a/mednafen/psx/irq.cpp
++++ b/mednafen/psx/irq.cpp
+@@ -73,6 +73,10 @@ void IRQ_Assert(int which, bool status)
+       Asserted |= 1 << which;
+       //Status |= 1 << which;
+       Status |= (old_Asserted ^ Asserted) & Asserted;
++
++      /* PSXRecomp oracle hook: rising edge of this IRQ line. */
++      if(MDFN_UNLIKELY(g_psxrecomp_irq_cb) && ((old_Asserted ^ Asserted) & Asserted))
++         g_psxrecomp_irq_cb(which);
+    }
+ 
+    Recalc();
+diff --git a/mednafen/psx/psx.h b/mednafen/psx/psx.h
+index fc53362d..05122c8c 100644
+--- a/mednafen/psx/psx.h
++++ b/mednafen/psx/psx.h
+@@ -178,4 +178,24 @@ typedef void (*psxrecomp_cdcmd_cb_t)(uint8_t cmd, uint8_t nargs,
+                                       uint32_t pc);
+ extern psxrecomp_cdcmd_cb_t g_psxrecomp_cdcmd_cb;
+ 
++/* PSXRecomp oracle: CPU load (read) trace callback — the read-side twin of
++ * the wtrace hook. Fired by PS_CPU after LB/LBU/LH/LHU/LW/LWL/LWR/LWC2 read
++ * memory (not on an address-error exception).
++ *   addr  = virtual address of the access (LWL/LWR: the unaligned address)
++ *   value = loaded bus value, zero-extended to `size` bytes
++ *           (LWL/LWR: the merged register value, size 4)
++ *   pc    = PC of the executing load instruction
++ *   ra    = $ra (GPR[31]) at time of load
++ *   size  = 1, 2, or 4 */
++typedef void (*psxrecomp_rtrace_cb_t)(uint32_t addr, uint32_t value,
++                                       uint32_t pc, uint32_t ra, uint8_t size);
++extern psxrecomp_rtrace_cb_t g_psxrecomp_rtrace_cb;
++
++/* PSXRecomp oracle: interrupt-line rising-edge callback. Fired by
++ * IRQ_Assert() when source `which` (the I_STAT bit number: 0=VBLANK,
++ * 2=CD, 3=DMA, ...) goes from deasserted to asserted, i.e. exactly when
++ * the I_STAT bit latches. */
++typedef void (*psxrecomp_irq_cb_t)(int which);
++extern psxrecomp_irq_cb_t g_psxrecomp_irq_cb;
++
+ #endif

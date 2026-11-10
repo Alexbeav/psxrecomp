@@ -1,0 +1,239 @@
+"""Exercise the compiled observer with synthetic RAM and no game assets."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import struct
+import sys
+import tempfile
+
+exe = Path(sys.argv[1]).resolve()
+with tempfile.TemporaryDirectory() as root:
+    root = Path(root)
+    bad_watches = {"watch_unaligned":"1", "watch_range":"0x200000", "watch_empty":"", "watch_duplicate":"0,0",
+                   "watch_trailing":"0,", "watch_space":"\t0", "watch_limit":",".join(str(2*i) for i in range(33))}
+    for case in ("valid", "cpu", "video", "cpu_missing", "missing", "wrong", "disconnected", "analog", "tail_pressed", "collision", "bad_tail", *bad_watches):
+        out = root / case
+        out.mkdir()
+        env = dict(os.environ, PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL="1", PSX_INPUT_ROUTE_TRACE="1")
+        env["PSX_INPUT_ROUTE_WATCH_U16"] = bad_watches.get(case, "0,0x1ffffe")
+        env["PSX_INPUT_ROUTE_CPU_STATE"] = "1" if case.startswith("cpu") else "0"
+        env["PSX_INPUT_ROUTE_VIDEO_STATE"] = "1" if case=="video" else "0"
+        if case == "collision":
+            (out / "checkpoints.jsonl").write_bytes(b"preserve")
+        if case == "bad_tail":
+            env["PSX_INPUT_ROUTE_NEUTRAL_TAIL"] = "1garbage"
+        run = subprocess.run([str(exe), case], env=env, capture_output=True)
+        expected = 0 if case in ("valid", "cpu", "video") else 4 if case == "bad_tail" or case in bad_watches else 3
+        assert run.returncode == expected, (case, run.returncode, run.stderr)
+        if case in ("valid", "cpu", "video"):
+            if case == "video":
+                rows=[json.loads(x) for x in (out/"video-state.jsonl").read_text(encoding='utf-8').splitlines()]
+                assert [x["frame"] for x in rows]==[0,1,2,3]
+                assert all(x["cycle"]==123456 and x["display_mode"]==100 and x["vertical_start"]==16 and x["vertical_end"]==256 and x["gpu_field"]==1 and x["lcf"]==0 and x["cycles_since_vblank"]==7 and x["next_period"]==563969 and x["profile_field"]==1 for x in rows)
+            else:assert not (out/"video-state.jsonl").exists()
+            if case == "cpu":
+                rows=[json.loads(x) for x in (out/"cpu-state.jsonl").read_text(encoding='utf-8').splitlines()]
+                assert [x["frame"] for x in rows] == [0,1,2,3]
+                assert all(x["timers"] == [dict(channel=i,counter=0xFFFF-i,mode=0x148+i,target=i,irq_line=i-1,fraction=2145-i) for i in range(3)] for x in rows)
+                assert all(x["sr"]==0x40000401 and x["cause"]==0x420 and x["epc"]==0x80012000 and x["i_stat"]==5 and x["i_mask"]==13 for x in rows)
+            else:
+                assert not (out/"cpu-state.jsonl").exists()
+            done = json.loads((out / "complete.json").read_text(encoding='utf-8'))
+            end = json.loads((out / "input-end.json").read_text(encoding='utf-8'))
+            assert done["frame"] == 3 and done["input_frames"] == 2 and done["neutral_tail_ticks"] == 1
+            assert end["frame"] == 2
+            assert done["applied_words_sha256"] == hashlib.sha256(bytes.fromhex("f7ffffff")).hexdigest()
+            assert end["applied_words_sha256"] == done["applied_words_sha256"]
+            assert json.loads((out / "device-events.json").read_text(encoding='utf-8')) == []
+            watches = [json.loads(line) for line in (out / "ram-u16.jsonl").read_text(encoding='utf-8').splitlines()]
+            assert [w["frame"] for w in watches] == [0,1,2,3]
+            assert all(w["ram_u16"] == {"000000":0x1234,"1FFFFE":0xABCD} for w in watches)
+            assert (out / "frame-000003.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+        else:
+            assert not (out / "complete.json").exists()
+        if case == "collision":
+            assert (out / "checkpoints.jsonl").read_bytes() == b"preserve"
+with tempfile.TemporaryDirectory() as directory:
+    for case in ('ds_valid', 'ds_wrong_axis', 'ds_unconverted', 'ds_missing',
+                 'ds_disconnected', 'ds_plainpad', 'ds_tail_axis', 'ds_digital',
+                 'ds_p2_valid', 'ds_p2_disconnected', 'ds_p2_plain', 'ds_p2_pressed',
+                 'ds_p2_axis', 'ds_p2_mode', 'ds_p2_multitap'):
+        out = Path(directory) / case
+        out.mkdir()
+        env = dict(os.environ, PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1',
+                   PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0',
+                   PSX_INPUT_ROUTE_CPU_STATE='0', PSX_INPUT_ROUTE_VIDEO_STATE='0')
+        env.pop('PSX_INPUT_ROUTE_WATCH_U16', None)
+        if case.startswith('ds_p2_'): env['PSX_INPUT_ROUTE_PORT2'] = 'dualshock-neutral'
+        run = subprocess.run([str(exe), case], env=env, capture_output=True)
+        assert run.returncode == (0 if case in ('ds_valid', 'ds_p2_valid') else 3), (case, run.returncode, run.stderr)
+        if case not in ('ds_valid', 'ds_p2_valid'):
+            assert not (out / 'complete.json').exists()
+            continue
+        source = struct.pack('<H5B', 0xFFEF, 1,0,128,255,0) + struct.pack('<H5B', 0xFFFF,129,130,131,132,0)
+        protocol = struct.pack('<H5B', 0xFFEF, 1,0,128,254,0) + struct.pack('<H5B', 0xFFFF,128,129,130,131,0)
+        for name in ('complete.json', 'input-end.json'):
+            record = json.loads((out / name).read_text(encoding='utf-8'))
+            assert record['original_controller_sha256'] == hashlib.sha256(source).hexdigest()
+            assert record['applied_controller_sha256'] == record['expected_protocol_sha256'] == hashlib.sha256(protocol).hexdigest()
+            if case == 'ds_p2_valid': assert record['port2_controller'] == 'dualshock-neutral'
+            assert record['guest_analog_mode'] == 1
+            assert 'applied_words_sha256' not in record
+        rows = [json.loads(line) for line in (out / 'checkpoints.jsonl').read_text(encoding='utf-8').splitlines()]
+        assert [row['frame'] for row in rows] == [0,1,2,3]
+        assert [row['guest_analog_mode'] for row in rows] == [0,0,1,1]
+        assert rows[2]['supplied_controller_sha256'] != rows[2]['applied_controller_sha256']
+        assert rows[2]['supplied_controller_sha256'] == rows[3]['supplied_controller_sha256']
+with tempfile.TemporaryDirectory() as directory:
+    digest = hashlib.sha256(bytes(range(256))*512).hexdigest()
+    for case in ('card_valid','card_missing','card_extra','card_short','card_changed','card_wrong_hash','card_bad_hash','ds_card_undeclared'):
+        out = Path(directory)/case; out.mkdir()
+        env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out),PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+        if case != 'ds_card_undeclared':
+            env['PSX_INPUT_ROUTE_CARD1_SHA256'] = '0'*64 if case=='card_wrong_hash' else 'xyz' if case=='card_bad_hash' else digest
+        run = subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert run.returncode == (0 if case=='card_valid' else 3), (case,run.returncode,run.stderr)
+        if case=='card_valid':
+            assert json.loads((out/'initial-cards.json').read_text(encoding='utf-8')) == dict(card1_present=True,card2_present=False,card1_sha256=digest,bytes=131072)
+            assert (out/'complete.json').is_file()
+        else:
+            assert not (out/'complete.json').exists()
+with tempfile.TemporaryDirectory() as directory:
+    env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+    env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=directory, PSX_INPUT_ROUTE_NEUTRAL_TAIL='2',
+               PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0')
+    result = subprocess.run([str(exe), 'resume_tail'], env=env, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    done = json.loads((Path(directory)/'complete.json').read_text(encoding='utf-8'))
+    assert done['frame'] == 4 and done['resumed_inputs'] == 3
+    assert done['input_frames'] == 2 and done['neutral_tail_ticks'] == 2
+    assert done['applied_controller_sha256'] == done['expected_protocol_sha256'] == hashlib.sha256(b'').hexdigest()
+with tempfile.TemporaryDirectory() as directory:
+    # PSXRTI3 two digital pads: P2 is hashed as supplied and as delivered, and
+    # a wrong, missing, disconnected, analog or non-neutral-tail P2 fails closed.
+    for case in ('two_valid', 'two_wrong', 'two_undelivered', 'two_disconnected', 'two_analog',
+                 'two_tail_pressed'):
+        out = Path(directory) / case
+        out.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+        run = subprocess.run([str(exe), case], env=env, capture_output=True)
+        assert run.returncode == (0 if case == 'two_valid' else 3), (case, run.returncode, run.stderr)
+        if case != 'two_valid':
+            assert not (out / 'complete.json').exists()
+            continue
+        p2 = hashlib.sha256(bytes.fromhex('bfffefff')).hexdigest()
+        for name in ('complete.json', 'input-end.json'):
+            record = json.loads((out / name).read_text(encoding='utf-8'))
+            assert record['port_layout'] == 'two-digital'
+            assert record['applied_port2_words_sha256'] == record['supplied_port2_words_sha256'] == p2
+            assert record['applied_words_sha256'] == hashlib.sha256(bytes.fromhex('f7ffffff')).hexdigest()
+    out = Path(directory) / 'two_dual_init'
+    out.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith('PSX_')}
+    env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+    run = subprocess.run([str(exe), 'two_dual_init'], env=env, capture_output=True)
+    assert run.returncode == 0, ('a DualShock init after a two-pad init is refused', run.returncode, run.stderr)
+with tempfile.TemporaryDirectory() as directory:
+    digest = hashlib.sha256(bytes(range(256))*512).hexdigest()
+    for case in ('card2_valid', 'card2_changed', 'card2_short', 'card2_wrong_hash', 'card2_bad_hash', 'card2_undeclared'):
+        out = Path(directory)/case; out.mkdir()
+        env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1', PSX_INPUT_ROUTE_CARD1_SHA256=digest)
+        if case != 'card2_undeclared':
+            env['PSX_INPUT_ROUTE_CARD2_SHA256'] = '0'*64 if case == 'card2_wrong_hash' else 'xyz' if case == 'card2_bad_hash' else digest
+        run = subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert run.returncode == (0 if case == 'card2_valid' else 3), (case,run.returncode,run.stderr)
+        if case == 'card2_valid':
+            assert json.loads((out/'initial-cards.json').read_text()) == dict(card1_present=True,card2_present=True,card1_sha256=digest,card2_sha256=digest,bytes=262144)
+        else: assert not (out/'complete.json').exists()
+print('input_route_observer: digital, DualShock delivery, loaded-card identity and tail resume, two digital pads passed')
+
+# Essential full-stream regressions through the production observer, including
+# neutral/order failures that selected checkpoint observations would miss.
+with tempfile.TemporaryDirectory() as directory:
+    for case in ('audit_valid','audit_dropped','audit_duplicate','audit_shifted','audit_early','audit_late'):
+        out=Path(directory)/case;out.mkdir()
+        env={k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out),PSX_INPUT_ROUTE_FULL_AUDIT='1',
+                   PSX_INPUT_ROUTE_AXIS_MODEL='octoshock-byte',PSX_INPUT_ROUTE_CAPTURE_EVERY='1',
+                   PSX_INPUT_ROUTE_NEUTRAL_TAIL='0')
+        run=subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert run.returncode==(0 if case=='audit_valid' else 3),(case,run.returncode,run.stderr)
+        if case!='audit_valid':
+            assert not (out/'complete.json').exists()
+            continue
+        expected=hashlib.sha256(b'TAS_SOURCE_CONTROLLER_V1\0'+bytes([2,0,0,0,0,0,0,0]))
+        for frame,buttons in ((1,0xffef),(2,0xffff)):
+            expected.update(struct.pack('<IBH5B',frame,1,buttons,1,2,3,4,0))
+        done=json.loads((out/'complete.json').read_text(encoding='utf-8'))
+        assert done['full_applied_input_sha256']==expected.hexdigest()
+        assert done['full_applied_original_frames']==done['runtime_boundary_rows']==2
+        assert all(done[k]==0 for k in ('missing_frames','duplicate_frames','out_of_order_frames','tail_applied_frames'))
+        rows=(out/'applied-input-boundaries.bin').read_bytes()
+        assert len(rows)==64 and struct.unpack_from('<IQ',rows)==(1,11) and struct.unpack_from('<IQ',rows,32)==(2,12)
+        sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools/tasreplays'))
+        from run_native import validate_full_input_audit
+        identity=dict(frames=2,full_expected_applied_sha256=expected.hexdigest(),console_events=[])
+        assert validate_full_input_audit(out,identity,0,False,[])['valid']
+        for fault in ('missing','duplicate','shifted','altered'):
+            bad=bytearray(rows)
+            if fault=='missing':bad=bad[:32]
+            elif fault=='duplicate':bad=bad[:32]+bad
+            elif fault=='shifted':struct.pack_into('<Q',bad,36,13)
+            else:bad[18]^=1
+            (out/'applied-input-boundaries.bin').write_bytes(bad)
+            try:validate_full_input_audit(out,identity,0,False,[])
+            except ValueError:pass
+            else:raise AssertionError('full input stream corruption accepted:'+fault)
+        (out/'applied-input-boundaries.bin').write_bytes(rows)
+
+with tempfile.TemporaryDirectory() as directory:
+    for case,value,expected in [('terminal_deferred','1',0),('terminal_bad_flag','garbage',4)]:
+        out=Path(directory)/case;out.mkdir()
+        env=dict(os.environ,PSX_INPUT_ROUTE_CAPTURE_DIR=str(out),PSX_INPUT_ROUTE_NEUTRAL_TAIL='0',
+                 PSX_SOURCE_TERMINAL_RETURN=value)
+        result=subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert result.returncode==expected,(case,result.returncode,result.stderr)
+        if expected==0:
+            complete=json.loads((out/'complete.json').read_text())
+            assert complete['input_frames']==2 and complete['neutral_tail_ticks']==0
+            checkpoints=[json.loads(x) for x in (out/'checkpoints.jsonl').read_text().splitlines()]
+            assert [r['frame'] for r in checkpoints]==[0,2]
+print('full applied audit and optional terminal deferral: complete hash/frame stream and dropped/duplicate/shifted/early/late rejection passed')
+
+# Continue the REAL observer in another process, including an input already
+# applied before the final CPU boundary. Do not regenerate the prefix from tape.
+with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory);cold=root/'cold';cold.mkdir();resumed=root/'resumed';resumed.mkdir()
+    checkpoint=cold/'state.input-observer'
+    base={k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+    base.update(PSX_INPUT_ROUTE_FULL_AUDIT='1',PSX_INPUT_ROUTE_AXIS_MODEL='octoshock-byte',
+                PSX_INPUT_ROUTE_CAPTURE_EVERY='1',PSX_INPUT_ROUTE_NEUTRAL_TAIL='0',
+                PSX_TEST_INPUT_CHECKPOINT=str(checkpoint))
+    before=subprocess.run([str(exe),'checkpoint_save'],env=dict(base,PSX_INPUT_ROUTE_CAPTURE_DIR=str(cold)),capture_output=True)
+    assert before.returncode==0,(before.returncode,before.stderr)
+    sha=next(line.split(b'=',1)[1].decode() for line in before.stdout.splitlines() if line.startswith(b'CHECKPOINT_SHA256='))
+    assert sha==hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    after=subprocess.run([str(exe),'checkpoint_resume'],env=dict(base,PSX_INPUT_ROUTE_CAPTURE_DIR=str(resumed),
+                            PSX_TEST_INPUT_CHECKPOINT_SHA256=sha),capture_output=True)
+    assert after.returncode==0,(after.returncode,after.stderr)
+    a=json.loads((cold/'complete.json').read_text());b=json.loads((resumed/'complete.json').read_text())
+    for key in ('applied_controller_sha256','original_controller_sha256','expected_protocol_sha256','full_applied_input_sha256',
+                'runtime_boundary_rows_sha256','full_applied_original_frames','runtime_boundary_rows',
+                'missing_frames','duplicate_frames','out_of_order_frames','neutral_tail_ticks'):
+        assert a[key]==b[key],(key,a,b)
+    assert b['resumed_inputs']==2 and (cold/'applied-input-boundaries.bin').read_bytes()==(resumed/'applied-input-boundaries.bin').read_bytes()
+    raw=bytearray(checkpoint.read_bytes());raw[-1]^=1;bad=root/'corrupt.input-observer';bad.write_bytes(raw)
+    rejected=root/'rejected';rejected.mkdir()
+    result=subprocess.run([str(exe),'checkpoint_resume'],env=dict(base,PSX_INPUT_ROUTE_CAPTURE_DIR=str(rejected),
+                PSX_TEST_INPUT_CHECKPOINT=str(bad),PSX_TEST_INPUT_CHECKPOINT_SHA256=sha),capture_output=True)
+    assert result.returncode==5 and not (rejected/'complete.json').exists(),(result.returncode,result.stderr)
+    relabelled=root/'relabelled';relabelled.mkdir()
+    result=subprocess.run([str(exe),'checkpoint_wrong_consumed'],env=dict(base,PSX_INPUT_ROUTE_CAPTURE_DIR=str(relabelled),
+                 PSX_TEST_INPUT_CHECKPOINT_SHA256=sha),capture_output=True)
+    assert result.returncode==5 and not (relabelled/'complete.json').exists(),(result.returncode,result.stderr)
+print('Actual full-input observer checkpoint/fresh-process continuation/terminal-boundary hash identity and corruption rejection passed')

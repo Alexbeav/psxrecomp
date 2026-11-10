@@ -1,0 +1,694 @@
+# New Project Layout scaffolding (Windows).
+#
+# Path params (pass on the CLI -- tab-complete in your shell):
+#   -Disc <cue>           REQUIRED legal Redump .cue (kept on your dump drive)
+#   -Dir <parent>         Parent directory (default: .)
+#   -Bios <SCPH1001.BIN>  Optional retail BIOS for Generate
+#   -StageDisc            Copy full cue+bins into repo disc/ (large; optional)
+#   Default: probe in place and extract boot EXE only into disc/
+#
+# Other options are prompted when interactive, or set via switches / -Yes.
+#
+# Usage:
+#   powershell -File setup_project.ps1 -Disc C:\dumps\game.cue
+#   powershell -File setup_project.ps1 -Disc game.cue -Name Foo -Yes
+#   powershell -File setup_project.ps1 -Disc game.cue -StageDisc
+
+[CmdletBinding()]
+param(
+    [string]$Name = "",
+    [Parameter(Mandatory = $true)][string]$Disc,
+    [string]$Dir = ".",
+    [string]$BootExe = "SLUS_01234",
+    [int]$Players = 0,
+    [string]$ZipPrefix = "",
+    [string]$GithubOwner = "",
+    [string]$GithubRepo = "",
+    [switch]$EnableRecompUi,
+    [switch]$NoRecompUi,
+    [switch]$EnableNetplay,
+    [switch]$NoNetplay,
+    [string]$LobbyUrl = "",
+    [switch]$EnableWizard,
+    [switch]$NoWizard,
+    [switch]$EnableCi,
+    [switch]$NoCi,
+    [switch]$FetchBoxart,
+    [switch]$NoFetchBoxart,
+    [switch]$Generate,
+    [switch]$NoGenerate,
+    [switch]$EnableBuild,
+    [switch]$NoBuild,
+    [switch]$CreateGithub,
+    [switch]$NoGithub,
+    [ValidateSet("public", "private", "internal")][string]$GithubVisibility = "private",
+    [string]$Description = "",
+    [string]$Publisher = "",
+    [string]$Year = "",
+    [string]$Region = "",
+    [switch]$Yes,
+    [string]$Bios = "",
+    [switch]$StageDisc,
+    # mstan/psxrecomp and recomp-ui both use master (not main).
+    [string]$PsxrecompRef = "master",
+    [string]$RecompUiRef = "master",
+    [string]$PsxrecompUrl = "https://github.com/mstan/psxrecomp.git",
+    [string]$RecompUiUrl = "https://github.com/RetroPortingToolKit/recomp-ui.git",
+    [Parameter(Mandatory=$true)][string]$PsxrecompSourceRoot,
+    [Parameter(Mandatory=$true)][string]$RecompUiSourceRoot,
+    [Parameter(Mandatory=$true)][string]$ToolkitRoot
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$ScriptDir = (Resolve-Path -LiteralPath $ToolkitRoot).Path
+$TemplateDir = Join-Path $ScriptDir "templates"
+$ProbeDisc = Join-Path $ScriptDir "probe_disc.py"
+$FillTokens = Join-Path $ScriptDir "fill_tokens.py"
+$FetchBoxartPy = Join-Path $ScriptDir "fetch_boxart.py"
+$WriteRecompJson = Join-Path $ScriptDir "write_recomp_json.py"
+$DefaultLobbyHost = "netplay.retcomm.net"
+
+function Normalize-LobbyUrl([string]$In) {
+    if ([string]::IsNullOrWhiteSpace($In)) { $In = $DefaultLobbyHost }
+    $In = $In.Trim()
+    if ($In -match '^(?i)wss?://') { return $In }
+    if ($In -match '://') { return $In }
+    if ($In -match ':') { return "ws://$In" }
+    return "ws://${In}:8765"
+}
+
+function Assert-Cmd([string]$cmd) {
+    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
+        throw "Missing required command: $cmd"
+    }
+}
+Assert-Cmd git
+
+# Windows-native Python only. An MSYS2/Cygwin python (e.g. devkitPro's, often
+# first on PATH) ignores the Windows-style PYTHONPATH set below, so every
+# sibling helper import fails.
+function Resolve-Python {
+    if ($env:PSXRECOMP_PYTHON) {
+        if (Test-Path -LiteralPath $env:PSXRECOMP_PYTHON) { return $env:PSXRECOMP_PYTHON }
+        throw "PSXRECOMP_PYTHON does not exist: $env:PSXRECOMP_PYTHON"
+    }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        $exe = (& py -3 -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $exe) { return ([string]$exe).Trim() }
+    }
+    foreach ($c in @(Get-Command python -All -CommandType Application -ErrorAction SilentlyContinue)) {
+        if ($c.Source -notmatch '(?i)[\\/](msys64|msys2|msys|cygwin64|cygwin|devkitPro)[\\/]') {
+            return $c.Source
+        }
+    }
+    throw "No Windows-native Python 3 found (MSYS2/Cygwin pythons cannot import the scaffold helpers). Install Python from python.org or set PSXRECOMP_PYTHON."
+}
+$Python = Resolve-Python
+
+# Windows PowerShell 5.1 writes a BOM for -Encoding UTF8 and UTF-16LE for
+# Tee-Object/Out-File. Block files are spliced mid-CMakeLists.txt, where a BOM
+# is a CMake parse error, so every file this script writes goes through here.
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+function Resolve-OutPath([string]$Path) {
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+function Write-TextFile([string]$Path, [string]$Value) {
+    [System.IO.File]::WriteAllText((Resolve-OutPath $Path), $Value + [Environment]::NewLine, $Utf8NoBom)
+}
+function Add-TextFile([string]$Path, [string]$Value) {
+    [System.IO.File]::AppendAllText((Resolve-OutPath $Path), $Value + [Environment]::NewLine, $Utf8NoBom)
+}
+
+function Test-Interactive {
+    return [Environment]::UserInteractive -and -not $Yes -and -not ($env:PSXRECOMP_SETUP_YES -eq "1")
+}
+
+function Prompt-Line([string]$Question, [string]$Default = "") {
+    if ($Default) {
+        $ans = Read-Host "$Question [$Default]"
+    } else {
+        $ans = Read-Host $Question
+    }
+    if ([string]::IsNullOrWhiteSpace($ans)) { return $Default }
+    return $ans.Trim()
+}
+
+function Prompt-Yn([string]$Question, [bool]$DefaultYes) {
+    $hint = if ($DefaultYes) { "Y/n" } else { "y/N" }
+    while ($true) {
+        $ans = Read-Host "$Question [$hint]"
+        if ([string]::IsNullOrWhiteSpace($ans)) { return $DefaultYes }
+        switch -Regex ($ans.Trim()) {
+            '^[yY](es|$)' { return $true }
+            '^[nN](o|$)' { return $false }
+            default { Write-Host "  please answer y or n" }
+        }
+    }
+}
+
+if (-not (Test-Path -LiteralPath $Disc)) {
+    throw "-Disc not found: $Disc (pass the path on the CLI so your shell can tab-complete it)"
+}
+
+$interactive = Test-Interactive
+
+if (-not $Name) {
+    if (-not $interactive) {
+        throw "-Name is required in non-interactive mode (-Yes)"
+    }
+    $Name = Prompt-Line "Project name (e.g. MyGameRecomp)" ""
+    if (-not $Name) { throw "Project name is required" }
+}
+
+if ($Players -eq 0) {
+    if ($interactive) {
+        $p = Prompt-Line "Max players (1-8)" "2"
+        $Players = [int]$p
+    } else {
+        $Players = 2
+    }
+}
+if ($Players -lt 1 -or $Players -gt 8) {
+    throw "Players must be 1-8 (got: $Players)"
+}
+
+$env:PYTHONPATH = "$ScriptDir" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
+$derivedZip = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from fill_tokens import derive_zip_prefix; print(derive_zip_prefix(sys.argv[2]))" $ScriptDir $Name).Trim()
+if (-not $ZipPrefix) {
+    if ($interactive) {
+        $ZipPrefix = Prompt-Line "Zip / CI artifact prefix" $derivedZip
+    } else {
+        $ZipPrefix = $derivedZip
+    }
+}
+
+if (-not $GithubOwner) {
+    if ($interactive) {
+        $GithubOwner = Prompt-Line "GitHub owner / org (README download badges)" "RetroPortingToolKit"
+    } else {
+        $GithubOwner = "RetroPortingToolKit"
+    }
+}
+$derivedRepo = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from fill_tokens import sanitize_github_name; print(sanitize_github_name(sys.argv[2]))" $ScriptDir $Name).Trim()
+if (-not $GithubRepo) {
+    if ($interactive) {
+        $GithubRepo = Prompt-Line "GitHub repo name (README download badges)" $derivedRepo
+    } else {
+        $GithubRepo = $derivedRepo
+    }
+}
+$GithubOwner = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from fill_tokens import sanitize_github_name; print(sanitize_github_name(sys.argv[2]))" $ScriptDir $GithubOwner).Trim()
+$GithubRepo = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from fill_tokens import sanitize_github_name; print(sanitize_github_name(sys.argv[2]))" $ScriptDir $GithubRepo).Trim()
+
+if (-not $PSBoundParameters.ContainsKey("Description")) {
+    if ($interactive) { $Description = Prompt-Line "Short game description (optional)" "" }
+}
+if (-not $PSBoundParameters.ContainsKey("Publisher")) {
+    if ($interactive) { $Publisher = Prompt-Line "Publisher (optional)" "" }
+}
+if (-not $PSBoundParameters.ContainsKey("Year")) {
+    if ($interactive) { $Year = Prompt-Line "Release year (optional)" "" }
+}
+if (-not $Region) {
+    if ($interactive) { $Region = Prompt-Line "Region" "USA" } else { $Region = "USA" }
+}
+
+# Tri-state: CLI enable/no, else prompt, else -Yes / non-interactive default off
+# (wizard is forced ON below when recomp-ui is enabled unless -NoWizard).
+function Resolve-BoolOpt([switch]$Enable, [switch]$No, [bool]$PromptDefault, [string]$Question) {
+    if ($No) { return $false }
+    if ($Enable) { return $true }
+    if ($interactive) { return (Prompt-Yn $Question $PromptDefault) }
+    return $false
+}
+
+$useRecompUi = Resolve-BoolOpt -Enable:$EnableRecompUi -No:$NoRecompUi -PromptDefault:$true `
+    -Question "Include recomp-ui launcher submodule?"
+
+$useWizard = $false
+$useNetplay = $false
+if (-not $useRecompUi) {
+    if ($EnableWizard -or $EnableNetplay) {
+        Write-Warning "Wizard/netplay require recomp-ui -- forcing both off."
+    }
+    Write-Host "  (recomp-ui declined -- skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
+} else {
+    # Default ON (interactive + non-interactive): the wizard is the first-run disc picker.
+    $useWizard = Resolve-BoolOpt -Enable:$EnableWizard -No:$NoWizard -PromptDefault:$true `
+        -Question "Enable first-run setup wizard + Generate & rebuild?"
+    if (-not $interactive -and -not $NoWizard) { $useWizard = $true }
+    # 1-player titles cannot use multiplayer netplay -- skip prompts entirely.
+    if ($Players -eq 1) {
+        if ($EnableNetplay) {
+            Write-Warning "-EnableNetplay ignored for 1-player title."
+        }
+        $useNetplay = $false
+        Write-Host "  (1-player title -- netplay skipped)"
+    } else {
+        $useNetplay = Resolve-BoolOpt -Enable:$EnableNetplay -No:$NoNetplay -PromptDefault:$false `
+            -Question "Enable netplay UI (needs nested recomp-net)?"
+    }
+}
+
+$NetplayLobbyWs = ""
+if ($useNetplay) {
+    if (-not $LobbyUrl) {
+        if ($interactive) {
+            $LobbyUrl = Prompt-Line "Netplay lobby server URL (host or ws://...)" $DefaultLobbyHost
+        } else {
+            $LobbyUrl = $DefaultLobbyHost
+        }
+    }
+    $NetplayLobbyWs = Normalize-LobbyUrl $LobbyUrl
+}
+
+$useCi = Resolve-BoolOpt -Enable:$EnableCi -No:$NoCi -PromptDefault:$true `
+    -Question "Add GitHub Actions release workflow (Linux/Windows/macOS)?"
+$doBoxart = Resolve-BoolOpt -Enable:$FetchBoxart -No:$NoFetchBoxart -PromptDefault:$true `
+    -Question "Fetch libretro boxart now? (needs network)"
+$doGenerate = Resolve-BoolOpt -Enable:$Generate -No:$NoGenerate -PromptDefault:$false `
+    -Question "Run Generate now (emitters + OpenBIOS + game C; generated/ is committed for release CI)?"
+
+$doBuild = $false
+if ($doGenerate) {
+    $doBuild = Resolve-BoolOpt -Enable:$EnableBuild -No:$NoBuild -PromptDefault:$true `
+        -Question "Configure & build psx-runtime after Generate?"
+} elseif ($EnableBuild) {
+    Write-Warning "-EnableBuild requires Generate -- enabling Generate"
+    $doGenerate = $true
+    $doBuild = $true
+}
+
+$createGithub = Resolve-BoolOpt -Enable:$CreateGithub -No:$NoGithub -PromptDefault:$false `
+    -Question "Create GitHub repo with gh (needs auth)?"
+
+if ($useCi -and $useRecompUi -and -not $useWizard) {
+    throw "Release CI requires the first-run setup wizard (omit -NoWizard, or pass -EnableWizard)."
+}
+
+if ($Bios -and -not (Test-Path -LiteralPath $Bios)) { throw "-Bios not found: $Bios" }
+if ($Bios -and -not $doGenerate) { Write-Warning "-Bios ignored without Generate" }
+
+$ProjectCmakeName = ($Name -replace '[^A-Za-z0-9_]', '_')
+$EnvPrefix = $ProjectCmakeName.ToUpperInvariant()
+$WindowTitle = $Name -replace 'Recomp$', ' Recompiled'
+$WindowTitle = $WindowTitle -replace 'Recompiled Recompiled', 'Recompiled'
+# Match runtime.cmake OUTPUT_NAME = MAKE_C_IDENTIFIER(WINDOW_TITLE).
+$ExeBasename = ($WindowTitle -replace '[^A-Za-z0-9_]', '_')
+$GameName = ($Name -replace 'Recomp$', '') -replace 'Recompiled$', ''
+$GameName = $GameName.Trim()
+if (-not $GameName) { $GameName = $Name }
+$DiscHint = "your legally owned $GameName disc"
+$EntryPc = "0x80010000"
+$PublisherDisp = if ($Publisher) { $Publisher } else { "-" }
+$YearDisp = if ($Year) { $Year } else { "-" }
+$DescriptionMd = if ($Description) { $Description } else { "_Add a short pitch in catalog_identity.json / README._" }
+
+# Folder = GitHub/catalog install_dir slug (hyphenated), not display $Name with spaces.
+$InstallDirName = $GithubRepo
+$Root = Join-Path (Resolve-Path $Dir) $InstallDirName
+if (Test-Path $Root) { throw "Target already exists: $Root" }
+if ($InstallDirName -ne $Name) {
+    Write-Host "note: project folder is '$InstallDirName' (catalog/GitHub slug; display name stays '$Name')"
+}
+
+$NetplayBlockFile = Join-Path $env:TEMP "psxrecomp_netplay_block.cmake"
+$WizardBlockFile = Join-Path $env:TEMP "psxrecomp_wizard_block.cmake"
+$BoxartBlockFile = Join-Path $env:TEMP "psxrecomp_boxart_block.cmake"
+$RecompUiBlockFile = Join-Path $env:TEMP "psxrecomp_recomp_ui_block.cmake"
+$CodegenArgFile = Join-Path $env:TEMP "psxrecomp_codegen_arg.cmake"
+
+if ($useRecompUi) {
+    Write-TextFile $RecompUiBlockFile "# recomp-ui submodule present (PSX_RECOMP_UI defaults ON)."
+    Write-TextFile $CodegenArgFile '    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"'
+} else {
+    Write-TextFile $RecompUiBlockFile @"
+set(PSX_RECOMP_UI OFF CACHE BOOL
+    "No recomp-ui submodule in this scaffold" FORCE)
+"@
+    Write-TextFile $CodegenArgFile "    # CODEGEN_SETUP_SOURCES -- add with recomp-ui / wizard later"
+}
+
+if ($useNetplay) {
+    # PSX_NETPLAY defaults RNET_ENABLE_ICE=ON; recomp-net FetchContents
+    # libjuice via pinned URL (not git) so Retro AppImage builds configure.
+    Write-TextFile $NetplayBlockFile @"
+if(EXISTS "`${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
+    set(PSX_NETPLAY ON CACHE BOOL
+        "Link recomp-net delay-sync (opt-in; needs recomp-net)" FORCE)
+endif()
+"@
+    $NetplayRuntimeArg = "    ENABLE_NETPLAY_IF_PRESENT"
+    $NetplayLobbyUrlArg = "    NETPLAY_LOBBY_URL `"$NetplayLobbyWs`""
+} else {
+    Write-TextFile $NetplayBlockFile @"
+# Full netplay UI -- enable after adding recomp-ui + testing:
+# if(EXISTS "`${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
+#     set(PSX_NETPLAY ON CACHE BOOL "..." FORCE)
+# endif()
+"@
+    $NetplayRuntimeArg = "    # ENABLE_NETPLAY_IF_PRESENT"
+    $NetplayLobbyUrlArg = "    # NETPLAY_LOBBY_URL `"ws://${DefaultLobbyHost}:8765`""
+}
+
+if ($useWizard) {
+    Write-TextFile $WizardBlockFile @"
+set(PSX_SETUP_WIZARD ON CACHE BOOL
+    "Advertise first-run setup wizard + Generate & rebuild in recomp-ui" FORCE)
+"@
+    $WizardRuntimeArg = "    ENABLE_SETUP_WIZARD"
+} else {
+    Write-TextFile $WizardBlockFile @"
+# First-run setup wizard -- enable after testing:
+# set(PSX_SETUP_WIZARD ON CACHE BOOL "..." FORCE)
+"@
+    $WizardRuntimeArg = "    # ENABLE_SETUP_WIZARD"
+}
+
+Write-TextFile $BoxartBlockFile '    # LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"'
+$HasBoxart = $false
+$AppIconBlockFile = Join-Path $env:TEMP "psxrecomp_app_icon_block.cmake"
+Write-TextFile $AppIconBlockFile '    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"'
+
+function Fill-Template([string]$src, [string]$dst) {
+    & $Python $FillTokens $src $dst `
+        --set "PROJECT_CMAKE_NAME=$ProjectCmakeName" `
+        --set "WINDOW_TITLE=$WindowTitle" `
+        --set "BOOT_EXE=$BootExe" `
+        --set "GAME_NAME=$GameName" `
+        --set "ENV_PREFIX=$EnvPrefix" `
+        --set "EXE_BASENAME=$ExeBasename" `
+        --set "ZIP_PREFIX=$ZipPrefix" `
+        --set "GITHUB_OWNER=$GithubOwner" `
+        --set "GITHUB_REPO=$GithubRepo" `
+        --set "DISC_HINT=$DiscHint" `
+        --set "GAME_TITLE=$WindowTitle" `
+        --set "PLAYERS=$Players" `
+        --set "DESCRIPTION=$DescriptionMd" `
+        --set "PUBLISHER=$PublisherDisp" `
+        --set "YEAR=$YearDisp" `
+        --set "REGION=$Region" `
+        --set "ENTRY_PC=$EntryPc" `
+        --set "NETPLAY_RUNTIME_ARG=$NetplayRuntimeArg" `
+        --set "NETPLAY_LOBBY_URL_ARG=$NetplayLobbyUrlArg" `
+        --set "WIZARD_RUNTIME_ARG=$WizardRuntimeArg" `
+        --set-file "BOXART_CMAKE_ARG=$BoxartBlockFile" `
+        --set-file "APP_ICON_CMAKE_ARG=$AppIconBlockFile" `
+        --set-file "NETPLAY_CMAKE_BLOCK=$NetplayBlockFile" `
+        --set-file "WIZARD_CMAKE_BLOCK=$WizardBlockFile" `
+        --set-file "RECOMP_UI_CMAKE_BLOCK=$RecompUiBlockFile" `
+        --set-file "CODEGEN_SETUP_ARG=$CodegenArgFile"
+}
+
+Write-Host "== New Project Layout =="
+Write-Host "  repo:       $Root"
+Write-Host "  disc:       $Disc"
+Write-Host "  zip prefix: $ZipPrefix"
+Write-Host "  gh slug:    $GithubOwner/$GithubRepo"
+Write-Host "  players:    $Players"
+Write-Host "  recomp-ui:  $useRecompUi"
+Write-Host "  wizard:     $useWizard"
+Write-Host "  netplay:    $useNetplay"
+if ($useNetplay) { Write-Host "  lobby URL:  $NetplayLobbyWs" }
+Write-Host "  CI:         $useCi"
+Write-Host "  boxart:     $doBoxart"
+Write-Host "  generate:   $doGenerate"
+Write-Host "  build:      $doBuild"
+Write-Host "  github:     $createGithub"
+Write-Host "  region:     $Region"
+
+New-Item -ItemType Directory -Path $Root | Out-Null
+Set-Location $Root
+# Public Studio projects are output artifacts, not newly initialized repositories.
+
+Fill-Template (Join-Path $TemplateDir "CMakeLists.txt.in") (Join-Path $Root "CMakeLists.txt")
+Fill-Template (Join-Path $TemplateDir "game.toml.in") (Join-Path $Root "game.toml")
+Fill-Template (Join-Path $TemplateDir "game_options.toml.in") (Join-Path $Root "game_options.toml")
+Fill-Template (Join-Path $TemplateDir "codegen_setup.c.in") (Join-Path $Root "codegen_setup.c")
+Fill-Template (Join-Path $TemplateDir "codegen_setup.h.in") (Join-Path $Root "codegen_setup.h")
+Fill-Template (Join-Path $TemplateDir "gitignore.in") (Join-Path $Root ".gitignore")
+Fill-Template (Join-Path $TemplateDir "VERSION.in") (Join-Path $Root "VERSION")
+Fill-Template (Join-Path $TemplateDir "README.md.in") (Join-Path $Root "README.md")
+Fill-Template (Join-Path $TemplateDir "symbols.toml.in") (Join-Path $Root "symbols.toml")
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "seeds") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "launcher_assets\img") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "scripts") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "tools") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "mods\preloaded\packages") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "assets") | Out-Null
+# Empty mod catalog tree (build stages mods/preloaded/packages -> <exe>/mods/bundled).
+$PreloadedReadme = @'
+# Preloaded mods
+
+Ship reviewed, default-disabled packages here:
+
+```text
+packages/<package-id>/<version>/
+  manifest.toml
+  ...
+```
+
+Build wiring copies `mods/preloaded/packages` next to the game executable as
+`mods/bundled/`. That tree is build output: every build wipes and re-stages it,
+so nothing you place there by hand survives.
+
+Player-installed `.psxmod` archives live in `mods/installed/`, which the
+launcher owns and no build ever touches. Install them through the launcher Mods
+manager rather than committing them here.
+
+See `psxrecomp/docs/MOD_PACKAGES.md`.
+'@
+Write-TextFile (Join-Path $Root "mods\preloaded\README.md") $PreloadedReadme
+New-Item -ItemType File -Force -Path (Join-Path $Root "mods\preloaded\packages\.gitkeep") | Out-Null
+Copy-Item (Join-Path $ScriptDir "sync_symbols.py") (Join-Path $Root "tools\sync_symbols.py")
+
+Write-Host "== Staging immutable source snapshots =="
+Copy-Item -LiteralPath $PsxrecompSourceRoot -Destination (Join-Path $Root "psxrecomp") -Recurse
+if ($useRecompUi) {
+    Copy-Item -LiteralPath $RecompUiSourceRoot -Destination (Join-Path $Root "recomp-ui") -Recurse
+}
+# Retro-themed default app icon (Windows .ico + PNG for packaging).
+$iconSrc = Join-Path $Root "psxrecomp\assets"
+$iconDst = Join-Path $Root "assets"
+if (Test-Path $iconSrc) {
+    New-Item -ItemType Directory -Force -Path $iconDst | Out-Null
+    foreach ($name in @("psxrecomp.svg", "psxrecomp.png", "psxrecomp.ico")) {
+        $src = Join-Path $iconSrc $name
+        if (Test-Path $src) {
+            Copy-Item -Force $src (Join-Path $iconDst $name)
+        }
+    }
+}
+
+Write-TextFile (Join-Path $Root "framework_pins.txt") "See parent build-record.json for source content identities."
+
+if ($useNetplay -and -not (Test-Path "psxrecomp\lib\recomp-net\CMakeLists.txt")) {
+    Write-Warning "Netplay enabled but psxrecomp/lib/recomp-net missing after recursive update."
+}
+
+Write-Host "== Packager stub =="
+Fill-Template (Join-Path $TemplateDir "package_release.sh.in") (Join-Path $Root "scripts\package_release.sh")
+Fill-Template (Join-Path $TemplateDir "package_prebuilt_release.sh.in") (Join-Path $Root "scripts\package_prebuilt_release.sh")
+Fill-Template (Join-Path $TemplateDir "release.toml.in") (Join-Path $Root "packaging\release.toml")
+Fill-Template (Join-Path $TemplateDir "START_HERE.txt.in") (Join-Path $Root "packaging\release\START_HERE.txt")
+Fill-Template (Join-Path $TemplateDir "AppRun.in") (Join-Path $Root "packaging\linux\AppRun")
+Fill-Template (Join-Path $TemplateDir "app.desktop.in") (Join-Path $Root "packaging\linux\${ZipPrefix}.desktop")
+
+if ($useCi) {
+    Write-Host "== CI release workflow =="
+    $WfSrc = Join-Path $Root "psxrecomp\docs\ci\templates\game-release.yml"
+    $WfDst = Join-Path $Root ".github\workflows\release.yml"
+    if (Test-Path -LiteralPath $WfSrc) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $WfDst) | Out-Null
+        & $Python $FillTokens $WfSrc $WfDst `
+            --ci-placeholders `
+            --set "ZIP_PREFIX=$ZipPrefix" `
+            --set "GAME_TITLE=$WindowTitle" `
+            --set "WINDOW_TITLE=$WindowTitle"
+        Write-Host "  wrote .github/workflows/release.yml"
+    } else {
+        Write-Warning "Missing $WfSrc -- skipped CI workflow copy"
+    }
+} else {
+    Write-Host "== CI workflow skipped =="
+}
+
+$DiscAbs = (Resolve-Path -LiteralPath $Disc).Path
+$DiscBasename = Split-Path -Leaf $DiscAbs
+if ($DiscBasename -notmatch '\.cue$') {
+    Write-Warning "Prefer a Redump-style .cue (with sibling .bin tracks)."
+}
+$DiscOut = Join-Path $Root "disc"
+New-Item -ItemType Directory -Force -Path $DiscOut | Out-Null
+
+$ProbeCue = $DiscAbs
+$DiscTomlPath = $DiscAbs
+$GenDiscHint = $DiscAbs
+
+if ($StageDisc) {
+    Write-Host "== Staging full disc dump into disc/ (optional; large) =="
+    $py = @'
+import re, shutil, sys
+from pathlib import Path
+cue = Path(sys.argv[1])
+out = Path(sys.argv[2])
+out.mkdir(parents=True, exist_ok=True)
+shutil.copy2(cue, out / cue.name)
+print(f"  copied {cue.name}")
+text = cue.read_text(encoding="utf-8", errors="ignore")
+for m in re.finditer(r'FILE\s+"([^"]+)"', text, re.I):
+    src = cue.parent / m.group(1)
+    if src.is_file():
+        dst = out / src.name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+            print(f"  copied track: {src.name}")
+    else:
+        print(f"  warning: cue FILE missing: {src}", file=sys.stderr)
+print("  disc staged under disc/ (gitignored -- never commit dumps)")
+'@
+    $pyFile = Join-Path $env:TEMP "psxrecomp_stage_disc.py"
+    Write-TextFile $pyFile $py
+    & $Python $pyFile $DiscAbs $DiscOut
+    $ProbeCue = Join-Path $DiscOut $DiscBasename
+    $DiscTomlPath = "disc/$DiscBasename"
+    $GenDiscHint = $ProbeCue
+    } else {
+    Write-Host "== External disc (no full copy) =="
+    Write-Host "  cue remains at: $DiscAbs"
+    Write-Host "  will extract boot EXE only into disc/"
+}
+
+$Probed = $false
+$SeedCount = 0
+if ($DiscBasename -match '\.cue$') {
+    Write-Host "== Probing disc (identity + seeds + TOC fp) =="
+    try {
+        # Windows PowerShell 5.1 drops empty-string arguments to native
+        # commands, so an empty value would leave its flag without one and
+        # argparse would reject the whole call. Pass marketing flags only
+        # when they carry a value.
+        $ProbeArgs = @(
+            $ProbeDisc, $ProbeCue,
+            "--json-out", (Join-Path $Root "disc_probe.json"),
+            "--write-game-toml", (Join-Path $Root "game.toml"),
+            "--write-catalog", (Join-Path $Root "catalog_identity.json"),
+            "--write-seeds", (Join-Path $Root "seeds\ghidra_funcs.txt"),
+            "--write-boot-exe", $DiscOut,
+            "--disc-rel", $DiscTomlPath,
+            "--out-dir", "disc",
+            "--players", $Players
+        )
+        foreach ($Pair in @(
+                @("--display-name", $GameName),
+                @("--description", $Description),
+                @("--publisher", $Publisher),
+                @("--year", $Year),
+                @("--region", $Region))) {
+            if (-not [string]::IsNullOrWhiteSpace($Pair[1])) { $ProbeArgs += $Pair }
+        }
+        & $Python @ProbeArgs
+        if ($LASTEXITCODE -ne 0) { throw "probe_disc.py exited $LASTEXITCODE" }
+        $Probed = $true
+        $SeedCount = @(Select-String -Path (Join-Path $Root "seeds\ghidra_funcs.txt") -Pattern '^0x').Count
+        $BootFromToml = & $Python -c @"
+import re,sys
+t=open(sys.argv[1],encoding='utf-8').read()
+m=re.search(r'boot_exe\s*=\s*\"([^\"]+)\"', t)
+print(m.group(1) if m else '')
+"@ (Join-Path $Root "game.toml")
+        $BootFromToml = $BootFromToml.Trim()
+        $EntryFromToml = & $Python -c @"
+import re,sys
+t=open(sys.argv[1],encoding='utf-8').read()
+m=re.search(r'entry_pc\s*=\s*\"([^\"]+)\"', t)
+print(m.group(1) if m else '')
+"@ (Join-Path $Root "game.toml")
+        $EntryFromToml = $EntryFromToml.Trim()
+        if ($BootFromToml -and $BootFromToml -ne $BootExe) {
+            $BootExe = $BootFromToml
+            Fill-Template (Join-Path $TemplateDir "CMakeLists.txt.in") (Join-Path $Root "CMakeLists.txt")
+            Fill-Template (Join-Path $TemplateDir "codegen_setup.c.in") (Join-Path $Root "codegen_setup.c")
+            Write-Host "  synced boot EXE -> $BootExe (CMake / codegen)"
+        }
+        if ($EntryFromToml) {
+            $EntryPc = $EntryFromToml
+            Fill-Template (Join-Path $TemplateDir "symbols.toml.in") (Join-Path $Root "symbols.toml")
+            Write-Host "  symbols.toml BootEntry -> $EntryPc"
+        }
+        if (-not $StageDisc) {
+            Write-Host "  game.toml disc -> $DiscTomlPath"
+            Write-Host "  (local absolute path -- do not commit machine-specific dumps)"
+        }
+    } catch {
+        throw "Disc probe failed: $_"
+    }
+} else {
+    Write-Warning "-Disc is not a .cue; skipped probe autofill."
+}
+
+# Community metadata (https://recomp.fyi/spec) -- serial from the probe if it ran.
+Write-Host "== Writing .recomp.json =="
+& $Python $WriteRecompJson (Join-Path $Root ".recomp.json") `
+    --game $GameName `
+    --project $Name `
+    --region $Region `
+    --probe-json (Join-Path $Root "disc_probe.json")
+if ($LASTEXITCODE -ne 0) { Write-Warning ".recomp.json not written" }
+
+if ($doBoxart) {
+    Write-Host "== Fetching libretro boxart =="
+    $cueHint = if ($DiscBasename) { $DiscBasename } else { $GameName }
+    $prevPy = $env:PYTHONPATH
+    try {
+        & $Python $FetchBoxartPy `
+            --out (Join-Path $Root "launcher_assets\img\boxart.tga") `
+            --cue-stem $cueHint `
+            --display-name $GameName
+        if ($LASTEXITCODE -eq 0) {
+            $HasBoxart = $true
+            Write-TextFile $BoxartBlockFile '    LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"'
+            Fill-Template (Join-Path $TemplateDir "CMakeLists.txt.in") (Join-Path $Root "CMakeLists.txt")
+            Write-Host "  wired LAUNCHER_BOXART in CMakeLists.txt"
+            $env:PYTHONPATH = $ScriptDir
+            & $Python -c "from pathlib import Path; import sys; from project_studio.readme_metrics import inject_readme_boxart; inject_readme_boxart(Path(sys.argv[1]), sys.argv[2])" (Join-Path $Root "README.md") $GameName
+            Write-Host "  injected boxart into README.md"
+        } else {
+            Write-Warning "boxart fetch failed -- leave LAUNCHER_BOXART commented."
+        }
+    } catch {
+        Write-Warning "boxart fetch failed -- leave LAUNCHER_BOXART commented."
+    } finally {
+        if ($null -eq $prevPy) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $prevPy }
+    }
+}
+
+Write-Host "== Sync symbols header =="
+Push-Location $Root
+try { & $Python tools/sync_symbols.py --game $GameName } catch { Write-Warning "sync_symbols failed" }
+Pop-Location
+
+# Every emitted text file must be BOM-less UTF-8: a U+FEFF spliced into
+# CMakeLists.txt is a configure-time parse error, and UTF-16 pins break tools.
+$TextExt = @(".txt", ".toml", ".json", ".md", ".c", ".h", ".cmake", ".sh", ".yml", ".yaml", ".py", ".ps1", ".gitignore")
+$Bad = @()
+Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
+    Where-Object { $_.FullName -notmatch '[\\/](psxrecomp|recomp-ui|disc|\.git)[\\/]' -and ($TextExt -contains $_.Extension.ToLower() -or $_.Name -eq "VERSION") } |
+    ForEach-Object {
+        $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+        $utf16 = $bytes.Length -ge 2 -and (($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) -or ($bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF))
+        $bom = $false
+        for ($i = 0; $i + 2 -lt $bytes.Length; $i++) {
+            if ($bytes[$i] -eq 0xEF -and $bytes[$i + 1] -eq 0xBB -and $bytes[$i + 2] -eq 0xBF) { $bom = $true; break }
+        }
+        if ($utf16 -or $bom) { $Bad += $_.FullName.Substring($Root.Length + 1) }
+    }
+if ($Bad.Count -gt 0) {
+    throw "Scaffold emitted BOM/UTF-16 text (must be BOM-less UTF-8): $($Bad -join ', ')"
+}
+
+
+Write-Host "Project scaffold ready: $Root"
+
+

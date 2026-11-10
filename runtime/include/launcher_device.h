@@ -8,6 +8,11 @@
 
 namespace PSXRecompV4 {
 
+inline bool launcher_controller_can_share(bool developer_build,
+                                          bool exact_guid_match) {
+    return developer_build && exact_guid_match;
+}
+
 inline std::string trim_launcher_device(const std::string& device) {
     const auto first = std::find_if_not(device.begin(), device.end(),
         [](unsigned char c) { return std::isspace(c) != 0; });
@@ -23,16 +28,46 @@ inline std::string normalize_launcher_device(const std::string& device) {
     return normalized;
 }
 
-inline int launcher_source_from_device(const std::string& device) {
+// "mouse" puts a PS1 Mouse in the seat (PS1B-279). recomp-ui has no source
+// for it, so the launcher shows the seat as None; a seat the player leaves at
+// None keeps the mouse on the way out. Picking Keyboard or a pad replaces it.
+constexpr int kLauncherSourceMouse = 3;
+// "guncon" puts a Namco GunCon aimed by the host pointer in the seat
+// (PS1B-305), the same way: source 4 ("GunCon") for a recomp-ui that defines
+// RECOMP_LAUNCHER_HAS_GUNCON_SOURCE (guncon_source = true); an older launcher
+// shows the seat as None, and None keeps the GunCon on the way out.
+constexpr int kLauncherSourceGuncon = 4;
+
+inline bool launcher_device_is_mouse(const std::string& device) {
+    return normalize_launcher_device(device) == "mouse";
+}
+
+inline bool launcher_device_is_guncon(const std::string& device) {
+    return normalize_launcher_device(device) == "guncon";
+}
+
+inline int launcher_source_from_device(const std::string& device,
+                                       bool mouse_source = false,
+                                       bool guncon_source = false) {
     const std::string normalized = normalize_launcher_device(device);
     if (normalized.empty() || normalized == "none") return 0;
+    if (normalized == "mouse") return mouse_source ? kLauncherSourceMouse : 0;
+    if (normalized == "guncon") return guncon_source ? kLauncherSourceGuncon : 0;
     if (normalized == "keyboard") return 1;
     return 2;
 }
 
 inline std::string launcher_device_from_source(
-    int source, const std::string& previous_device) {
-    if (source <= 0) return "none";
+    int source, const std::string& previous_device, bool mouse_source = false,
+    bool guncon_source = false) {
+    if (source == kLauncherSourceMouse && mouse_source) return "mouse";
+    if (source == kLauncherSourceGuncon && guncon_source) return "guncon";
+    if (source <= 0 || source == kLauncherSourceMouse ||
+        source == kLauncherSourceGuncon) {
+        if (!mouse_source && launcher_device_is_mouse(previous_device)) return "mouse";
+        if (!guncon_source && launcher_device_is_guncon(previous_device)) return "guncon";
+        return "none";
+    }
     if (source == 1) return "keyboard";
 
     // recomp-ui's C ABI currently returns a source category, not the selected
@@ -42,6 +77,66 @@ inline std::string launcher_device_from_source(
         return trim_launcher_device(previous_device);
     }
     return "gamepad";
+}
+
+// Pad mode for one seat on the way OUT of the launcher.
+//
+// Three sources of truth have to be reconciled, and they have a strict
+// precedence:
+//
+//   1. A trusted mod's controller-mode override
+//      (psx_mod_set_controller_mode_override, runtime/include/mod_plugins.h).
+//      A game plugin that declared the pad type its patched code needs
+//      outranks everything else. Pass -1 when no override is active.
+//   2. game.toml [controller] lock_mode. A locked title supports exactly one
+//      pad type, and the launcher HIDES its pad-mode selector for such a
+//      title -- so whatever came back in ls.pad_mode[] for that seat was
+//      never a player choice and must not be believed.
+//   3. What the launcher returned.
+//
+// Both launcher-exit readback loops in runtime/src/main.cpp call this, and
+// both call it BEFORE the seat's mode is written to settings.toml, so an
+// unsupported mode can never be persisted either.
+//
+// Note what is deliberately NOT here: a keyboard seat is not forced to
+// DIGITAL. It already behaves as a plain digital pad -- effective_player_mode()
+// reports DIGITAL for any seat whose kind is keyboard, whatever this value
+// says -- so overwriting the stored mode bought nothing and cost a durable
+// corruption. A release install defaults Player 1 to the keyboard, and a
+// locked title has no selector with which to repair the value, so an
+// ANALOG-locked dual-analog game (Ape Escape) reached its DualShock as an
+// SCPH-1080: sio.c took the 4-byte pad_response_len branch, right stick dead
+// and left stick folded onto the D-pad. The matching launcher-side coercion is
+// fixed in recomp-ui's launcher_model.c.
+inline int resolve_player_mode_after_launcher(int launcher_mode,
+                                              bool lock_mode,
+                                              int locked_mode,
+                                              int mod_override_mode) {
+    if (mod_override_mode >= 0) return mod_override_mode;
+    if (lock_mode) return locked_mode;
+    return launcher_mode;
+}
+
+// neGcon pad type (PS1B-304) at the launcher seam. A recomp-ui that defines
+// RECOMP_LAUNCHER_HAS_NEGCON_MODE offers it as pad mode 3; the caller passes
+// negcon_mode = true for that launcher. An older one has no such mode and
+// would clamp 3 to D-Pad, so for it a neGcon seat goes in as Analog, and an
+// Analog that comes back for a seat that went in as neGcon stays neGcon.
+// Picking D-Pad replaces the neGcon.
+constexpr int kLauncherPadModeNegcon = 3;   // PAD_MODE_NEGCON
+constexpr int kLauncherPadModeAnalog = 1;   // PAD_MODE_ANALOG
+
+inline int launcher_pad_mode_to_launcher(int mode, bool negcon_mode) {
+    return (!negcon_mode && mode == kLauncherPadModeNegcon) ? kLauncherPadModeAnalog
+                                                            : mode;
+}
+
+inline int launcher_pad_mode_from_launcher(int launcher_mode, int previous_mode,
+                                           bool negcon_mode) {
+    if (!negcon_mode && previous_mode == kLauncherPadModeNegcon &&
+        launcher_mode == kLauncherPadModeAnalog)
+        return kLauncherPadModeNegcon;
+    return launcher_mode;
 }
 
 } // namespace PSXRecompV4

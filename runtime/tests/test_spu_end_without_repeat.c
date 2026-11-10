@@ -88,7 +88,7 @@ static void test_end_without_repeat_is_silent(void) {
     fill_block(0x310u, 0x00u, 0x77u);
     SpuVoice *v = stage_end_boundary(0x01u, repeat_addr);
 
-    int16_t sample = voice_next_sample(0);
+    int16_t sample = voice_next_sample(0, 0);
 
     CHECK(sample == 0, "END without REPEAT emits silence at the boundary");
     CHECK(v->env_level == 0, "END without REPEAT forces the envelope to zero");
@@ -105,7 +105,7 @@ static void test_end_without_repeat_is_silent(void) {
     CHECK(event.addr == repeat_addr,
           "END stop event reports the redirected repeat address");
 
-    (void)voice_next_sample(0);
+    (void)voice_next_sample(0, 0);
     CHECK(spu_event_total() == 1,
           "an inactive one-shot does not retrigger its END transition");
 }
@@ -116,7 +116,7 @@ static void test_end_with_repeat_keeps_playing(void) {
     fill_block(repeat_addr, 0x00u, 0x11u);
     SpuVoice *v = stage_end_boundary(0x03u, repeat_addr);
 
-    int16_t sample = voice_next_sample(0);
+    int16_t sample = voice_next_sample(0, 0);
 
     CHECK(sample != 0, "END with REPEAT remains audible");
     CHECK(v->env_level != 0, "END with REPEAT preserves the envelope");
@@ -129,9 +129,32 @@ static void test_end_with_repeat_keeps_playing(void) {
           "END with REPEAT records a loop event");
 }
 
+static uint32_t overlay_frames;
+static void test_overlay(int16_t* stereo, uint32_t frames) {
+    overlay_frames += frames;
+    for (uint32_t i = 0; i < frames * 2; ++i) stereo[i] = 1234;
+}
+static void test_pcm_overlay_paths(void) {
+    int16_t output[14];
+    spu_init();
+    spu_set_pcm_overlay(test_overlay);
+    spu_render_block(output, 7); /* disabled SPU / general path */
+    CHECK(overlay_frames == 7 && output[0] == 1234 && output[13] == 1234,
+          "overlay plays even with disabled native SPU");
+    spu_regs[reg_index(0x1F801DAAu)] = 0x8000;
+    spu_render_block(output, 7); /* enabled SPU without voices / fast path */
+    CHECK(overlay_frames == 14 && output[13] == 1234,
+          "voice-free SPU path also advances the overlay");
+    spu_set_pcm_overlay(NULL);
+    spu_render_block(output, 7);
+    CHECK(overlay_frames == 14 && output[0] == 0 && output[13] == 0,
+          "unbinding preserves native silence without advancing playback");
+}
+
 int main(void) {
     test_end_without_repeat_is_silent();
     test_end_with_repeat_keeps_playing();
+    test_pcm_overlay_paths();
     printf(failures ? "FAILED (%d)\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;
 }

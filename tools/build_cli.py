@@ -113,11 +113,18 @@ def main() -> int:
         "*.exe", "*.obj", "*.pdb", "*.lib")
     shutil.copytree(ROOT / "runtime", framework / "runtime", ignore=source_ignore)
     shutil.copytree(ROOT / "recompiler", framework / "recompiler", ignore=source_ignore)
+    # runtime.cmake embeds Vulkan SPIR-V through tools/embed_spirv.py, and
+    # PSX_ENABLE_VULKAN defaults ON, so the packaged framework needs it.
+    (framework / "tools").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "tools" / "embed_spirv.py", framework / "tools")
     bios_profiles = {
         "OpenBIOS.toml": ROOT / "bios" / "OpenBIOS.toml",
         "SCPH1001.toml": ROOT / "bios" / "SCPH1001.toml",
-        "SCPH101.toml": ROOT / "SCPH101.toml",
-        "SCPH5552.toml": ROOT / "SCPH5552.toml",
+        "SCPH101.toml": ROOT / "bios" / "SCPH101.toml",
+        "SCPH5500.toml": ROOT / "bios" / "SCPH5500.toml",
+        "SCPH5501.toml": ROOT / "bios" / "SCPH5501.toml",
+        "SCPH5552.toml": ROOT / "bios" / "SCPH5552.toml",
+        "SCPH7000.toml": ROOT / "bios" / "SCPH7000.toml",
     }
     (framework / "bios").mkdir()
     for filename, source in bios_profiles.items():

@@ -1,0 +1,4795 @@
+{
+  "schema": "psxrecomp curated BIOS seeds",
+  "source": "SCPH1001 (ROM sha256 71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3). Entries tools/bios_seed_corpus.py cannot prove: manual = recorded rationale (dispatch-miss history), ghidra_legacy = Ghidra function start with no tool proof. Split from the pre-T13 phase2_ghidra_seeds.json (1102 entries) on 2026-09-17.",
+  "seeds": [
+    {
+      "address": "0xBFC00678",
+      "label": "ghidra_BFC00678",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC006A8",
+      "label": "ghidra_BFC006A8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC006D8",
+      "label": "ghidra_BFC006D8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0193C",
+      "label": "cache_flush_continuation",
+      "rationale": "Jump target of cache-flush jr k0 at BFC01938",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC01B08",
+      "label": "seed_BFC01B08",
+      "rationale": "kernel jump-table target: A0:29 (bcmp) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC01E24",
+      "label": "SysInitMemory",
+      "rationale": "Dispatch miss during boot â€” kernel init function",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC021A0",
+      "label": "seed_BFC021A0",
+      "rationale": "kernel jump-table target: A0:37 (rand-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02200",
+      "label": "jal_BFC02200",
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02230",
+      "label": "seed_BFC02230",
+      "rationale": "kernel jump-table target: A0:30 (rand-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02918",
+      "label": "card_copy_dispatch_miss_2026_05_05",
+      "rationale": "Runtime dispatch miss: 8 hits during YES/NO COPY confirm execution. BANDAID per user permission.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02934",
+      "label": "seed_BFC02934",
+      "rationale": "kernel jump-table target: A0:0F (unresolved (see psx-spx A0 table)) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02B8C",
+      "label": "seed_BFC02B8C",
+      "rationale": "kernel jump-table target: A0:2B (memset) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02BC8",
+      "label": "seed_BFC02BC8",
+      "rationale": "kernel jump-table target: A0:2C (memmove) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC02C50",
+      "label": "seed_BFC02C50",
+      "rationale": "kernel jump-table target: A0:2D (memcmp) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC03200",
+      "label": "seed_BFC03200",
+      "rationale": "kernel jump-table target: A0:16 (strncat) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC034D0",
+      "label": "seed_BFC034D0",
+      "rationale": "kernel jump-table target: A0:1C (atob helper) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC03514",
+      "label": "seed_BFC03514",
+      "rationale": "kernel jump-table target: A0:1D (strtol-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0357C",
+      "label": "seed_BFC0357C",
+      "rationale": "kernel jump-table target: A0:1E (strtol-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC035C0",
+      "label": "seed_BFC035C0",
+      "rationale": "kernel jump-table target: A0:1F (abs) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC03628",
+      "label": "seed_BFC03628",
+      "rationale": "kernel jump-table target: A0:20 (labs) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC03694",
+      "label": "seed_BFC03694",
+      "rationale": "kernel jump-table target: A0:21 (atoi) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC036FC",
+      "label": "seed_BFC036FC",
+      "rationale": "kernel jump-table target: A0:22 (atol) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC03894",
+      "label": "seed_BFC03894",
+      "rationale": "kernel jump-table target: A0:24 (strtol-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC03910",
+      "label": "ghidra_BFC03910",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC03FC0",
+      "label": "jal_BFC03FC0",
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC04120",
+      "label": "seed_BFC04120",
+      "rationale": "kernel jump-table target: A0:4D (ChangeClearRCnt-adjacent) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC04850",
+      "label": "dmiss_BFC04850",
+      "rationale": "Tomba boot dispatch miss after seeding 0xBFC04910. Verified in Ghidra/runtime disassembly as a standalone BIOS callback-list init routine between 0xBFC0472C and 0xBFC048D0, with return at 0xBFC048C8 and table data reference from 0xBFC04588.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC04910",
+      "label": "dmiss_BFC04910",
+      "rationale": "Tomba boot dispatch miss after licensed PlayStation screen. Verified in Ghidra/runtime disassembly as a standalone BIOS init routine between 0xBFC048D0 and 0xBFC04ABC, with return at 0xBFC04A98 and table data reference from 0xBFC04554.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC04AA0",
+      "label": "seed_BFC04AA0",
+      "rationale": "kernel jump-table target: A0:94 (card-adjacent service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC050DC",
+      "label": "seed_BFC050DC",
+      "rationale": "kernel jump-table target: A0:9E (kernel service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC06728",
+      "label": "seed_BFC06728",
+      "rationale": "kernel jump-table target: A0:9D (kernel service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC06750",
+      "label": "seed_BFC06750",
+      "rationale": "kernel jump-table target: A0:9C (kernel service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC06FDC",
+      "label": "indirect_BFC06FDC",
+      "rationale": "Reached via indirect dispatch during boot",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC07370",
+      "label": "ghidra_BFC07370",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC079F8",
+      "label": "dmiss_BFC079F8",
+      "rationale": "Tomba boot dispatch miss after game callback coverage fixes. Verified in Ghidra as a tiny BIOS table leaf routine (sw a0,0(sp); jr ra; clear v0) referenced by data at 0xBFC04484 and 0xBFC0E30C.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC085D4",
+      "label": "ghidra_BFC085D4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC086EC",
+      "label": "ghidra_BFC086EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC09890",
+      "label": "card_cmd_is_not_read",
+      "rationale": "3-instruction predicate function: xori $v0,$a0,0x52; jr $ra; sltu $v0,$0,$v0. Returns ($a0 != 0x52 READ). Sibling of 0xBFC0989C.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0989C",
+      "label": "card_cmd_is_not_write_2026_05_09",
+      "rationale": "3-instruction predicate function: xori $v0,$a0,0x51; jr $ra; sltu $v0,$0,$v0. Returns ($a0 != 0x51 WRITE). Sibling of 0xBFC09890. Discovery missed it because it sits between 0xBFC09898 (end of 0xBFC09890) and 0xBFC098A8 (next discovered fn). Called via JALR at 0xBFC09788 in func_1FC09598 â€” without this seed, JALR dispatches to unknown, write predicate returns junk via uninitialized v0, BIOS COPY silently no-ops the SIO write protocol (60 misses per copy, no 0x57 ever sent). Earlier bisect (2026-05-05) said this crashed; that was before the predicate-init fix and dispatch-miss class fixes. Retry 2026-05-09.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0994C",
+      "label": "ghidra_BFC0994C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0B0C4",
+      "label": "seed_BFC0B0C4",
+      "rationale": "kernel jump-table target: A0:6F (card/dev service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0BA8C",
+      "label": "bios_BA8C",
+      "rationale": "BIOS boot code function. Dispatch miss from shell input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0C1DC",
+      "label": "bios_C1DC",
+      "rationale": "BIOS boot code function. Dispatch miss from shell input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0C2E8",
+      "label": "ghidra_BFC0C2E8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0C318",
+      "label": "ghidra_BFC0C318",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0C580",
+      "label": "ghidra_BFC0C580",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0C720",
+      "label": "ghidra_BFC0C720",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0C830",
+      "label": "ghidra_BFC0C830",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0D4F0",
+      "label": "seed_BFC0D4F0",
+      "rationale": "kernel jump-table target: A0:B4 (GetSystemInfo-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D8E0",
+      "label": "seed_BFC0D8E0",
+      "rationale": "kernel jump-table target: A0:40 (SystemErrorUnresolvedException) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D8F0",
+      "label": "seed_BFC0D8F0",
+      "rationale": "kernel jump-table target: A0:4F (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D900",
+      "label": "seed_BFC0D900",
+      "rationale": "kernel jump-table target: A0:50 (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D910",
+      "label": "seed_BFC0D910",
+      "rationale": "kernel jump-table target: A0:52 (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D920",
+      "label": "seed_BFC0D920",
+      "rationale": "kernel jump-table target: A0:53 (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D930",
+      "label": "seed_BFC0D930",
+      "rationale": "kernel jump-table target: A0:9A (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0D940",
+      "label": "seed_BFC0D940",
+      "rationale": "kernel jump-table target: A0:9B (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0DA50",
+      "label": "ghidra_BFC0DA50",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DA60",
+      "label": "ghidra_BFC0DA60",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DA70",
+      "label": "jal_BFC0DA70",
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0DA80",
+      "label": "jal_BFC0DA80",
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0DA90",
+      "label": "jal_BFC0DA90",
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC0DAA0",
+      "label": "ghidra_BFC0DAA0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DAB0",
+      "label": "ghidra_BFC0DAB0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DAC0",
+      "label": "ghidra_BFC0DAC0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DAD0",
+      "label": "ghidra_BFC0DAD0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DBA0",
+      "label": "ghidra_BFC0DBA0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC0DC50",
+      "label": "ghidra_BFC0DC50",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC10000",
+      "label": "kernel_trampoline_0",
+      "rationale": "Trampoline to FileOpen (0x598)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10010",
+      "label": "kernel_trampoline_1",
+      "rationale": "Trampoline to FileRead (0x5C4)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10020",
+      "label": "kernel_trampoline_2",
+      "rationale": "Trampoline to FileClose (0x5E0)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10030",
+      "label": "kernel_trampoline_3",
+      "rationale": "Trampoline to 0x600",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10040",
+      "label": "kernel_memcpy",
+      "rationale": "ROM-to-RAM and RAM clear routine",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10098",
+      "label": "kernel_bzero",
+      "rationale": "RAM clear routine (to 0xBFC100BC)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC100C4",
+      "label": "a0_vector_dispatch",
+      "rationale": "A0 function table dispatch",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC100E0",
+      "label": "b0_vector_dispatch",
+      "rationale": "B0 function table dispatch",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10100",
+      "label": "c0_vector_dispatch",
+      "rationale": "C0 function table dispatch",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10120",
+      "label": "kernel_get_cause",
+      "rationale": "mfc0 v0,Cause; jr ra",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10130",
+      "label": "kernel_get_sr",
+      "rationale": "mfc0 v0,SR; jr ra",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10140",
+      "label": "kernel_set_sr",
+      "rationale": "mtc0 a0,SR; jr ra",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10150",
+      "label": "kernel_syscall",
+      "rationale": "syscall; jr ra",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1015C",
+      "label": "kernel_get_c0_table",
+      "rationale": "Returns C0 table pointer",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10168",
+      "label": "kernel_get_b0_table",
+      "rationale": "Returns B0 table pointer",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10174",
+      "label": "kernel_BFC10174",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10780",
+      "label": "rmiss_BFC10780",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC109A0",
+      "label": "kernel_BFC109A0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC109B0",
+      "label": "kernel_BFC109B0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10A20",
+      "label": "kernel_BFC10A20",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10A2C",
+      "label": "kernel_BFC10A2C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10A40",
+      "label": "kernel_BFC10A40",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10B30",
+      "label": "rmiss_BFC10B30",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10BB8",
+      "label": "kernel_BFC10BB8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10BE0",
+      "label": "kernel_BFC10BE0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10BE4",
+      "label": "rmiss_BFC10BE4",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10C3C",
+      "label": "kernel_BFC10C3C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10F08",
+      "label": "kernel_BFC10F08",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10F20",
+      "label": "kernel_BFC10F20",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC10F44",
+      "label": "kernel_BFC10F44",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC110D8",
+      "label": "kernel_BFC110D8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC110F8",
+      "label": "kernel_BFC110F8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11114",
+      "label": "kernel_BFC11114",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC111AC",
+      "label": "kernel_BFC111AC",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC111C4",
+      "label": "kernel_BFC111C4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC111E4",
+      "label": "kernel_BFC111E4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1121C",
+      "label": "kernel_BFC1121C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11228",
+      "label": "kernel_BFC11228",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1125C",
+      "label": "kernel_BFC1125C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11274",
+      "label": "kernel_BFC11274",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11294",
+      "label": "ghidra_BFC11294",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC112F4",
+      "label": "ghidra_BFC112F4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11358",
+      "label": "ghidra_BFC11358",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC113BC",
+      "label": "ghidra_BFC113BC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11420",
+      "label": "ghidra_BFC11420",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11458",
+      "label": "ghidra_BFC11458",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11490",
+      "label": "ghidra_BFC11490",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC114C8",
+      "label": "ghidra_BFC114C8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11500",
+      "label": "ghidra_BFC11500",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11524",
+      "label": "dmiss_BFC11524",
+      "rationale": "dispatch miss: KP2 secondary entry point for exception handler, mid-function split of func_00001A00, called during VBlank",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1152C",
+      "label": "rmiss_BFC1152C",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11560",
+      "label": "rmiss_BFC11560",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC115E8",
+      "label": "rmiss_BFC115E8",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC115FC",
+      "label": "rmiss_BFC115FC",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11610",
+      "label": "dmiss_BFC11610",
+      "rationale": "dispatch miss: KP2 function, tail-call target from 0xBFC11524 exception handler path",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11644",
+      "label": "kernel_BFC11644",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1175C",
+      "label": "kernel_BFC1175C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11800",
+      "label": "kernel_BFC11800",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11840",
+      "label": "dmiss_BFC11840",
+      "rationale": "dispatch miss: KP2 function, indirect call",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11870",
+      "label": "kernel_BFC11870",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1191C",
+      "label": "kernel_BFC1191C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11944",
+      "label": "kernel_BFC11944",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11980",
+      "label": "kernel_BFC11980",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11998",
+      "label": "kernel_BFC11998",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC119C8",
+      "label": "kernel_BFC119C8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11A04",
+      "label": "kernel_BFC11A04",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11A10",
+      "label": "kernel_BFC11A10",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11A4C",
+      "label": "kernel_BFC11A4C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11A88",
+      "label": "kernel_BFC11A88",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11AFC",
+      "label": "kernel_BFC11AFC",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11BA8",
+      "label": "kernel_BFC11BA8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11BD4",
+      "label": "kernel_BFC11BD4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11C14",
+      "label": "kernel_BFC11C14",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11C24",
+      "label": "kernel_BFC11C24",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11C50",
+      "label": "kernel_BFC11C50",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11C68",
+      "label": "kernel_BFC11C68",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC11C8C",
+      "label": "ghidra_BFC11C8C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC11F58",
+      "label": "ghidra_BFC11F58",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC12224",
+      "label": "kernel_BFC12224",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1228C",
+      "label": "kernel_BFC1228C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC122A0",
+      "label": "kernel_BFC122A0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC129EC",
+      "label": "kernel_BFC129EC",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC12BC8",
+      "label": "kernel_BFC12BC8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC12BE0",
+      "label": "kernel_BFC12BE0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC12BE4",
+      "label": "rmiss_BFC12BE4",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC12EA4",
+      "label": "kernel_BFC12EA4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1302C",
+      "label": "kernel_BFC1302C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13070",
+      "label": "ghidra_BFC13070",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC130A4",
+      "label": "kernel_BFC130A4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13570",
+      "label": "kernel_BFC13570",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1372C",
+      "label": "kernel_BFC1372C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1376C",
+      "label": "rmiss_BFC1376C",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC137B4",
+      "label": "indirect_BFC137B4",
+      "rationale": "Reached via indirect dispatch during boot (kernel relocated)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC137BC",
+      "label": "rmiss_BFC137BC",
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC137D0",
+      "label": "kernel_ram_function",
+      "rationale": "Dispatch miss at 0xBFC137D0 (phys 0x00003CD0) â€” 3 misses. Kernel RAM function.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC138AC",
+      "label": "kernel_BFC138AC",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1395C",
+      "label": "kernel_BFC1395C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13968",
+      "label": "kernel_BFC13968",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13A04",
+      "label": "kernel_BFC13A04",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13ED0",
+      "label": "kernel_BFC13ED0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13F5C",
+      "label": "kernel_BFC13F5C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC13F98",
+      "label": "ghidra_BFC13F98",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC144BC",
+      "label": "ghidra_BFC144BC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1454C",
+      "label": "kernel_BFC1454C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14588",
+      "label": "kernel_BFC14588",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14594",
+      "label": "kernel_BFC14594",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14670",
+      "label": "kernel_BFC14670",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14754",
+      "label": "kernel_BFC14754",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14764",
+      "label": "kernel_BFC14764",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1483C",
+      "label": "kernel_BFC1483C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1484C",
+      "label": "kernel_BFC1484C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14864",
+      "label": "kernel_BFC14864",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1486C",
+      "label": "kernel_BFC1486C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14A54",
+      "label": "dmiss_BFC14A54",
+      "rationale": "dispatch miss (Beetle wtrace, docs/CASE_A_AOT_GAP.md): chain BUSY-writer at RAM 0x4F54; alias rule RAM=ROM-0xBFC10000+0x500. Reached via JAL inside FUN_bfc147f4; never emitted as standalone entry.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC14A90",
+      "label": "ghidra_BFC14A90",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC14B00",
+      "label": "ghidra_BFC14B00",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC14CF4",
+      "label": "ghidra_BFC14CF4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC15188",
+      "label": "kernel_BFC15188",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC151E8",
+      "label": "kernel_56E8",
+      "rationale": "Kernel function at RAM 0x56E8. Dispatch miss from shell input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15268",
+      "label": "kernel_5768",
+      "rationale": "Kernel function at RAM 0x5768. Cascade from input path seeds.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1529C",
+      "label": "kernel_579C",
+      "rationale": "Kernel function at RAM 0x579C. Cascade from input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15334",
+      "label": "kernel_5834",
+      "rationale": "Kernel function at RAM 0x5834. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15370",
+      "label": "kernel_5870",
+      "rationale": "Kernel (CARD driver) function. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC153B4",
+      "label": "kernel_58B4",
+      "rationale": "Kernel (CARD driver) function at RAM 0x58B4. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC153E8",
+      "label": "kernel_58E8",
+      "rationale": "Kernel (CARD driver) function at RAM 0x58E8. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15418",
+      "label": "kernel_5918",
+      "rationale": "Kernel (CARD driver) leaf function at RAM 0x5918. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15454",
+      "label": "kernel_5954",
+      "rationale": "CARD driver cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15490",
+      "label": "kernel_5990",
+      "rationale": "CARD driver cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC154CC",
+      "label": "kernel_59CC",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15500",
+      "label": "kernel_5A00",
+      "rationale": "CARD driver cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15508",
+      "label": "kernel_5A08",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15544",
+      "label": "kernel_5A44",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15558",
+      "label": "kernel_5A58",
+      "rationale": "CARD read chain state 12 (data-byte-store): SIO_RX -> a1[0x7F], XOR-updates checksum at 0x7560+slot*4, returns v0=0. Targeted by jump table at RAM 0x6c98 entry 12.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15580",
+      "label": "kernel_5A80",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC155B0",
+      "label": "kernel_5AB0",
+      "rationale": "CARD read chain state 13 (data-loop completion): reads byte vs checksum at 0x7560+slot*4, polls SIO_STAT for RX_RDY, reads END byte; v0=1 if 'G' else v0=-1. Targeted by jump table at RAM 0x6c98 entry 13.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC155BC",
+      "label": "kernel_5ABC",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC155F8",
+      "label": "kernel_5AF8",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15634",
+      "label": "kernel_5B34",
+      "rationale": "CARD driver cascade (predicted).",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15650",
+      "label": "kernel_5B50",
+      "rationale": "Kernel function. Cascade from input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15654",
+      "label": "kernel_5B54",
+      "rationale": "Kernel function. Cascade from input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15664",
+      "label": "kernel_BFC15664",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC156A4",
+      "label": "kernel_5BA4",
+      "rationale": "Kernel function at RAM 0x5BA4. Dispatch miss from shell input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15724",
+      "label": "kernel_5C24",
+      "rationale": "Kernel function at RAM 0x5C24. Cascade from input path seeds.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15758",
+      "label": "kernel_5C58",
+      "rationale": "Kernel function at RAM 0x5C58. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15848",
+      "label": "kernel_5D48",
+      "rationale": "Kernel (CARD driver) function. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15894",
+      "label": "kernel_5D94",
+      "rationale": "Kernel function. Cascade from input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15898",
+      "label": "kernel_5D98",
+      "rationale": "Kernel (CARD driver) function. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC158D0",
+      "label": "dmiss_BFC158D0",
+      "rationale": "dispatch miss (Beetle wtrace, docs/CASE_A_AOT_GAP.md): chain init slot-0 BUSY writer at RAM 0x5DD0; alias RAM=ROM-0xBFC10000+0x500. Inside FUN_bfc158a8 body.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC158D8",
+      "label": "dmiss_BFC158D8",
+      "rationale": "dispatch miss (Beetle wtrace, docs/CASE_A_AOT_GAP.md): chain init slot-1 BUSY writer at RAM 0x5DD8; alias RAM=ROM-0xBFC10000+0x500. Inside FUN_bfc158a8 body.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15930",
+      "label": "kernel_BFC15930",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15950",
+      "label": "kernel_BFC15950",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15998",
+      "label": "kernel_BFC15998",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC159F4",
+      "label": "dmiss_BFC159F4",
+      "rationale": "dispatch miss (Beetle wtrace, docs/CASE_A_AOT_GAP.md): chain step handler that writes 0x02 OPEN to [0x7568+slot] at RAM 0x5EF4. Indirect-jr target from RAM 0x6c98 jump table; alias RAM=ROM-0xBFC10000+0x500. KEY entry â€” without this the gate never clears.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15A04",
+      "label": "kernel_BFC15A04",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15A4C",
+      "label": "kernel_BFC15A4C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15AA8",
+      "label": "dmiss_BFC15AA8",
+      "rationale": "dispatch miss (Beetle wtrace, docs/CASE_A_AOT_GAP.md): chain step handler that writes 0x04 OPEN to [0x7568+slot] at RAM 0x5FA8. Indirect-jr target from RAM 0x6c98 jump table; alias RAM=ROM-0xBFC10000+0x500. KEY entry â€” paired with 0xBFC159F4.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15AB8",
+      "label": "kernel_BFC15AB8",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15AF0",
+      "label": "kernel_BFC15AF0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15B5C",
+      "label": "kernel_BFC15B5C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15B70",
+      "label": "kernel_BFC15B70",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15CC4",
+      "label": "kernel_BFC15CC4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15E90",
+      "label": "kernel_BFC15E90",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15EBC",
+      "label": "kernel_BFC15EBC",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15F08",
+      "label": "kernel_BFC15F08",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC15F1C",
+      "label": "dmiss_BFC15F1C",
+      "rationale": "dirty_ram hot: SIO/PAD interrupt handler entry point (RAM 0x641C), called via jalr. 10852+ hits/frame across internal branch targets (0x641C, 0x6430, 0x6444, 0x6458, 0x650C, 0x6514, 0x658C, 0x6594). Seeding entry only; CFG discovers internal labels.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1609C",
+      "label": "kernel_BFC1609C",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC16690",
+      "label": "kernel_BFC16690",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC166A0",
+      "label": "kernel_BFC166A0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC166B0",
+      "label": "kernel_BFC166B0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC166C0",
+      "label": "kernel_BFC166C0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC166D0",
+      "label": "kernel_BFC166D0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC166E0",
+      "label": "kernel_BFC166E0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC166F0",
+      "label": "kernel_BFC166F0",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC16700",
+      "label": "kernel_BFC16700",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC16710",
+      "label": "kernel_BFC16710",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC16720",
+      "label": "kernel_BFC16720",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC18000",
+      "label": "shell_entry",
+      "rationale": "Shell entry point at BFC18000, copied to RAM 0x80030000",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC18254",
+      "label": "ghidra_BFC18254",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC18684",
+      "label": "ghidra_BFC18684",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC18788",
+      "label": "kernel_BFC18788",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC18798",
+      "label": "ghidra_BFC18798",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC188B4",
+      "label": "kernel_BFC188B4",
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC188F0",
+      "label": "ghidra_BFC188F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC18990",
+      "label": "ghidra_BFC18990",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC18D10",
+      "label": "ghidra_BFC18D10",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC192E4",
+      "label": "ghidra_BFC192E4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC193C0",
+      "label": "ghidra_BFC193C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1952C",
+      "label": "ghidra_BFC1952C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC19630",
+      "label": "ghidra_BFC19630",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC196D4",
+      "label": "ghidra_BFC196D4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC19A58",
+      "label": "ghidra_BFC19A58",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC19DF4",
+      "label": "ghidra_BFC19DF4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC19FD0",
+      "label": "shell_input_handler_2",
+      "rationale": "Second shell input handler at RAM 0x80031FD0. Similar to BFC1A050. Dispatch miss after adding BFC1A050.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1A050",
+      "label": "shell_input_handler",
+      "rationale": "Shell function called via RAM 0x80032050 after pad input detected. Dispatch miss blocked shell from processing button presses.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1A15C",
+      "label": "ghidra_BFC1A15C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1A17C",
+      "label": "ghidra_BFC1A17C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1A19C",
+      "label": "ghidra_BFC1A19C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1A1BC",
+      "label": "modal_stub_dispatch_miss",
+      "rationale": "Runtime dispatch miss confirmed 2026-05-05: psx_unknown_dispatch hit during YES/NO COPY confirm modal CROSS press. Beetle wtrace+fntrace shows this PC fires on modal close via JAL caller_pc=0x8004673C. Ghidra function discovery missed it. BANDAID per user permission â€” should be replaced by an improved heuristic that catches this gap.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1A430",
+      "label": "ghidra_BFC1A430",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1A5B0",
+      "label": "ghidra_BFC1A5B0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1A6EC",
+      "label": "ghidra_BFC1A6EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1AA90",
+      "label": "ghidra_BFC1AA90",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1AC68",
+      "label": "ghidra_BFC1AC68",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1AE68",
+      "label": "ghidra_BFC1AE68",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1B7E0",
+      "label": "ghidra_BFC1B7E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1BD68",
+      "label": "ghidra_BFC1BD68",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1BEE0",
+      "label": "ghidra_BFC1BEE0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1BF44",
+      "label": "ghidra_BFC1BF44",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1C130",
+      "label": "ghidra_BFC1C130",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1C4C0",
+      "label": "ghidra_BFC1C4C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1C78C",
+      "label": "ghidra_BFC1C78C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1C8EC",
+      "label": "ghidra_BFC1C8EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1C9B4",
+      "label": "ghidra_BFC1C9B4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1CAF0",
+      "label": "ghidra_BFC1CAF0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1CBAC",
+      "label": "ghidra_BFC1CBAC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1CDD8",
+      "label": "ghidra_BFC1CDD8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1DBF4",
+      "label": "ghidra_BFC1DBF4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1DDD8",
+      "label": "ghidra_BFC1DDD8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1DF50",
+      "label": "ghidra_BFC1DF50",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1E0C4",
+      "label": "ghidra_BFC1E0C4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1E10C",
+      "label": "ghidra_BFC1E10C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1E3AC",
+      "label": "dmiss_BFC1E3AC",
+      "rationale": "dispatch miss: Shell function, called in vblank loop",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1E3C0",
+      "label": "sio_event_opener_epilogue",
+      "rationale": "Epilogue fragment at BFC1E3C0 (addiu sp,sp,0x18; jr ra; nop). Reached via branch from SIO state machine. Dispatch miss after fall-through fix exposed new code paths.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC1E3CC",
+      "label": "ghidra_BFC1E3CC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1F6AC",
+      "label": "ghidra_BFC1F6AC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1F980",
+      "label": "ghidra_BFC1F980",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC1FFA8",
+      "label": "ghidra_BFC1FFA8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20338",
+      "label": "ghidra_BFC20338",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2069C",
+      "label": "ghidra_BFC2069C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20BE4",
+      "label": "ghidra_BFC20BE4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20C64",
+      "label": "ghidra_BFC20C64",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20CE4",
+      "label": "ghidra_BFC20CE4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20D4C",
+      "label": "ghidra_BFC20D4C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20DB4",
+      "label": "ghidra_BFC20DB4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20E10",
+      "label": "ghidra_BFC20E10",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20E6C",
+      "label": "ghidra_BFC20E6C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20EC8",
+      "label": "ghidra_BFC20EC8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20F24",
+      "label": "ghidra_BFC20F24",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20F8C",
+      "label": "ghidra_BFC20F8C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC20FE8",
+      "label": "ghidra_BFC20FE8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC21044",
+      "label": "ghidra_BFC21044",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC210C0",
+      "label": "ghidra_BFC210C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC210F0",
+      "label": "shell_handler_BFC210F0",
+      "rationale": "Recomp TCB saved PC - handler function",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC21128",
+      "label": "ghidra_BFC21128",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC21184",
+      "label": "ghidra_BFC21184",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC21200",
+      "label": "ghidra_BFC21200",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2125C",
+      "label": "ghidra_BFC2125C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC212C4",
+      "label": "ghidra_BFC212C4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC21320",
+      "label": "ghidra_BFC21320",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC213A4",
+      "label": "ghidra_BFC213A4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC213FC",
+      "label": "ghidra_BFC213FC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC214B0",
+      "label": "ghidra_BFC214B0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC218CC",
+      "label": "ghidra_BFC218CC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2193C",
+      "label": "ghidra_BFC2193C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC21A9C",
+      "label": "ghidra_BFC21A9C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC22164",
+      "label": "ghidra_BFC22164",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC226D0",
+      "label": "ghidra_BFC226D0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC228D8",
+      "label": "ghidra_BFC228D8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC22B80",
+      "label": "ghidra_BFC22B80",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC22E1C",
+      "label": "ghidra_BFC22E1C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC22E90",
+      "label": "ghidra_BFC22E90",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC23078",
+      "label": "ghidra_BFC23078",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC230C4",
+      "label": "ghidra_BFC230C4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2311C",
+      "label": "ghidra_BFC2311C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC232DC",
+      "label": "ghidra_BFC232DC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC23500",
+      "label": "ghidra_BFC23500",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC23524",
+      "label": "ghidra_BFC23524",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC23D3C",
+      "label": "ghidra_BFC23D3C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC24288",
+      "label": "ghidra_BFC24288",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC24418",
+      "label": "ghidra_BFC24418",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC24640",
+      "label": "ghidra_BFC24640",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC24A48",
+      "label": "ghidra_BFC24A48",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC24F00",
+      "label": "ghidra_BFC24F00",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC251A8",
+      "label": "ghidra_BFC251A8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25200",
+      "label": "ghidra_BFC25200",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC252BC",
+      "label": "ghidra_BFC252BC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2531C",
+      "label": "ghidra_BFC2531C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25390",
+      "label": "ghidra_BFC25390",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC254B0",
+      "label": "ghidra_BFC254B0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25558",
+      "label": "ghidra_BFC25558",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25754",
+      "label": "ghidra_BFC25754",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25B74",
+      "label": "ghidra_BFC25B74",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25CC0",
+      "label": "ghidra_BFC25CC0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25D8C",
+      "label": "ghidra_BFC25D8C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25E8C",
+      "label": "ghidra_BFC25E8C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC25EF8",
+      "label": "ghidra_BFC25EF8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2632C",
+      "label": "ghidra_BFC2632C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2644C",
+      "label": "ghidra_BFC2644C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC264A0",
+      "label": "ghidra_BFC264A0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC26550",
+      "label": "ghidra_BFC26550",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC265C0",
+      "label": "ghidra_BFC265C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC26610",
+      "label": "ghidra_BFC26610",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC26670",
+      "label": "ghidra_BFC26670",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC266B0",
+      "label": "ghidra_BFC266B0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC268EC",
+      "label": "ghidra_BFC268EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC26C10",
+      "label": "ghidra_BFC26C10",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC26E64",
+      "label": "ghidra_BFC26E64",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27190",
+      "label": "ghidra_BFC27190",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC273E4",
+      "label": "ghidra_BFC273E4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27868",
+      "label": "ghidra_BFC27868",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27910",
+      "label": "ghidra_BFC27910",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27A2C",
+      "label": "ghidra_BFC27A2C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27B24",
+      "label": "ghidra_BFC27B24",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27BDC",
+      "label": "ghidra_BFC27BDC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27CC8",
+      "label": "ghidra_BFC27CC8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27DB0",
+      "label": "ghidra_BFC27DB0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27E68",
+      "label": "ghidra_BFC27E68",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27E88",
+      "label": "ghidra_BFC27E88",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27EB4",
+      "label": "ghidra_BFC27EB4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC27FB0",
+      "label": "dmiss_BFC27FB0",
+      "rationale": "dispatch miss: Kernel Part 2 function, indirect call",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC28064",
+      "label": "ghidra_BFC28064",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC28490",
+      "label": "ghidra_BFC28490",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC284F0",
+      "label": "ghidra_BFC284F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2886C",
+      "label": "ghidra_BFC2886C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC28B84",
+      "label": "ghidra_BFC28B84",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC29770",
+      "label": "ghidra_BFC29770",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC29AE0",
+      "label": "ghidra_BFC29AE0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC29FE8",
+      "label": "ghidra_BFC29FE8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2A31C",
+      "label": "ghidra_BFC2A31C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2BF1C",
+      "label": "ghidra_BFC2BF1C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2BF74",
+      "label": "ghidra_BFC2BF74",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2C2F0",
+      "label": "ghidra_BFC2C2F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2C3E0",
+      "label": "ghidra_BFC2C3E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CA9C",
+      "label": "ghidra_BFC2CA9C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CAE0",
+      "label": "ghidra_BFC2CAE0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CB24",
+      "label": "ghidra_BFC2CB24",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CB80",
+      "label": "ghidra_BFC2CB80",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CC10",
+      "label": "ghidra_BFC2CC10",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CCC4",
+      "label": "ghidra_BFC2CCC4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CE08",
+      "label": "ghidra_BFC2CE08",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2CF54",
+      "label": "ghidra_BFC2CF54",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2D0E0",
+      "label": "ghidra_BFC2D0E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2E44C",
+      "label": "ghidra_BFC2E44C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2E600",
+      "label": "ghidra_BFC2E600",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2E65C",
+      "label": "ghidra_BFC2E65C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2ED1C",
+      "label": "ghidra_BFC2ED1C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2EE6C",
+      "label": "ghidra_BFC2EE6C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2EF40",
+      "label": "ghidra_BFC2EF40",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F210",
+      "label": "ghidra_BFC2F210",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F618",
+      "label": "ghidra_BFC2F618",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F65C",
+      "label": "ghidra_BFC2F65C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F718",
+      "label": "ghidra_BFC2F718",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F808",
+      "label": "ghidra_BFC2F808",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F85C",
+      "label": "ghidra_BFC2F85C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2F8AC",
+      "label": "ghidra_BFC2F8AC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2FCC4",
+      "label": "ghidra_BFC2FCC4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC2FE6C",
+      "label": "ghidra_BFC2FE6C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC301AC",
+      "label": "ghidra_BFC301AC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3029C",
+      "label": "ghidra_BFC3029C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC30350",
+      "label": "ghidra_BFC30350",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3045C",
+      "label": "dmiss_BFC3045C",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30470",
+      "label": "dmiss_BFC30470",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30484",
+      "label": "dmiss_BFC30484",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30498",
+      "label": "dmiss_BFC30498",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC304AC",
+      "label": "trampoline_BFC304AC",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30554",
+      "label": "dmiss_BFC30554",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30560",
+      "label": "dmiss_BFC30560",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3056C",
+      "label": "dmiss_BFC3056C",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30578",
+      "label": "dmiss_BFC30578",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30584",
+      "label": "trampoline_BFC30584",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC30960",
+      "label": "ghidra_BFC30960",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC30A80",
+      "label": "ghidra_BFC30A80",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC30DF0",
+      "label": "ghidra_BFC30DF0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31194",
+      "label": "ghidra_BFC31194",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31380",
+      "label": "ghidra_BFC31380",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC313EC",
+      "label": "ghidra_BFC313EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31448",
+      "label": "ghidra_BFC31448",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31580",
+      "label": "ghidra_BFC31580",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31638",
+      "label": "ghidra_BFC31638",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC317D0",
+      "label": "ghidra_BFC317D0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31968",
+      "label": "ghidra_BFC31968",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31C64",
+      "label": "ghidra_BFC31C64",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31D14",
+      "label": "ghidra_BFC31D14",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31DC4",
+      "label": "ghidra_BFC31DC4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC31E74",
+      "label": "ghidra_BFC31E74",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC322E4",
+      "label": "ghidra_BFC322E4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC32410",
+      "label": "ghidra_BFC32410",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC32450",
+      "label": "ghidra_BFC32450",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3255C",
+      "label": "ghidra_BFC3255C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC32724",
+      "label": "ghidra_BFC32724",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC32820",
+      "label": "ghidra_BFC32820",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC328F4",
+      "label": "ghidra_BFC328F4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC329F0",
+      "label": "ghidra_BFC329F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC32CCC",
+      "label": "ghidra_BFC32CCC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC33138",
+      "label": "ghidra_BFC33138",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC331A0",
+      "label": "ghidra_BFC331A0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC33358",
+      "label": "ghidra_BFC33358",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC33400",
+      "label": "ghidra_BFC33400",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC336F0",
+      "label": "gte_cop2_init",
+      "rationale": "GTE/COP2 initialization: enables COP2 in SR, sets COP2 control registers. Contains COP2 instructions (Phase 5). Reached after fall-through fix.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33758",
+      "label": "gte_lib_BFC33758",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC337AC",
+      "label": "gte_lib_BFC337AC",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33800",
+      "label": "gte_lib_BFC33800",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3388C",
+      "label": "gte_lib_BFC3388C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33918",
+      "label": "gte_lib_BFC33918",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33978",
+      "label": "gte_lib_BFC33978",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33AB8",
+      "label": "gte_lib_BFC33AB8",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33B80",
+      "label": "gte_lib_BFC33B80",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33C04",
+      "label": "gte_lib_BFC33C04",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33C84",
+      "label": "gte_lib_BFC33C84",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33C90",
+      "label": "trampoline_BFC33C90",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33CC0",
+      "label": "jal_BFC33CC0",
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33D1C",
+      "label": "trampoline_BFC33D1C",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33D24",
+      "label": "gte_lib_BFC33D24",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33DA4",
+      "label": "gte_lib_BFC33DA4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33E20",
+      "label": "gte_lib_BFC33E20",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33E80",
+      "label": "gte_lib_BFC33E80",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33E90",
+      "label": "gte_lib_BFC33E90",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33EA0",
+      "label": "gte_lib_BFC33EA0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33EC0",
+      "label": "gte_lib_BFC33EC0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33ECC",
+      "label": "gte_lib_BFC33ECC",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33EE0",
+      "label": "gte_lib_BFC33EE0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33EF4",
+      "label": "gte_lib_BFC33EF4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33F40",
+      "label": "gte_lib_BFC33F40",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33F54",
+      "label": "gte_lib_BFC33F54",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33F6C",
+      "label": "gte_lib_BFC33F6C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33F80",
+      "label": "gte_lib_BFC33F80",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33F94",
+      "label": "gte_lib_BFC33F94",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33FA8",
+      "label": "gte_lib_BFC33FA8",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33FF0",
+      "label": "gte_lib_BFC33FF0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC33FFC",
+      "label": "gte_lib_BFC33FFC",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34008",
+      "label": "gte_lib_BFC34008",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3401C",
+      "label": "gte_lib_BFC3401C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34028",
+      "label": "gte_lib_BFC34028",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3403C",
+      "label": "gte_lib_BFC3403C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34054",
+      "label": "gte_lib_BFC34054",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34068",
+      "label": "gte_lib_BFC34068",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3407C",
+      "label": "gte_lib_BFC3407C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34088",
+      "label": "gte_lib_BFC34088",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3409C",
+      "label": "gte_lib_BFC3409C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC340CC",
+      "label": "gte_lib_BFC340CC",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC340D8",
+      "label": "gte_lib_BFC340D8",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC340E4",
+      "label": "gte_lib_BFC340E4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34104",
+      "label": "gte_lib_BFC34104",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34110",
+      "label": "gte_lib_BFC34110",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34160",
+      "label": "ghidra_BFC34160",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC34304",
+      "label": "ghidra_BFC34304",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC344A4",
+      "label": "ghidra_BFC344A4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC345F4",
+      "label": "ghidra_BFC345F4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC34748",
+      "label": "ghidra_BFC34748",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC34898",
+      "label": "ghidra_BFC34898",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC34924",
+      "label": "gte_lib_BFC34924",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34928",
+      "label": "gte_lib_BFC34928",
+      "rationale": "GTE library sub-entry. Cascade from batch.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34954",
+      "label": "gte_lib_BFC34954",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34958",
+      "label": "gte_lib_BFC34958",
+      "rationale": "GTE library sub-entry. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34980",
+      "label": "gte_lib_BFC34980",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34984",
+      "label": "gte_lib_BFC34984",
+      "rationale": "GTE library sub-entry. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A04",
+      "label": "gte_lib_BFC34A04",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A08",
+      "label": "gte_lib_BFC34A08",
+      "rationale": "GTE library sub-entry. Cascade from batch.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A30",
+      "label": "gte_lib_BFC34A30",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A34",
+      "label": "gte_lib_BFC34A34",
+      "rationale": "GTE library sub-entry. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A60",
+      "label": "gte_lib_BFC34A60",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A64",
+      "label": "gte_lib_BFC34A64",
+      "rationale": "GTE library sub-entry. Cascade.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34A90",
+      "label": "gte_lib_BFC34A90",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34AA0",
+      "label": "gte_lib_BFC34AA0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34B08",
+      "label": "gte_lib_BFC34B08",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34B58",
+      "label": "ghidra_BFC34B58",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC34E00",
+      "label": "gte_lib_BFC34E00",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34EC0",
+      "label": "gte_lib_BFC34EC0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34EC4",
+      "label": "gte_lib_BFC34EC4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC34FA0",
+      "label": "gte_lib_BFC34FA0",
+      "rationale": "GTE math library function missed by adjacent batch discovery; contains the BFC34FF8-BFC350C4 MVMVA/SWC2 helper used by the BIOS disc logo screen.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35128",
+      "label": "gte_lib_BFC35128",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3524C",
+      "label": "gte_lib_BFC3524C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35348",
+      "label": "gte_lib_BFC35348",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35470",
+      "label": "gte_lib_BFC35470",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35598",
+      "label": "gte_lib_BFC35598",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35698",
+      "label": "gte_lib_BFC35698",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC357C4",
+      "label": "gte_lib_BFC357C4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3582C",
+      "label": "gte_lib_BFC3582C",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3586C",
+      "label": "gte_lib_BFC3586C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35890",
+      "label": "gte_lib_BFC35890",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC359B4",
+      "label": "gte_lib_BFC359B4",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35AD8",
+      "label": "gte_lib_BFC35AD8",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35B08",
+      "label": "gte_lib_BFC35B08",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35B38",
+      "label": "gte_lib_BFC35B38",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35B68",
+      "label": "gte_lib_BFC35B68",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35B88",
+      "label": "gte_lib_BFC35B88",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35BC4",
+      "label": "gte_lib_BFC35BC4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35C28",
+      "label": "gte_lib_BFC35C28",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35C60",
+      "label": "gte_lib_BFC35C60",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35CC8",
+      "label": "gte_lib_BFC35CC8",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35D10",
+      "label": "gte_lib_BFC35D10",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35D58",
+      "label": "gte_lib_BFC35D58",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35DA0",
+      "label": "gte_lib_BFC35DA0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35DD4",
+      "label": "gte_lib_BFC35DD4",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35E30",
+      "label": "gte_lib_BFC35E30",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35E64",
+      "label": "gte_lib_BFC35E64",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35E98",
+      "label": "gte_lib_BFC35E98",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35EC0",
+      "label": "gte_lib_BFC35EC0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35EEC",
+      "label": "gte_lib_BFC35EEC",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35F18",
+      "label": "gte_lib_BFC35F18",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35F38",
+      "label": "gte_lib_BFC35F38",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35F78",
+      "label": "gte_lib_BFC35F78",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35FA0",
+      "label": "gte_lib_BFC35FA0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC35FD0",
+      "label": "gte_lib_BFC35FD0",
+      "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36000",
+      "label": "gte_lib_BFC36000",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36024",
+      "label": "gte_lib_BFC36024",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36068",
+      "label": "gte_lib_BFC36068",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36094",
+      "label": "gte_lib_BFC36094",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC360E0",
+      "label": "gte_lib_BFC360E0",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36104",
+      "label": "gte_lib_BFC36104",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3614C",
+      "label": "gte_lib_BFC3614C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36178",
+      "label": "gte_lib_BFC36178",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC361A0",
+      "label": "gte_lib_BFC361A0",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC361CC",
+      "label": "gte_lib_BFC361CC",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC361F4",
+      "label": "gte_lib_BFC361F4",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3621C",
+      "label": "gte_lib_BFC3621C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36244",
+      "label": "gte_lib_BFC36244",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3625C",
+      "label": "gte_lib_BFC3625C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36280",
+      "label": "gte_lib_BFC36280",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36294",
+      "label": "gte_lib_BFC36294",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC362BC",
+      "label": "gte_lib_BFC362BC",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC362D0",
+      "label": "gte_lib_BFC362D0",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3632C",
+      "label": "gte_lib_BFC3632C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36388",
+      "label": "gte_lib_BFC36388",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC363A0",
+      "label": "gte_lib_BFC363A0",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC363F0",
+      "label": "gte_lib_BFC363F0",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36458",
+      "label": "gte_lib_BFC36458",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC364DC",
+      "label": "gte_lib_BFC364DC",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC3653C",
+      "label": "gte_lib_BFC3653C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC365C4",
+      "label": "gte_lib_BFC365C4",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC365F8",
+      "label": "gte_lib_BFC365F8",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36684",
+      "label": "gte_lib_BFC36684",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36740",
+      "label": "gte_lib_BFC36740",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC367D4",
+      "label": "gte_lib_BFC367D4",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36880",
+      "label": "gte_lib_BFC36880",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36940",
+      "label": "gte_lib_BFC36940",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36998",
+      "label": "gte_lib_BFC36998",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36A3C",
+      "label": "gte_lib_BFC36A3C",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36B14",
+      "label": "gte_lib_BFC36B14",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36BEC",
+      "label": "gte_lib_BFC36BEC",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36C60",
+      "label": "gte_lib_BFC36C60",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36CA4",
+      "label": "gte_lib_BFC36CA4",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36CF0",
+      "label": "ghidra_BFC36CF0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC36D1C",
+      "label": "ghidra_BFC36D1C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC36D48",
+      "label": "dmiss_BFC36D48",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36DD0",
+      "label": "dmiss_BFC36DD0",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36DF8",
+      "label": "dmiss_BFC36DF8",
+      "rationale": "dispatch miss: Shell function, indirect call",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC36EC0",
+      "label": "ghidra_BFC36EC0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC36F90",
+      "label": "ghidra_BFC36F90",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC36FF0",
+      "label": "gte_lib_BFC36FF0",
+      "rationale": "(no rationale recorded in the pre-T13 corpus)",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC37028",
+      "label": "ghidra_BFC37028",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37070",
+      "label": "ghidra_BFC37070",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC370A0",
+      "label": "ghidra_BFC370A0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC370F4",
+      "label": "ghidra_BFC370F4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37130",
+      "label": "ghidra_BFC37130",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3716C",
+      "label": "ghidra_BFC3716C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37334",
+      "label": "ghidra_BFC37334",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37368",
+      "label": "ghidra_BFC37368",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC373E0",
+      "label": "ghidra_BFC373E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37434",
+      "label": "ghidra_BFC37434",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC374BC",
+      "label": "ghidra_BFC374BC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC374EC",
+      "label": "ghidra_BFC374EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37838",
+      "label": "ghidra_BFC37838",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37868",
+      "label": "ghidra_BFC37868",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC378B4",
+      "label": "ghidra_BFC378B4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37908",
+      "label": "ghidra_BFC37908",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37998",
+      "label": "ghidra_BFC37998",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37A4C",
+      "label": "ghidra_BFC37A4C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC37AC4",
+      "label": "ghidra_BFC37AC4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC38204",
+      "label": "ghidra_BFC38204",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC382E0",
+      "label": "ghidra_BFC382E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC38524",
+      "label": "ghidra_BFC38524",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC387D4",
+      "label": "ghidra_BFC387D4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC38A7C",
+      "label": "ghidra_BFC38A7C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC38AA4",
+      "label": "dmiss_BFC38AA4",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC38AD4",
+      "label": "dmiss_BFC38AD4",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC38AF0",
+      "label": "shell_hot_function",
+      "rationale": "Dispatch miss at 0x80050AF0 (phys 0x1FC38AF0) â€” 178 misses. Hot shell function during rendering loop.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC38BE8",
+      "label": "ghidra_BFC38BE8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC38C68",
+      "label": "ghidra_BFC38C68",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC38DAC",
+      "label": "ghidra_BFC38DAC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC39080",
+      "label": "ghidra_BFC39080",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC39410",
+      "label": "ghidra_BFC39410",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC394EC",
+      "label": "ghidra_BFC394EC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3954C",
+      "label": "ghidra_BFC3954C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC39630",
+      "label": "ghidra_BFC39630",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC396E8",
+      "label": "ghidra_BFC396E8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC39D38",
+      "label": "ghidra_BFC39D38",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC39E84",
+      "label": "ghidra_BFC39E84",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC39FE4",
+      "label": "ghidra_BFC39FE4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3A094",
+      "label": "ghidra_BFC3A094",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3A228",
+      "label": "ghidra_BFC3A228",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3A2C0",
+      "label": "ghidra_BFC3A2C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3B30C",
+      "label": "ghidra_BFC3B30C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3B368",
+      "label": "ghidra_BFC3B368",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3B85C",
+      "label": "ghidra_BFC3B85C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3B93C",
+      "label": "ghidra_BFC3B93C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3BA74",
+      "label": "ghidra_BFC3BA74",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3BD78",
+      "label": "ghidra_BFC3BD78",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3BD98",
+      "label": "ghidra_BFC3BD98",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3BF10",
+      "label": "ghidra_BFC3BF10",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3C060",
+      "label": "ghidra_BFC3C060",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3C140",
+      "label": "ghidra_BFC3C140",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3C428",
+      "label": "ghidra_BFC3C428",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3C4E0",
+      "label": "ghidra_BFC3C4E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3C710",
+      "label": "ghidra_BFC3C710",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3D810",
+      "label": "ghidra_BFC3D810",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3D8C0",
+      "label": "ghidra_BFC3D8C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3DF20",
+      "label": "ghidra_BFC3DF20",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3E020",
+      "label": "ghidra_BFC3E020",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3E980",
+      "label": "ghidra_BFC3E980",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3EDB4",
+      "label": "ghidra_BFC3EDB4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3EFF0",
+      "label": "ghidra_BFC3EFF0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F1B8",
+      "label": "ghidra_BFC3F1B8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F2B4",
+      "label": "ghidra_BFC3F2B4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F484",
+      "label": "ghidra_BFC3F484",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F4F0",
+      "label": "ghidra_BFC3F4F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F570",
+      "label": "ghidra_BFC3F570",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F5D8",
+      "label": "ghidra_BFC3F5D8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F6F0",
+      "label": "ghidra_BFC3F6F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F7E8",
+      "label": "ghidra_BFC3F7E8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F8E4",
+      "label": "ghidra_BFC3F8E4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3F9AC",
+      "label": "ghidra_BFC3F9AC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FA10",
+      "label": "ghidra_BFC3FA10",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FAEC",
+      "label": "ghidra_BFC3FAEC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FB74",
+      "label": "ghidra_BFC3FB74",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FC50",
+      "label": "ghidra_BFC3FC50",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FD0C",
+      "label": "ghidra_BFC3FD0C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FDC8",
+      "label": "ghidra_BFC3FDC8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FE60",
+      "label": "ghidra_BFC3FE60",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC3FF40",
+      "label": "ghidra_BFC3FF40",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40034",
+      "label": "ghidra_BFC40034",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC400DC",
+      "label": "ghidra_BFC400DC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40184",
+      "label": "ghidra_BFC40184",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40260",
+      "label": "ghidra_BFC40260",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC402DC",
+      "label": "ghidra_BFC402DC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40484",
+      "label": "ghidra_BFC40484",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40628",
+      "label": "ghidra_BFC40628",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC406E0",
+      "label": "ghidra_BFC406E0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40700",
+      "label": "ghidra_BFC40700",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC407B8",
+      "label": "ghidra_BFC407B8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40B68",
+      "label": "ghidra_BFC40B68",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40DE8",
+      "label": "ghidra_BFC40DE8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC40F34",
+      "label": "ghidra_BFC40F34",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC4102C",
+      "label": "ghidra_BFC4102C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41200",
+      "label": "ghidra_BFC41200",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41258",
+      "label": "ghidra_BFC41258",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC413B0",
+      "label": "ghidra_BFC413B0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC413F4",
+      "label": "ghidra_BFC413F4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41458",
+      "label": "ghidra_BFC41458",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41520",
+      "label": "ghidra_BFC41520",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41648",
+      "label": "ghidra_BFC41648",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41670",
+      "label": "ghidra_BFC41670",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41708",
+      "label": "ghidra_BFC41708",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC417CC",
+      "label": "ghidra_BFC417CC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41848",
+      "label": "ghidra_BFC41848",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC418C4",
+      "label": "ghidra_BFC418C4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC4192C",
+      "label": "ghidra_BFC4192C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41A44",
+      "label": "ghidra_BFC41A44",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41C80",
+      "label": "ghidra_BFC41C80",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41D18",
+      "label": "shell_3d_callback_BFC41D18",
+      "rationale": "DuckStation oracle TCB saved PC - shell 3D rendering callback",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC41DA4",
+      "label": "ghidra_BFC41DA4",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC41DC8",
+      "label": "dispatch_miss_0xBFC41DC8",
+      "rationale": "Phase 4.5 dispatch miss from 3D rendering seeds",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC41DFC",
+      "label": "shell_3d_callback_BFC41DFC",
+      "rationale": "DuckStation oracle TCB saved EPC - shell 3D rendering",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC41E14",
+      "label": "dispatch_miss_0xBFC41E14",
+      "rationale": "Phase 4.5 dispatch miss from 3D rendering seeds",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC41FC0",
+      "label": "shell_InitRCnt_setup",
+      "rationale": "Undiscovered function: calls B0:0x15 (InitRCnt) with arg 0x20000001. Only reachable via indirect jalr from shell init table. Missing seed causes VSync counter to never increment.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42014",
+      "label": "ghidra_BFC42014",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC4203C",
+      "label": "ghidra_BFC4203C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42060",
+      "label": "ghidra_BFC42060",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42090",
+      "label": "ghidra_BFC42090",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC420C0",
+      "label": "ghidra_BFC420C0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC420F0",
+      "label": "ghidra_BFC420F0",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42120",
+      "label": "ghidra_BFC42120",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42160",
+      "label": "ghidra_BFC42160",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC421D8",
+      "label": "shell_vblank_restore_entry",
+      "rationale": "Mid-function entry: SaveState/RestoreState (A0:0x13/0x14) longjmp target inside func_1FC42160; after RestoreState returns v0!=0 the callback loop runs",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC4226C",
+      "label": "shell_vblank_callback_loop",
+      "rationale": "Mid-function entry point inside func_1FC42160. The BIOS shell jumps here directly to walk VBlank callbacks, bypassing the init-gate at the function top. Needed for VSync counter increment.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42308",
+      "label": "shell_42308",
+      "rationale": "Shell function near VSync callback area. Dispatch miss from input path.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC4231C",
+      "label": "shell_vblank_init_body",
+      "rationale": "Mid-function entry: SaveState returns v0=0 â†’ BEQ at 0xBFC421D8 taken â†’ callback table setup at 0xBFC4231C. Split from func_1FC42160",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42370",
+      "label": "shell_vblank_epilogue",
+      "rationale": "Mid-function entry: func_1FC42160 epilogue (restore ra/sp, return). Branch target from BNE at 0xBFC4216C when init flag is set",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42380",
+      "label": "dmiss_BFC42380",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42424",
+      "label": "ghidra_BFC42424",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC424A8",
+      "label": "ghidra_BFC424A8",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42540",
+      "label": "ghidra_BFC42540",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC425BC",
+      "label": "vblank_chain_handler",
+      "rationale": "VBlank chain handler: the ONLY instruction in the entire BIOS ROM that stores to 0x80079D9C (VSync counter) is at 0xBFC425E0, inside this 15-instruction function at 0xBFC425BC. Function reads counter, increments it, optionally calls user callback at *0x800DFF40. Not reachable via any JAL/literal/lui in ROM â€” installed at runtime by kernel chain-registration code. Missing seed means counter-increment code is never recompiled, so even if kernel installs the handler pointer it cannot dispatch to recompiled code.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC425FC",
+      "label": "ghidra_BFC425FC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42640",
+      "label": "ghidra_BFC42640",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC426DC",
+      "label": "ghidra_BFC426DC",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC4270C",
+      "label": "ghidra_BFC4270C",
+      "rationale": "Ghidra function start",
+      "provenance": "ghidra_legacy"
+    },
+    {
+      "address": "0xBFC42844",
+      "label": "dmiss_BFC42844",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC428D0",
+      "label": "trampoline_BFC428D0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC428E0",
+      "label": "trampoline_BFC428E0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC428F0",
+      "label": "trampoline_BFC428F0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42900",
+      "label": "trampoline_BFC42900",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42910",
+      "label": "shell_post_callback_cleanup",
+      "rationale": "Called from func_1FC42160 after 256-iteration callback countdown expires; was dispatch miss",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42920",
+      "label": "trampoline_BFC42920",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42930",
+      "label": "trampoline_BFC42930",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42940",
+      "label": "trampoline_BFC42940",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42950",
+      "label": "trampoline_BFC42950",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42960",
+      "label": "trampoline_BFC42960",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42970",
+      "label": "trampoline_BFC42970",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42980",
+      "label": "trampoline_BFC42980",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42990",
+      "label": "trampoline_BFC42990",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC429A0",
+      "label": "trampoline_BFC429A0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC429B0",
+      "label": "trampoline_BFC429B0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC429C0",
+      "label": "trampoline_BFC429C0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC429D0",
+      "label": "trampoline_BFC429D0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC429E0",
+      "label": "trampoline_BFC429E0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC429F0",
+      "label": "trampoline_BFC429F0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A00",
+      "label": "trampoline_BFC42A00",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A10",
+      "label": "dmiss_BFC42A10",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A20",
+      "label": "trampoline_BFC42A20",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A30",
+      "label": "trampoline_BFC42A30",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A40",
+      "label": "trampoline_BFC42A40",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A50",
+      "label": "trampoline_BFC42A50",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A60",
+      "label": "trampoline_BFC42A60",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A70",
+      "label": "trampoline_BFC42A70",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A80",
+      "label": "trampoline_BFC42A80",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42A90",
+      "label": "dmiss_BFC42A90",
+      "rationale": "dispatch miss: Shell function, indirect call via table",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42AA0",
+      "label": "trampoline_BFC42AA0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42AB0",
+      "label": "trampoline_BFC42AB0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42AC0",
+      "label": "trampoline_BFC42AC0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42AD0",
+      "label": "trampoline_BFC42AD0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42AE0",
+      "label": "trampoline_BFC42AE0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42AF0",
+      "label": "trampoline_BFC42AF0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B00",
+      "label": "trampoline_BFC42B00",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B10",
+      "label": "trampoline_BFC42B10",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B20",
+      "label": "trampoline_BFC42B20",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B30",
+      "label": "trampoline_BFC42B30",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B40",
+      "label": "trampoline_BFC42B40",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B50",
+      "label": "trampoline_BFC42B50",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B60",
+      "label": "trampoline_BFC42B60",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B70",
+      "label": "trampoline_BFC42B70",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B80",
+      "label": "trampoline_BFC42B80",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42B90",
+      "label": "trampoline_BFC42B90",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42BA0",
+      "label": "shell_vblank_dispatch",
+      "rationale": "Called from chain-E004 verify (func_1FC40700) via jal 0x8005ABA0. Walks VBlank callback chain â†’ calls VSync counter incrementer. Missing seed blocks VSync counter from incrementing.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42BB0",
+      "label": "trampoline_BFC42BB0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42BC0",
+      "label": "trampoline_BFC42BC0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42BD0",
+      "label": "trampoline_BFC42BD0",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42BE0",
+      "label": "shell_vblank_process",
+      "rationale": "Called from chain-E004 verify (jal 0x8005ABE0). Also called from shell main loop to process VBlank events. Missing seed causes VBlank callback chain to never execute.",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42BF0",
+      "label": "shell_register_callback",
+      "rationale": "Called from func_1FC42160 init path at 0xBFC42330 to register VBlank callbacks; missing seed caused callback table corruption",
+      "provenance": "manual"
+    },
+    {
+      "address": "0xBFC42C00",
+      "label": "trampoline_BFC42C00",
+      "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
+      "provenance": "manual"
+    }
+  ],
+  "excluded": [
+    {
+      "address": "0xBFC00100",
+      "label": "utlb_miss_bev1",
+      "rationale": "R3000 UTLB-miss vector; PS1 has no TLB; never executed"
+    }
+  ]
+}

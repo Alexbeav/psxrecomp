@@ -1,13 +1,47 @@
 #pragma once
 
+#include "mod_plugins.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace PSXRecompV4 {
+
+/* How finished a feature is, and therefore who is allowed to see it.
+ *
+ * Stable ships and is offered to everyone. Experimental ships, badged, and is
+ * default-off: it works, but has not been validated on this title. Developer
+ * does not ship at all -- contributors reach those features by cloning the
+ * repo and building locally.
+ *
+ * This lives on the FEATURE, not the package. A package is the trust and
+ * installation boundary; how finished one of its features is has nothing to do
+ * with that, and tying the two forced a whole catalog down to the maturity of
+ * its least finished feature. A package may still declare a channel, which its
+ * features inherit unless they state their own. */
+enum class ModChannel {
+    Stable = 0,
+    Experimental = 1,
+    Developer = 2,
+};
+
+/* Whether this build may see developer-channel features. A local build may; a
+ * CI/release build may not, which is what "developer does not ship" means in
+ * practice. runtime.cmake defines PSX_MOD_DEVELOPER_CHANNEL for local builds. */
+#if defined(PSX_MOD_DEVELOPER_CHANNEL) && PSX_MOD_DEVELOPER_CHANNEL
+inline constexpr bool kDeveloperChannelDefault = true;
+#else
+inline constexpr bool kDeveloperChannelDefault = false;
+#endif
+
+const char* mod_channel_name(ModChannel channel);
+bool mod_channel_from_name(const std::string& name, ModChannel& out);
 
 enum class ModOptionType {
     Boolean,
@@ -45,9 +79,24 @@ struct ModFeature {
     std::string author;
     std::string description;
     std::string group = "General";
+    ModChannel channel = ModChannel::Stable;
     bool default_enabled = false;
     bool hidden = false;
     bool legacy = false;
+    /* Manifest `quick`: offered in the launcher's Quick Mods card by default.
+     * The player's own choice (state.toml [quick_mods]) overrides it. */
+    bool quick = false;
+    /* Derived at parse: every contribution of this feature is a
+     * netplay = "host_only" plugin (ModPlugin::netplay_host_only). Such a
+     * feature changes only this machine's presentation, audio output or host
+     * tools, so it stays the player's own in netplay and the canonical plan
+     * fingerprint leaves it out (canonical_resolution). */
+    bool host_only = false;
+    /* Manifest `vsync = "off"` (format 11): while enabled, this feature's
+     * plugin presents with driver vsync off (frame interpolation, native
+     * VBlank pacing above the panel rate). The launcher shows its VSync row
+     * as overridden instead of offering a choice that would not apply. */
+    bool vsync_off = false;
 };
 
 enum class ModConstraintKind {
@@ -74,6 +123,25 @@ struct ModConstraint {
 struct ModRequirement {
     std::string id;
     std::string version;
+};
+
+/* A feature of this package that needs a feature of ANOTHER package while a
+ * condition on its own options holds (manifest [[requirement]], format 7).
+ *
+ * Package-level [[dependency]] is unconditional, and an in-package
+ * requires_feature constraint cannot name another package. This is the
+ * missing shape: "Extras = Full needs psx.enhancement.8mb-ram/8mb-ram". The
+ * required feature is DERIVED for the session -- resolve() activates it even
+ * when it is hidden or disabled in state.toml -- and is never written to
+ * state.toml, because the player did not choose it. A requirement that cannot
+ * be met (package absent, excluded, wrong version, feature missing) fails the
+ * plan loudly; it never runs the requiring selection without it. */
+struct ModFeatureRequirement {
+    std::string feature_id;           /* the requiring feature (owner) */
+    std::string package_id;           /* the package that provides it */
+    std::string version = "*";        /* same range syntax as [[dependency]] */
+    std::string required_feature_id;  /* feature of package_id to activate */
+    std::map<std::string, std::string> when;  /* owner's option conditions */
 };
 
 struct ModTarget {
@@ -143,6 +211,9 @@ struct ModOverlay {
     ModPatchTarget target = ModPatchTarget::DiscRaw;
     uint64_t location = 0;
     std::filesystem::path file;
+    // Format 10: verified same-feature derived resource instead of a package file.
+    std::string resource_id;
+    uint64_t resource_offset = 0;
     std::string sha256;
     std::string expected_sha256;
     uint64_t size = 0;
@@ -161,17 +232,51 @@ struct ModPlugin {
     std::string id;
     std::map<std::string, std::string> when;
     int64_t order = 0;
+    /* [[plugin]] netplay = "local_view": the plugin only changes what this
+     * player sees. In a netplay match it stays on, per player, but its hooks
+     * run only inside the sandboxed own-view render
+     * (psx_mod_render_local_view), never in the shared simulation. */
+    bool netplay_local_view = false;
+    /* netplay = "input": the plugin only transforms this player's own pad
+     * before it is staged (psx_mod_set_pad_transform). Online it stays on per
+     * player: the post-transform pad is what every peer simulates. */
+    bool netplay_input = false;
+    /* netplay = "host_output": the plugin only reads guest state and drives
+     * host output (rumble, haptics). Online it stays on per player and its
+     * hooks run in the shared simulation, but every guest write it attempts
+     * is refused there, so it can never diverge the peers. */
+    bool netplay_host_output = false;
+    /* netplay = "host_only" (format 11): the plugin never touches guest
+     * execution at all -- it only sets host presentation, audio output or
+     * host-tool state from its activation (the framework's CRT Filter, Image
+     * Filtering, Enhanced Audio and Rewind). Its feature may own nothing
+     * else (ModFeature::host_only). It stays on per player in every netplay
+     * mode, is never published in a lobby plan, and is not part of the plan
+     * fingerprint. */
+    bool netplay_host_only = false;
 };
 
 struct ModResource {
     std::string feature_id;
+    std::map<std::string, std::string> when;
     std::string id;
     std::string label;
     std::string description;
     std::string file_patterns;
     std::string file_description;
+    std::string texture_game_id; // Optional title identity required for HD installation.
     std::string format = "file";
     bool required = false;
+    uint64_t size = 0;
+    std::string sha256;
+    // Source inputs are launcher configuration, not guest resources. A shared
+    // key stores one path across packages; derived resources never get pickers.
+    std::string shared_source;
+    bool input_only = false;
+    bool hidden = false;
+    // Package-relative path used when the player has not selected one (for
+    // example a pack folder the package ships). A selection always wins.
+    std::string default_path;
 };
 
 struct ModDerivedDisc {
@@ -190,6 +295,20 @@ struct ModAuthorLink {
     std::string url;
 };
 
+/* Where a package's files came from, and therefore who owns them on disk.
+ *
+ * Bundled packages are build output: the framework and the title stage them
+ * into <exe>/mods/bundled, which every build wipes and re-stages. Nothing the
+ * player owns may live there. Installed packages are written by the launcher
+ * into <exe>/mods/installed and are never touched by a build.
+ *
+ * Before this split there was one <exe>/mods/packages tree serving both roles,
+ * so a rebuild deleted every mod the player had installed. */
+enum class ModPackageOrigin {
+    Bundled,
+    Installed,
+};
+
 struct ModPackage {
     uint32_t format_version = 0;
     std::string id;
@@ -202,7 +321,13 @@ struct ModPackage {
     std::string source_name;
     std::string source_url;
     std::string resolver = "declarative";
+    std::string prepare;
     std::string save_compatibility = "shared";
+    /* Default channel for features that do not declare their own. */
+    ModChannel channel = ModChannel::Stable;
+    ModPackageOrigin origin = ModPackageOrigin::Installed;
+    /* Set when an installed package of the same id shadows a bundled one. */
+    bool shadows_bundled = false;
     std::filesystem::path root;
     std::vector<ModTarget> targets;
     std::vector<ModRequirement> dependencies;
@@ -210,12 +335,37 @@ struct ModPackage {
     std::vector<ModFeature> features;
     std::vector<ModOption> options;
     std::vector<ModConstraint> constraints;
+    std::vector<ModFeatureRequirement> requirements;
     std::vector<ModPatch> patches;
     std::vector<ModOverlay> overlays;
     std::vector<ModPlugin> plugins;
     std::vector<ModResource> resources;
     std::vector<ModDerivedDisc> derived_discs;
 };
+
+// False requests cancellation. Providers report between bounded work units
+// and before publishing outputs; no UI code runs on the preparation worker.
+using ModPrepareProgress = std::function<bool(float, const std::string&)>;
+struct ModPrepareContext {
+    const ModPackage& package;
+    std::string feature_id;
+    std::filesystem::path disc_path;
+    std::filesystem::path cache_root;
+    std::filesystem::path application_dir;
+    std::map<std::string, std::filesystem::path> inputs;
+    ModPrepareProgress progress;
+};
+using ModMediaPreparer = std::function<bool(const ModPrepareContext&,
+    std::map<std::string, std::filesystem::path>&, std::string&)>;
+// Implementations are linked trusted code. A manifest cannot execute a command.
+// Normally called synchronously during launch preparation. A title enabling
+// PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE also permits preboot offline preparation
+// on a launcher-owned worker. Every registered callback/service used by that
+// title must then support serialized worker calls without SDL/UI/GL or
+// main-thread affinity. Registration must finish before opening the launcher;
+// activation callbacks still run separately, before renderer initialization.
+bool mod_register_media_preparer(const std::string& id, ModMediaPreparer callback,
+                                 ModMediaPreparer cache_probe = {});
 
 struct ModFeatureSelection {
     bool enabled = false;
@@ -273,6 +423,10 @@ struct ModResolution {
         std::string id;
         std::string package_id;
         std::string feature_id;
+        bool netplay_local_view = false;
+        bool netplay_input = false;
+        bool netplay_host_output = false;
+        bool netplay_host_only = false;
     };
     std::vector<Plugin> plugins;
     struct Resource {
@@ -280,6 +434,9 @@ struct ModResolution {
         std::string feature_id;
         std::string id;
         std::filesystem::path path;
+        std::string format;
+        std::string sha256;
+        std::shared_ptr<const std::vector<uint8_t>> bytes;
     };
     std::vector<Resource> resources;
     struct Diagnostic {
@@ -291,6 +448,20 @@ struct ModResolution {
         std::string other_feature_id;
     };
     std::vector<Diagnostic> diagnostics;
+    /* Features the plan activates because an active [[requirement]] needs
+     * them, not because state.toml enables them. One entry per derived
+     * feature (the first requirement that activated it). */
+    struct ImplicitFeature {
+        std::string package_id;
+        std::string feature_id;
+        std::string required_by_package_id;
+        std::string required_by_feature_id;
+    };
+    std::vector<ImplicitFeature> implicit_features;
+    /* The selection the plan was built from: state.toml's selection plus the
+     * implicit activations above. Plugins read option values from this, so a
+     * committed plan and the values its plugins observe cannot disagree. */
+    std::map<std::string, ModSelection> selections;
     std::vector<std::string> errors;
 };
 
@@ -312,10 +483,40 @@ public:
 
     void set_root(std::filesystem::path mods_root);
     const std::filesystem::path& root() const { return root_; }
+    /* Developer-channel features are stripped at scan and install time unless
+     * this is set. Defaults to kDeveloperChannelDefault; tests set it
+     * explicitly so they exercise both a local and a release build. */
+    void set_developer_channel_visible(bool visible) {
+        developer_channel_ = visible;
+    }
+    bool developer_channel_visible() const { return developer_channel_; }
+    /* Trusted title policy: hide and deactivate these ids even when an old
+     * bundle or an installed copy survives an update. Saved choices stay
+     * dormant and files remain untouched. Set before scan(). */
+    void set_disabled_packages(std::vector<std::string> ids) { disabled_packages_ = std::move(ids); }
+
+    /* Build-owned catalog: wiped and re-staged by every build. */
+    std::filesystem::path bundled_root() const { return root_ / "bundled"; }
+    /* Launcher-owned catalog: a build never touches this tree. */
+    std::filesystem::path installed_root() const { return root_ / "installed"; }
 
     bool scan(std::string* error = nullptr);
     bool load_state(std::string* error = nullptr);
     bool save_state(std::string* error = nullptr) const;
+    /* Quick Mods card membership: the saved player choice, else the
+     * manifest's quick flag. Never changes activation or the fingerprint. */
+    bool quick_visible(const std::string& package, const std::string& feature) const;
+    bool set_quick_visible(const std::string& package, const std::string& feature,
+                           bool visible, std::string* error = nullptr);
+    /* Inspect selected targets before requesting a disc digest. */
+    bool needs_disc_digest(const std::string& game_id,
+                           const std::string& exe_sha256 = {}) const;
+
+    bool prepare_resources(const std::string& game_id,
+                           const std::filesystem::path& disc_path,
+                           const std::filesystem::path& cache_root,
+                           std::string* error = nullptr, bool cached_only = false,
+                           const ModPrepareProgress& progress = {});
 
     bool install_archive(const std::filesystem::path& archive,
                          std::string* installed_id = nullptr,
@@ -347,6 +548,15 @@ public:
         return packages_;
     }
     const std::map<std::string, ModSelection>& selections() const { return selections_; }
+    /* Swap the in-memory selection for `next` and return the previous one.
+     * Never saved by itself: a session that must not run the player's whole
+     * choice (a netplay match) swaps a reduced selection in, resolves, and
+     * swaps the player's back before anything can save_state(). */
+    std::map<std::string, ModSelection> exchange_selections(
+        std::map<std::string, ModSelection> next) {
+        selections_.swap(next);
+        return next;
+    }
     const ModPackage* selected_package(const std::string& id) const;
     const ModFeature* selected_feature(const std::string& package_id,
                                        const std::string& feature_id) const;
@@ -355,31 +565,152 @@ public:
     std::string feature_option_value(const std::string& package_id,
                                      const std::string& feature_id,
                                      const std::string& option_id) const;
+    /* Runtime-derived defaults are not player selections and are never saved.
+     * relative_path is rooted at this manager's mods root, captured as an
+     * absolute path at registration so subsequent cwd changes cannot rebase it.
+     * Existing explicit selections (including legacy absolute paths) win. */
+    bool set_generated_feature_resource_default(const std::string& package_id,
+        const std::string& feature_id, const std::string& resource_id,
+        const std::filesystem::path& relative_path, std::string* error = nullptr);
+
     std::filesystem::path feature_resource_path(
         const std::string& package_id,
         const std::string& feature_id,
         const std::string& resource_id) const;
+    // Conditions only: pickers stay configurable while the feature is off.
+    bool feature_resource_active(const std::string& package_id,
+                                 const std::string& feature_id,
+                                 const std::string& resource_id) const;
+    /* True when an active [[requirement]] activates this feature for the
+     * session although state.toml does not enable it. feature_enabled() keeps
+     * answering for the player's own choice, which is what the launcher shows
+     * and what save_state() persists. */
+    bool feature_implicitly_enabled(const std::string& package_id,
+                                    const std::string& feature_id) const;
+    /* An option value as a resolved plan sees it (plan.selections), for
+     * plugins running under that plan. */
+    std::string feature_option_value(const ModResolution& plan,
+                                     const std::string& package_id,
+                                     const std::string& feature_id,
+                                     const std::string& option_id) const;
 
+    // Defer prepared resources only for launcher diagnostics, never execution
+    // or fingerprints. A commit prepares first, then resolves without deferral.
     ModResolution resolve(const std::string& game_id,
                           const std::string& exe_sha256 = {},
-                          const std::string& disc_sha256 = {}) const;
+                          const std::string& disc_sha256 = {},
+                          bool defer_prepared_resources = false) const;
 
     static bool read_manifest(const std::filesystem::path& path, ModPackage& out,
                               std::string* error = nullptr);
 
+    /* Manifests that failed to parse during the last scan(), as
+     * "<path>: <reason>". A package that cannot be read must never vanish
+     * silently -- the launcher surfaces these so a mod author sees why their
+     * package is absent from the list. */
+    const std::vector<std::string>& scan_errors() const { return scan_errors_; }
+
+    /* Package ids that mods/state.toml carries a selection for but that no
+     * catalog root holds -- a package the player removed, a developer-only
+     * package a release build stripped, or a framework builtin the title
+     * excludes (EXCLUDE_BUILTIN_MODS). Such a selection is DORMANT: resolve()
+     * never visits it, so it contributes nothing to the plan, and save_state()
+     * keeps it verbatim so the choice returns if the package ever does. The
+     * runtime names these once at startup instead of dropping them silently. */
+    std::vector<std::string> dormant_selections() const;
+
 private:
+    /* One-time move of a pre-split <exe>/mods/packages tree into the two
+     * owned roots. Anything the build also staged into bundled/ is dropped;
+     * everything else is the player's and moves to installed/. */
+    void migrate_legacy_root();
+    bool scan_root(const std::filesystem::path& packages_root,
+                   ModPackageOrigin origin, std::string* error);
+    /* selections_ plus every feature an active [[requirement]] derives,
+     * iterated to a fixed point (a derived feature may carry requirements of
+     * its own). Unmet requirements are reported through errors/diagnostics.
+     * Never touches selections_: derived activations are not player choices. */
+    std::map<std::string, ModSelection> effective_selections(
+        std::vector<ModResolution::ImplicitFeature>* implicit,
+        std::vector<ModResolution::Diagnostic>* diagnostics,
+        std::vector<std::string>* errors) const;
+
+    std::filesystem::path generated_resource_default(const std::string& package_id,
+        const std::string& feature_id, const std::string& resource_id) const;
+    std::map<std::tuple<std::string, std::string, std::string>, std::filesystem::path>
+        generated_resource_defaults_;
     std::filesystem::path root_;
+    bool developer_channel_ = kDeveloperChannelDefault;
+    std::vector<std::string> scan_errors_;
     std::map<std::string, std::map<std::string, ModPackage>> packages_;
+    std::vector<std::string> disabled_packages_;
     std::map<std::string, ModSelection> selections_;
+    std::map<std::string, bool> quick_visibility_;   /* "package/feature" */
+    std::map<std::string, std::filesystem::path> sources_;
 };
 
 bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver resolver);
 void mod_clear_builtin_resolvers_for_tests();
 bool mod_register_activation_plugin(const std::string& id, void (*callback)(void));
+bool mod_register_session_reset_plugin(const std::string& id, void (*callback)(void));
+void mod_reset_plugin_sessions();
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
+bool mod_register_pcm_plugin(const std::string& id, PSXModPCMCallback callback);
+PSXModPCMCallback mod_pcm_callback(const std::string& id);
+bool mod_register_savestate_plugin(const std::string& id, void (*callback)(void));
+void mod_invoke_savestate_plugin(const std::string& id);
+/* A function-entry hook is a trusted implementation like the others: manifests
+ * select it by id, and it runs only while a resolved plan activates that id. */
+bool mod_register_function_entry_plugin(const std::string& id, uint32_t address,
+                                        PSXModFunctionEntryCallback callback);
+bool mod_register_function_filter_plugin(const std::string& id, uint32_t address,
+                                         PSXModFunctionFilterCallback callback);
+bool mod_register_guest_function_plugin(const std::string& id, uint32_t address,
+                                        PSXModFunctionEntryCallback callback);
 bool mod_plugin_registered(const std::string& id);
+bool mod_register_function_override_marker(const std::string& id);
 void mod_invoke_activation_plugin(const std::string& id);
 void mod_invoke_vblank_plugin(const std::string& id);
+struct ModFunctionEntryHook {
+    uint32_t address = 0;
+    PSXModFunctionEntryCallback callback = nullptr;
+    PSXModFunctionFilterCallback filter = nullptr;
+};
+/* Hooks one implementation registered, in registration order. mod_runtime
+ * flattens these into an address table when the plan's plugins activate. */
+std::vector<ModFunctionEntryHook> mod_function_entry_hooks(const std::string& id);
+std::vector<ModFunctionEntryHook> mod_guest_functions(const std::string& id);
+struct ModInstructionHook {
+    uint32_t address, expected;
+    PSXModFunctionEntryCallback callback = nullptr;
+    PSXModMemoryAddressCallback memory_address = nullptr;
+};
+bool mod_register_instruction_plugin(const std::string& id, uint32_t address,
+                                      uint32_t expected, PSXModFunctionEntryCallback callback);
+std::vector<ModInstructionHook> mod_instruction_hooks(const std::string& id);
+bool mod_register_memory_address_plugin(const std::string& id, uint32_t address,
+    uint32_t expected, PSXModMemoryAddressCallback callback);
 void mod_clear_plugins_for_tests();
+
+/* Every id a trusted implementation registered (activation, vblank or
+ * function-entry), sorted. */
+std::vector<std::string> mod_registered_plugin_ids();
+
+/* Registered implementations that no manifest under `manifest_roots` declares
+ * as a [[plugin]] id. The resolved plan activates plugins by manifest id only,
+ * so such an implementation can never run: a hook registered under a sub-id
+ * ("x.widescreen.hud") is silently dead while its package ("x.widescreen")
+ * resolves cleanly. Roots are searched recursively for manifest.toml; pass the
+ * AUTHORED trees (title mods/preloaded, framework mods/builtin) so developer
+ * packages a release catalog strips still count as declarations. Manifests
+ * that fail to parse are reported through `errors`. */
+struct ModPluginAudit {
+    std::vector<std::string> undeclared;   /* registered, never declared */
+    std::vector<std::string> declared;     /* every manifest [[plugin]] id */
+    std::vector<std::string> errors;
+    size_t manifests = 0;
+};
+ModPluginAudit mod_audit_registered_plugins(
+    const std::vector<std::filesystem::path>& manifest_roots);
 
 } // namespace PSXRecompV4

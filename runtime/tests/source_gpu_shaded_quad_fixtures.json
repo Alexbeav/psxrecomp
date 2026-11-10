@@ -1,0 +1,2572 @@
+{
+  "scope": "Shaded quad opcodes 38/39/3A/3B, four blend modes, four mask modes, dithering off/on. Ignored texture-bit aliases have identical source pixels and split-command work. Authored MMIO waits between halves restore GPU work credit; no retail data or emulator-state input.",
+  "source_upstream": "a15b31a46bdac27d843d3ebbc5a860012d8452fb",
+  "stock_core_sha256": "749d6dd58430d010e46ae97c628e113adad5f420c05c2ada0ad35e58191781c0",
+  "observer_core_sha256": "175e315cae27d1ae9f00434625184045380807244cda7389468bde618a0e6882",
+  "observer_source_head": "a641d24e157722798c2a3156aa1548d8ae8dfa64",
+  "stock_receipt_sha256": "5128e44f63c3a471083e595294ac09e49154f626767b6b63aafa7b400468287f",
+  "observed_receipt_sha256": "7311a2c8df2aa32d5b9d95128f2bc1c1f0f3caa2dbc371b642d2892aaa5b8bdb",
+  "driver_sha256": "5975f8045bb07d92e16e29c1ec7ae56a25881caeafdc7b2ceb70e1d488857c08",
+  "cases": [
+    {
+      "case": "op38-b0-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "0275b605e94f7ff4f48fc3ec7e4167623e03d7a1c0d5cead8416ad2e116ea26a"
+    },
+    {
+      "case": "op38-b0-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f4b62d2187e8fe1215cd7795837713047b01e320e47b9308c9959d55a2d649b6"
+    },
+    {
+      "case": "op38-b0-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "856cdd754994353704fe05ce3ae614cf9f166622cb20c107be0815c1241c29e3"
+    },
+    {
+      "case": "op38-b0-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "09c99c52d93efa122b4dc049326a0b5a434e372c84208f6669fec4a236c380ab"
+    },
+    {
+      "case": "op38-b0-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "afad9440154057b49f26fb6fd62c59c96f857b38c39b26034e3e20b6d936ae0e"
+    },
+    {
+      "case": "op38-b0-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "1e395f9389d350b64574db58fe14f7bbc862ccffa8511d724d2dfc4b128e3ed9"
+    },
+    {
+      "case": "op38-b0-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "5d973d62ea980fc27dacf7dc86212cba2317e8e83b107f9b9b2c23aa2bf99c79"
+    },
+    {
+      "case": "op38-b0-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f13ea48dd6b378aa01b5b6f99bcf9986fe1b3e5bf509e408d7b0dc62634d70fa"
+    },
+    {
+      "case": "op38-b1-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f0c25fa6e460846c369ee3cbda80ac9ec1f64d003c532f52853fbe1970bcde26"
+    },
+    {
+      "case": "op38-b1-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "6365d7b4d919e600fe948f737c35cbbae7a8ed7d87bb4f3abddb83da8bcc25e6"
+    },
+    {
+      "case": "op38-b1-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "bf5e7efcede412ae9ecc7c48a887be5a080727842dad085e893db16404e8f5b9"
+    },
+    {
+      "case": "op38-b1-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ea4efd416eb860ee81e10885c40351d248be1cf5539fc41d498ab0d64f2f9983"
+    },
+    {
+      "case": "op38-b1-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f3cebe62764f2bc45e6ad4d78af87b55b56f0023838f0f41bbf24edbffcb96aa"
+    },
+    {
+      "case": "op38-b1-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "85dc0fab3e458a27865208069eb52d6bbd2ee8c5c647f3550aef5e75505a1e99"
+    },
+    {
+      "case": "op38-b1-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e0849c010bf7e9e5adcdeaa4b06871f35b2ae85afda01233067d212b7ddfa867"
+    },
+    {
+      "case": "op38-b1-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "89c8198f72dc0c3f5f3b7bc00a297054d65815b5a9d024cf5463d5280f996c11"
+    },
+    {
+      "case": "op38-b2-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "91c1c87be206247d77b22549bfa35c7083548c2ede0911b4cdfbbd1134b4484c"
+    },
+    {
+      "case": "op38-b2-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "32bfc30a716a292cbeaf559a90d4aa8ba5d704031f4c9a95111ddc08b78877c4"
+    },
+    {
+      "case": "op38-b2-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ff87cdaa7bae94c81ea8ff89aac282fc27dbea27924251693c4e9a629e761eb0"
+    },
+    {
+      "case": "op38-b2-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "5e94dfa3711743ca65b5aab2769f7c635f61d5e463e2889b50229ecde695064e"
+    },
+    {
+      "case": "op38-b2-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "454cc12e81ae0c2ed6993c118a116fe72881931202aa72c5d05031ca800933f6"
+    },
+    {
+      "case": "op38-b2-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "3733eefe2cfe8c3595edab2b6e67036a166f89846f23d69e35c6e1f47399e535"
+    },
+    {
+      "case": "op38-b2-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "901a9e6958f6ba93a196df50d3847242e6d1c824fff45dcabb86278ea1ac20da"
+    },
+    {
+      "case": "op38-b2-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "9ce312f92a4ef60127aec93d2e6830d0b655908facd9ca5dfba175af5fae727b"
+    },
+    {
+      "case": "op38-b3-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b904e3566e62418ab61a842729976d4dff4c831cd6d62bf4c0f99809dac26e51"
+    },
+    {
+      "case": "op38-b3-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e374a965649f7bae1d8db26aa89c922c3eed2a41ba3d3e7cacf3b394b575b62d"
+    },
+    {
+      "case": "op38-b3-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "826e799256011c1dd357784a4b3f581afc1c948f9903933d9fb912a1080c281a"
+    },
+    {
+      "case": "op38-b3-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "270f0959ff0eda858f624f3eba1125a46b304e45439cad357af1d16a435344c2"
+    },
+    {
+      "case": "op38-b3-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "3377259af0abf67d3132a3d1364347ff7fec428804d434c9dd9e2b008e68a3c3"
+    },
+    {
+      "case": "op38-b3-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "302a7f62d36e97b4d5b479619ad7ddf97b757d17c4784cc4d5f74599f2214d4d"
+    },
+    {
+      "case": "op38-b3-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "674f84e1b5332b3ef219ceb5b2c239178b31312ac3a86029369cfc48aed959eb"
+    },
+    {
+      "case": "op38-b3-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        954438699,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "215e104af5ff836cf3a5480bdc9f89b2f29103379591d096272b1af5aa4ec1ac"
+    },
+    {
+      "case": "op39-b0-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "d6f1a280f73173f9c7ec14de8104d9227df627100d00957363ce0f9a653d9433"
+    },
+    {
+      "case": "op39-b0-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "bbdff5fd6dd40a91e6d38deb4b46d85dae1b877161c705f7337d2c6d3de19d32"
+    },
+    {
+      "case": "op39-b0-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ceba33673946e43ed735dae68d61503a021e9c44ced3a2a4354b1e316ea09be9"
+    },
+    {
+      "case": "op39-b0-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "088a619cfa9be49414e43c457555b583a5630f995a1cdd0e6a321df3189196f4"
+    },
+    {
+      "case": "op39-b0-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "a6ecbf0bb46f98adfec25fadc904dd0c6af01be65b511a6f875d1b97eb8a101e"
+    },
+    {
+      "case": "op39-b0-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "a4d4c1c7ef771689058a6a2753190738176a41210c435dc91687a87f55a38619"
+    },
+    {
+      "case": "op39-b0-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "415cf091134698a81f246afbdad79021d0c990ad9402b73d9dafc64d5f41edf9"
+    },
+    {
+      "case": "op39-b0-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "faeb32423e36f4ea0b8fb94548b3485ccc42f6af9febe7ca695676d7db336163"
+    },
+    {
+      "case": "op39-b1-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "459831f34325387aa8751af9ef7a3def6f8bd2dfaf47f67f307f5820b029156f"
+    },
+    {
+      "case": "op39-b1-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "4b0ae893e10505d198a108b85f5922eba65e7e070f16346919858e6c21c423aa"
+    },
+    {
+      "case": "op39-b1-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "29dc975ec4de30a23adfd084e20d13ee58e826b9294d7c76444214ef57da8ef9"
+    },
+    {
+      "case": "op39-b1-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e7d0724b6cc290bf0af96f696d9aaff64c322849e04083f8ce4b9501c5ac7b3e"
+    },
+    {
+      "case": "op39-b1-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "c1d375075803c2b0c3231c133efbdf37f9fa57c1c2870e0fa7cac0e230caa629"
+    },
+    {
+      "case": "op39-b1-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e562056d3522d425bea1b5882e726bd27a35527f2ce25d9d8cdcdcd0ce6241e4"
+    },
+    {
+      "case": "op39-b1-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "85f282508f42b7a020d1a5befc594265c101209063e481b06977abf98fd010c0"
+    },
+    {
+      "case": "op39-b1-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "506a2ce60363e6ac5c05834b4954fd19f017130578a1bf02cb53efa9122d5e6d"
+    },
+    {
+      "case": "op39-b2-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "df0c32e4413f4eaeb03cd10d145672bb27f53e33e45879c945dd3276bebfa11b"
+    },
+    {
+      "case": "op39-b2-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "49b95ec34b5048cbbf362c3f8b8215ad4c1cf34cc4887a5080bf010e61477355"
+    },
+    {
+      "case": "op39-b2-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "fca7254936dea2055bb9efde52ef3c208728c6d1a2ba874ca2bd76760385af67"
+    },
+    {
+      "case": "op39-b2-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b2ad1760a8452070487e71deb005ffa0aa6321df097e9ead8f6b621062afdf59"
+    },
+    {
+      "case": "op39-b2-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b1276e1f10f4ac082d161bbba1c2d9d28df2a27e881506fdb9784c532c2e2068"
+    },
+    {
+      "case": "op39-b2-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "98c4c6532b25f2233bf93407a2fb37a114d4820622eae9bd71882b8e724fc0b9"
+    },
+    {
+      "case": "op39-b2-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e6ec00620a6594ffb03dfd528f30913f12657008af810d95c6f795dd646dbcca"
+    },
+    {
+      "case": "op39-b2-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "15da85b9a9863af12b1b2b452543c2a6291446bcab028348f6d3eb14d3507553"
+    },
+    {
+      "case": "op39-b3-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "e8e2a967a6f1bb60078e4c298e6bd6f323321210418aa990039d062e9d75ec64",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "717308f289f89fe9ab11b90c58ed01487be4ae807bd9a624b3de53aff8eabd78"
+    },
+    {
+      "case": "op39-b3-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4e9e681595a58b4281e0429b130f432d93fe06cf1082d9f28e07fe984dda5695",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "61136ce56054afb06031112362fc328e4ada3246fa92157d60cc8019e9d69305"
+    },
+    {
+      "case": "op39-b3-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "7f8182824b1c3484dae38301719ed89512c067a8eb99369357884bffc8958e8f",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "cc6dc5ea7433c2f1f83abe25007dcbde78607a91a3d69a2a06087a1ffe3539b7"
+    },
+    {
+      "case": "op39-b3-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "572b03bfc6a456e9afad792086bf2ef9cea194499a17205d01d0f468af8d1255",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "fc667095111e7d41f275237e4ae5c3cdc803917e39f8605d22edc089ff4d8d11"
+    },
+    {
+      "case": "op39-b3-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f9e92fdd87c6c10a77bd314bf8aa52854de5852efbe825ef5f362ff024f91031",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b692350307cf6f96001042f4eecee31a6078a20490c2cc4ba6f9457e52555608"
+    },
+    {
+      "case": "op39-b3-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6c1d1f4b0293aa01ab6f89c9b6a75b2bf88e6245978d7d090f9df88c027c0793",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "6d12d1391d7d6440f245721a47d4ae50ddc90fe6cfb3e6a0f0c498c8e7b05e36"
+    },
+    {
+      "case": "op39-b3-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "936fd14e634f4562f13f53b68c5b20f0709250d882f7fca086c88752cc4fa3f8",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "fc8e753fad7fb005c4d1b630eb6c60e23ccdf5824e1ef5e48b9925547becc8e5"
+    },
+    {
+      "case": "op39-b3-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f3773b0c51870fa5d9a59e6eef8d73a78a2fbed4bf94cc2d66c8d42d521a3cdd",
+      "packet": [
+        971215915,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "983417c8832dc855d10ee6c195433a220bb5518c3631fca83d20211ebab806ca"
+    },
+    {
+      "case": "op3a-b0-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "d6a424e8c20bb7c0aa63e6ff89d9409695e1e5fc7c805ab265339cddac070daf",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b847e266747908c23b9bd0bcd69ffdbf4fac5ab33a02e51cb32736d798c4242d"
+    },
+    {
+      "case": "op3a-b0-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6b2de4a8bb7627ebcb0b6615bdfe073c6d6d67e7acca1fc5314e64eb559dfce2",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "a6c15beb58de74d30e99195ec569abaa42342ac5feca873a054f42c9aaa10cd1"
+    },
+    {
+      "case": "op3a-b0-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "44fed2efdc32f85801a57dcc65c8cb55e1b515d588ca81304cfdb8fa5da25a05",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ab776708f8bec8dd867539fe970d19b052c3ccd5fcade0556413a0e98651341a"
+    },
+    {
+      "case": "op3a-b0-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f41ae3ed08daa89a65cc12471889eb364255022a88b769e82d9a1b309304a234",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "3f546d5d5180e907145c720e08fa1e9bc1e82f43223cadb69fbdc423888d0cf6"
+    },
+    {
+      "case": "op3a-b0-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "eb523d5d5fbaa9d2f80eeff8e761f73d9eb6fd493c5c9a7edd262b3765ea568b",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "baeec4c0882a51c62e7842b71089792f76fe10b87e3315008e9eafabc21ff822"
+    },
+    {
+      "case": "op3a-b0-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "511ecab60190639b48eaf26335faee1ea2ef0ecef3ec462688b99fb5056143c1",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "6f04417f3ac5118d945f4866b6608e3d160244a454f1f63f321c1c7233e8242e"
+    },
+    {
+      "case": "op3a-b0-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "a9fccb85180baeef3e33d711bd713df30f892fa370610b1ff5ba69c2b05eaa8f",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "4e1c4d3c7d1ccfa68ccc1875ae4cb3ea25bc6e631d7a03d0b0109ff1e5d2a55b"
+    },
+    {
+      "case": "op3a-b0-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "8734c758e7fb9b5e21dd23d873d6466528a35d8e8244da85aa3104879bfcff56",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "275882db8c6e111eb17873610822acb99339335e83bb5131199ef06b1921cb33"
+    },
+    {
+      "case": "op3a-b1-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "b9787202dc373c4adc69ec121c344fce6d39ef35ac4d8d913e75fea77f5402d7",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "d550c03eded449a2547c9562b0416b14c410ec1fb3c401b05ae949ec63f89266"
+    },
+    {
+      "case": "op3a-b1-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "b2ae1d6bd3fbabdc5d3d200c34a293fa340d88b7ae7f44e7a475d609054e07d9",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "083a76e67fce0a75579df515f2497e4ff8fa5052c50e7ac9ade1cb1e771a18ba"
+    },
+    {
+      "case": "op3a-b1-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "5f3d6610558c0923b746df9b9fe267ab03c52a65d2cfa48410095cd172e773ea",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "97038415755cec1d714cc4089ba3414fa0f36beddcba71f9adf4308c9c914543"
+    },
+    {
+      "case": "op3a-b1-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "0066a379c52a3f8d754b89bdd83be7e46fdd7eeb83a45a32f6c49e2da69b7e92",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ba32ce009981b8017677e98dcb7d51f76342681db4780cf2e54f70d42aace06c"
+    },
+    {
+      "case": "op3a-b1-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "66a029b7d3b518c5cca88ae5273b48b71c15a4a3ec5f7dba65cd7be7837629e6",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "c39f74cc7420dab0e21a41cfb95ba31ce0ae3ee92f99493b9c34b2cb67c10e92"
+    },
+    {
+      "case": "op3a-b1-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "5feed8d5d95395bb737efcd82c04e4e627a0767b34efbf8e809b740cb61e6070",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "7f8b03e2ffbada6c3355537bdd7baffd2e1ace59ab8e8ca000d882d38f8c91aa"
+    },
+    {
+      "case": "op3a-b1-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "193542985bd314a14c2fcdde924c581801671e79ab3282e335b6ef018bc0cea8",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b3d72007ff237332fc1e1b2f1257e8b9212c03222446b81698f87bdccc702aac"
+    },
+    {
+      "case": "op3a-b1-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "5d8e62f6e9b9479a928ceb83349c5cb107ec4d1465258f49041467e45ee05cda",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f4f300a872d8e954e926a929ad88c22ba84447cfbb3da78435185239862a946b"
+    },
+    {
+      "case": "op3a-b2-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "efe53819f5e8e4a5af4628ab2e94a077d2e701f9f738919c1271ce836c5eca41",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "c5130ed60c98c3dcc7195e1d0dce3c29be980c59872c478fe22662271e20669d"
+    },
+    {
+      "case": "op3a-b2-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4b93fdf1abd024b8c197efc320a852b4236b4ca55c4d54350644ae6d21d05ce7",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ecca5b53eafc39daf54434d38cdd246ea6d804480b93621d40b38f4415ee4f06"
+    },
+    {
+      "case": "op3a-b2-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "c56b012f59caeef0c7bba7e490955b6c92f0f79c153642a426463fd3f5a0f052",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "8f791c743d3e41dc0017738a06bdb13796470306c2029b439c8951574105b4fc"
+    },
+    {
+      "case": "op3a-b2-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "59cfbb03ab4cd5942ae440ac69cbc47fc6842873121af027754eb64bc40de323",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "c188be4c6a042663e6d9e5c8b09e35191f6fe3a0dda6e1de1cb8fd2424aa7734"
+    },
+    {
+      "case": "op3a-b2-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "b1d6268b9b0ad6f195ce258312e1b1e6cff7ec555c96f65d06abc23b1dede6d3",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f392bad8f62bc3caad2f8464298240ef01952f9024f66cf0828ababfba76a95c"
+    },
+    {
+      "case": "op3a-b2-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "82482fd398dd8526bfe4cb5c37c3a53f2eac59e7e0768b10fcf2e80df73c9d7b",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "d44c10c1a8fd10c19a9c591345d8640fe95cd615822e0d9c3363333eb5c4ade5"
+    },
+    {
+      "case": "op3a-b2-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6a57bcd053748a9a0c3cc6ff2182a1327836be2b673e64509d317e4cc027fd50",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ca4001b2d22f59b90c44585a9b9b96d7c1738295de64c8ae99faeaafa5aabb6e"
+    },
+    {
+      "case": "op3a-b2-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "a26a01f1141b5ded1812a22dabcfa78046e92e84e7ca52f838da50f6d6c867e2",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "59a5eccaf919831ec47813ad5348d111b73395a5cfdca7a57dc736d89182e56d"
+    },
+    {
+      "case": "op3a-b3-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "cdaaedff3ba586e652e9df1b3a5e1fce40617e45d44b4eb906b7e324958bc568",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "7459c44072b0e03dae05043ef82687f60d68b37440367953043581da01987623"
+    },
+    {
+      "case": "op3a-b3-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "06b7225ce7be47f7a4bdc7dbc681c15910f961b555848991bd68e5f08361ac18",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "a2c0436f02dd4886d3e921e615027ed40ed798e574b9c4fd89a1d75a05ca05c5"
+    },
+    {
+      "case": "op3a-b3-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "44981a56c626b28b15087e10f032ad8eaec5edcbcde2ddb072b8bc8741d89840",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "055959997d6facd383edc89a49cee970cf78ecdaaa7e79a63047b197e51d0c7f"
+    },
+    {
+      "case": "op3a-b3-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "9bdfc1f87d4adeec945b63ed7bb16de07b84d33ba850c23d1659d9651c94bbb9",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "0e43f1838ed82a577f20ff031865709d55deb93e8a028457137c4a8f2aa706f7"
+    },
+    {
+      "case": "op3a-b3-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "a89e85d9b07ebf770b462c92e5db2e3d527ff26c8ceda139307107aacf156932",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "d353157ffd807d2ca9eb15de29ed08f4871a8a9f2487b2fd1a50068d2a7fa4d8"
+    },
+    {
+      "case": "op3a-b3-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "9ef78fec37bdccdd35124cd456271faca6ed6300bc9c150751c34f2b9715da37",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "302751582ff6505f9a651b489400b4f328ee6095cb8ab23802eb498444896563"
+    },
+    {
+      "case": "op3a-b3-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "580cf6579a078890cfc1d1ae626e9c42153d179b49f5373e13443a1d4d51694a",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "65962704e16abdb1d967a6bb8366a53709bd17e6e941fc4eb64a5b03ce79c71d"
+    },
+    {
+      "case": "op3a-b3-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "36d388fb5d60859ba2d3cd911234e65027ec8b6efc3b2b8a7431e48e94ea057e",
+      "packet": [
+        987993131,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "0cda2eaefa1e4a33d2e06ee733a5a91e160c3696d6fc4e63bf3d36d3b7412cae"
+    },
+    {
+      "case": "op3b-b0-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "d6a424e8c20bb7c0aa63e6ff89d9409695e1e5fc7c805ab265339cddac070daf",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e6604f01cb0e22047e789f87e926f88c451928d22e08b89b0acec983147ba2bb"
+    },
+    {
+      "case": "op3b-b0-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6b2de4a8bb7627ebcb0b6615bdfe073c6d6d67e7acca1fc5314e64eb559dfce2",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "1a1e5d33f73e47cfe4bc4a38b4ae25f3637328af2da35bd750459dbd2761ca33"
+    },
+    {
+      "case": "op3b-b0-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "44fed2efdc32f85801a57dcc65c8cb55e1b515d588ca81304cfdb8fa5da25a05",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "12b224389c18aa75144bf0ed478f2de1e6e10ec9f9645c9fe2d15c20b72c250e"
+    },
+    {
+      "case": "op3b-b0-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "f41ae3ed08daa89a65cc12471889eb364255022a88b769e82d9a1b309304a234",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "4a13b56a30fc3ddfa2b2118dd0f3b2a816a7dcf2528bcd6dc3f95615daeea817"
+    },
+    {
+      "case": "op3b-b0-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "eb523d5d5fbaa9d2f80eeff8e761f73d9eb6fd493c5c9a7edd262b3765ea568b",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "5515f92103a7e964f7d04016f61d48dd2527e4a7250d92ea561ae1d3cb804172"
+    },
+    {
+      "case": "op3b-b0-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "511ecab60190639b48eaf26335faee1ea2ef0ecef3ec462688b99fb5056143c1",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "b337106ece231f4a77f3714c62bf4b662a0da761b9fb8f7aadbeb0345d82fa3b"
+    },
+    {
+      "case": "op3b-b0-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "a9fccb85180baeef3e33d711bd713df30f892fa370610b1ff5ba69c2b05eaa8f",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "459f7dc72fbb9328214341d9d2cb9724925053bb47af2b094e70fb33b93a8518"
+    },
+    {
+      "case": "op3b-b0-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "8734c758e7fb9b5e21dd23d873d6466528a35d8e8244da85aa3104879bfcff56",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "55ebc3ab63aa26b23d32c23a4662899490e747f7098a5c52dc989166fea9620e"
+    },
+    {
+      "case": "op3b-b1-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "b9787202dc373c4adc69ec121c344fce6d39ef35ac4d8d913e75fea77f5402d7",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "220995ddc8fefea2cb2f2f575f038b3ab219ce069107c0b7a56e4ac6fe9fea76"
+    },
+    {
+      "case": "op3b-b1-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "b2ae1d6bd3fbabdc5d3d200c34a293fa340d88b7ae7f44e7a475d609054e07d9",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "5f541137ba2bfc5bdb38e273e1614ae800770bc0a3e0e0149dfd5aa16cb48112"
+    },
+    {
+      "case": "op3b-b1-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "5f3d6610558c0923b746df9b9fe267ab03c52a65d2cfa48410095cd172e773ea",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "e6cc90999fb30076080b4f3028c72cdad370eb7d2e88bcb57abf5b80e7c9d458"
+    },
+    {
+      "case": "op3b-b1-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "0066a379c52a3f8d754b89bdd83be7e46fdd7eeb83a45a32f6c49e2da69b7e92",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "91c2dfe9c468129a0953cf787ec887e32072ff5df71f58fd701520e9c7eec9b2"
+    },
+    {
+      "case": "op3b-b1-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "66a029b7d3b518c5cca88ae5273b48b71c15a4a3ec5f7dba65cd7be7837629e6",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "c79234b96b0062b1c1bea66c0f1bfdcc195c0842dc67bb01a157c9e768163c82"
+    },
+    {
+      "case": "op3b-b1-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "5feed8d5d95395bb737efcd82c04e4e627a0767b34efbf8e809b740cb61e6070",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "2cfe4ef7980597354ead08516091ff7318e01a443fe5783f68b570a4ebca66be"
+    },
+    {
+      "case": "op3b-b1-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "193542985bd314a14c2fcdde924c581801671e79ab3282e335b6ef018bc0cea8",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ab6791ce8a3e7145d8e13fb41a54ff0f9ae56823a9ccc2d8c632684c85df3302"
+    },
+    {
+      "case": "op3b-b1-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "5d8e62f6e9b9479a928ceb83349c5cb107ec4d1465258f49041467e45ee05cda",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "6c24e4aa95736941de876f1c04fea84ad9438e7b71e4b94012510a8b5801fd29"
+    },
+    {
+      "case": "op3b-b2-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "efe53819f5e8e4a5af4628ab2e94a077d2e701f9f738919c1271ce836c5eca41",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "565c3f90bd10dfaccbf82719f0c911572b12080f97078acc2e4433c7a8ceb1d5"
+    },
+    {
+      "case": "op3b-b2-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "4b93fdf1abd024b8c197efc320a852b4236b4ca55c4d54350644ae6d21d05ce7",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "a38eff1e15a6c14742229073c590622189da2105927aa4dcaceb6cca11839522"
+    },
+    {
+      "case": "op3b-b2-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "c56b012f59caeef0c7bba7e490955b6c92f0f79c153642a426463fd3f5a0f052",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "68753ed44d583912aa5696bc2f798f551f8f7d84ff712ea732d1f6cb08711511"
+    },
+    {
+      "case": "op3b-b2-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "59cfbb03ab4cd5942ae440ac69cbc47fc6842873121af027754eb64bc40de323",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "3fc267b360d9e10559f1e02f48d5e3624252aa82d7993cfabca2ec10b44b568b"
+    },
+    {
+      "case": "op3b-b2-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "b1d6268b9b0ad6f195ce258312e1b1e6cff7ec555c96f65d06abc23b1dede6d3",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "7ea78e92c90ed3b18435abb5e0949c3107193712d2e56f7f4af5799c7f794015"
+    },
+    {
+      "case": "op3b-b2-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "82482fd398dd8526bfe4cb5c37c3a53f2eac59e7e0768b10fcf2e80df73c9d7b",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "f6be9825c0b70c1f1f88bd32440e92181fda8089ffc39b2d1db9a320d6f16f51"
+    },
+    {
+      "case": "op3b-b2-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "6a57bcd053748a9a0c3cc6ff2182a1327836be2b673e64509d317e4cc027fd50",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "4021634caf8ab0342980c1180b269feb826557acce10a80937676833def0320d"
+    },
+    {
+      "case": "op3b-b2-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "a26a01f1141b5ded1812a22dabcfa78046e92e84e7ca52f838da50f6d6c867e2",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "835d7295468fcbc0a4739ba35398c38ae67dd5be3a50c711512487f9a5df4a63"
+    },
+    {
+      "case": "op3b-b3-k0-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "cdaaedff3ba586e652e9df1b3a5e1fce40617e45d44b4eb906b7e324958bc568",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "043fd39719aa70501fc9047256b3fe5fcaf76994851ffde0dc5001cd6725cc8c"
+    },
+    {
+      "case": "op3b-b3-k0-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "06b7225ce7be47f7a4bdc7dbc681c15910f961b555848991bd68e5f08361ac18",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "4ed4731e0ec47b50727d505718ad81191365d087e5b1b93e3559217b28b91905"
+    },
+    {
+      "case": "op3b-b3-k1-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "44981a56c626b28b15087e10f032ad8eaec5edcbcde2ddb072b8bc8741d89840",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "9a2e3d0c11f7b81ae93d18c7663cec5b2ea77645cc1dc8faf6fc89014f63b08a"
+    },
+    {
+      "case": "op3b-b3-k1-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "9bdfc1f87d4adeec945b63ed7bb16de07b84d33ba850c23d1659d9651c94bbb9",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "dac060ab732b02e39370c6b333721565a2ab9481bee719db9268d94f92ea7336"
+    },
+    {
+      "case": "op3b-b3-k2-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "a89e85d9b07ebf770b462c92e5db2e3d527ff26c8ceda139307107aacf156932",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "29bb8f329f0b7a897b8f225df8a7782573a7ec4afb700e0fd018b91faeb559b6"
+    },
+    {
+      "case": "op3b-b3-k2-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "9ef78fec37bdccdd35124cd456271faca6ed6300bc9c150751c34f2b9715da37",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "526c95e97731e7ba65dae62c3766da181546a1484baa9f6a1514bf167bb1f29b"
+    },
+    {
+      "case": "op3b-b3-k3-d0",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "580cf6579a078890cfc1d1ae626e9c42153d179b49f5373e13443a1d4d51694a",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "ab6631d7a1d01d1382abc2d5a8ed545e1c108a1689a58dbffa74d9c4572d7808"
+    },
+    {
+      "case": "op3b-b3-k3-d1",
+      "work": [
+        748,
+        710
+      ],
+      "source_vram_sha256": "36d388fb5d60859ba2d3cd911234e65027ec8b6efc3b2b8a7431e48e94ea057e",
+      "packet": [
+        1004770347,
+        262148,
+        2645680,
+        393244,
+        7783233,
+        1310728,
+        9234721,
+        1441824
+      ],
+      "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
+      "authored_ram_sha256": "2cbd5e5538376cd158cd6f6f80e2b7a3d61f500ac32012cb5f75fd8f4dcf327a"
+    }
+  ]
+}

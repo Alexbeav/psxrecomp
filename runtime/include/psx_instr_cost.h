@@ -154,6 +154,37 @@ static inline uint32_t psx_cyc_dep_res_mask(uint32_t insn) {
            ((0u - ((roles & PSX_CYC_ROLE_R31) != 0u)) & (1u << 31));
 }
 
+/* 1 iff an instruction fetch at virtual address `pc` bypasses the I-cache.
+ * Transcribed from Beetle PS_CPU::ReadInstruction (the in-tree cpu.cpp:534-601
+ * that psx_icache.c follows): a fetch at 0xA0000000 or above (KSEG1, and KSEG2
+ * above it) never hits and never fills a line. Each such fetch costs +4 and
+ * clears the pending load give-back, on EVERY instruction.
+ *
+ * One definition for three users:
+ *  - psx_icache.c charges the uncached fetch with it;
+ *  - the dirty-RAM interpreter reaches that charge by fetching at every PC;
+ *  - both static emitters (code_generator.cpp, full_function_emitter.cpp) use it
+ *    to emit a fetch charge before every instruction whose runtime PC is
+ *    uncached. Cached code keeps the line-leader rule, where intra-line
+ *    fall-through followers are guaranteed hits.
+ * BIU bit 11 (cache disable) is run-time state, not an address property.
+ * Neither psx_icache.c nor the interpreter models it yet
+ * (ACCURACY_BURNDOWN axis 4). */
+static inline int psx_fetch_uncached(uint32_t pc) {
+    return pc >= 0xA0000000u;
+}
+
+/* Experimental native-span budget, not the faithful pipeline model. A span
+ * owns its base and estimated load work, so its loads do not run ReadAbsorb,
+ * dependency or cache-tag bookkeeping. Uncached BIOS execution still costs
+ * more than cached work. Device clocks and completion deadlines are separate.
+ */
+static inline uint32_t psx_native_instr_cycles(uint32_t insn, uint32_t pc) {
+    uint32_t op = insn >> 26;
+    uint32_t load = ((op >= 0x20u && op <= 0x26u) || op == 0x32u) ? 2u : 0u;
+    return 1u + load + (psx_fetch_uncached(pc) ? 4u : 0u);
+}
+
 #ifdef __cplusplus
 }
 #endif

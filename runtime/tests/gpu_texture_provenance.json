@@ -1,0 +1,51 @@
+{
+  "task": "T172",
+  "status": "Texture helpers/statefulcache and bounded publicdraw qualified; independent final review/publication pending",
+  "base": "754fbae6fb2b130acbf0806135f4701d0346c45e",
+  "tested_commit": "6eebf2bc5f09a5bb41f86c6dc472dcb9859afa0d",
+  "scope": [
+    "runtime/include/source_gpu_texture.h",
+    "Two guarded texturecache/control and fetch/palette sections in runtime/src/gpu_sw_renderer.c"
+  ],
+  "validation": {
+    "datasets": 20,
+    "cases": 6000,
+    "rows": 242028
+  },
+  "public_draw_cases": 96,
+  "public_draw_changed_pixels": 1514,
+  "negative_controls": 23,
+  "source_boundary": "Primary PSX-SPX hardware context, declaration-only contracts, authored syntheticVRAM experiments; old helper/header/renderer bodies and adjacent projection code unread.",
+  "evidence_plan": "gpu-texture-plan-v1.json",
+  "evidence_results": "gpu-texture-results-v1.json",
+  "preservation": "gpu-texture-preservation-v2.json; all three unowned chunks retain exact original rawbyte hashes",
+  "limitations": [
+    "Texture helper modes0..2,UV0..255,declared controlactions0..4; syntheticVRAM only",
+    "Actual public triangle drawing covered96coldcache cases with stated inactivehook/parityseams; no commandqueue/generalpersistentdraw claim",
+    "No snapshotcodec for privatecache; lifecycle tested throughpublicsequences",
+    "No full game/runtime integration,MSVC,hardware accuracy,performance or quality graduation claim"
+  ],
+  "retained_attempts": [
+    "5608e347e05db2bd39319fac44f8dc273cfcf475 passed initial70548rows but failed mixedholdout controlpage/CLUTalias state",
+    "Initial negativecontrol config_1 was a no-op mutation; corrected actual configsubstitution and all23controls rejected"
+  ],
+  "notice_status": "Original renderer file-level prefix preserved byte-for-byte; T77 headernotice review reports no explicit retainednotice; rootLICENSE unchanged; finalrootnotice/source review remains gate.",
+  "legal_claim": "No formal clean-room/legal-clearance claim; broaderorigin auditopen.",
+  "exposure_incident": "Prior unrelated GPU projection warning exposure remains recorded; command-cost/clamping scope excluded.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4",
+  "PS1B_632_amendment": {
+    "base": "d1e9af254839ebcc431511ae8d6a777b93941b03",
+    "scope": "Named internal polygon-page action5 retains bitmap lines for inline8/15-bit changes at unchanged physical X/Y; transitions across the distinct4-bit cache layout and physical-page changes keep invalidation policy",
+    "preserved": "All prior actions0..4, CLUT policy, explicit E1 and cache-clear behavior, draw formulas and default renderer paths retain their existing contracts",
+    "source_observation": "Own Pegasus PSX original2255/current title observation: first persistent sampled credit split at a 3E quad15bit-to8bit transition;3072-byte public TexCache changes only16bytes across the packet; no source CPU absolute cycles claimed; later1551147 measured4-bit->8-bit samepage448/256 public-cache invalidation, with first8-unit credit deficit after overbroad initial retention",
+    "regression": "test_source_gpu_textured_triangle.c: authored warm15bit-to8bit physical-word reuse, identical warm/cold pixels, explicit E1/cache-clear controls; before production policy FAIL, after O0/O2 PASS; all384 existing stock2.3 VRAM fixtures unchanged;4-bit<->8-bit boundary regression fails on ad17 and passes8458checks O0/O2 on narrowed policy; all384 old stock2.3 VRAM outputs remain byte-identical SHA821230d6c88cd29a21f784e2aa671a86153a5ab6fc2a0b2ed2c6c8fae1a3f9b0",
+    "runtime_observation": "Diagnostic product9c3c86923060 matches4904 consecutive CPU37-field and512-page observations1545001..1549904 against independently cold-qualified own-reference segment; oldfault1549904 full2MiB RAM SHA b844582bb44b202f95b31878038f8f40352e162210d50e200cb30ac9239351cf; narrowed productbc8381f9 matches1152 consecutive CPU37-field/512-page observations1550001..1551152; firstGPUframe1551147 source/native budget-136, phase2/count2, rasterfraction816/remaining3204/scanline245",
+    "evidence": "Evidence/PS1B-632/cache-candidate-review01-20261103 and PS1B-632 actual terminal records; firstwriter1551152-20261103 and firstGPU1551147-diagnostics-20261103",
+    "limits": [
+      "Historical validation counts and tested_commit above are unchanged and apply only to their original scope; they are not action5 qualification",
+      "This bounded amendment is not a complete title/final replay-round pass; combined GCC and confirming replay results are recorded separately",
+      "No private bitmap-cache snapshot codec is added; keep proven1545000 for restart and do not promote the known unfaithful late1549903 checkpoint;1550000 independently repeats the entire1152-frame baseline CPU/cycles/512pages through1551152, qualifying only that bounded restart",
+      "No hardware, absolute source-cycle, broad provider-equivalence or formal clean-room claim"
+    ]
+  }
+}

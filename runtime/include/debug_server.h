@@ -6,7 +6,8 @@
  * Includes a 36000-frame ring buffer for retroactive state queries.
  *
  * Same public API names as nesrecomp/snesrecomp debug servers
- * so TCP.md and DEBUG.md documentation is reusable across projects.
+ * so docs/TCP_COMMANDS.md and docs/internal/DEBUG.md documentation is
+ * reusable across projects.
  */
 #ifndef PSXRECOMP_DEBUG_SERVER_H
 #define PSXRECOMP_DEBUG_SERVER_H
@@ -83,6 +84,17 @@ typedef struct {
  * port=0 uses the default (4370). */
 void debug_server_init(int port);
 
+/* Opt-in PSXRTI1 digital or PSXRTI2 DualShock route, validated before guest execution. First record is
+ * consumed at the first normal VBlank input-sampling boundary. */
+int debug_server_preload_input_route(const char *path);
+/* TAS checkpoint resume: seek the preloaded route to a consumed-frame count. */
+int debug_server_seek_input_route(uint32_t frame);
+uint32_t debug_server_input_route_consumed(void);
+/* Exact PSXRTI2 delivery bypasses interactive folding/type policy. */
+int debug_server_apply_dualshock_input(int buttons);
+/* P2 word of the current admitted two-digital route record. */
+int debug_server_route_port2(uint16_t *buttons);
+
 /* Current listener status for heartbeat diagnostics. error is the platform
  * socket error captured by init, or 0 when the listener is active. */
 void debug_server_get_status(int *listening, int *port, int *error);
@@ -107,6 +119,10 @@ uint32_t debug_server_get_tcp_drops(void);
 /* Record the current frame's state into the ring buffer.
  * Call after vblank processing. */
 void debug_server_record_frame(void);
+/* Operator capture mark (hotkey, present thread): freeze the always-on display
+ * and GP0 rings at this instant and save the presented native-wide frame, so a
+ * transient glitch can be read back afterwards over TCP (capture_mark). */
+void debug_server_capture_mark(void);
 
 /* Block while paused, polling TCP + SDL events.
  * Call from vblank callback before frame processing. */
@@ -129,6 +145,7 @@ extern uint32_t g_debug_current_func_addr;
  * writes into the 1M-entry ring buffer with function + frame attribution. */
 void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
                                     uint32_t new_val, uint8_t width);
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog);
 
 /* MMIO write trace — separate ring buffer for 0x1F801xxx writes. */
 void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width);
@@ -193,15 +210,34 @@ void debug_server_check_watchpoints(void);
 /* Returns >= 0 if the debug server wants to override pad input,
  * -1 if no override is active. Value is PS1 16-bit button mask. */
 int debug_server_get_input_override(void);
+/* Port-2 override word (set_input/press "port":2), or -1. */
+int debug_server_get_input_override_port2(void);
 
 /* Optional analog-stick override set alongside set_input (lx/ly/rx/ry,
  * 0..255, 0x80 = centre). Returns 1 and fills st[lx,ly,rx,ry] when armed,
  * 0 when the injection is buttons-only. */
 int debug_server_get_axis_override(unsigned char st[4]);
 
+/* Optional debug-only emulated controller identity set by set_input/press:
+ * -1 follows normal device selection; otherwise 0=digital, 1=DualShock,
+ * 2=JogCon. */
+int debug_server_get_pad_type_override(void);
+/* set_input/press connected: -1 leaves device selection unchanged; 0/1
+ * unplug/plug the serial endpoint for that injected sample. */
+int debug_server_get_pad_connected_override(int slot);
+
+/* Host-pad layer (set_input {"layer":"host", buttons, lx..ry, lt, rt}): a
+ * virtual P1 gamepad feeding the normal offline input path and host shortcut
+ * polling. Returns 1 while armed (until clear_input) and fills the PSX
+ * active-low word, sticks and trigger values (0..255). */
+int debug_server_get_host_pad(uint16_t *buttons, uint8_t st[4], uint8_t *lt,
+                              uint8_t *rt);
+
 /* TCP-controlled turbo mode. When enabled the frontend skips presentation and
  * wall-clock pacing at vblank, matching the keyboard TAB turbo path. */
 int debug_server_turbo_enabled(void);
+/* File playback only: assert actual P1 SIO state after normal VBlank sampling. */
+void debug_server_note_input_applied(void);
 
 /* TCP-controlled turbo mode. When enabled the frontend skips presentation and
  * wall-clock pacing at vblank, matching the keyboard TAB turbo path. */
@@ -233,6 +269,8 @@ void debug_server_send_fmt(const char *fmt, ...);
  * ring head. Forensic value is in the bulk of older entries which are
  * stable. */
 void debug_server_freeze_dump_wtrace_all_json(FILE *f, uint32_t max_count);
+/* Passive scalar filter of existing write history; no new recording or RAM reads. */
+void debug_server_dump_watched_writes(FILE *f, const uint32_t *u16_addresses, uint32_t count);
 void debug_server_freeze_dump_wtrace_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_mmio_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_frame_history_json(FILE *f, uint32_t max_count);
@@ -253,6 +291,9 @@ void debug_server_freeze_dump_fn_entry_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_dirty_block_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_dirty_insn_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_evcb_json(FILE *f, uint32_t max_count);
+
+/* frame_fingerprint reset_on_load: called when a savestate load completes. */
+void debug_server_note_savestate_loaded(void);
 
 #ifdef __cplusplus
 }

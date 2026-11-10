@@ -1,18 +1,18 @@
 #include "overlay_api.h"
+#include "ws_cull_edge.h"   /* psx_ws_cull_bgez / psx_ws_clip_edge_x math */
 
 /* ---- Overlay dispatch shim (inserted by compile_overlays.py) ----------- */
 static OverlayCallbacks g_cbs;
 static uint32_t s_pending_cycles;
 
-#ifdef _WIN32
-__declspec(dllexport)
-#else
-__attribute__((visibility("default")))
-#endif
-void overlay_flush_cycles(void) {
+/* Live observer state also prevents fused-entry admission during replay. */
+#define g_psx_cpu_step_boundary_callback \
+    (g_cbs.cpu_step_boundary_enabled && g_cbs.cpu_step_boundary_enabled(1))
+
+PSX_OVERLAY_EXPORT void overlay_flush_cycles(void) {
     uint32_t cycles = s_pending_cycles;
     s_pending_cycles = 0;
-    if (cycles && g_cbs.advance_cycles) g_cbs.advance_cycles(cycles);
+    if (cycles && g_cbs.cpu_charge) g_cbs.cpu_charge(cycles);
 }
 
 /* Call-contract state (ABI v2): generated code reads/bumps the runtime's
@@ -23,24 +23,24 @@ static uint64_t s_ctr_dummy0, s_ctr_dummy1;
 int      *g_psx_call_bail_p    = &s_bail_dummy;
 uint64_t *g_psx_bail_first_p   = &s_ctr_dummy0;
 uint64_t *g_psx_bail_resolved_p = &s_ctr_dummy1;
+/* g_debug_last_store_pc (ABI v24): cpu_state.h maps the emitter's writes to
+ * *g_psx_last_store_pc_p. The runtime reads the value in every build (memory.c
+ * store filters, write attribution), so overlay_init points this at the host's
+ * copy; the local one only catches a store made before init or on a NULL host. */
+static uint32_t s_last_store_pc_local;
+uint32_t *g_psx_last_store_pc_p = &s_last_store_pc_local;
 
-#ifdef _WIN32
-__declspec(dllexport)
-#else
-__attribute__((visibility("default")))
-#endif
-int overlay_abi(void) { return PSX_OVERLAY_ABI_VERSION | (PSX_OVERLAY_FLAVOR << 16); }
+PSX_OVERLAY_EXPORT int overlay_abi(void) {
+    return PSX_OVERLAY_ABI_TAG;
+}
 
-#ifdef _WIN32
-__declspec(dllexport)
-#else
-__attribute__((visibility("default")))
-#endif
-void overlay_init(const OverlayCallbacks *cbs) {
+PSX_OVERLAY_EXPORT void overlay_init(const OverlayCallbacks *cbs) {
     g_cbs = *cbs;
     if (g_cbs.call_bail_flag) g_psx_call_bail_p    = g_cbs.call_bail_flag;
     if (g_cbs.bail_first)     g_psx_bail_first_p   = g_cbs.bail_first;
     if (g_cbs.bail_resolved)  g_psx_bail_resolved_p = g_cbs.bail_resolved;
+    g_psx_last_store_pc_p = g_cbs.last_store_pc ? g_cbs.last_store_pc
+                                                : &s_last_store_pc_local;
 }
 
 void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t ra) {
@@ -57,10 +57,16 @@ void psx_check_interrupts_at(CPUState *cpu, uint32_t resume_pc) {
     if (g_cbs.check_interrupts_at) g_cbs.check_interrupts_at(cpu, resume_pc);
     else g_cbs.check_interrupts(cpu);
 }
-void psx_advance_cycles(uint32_t cycles) {
+/* The CPU charge (psx_cycles.h): overlay code is guest CPU work, so its
+ * charges accumulate here raw and publish through cpu_charge, the host's
+ * psx_cpu_charge, which applies [timing] guest_cycle_scale exactly as it does
+ * for native code. psx_advance_cycles is kept as the same accumulator for
+ * code generated before the emitter named the CPU charge. */
+void psx_cpu_charge(uint32_t cycles) {
     if (cycles > UINT32_MAX - s_pending_cycles) overlay_flush_cycles();
     s_pending_cycles += cycles;
 }
+void psx_advance_cycles(uint32_t cycles) { psx_cpu_charge(cycles); }
 void gte_execute(CPUState *cpu, uint32_t cmd) {
     overlay_flush_cycles();
     g_cbs.gte_execute(cpu, cmd);
@@ -68,6 +74,14 @@ void gte_execute(CPUState *cpu, uint32_t cmd) {
 int psx_syscall(CPUState *cpu, uint32_t code) {
     overlay_flush_cycles();
     return g_cbs.psx_syscall(cpu, code);
+}
+void source_gpu_runtime_latch_bltz(uint32_t pc, int taken) {
+    g_cbs.source_latch_bltz(pc, taken);
+}
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc,
+                    int in_delay_slot) {
+    overlay_flush_cycles();
+    g_cbs.psx_game_break(cpu, code, pc, in_delay_slot);
 }
 void psx_native_bad_entry(CPUState *cpu, uint32_t owner, uint32_t pc) {
     overlay_flush_cycles();
@@ -93,6 +107,16 @@ void psx_rfe_mark_escape(void) {
     overlay_flush_cycles();
     g_cbs.rfe_mark_escape();
 }
+/* Stale-static guard (ABI v22). The emitter emits this at block entry and
+ * before every direct jal, but it is DEFINED IN THE GENERATED DISPATCH SHARD
+ * (executable side), so an overlay DLL cannot resolve it without this shim.
+ * Its absence is what made 107 shards fail to link on the 2026-09-02 bump.
+ * NULL-guarded: returning 0 sends the guest down the dispatcher path, which is
+ * slower but never wrong -- the opposite choice (returning 1) would let an
+ * overlay run native code the guard was trying to reject. */
+int psx_game_text_native_ok(uint32_t addr) {
+    return g_cbs.game_text_native_ok ? g_cbs.game_text_native_ok(addr) : 0;
+}
 /* Faithful-timing functions (ABI v9): overlay code built with PSX_ENABLE_BLOCK_CYCLES
  * emits these; forward to the runtime's real impls so native overlays charge cycles on
  * the SAME timeline as the interp/BIOS (a local copy would diverge). NULL-guarded so a
@@ -113,9 +137,25 @@ uint32_t psx_cyc_lwc2_read(CPUState *cpu, uint32_t addr) {
     overlay_flush_cycles();
     return g_cbs.cyc_lwc2_read ? g_cbs.cyc_lwc2_read(cpu, addr) : cpu->read_word(addr);
 }
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+#include <stdio.h>
+#include <stdlib.h>
+PSX_OVERLAY_EXPORT void source_gpu_runtime_cpu_boundary(CPUState *cpu,uint32_t pc){
+    overlay_flush_cycles();
+    if(!g_cbs.source_bus_boundary){fputs("source overlay requires CPU boundary callback\n",stderr);exit(1);}
+    g_cbs.source_bus_boundary(cpu,pc);
+}
+#endif
 void psx_icache_fetch(CPUState *cpu, uint32_t addr) {
     overlay_flush_cycles();
     if (g_cbs.icache_fetch) g_cbs.icache_fetch(cpu, addr);
+}
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t addr) {
+    if (g_cbs.cpu_step_boundary_enabled &&
+        g_cbs.cpu_step_boundary_enabled(0) && g_cbs.cpu_step_boundary) {
+        overlay_flush_cycles();
+        g_cbs.cpu_step_boundary(cpu, addr);
+    }
 }
 void psx_muldiv_set(CPUState *cpu, uint32_t latency) {
     overlay_flush_cycles();
@@ -170,11 +210,6 @@ void gte_write_ctrl(CPUState *cpu, uint8_t reg, uint32_t value) {
     overlay_flush_cycles();
     g_cbs.gte_write_ctrl(cpu, reg, value);
 }
-/* g_debug_last_store_pc: a provenance breadcrumb the emitter writes before stores.
- * Overlays are built PSX_NO_DEBUG_TOOLS (the runtime's only consumer is debug tooling),
- * so a local definition satisfies the link; overlay-store provenance is simply not
- * tracked in a no-debug-tools build (by design). */
-uint32_t g_debug_last_store_pc;
 /* Widescreen hooks (ABI v3): forward to the runtime's live widescreen state.
  * Identity fallback if the host predates the callbacks (NULL) — so a v3 DLL
  * stays correct (4:3) on an older host. */
@@ -196,6 +231,13 @@ int psx_ws_cull_sltiu(uint32_t sx, uint32_t imm) {
     return ((uint32_t)((int32_t)(int16_t)(uint16_t)sx + m)
             < (uint32_t)((int32_t)imm + 2 * m)) ? 1 : 0;
 }
+/* MUST stay byte-for-byte identical to gpu.c psx_ws_cull_sltu_band. */
+int psx_ws_cull_sltu_band(uint32_t sx, uint32_t bound) {
+    int m = psx_ws_x_margin();
+    if (m <= 0) return sx < bound ? 1 : 0;
+    int32_t x = (int32_t)(int16_t)(uint16_t)sx;
+    return (x >= -4 * m && x < (int32_t)bound) ? 1 : 0;  /* WS_SLTU_BAND_LEFT_REACH */
+}
 /* Signed-funnel variants (min/max + center±halfwidth idioms). Same contract:
  * self-contained, identity at margin 0, MUST stay byte-for-byte identical to
  * the gpu.c implementations. */
@@ -208,6 +250,25 @@ int psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm) {
 }
 int psx_ws_cull_bltz(uint32_t v) {
     return ((int32_t)v < -psx_ws_x_margin()) ? 1 : 0;
+}
+/* [widescreen.cull] bgez_sites and clip_edge_x_load_sites. The emitter writes
+ * these at a listed address whose instruction matches in overlay code too, so
+ * the shard must define them. Same math as gpu.c: both call the pure helpers
+ * in ws_cull_edge.h (stdint-only), over psx_ws_x_margin() above. */
+int psx_ws_cull_bgez(uint32_t v) {
+    return psx_ws_cull_bgez_value((int32_t)v, psx_ws_x_margin());
+}
+uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w) {
+    return psx_ws_clip_edge_x_value(v, w, psx_ws_x_margin());
+}
+/* [widescreen.cull] screen_x_sites on `lui` and `bltz` (a screen X in the high
+ * half of a register). Emitted in overlay code at a listed address whose
+ * instruction matches, so the shard must define them. Same math as gpu.c. */
+uint32_t psx_ws_cull_lui_hi(uint32_t imm) {
+    return psx_ws_cull_lui_hi_value(imm, psx_ws_x_margin());
+}
+int psx_ws_cull_bltz_hi(uint32_t v) {
+    return psx_ws_cull_bltz_hi_value(v, psx_ws_x_margin());
 }
 int psx_ws_cull_vxrange(uint32_t x, uint32_t imm) {
     int32_t margin = psx_ws_x_margin();
@@ -233,6 +294,29 @@ uint32_t psx_ws_backdrop_value(uint32_t orig, int is_end, int window_cols) {
 int32_t psx_ws_player_x_bound(int32_t vanilla) {
     return g_cbs.ws_player_x_bound ? g_cbs.ws_player_x_bound(vanilla) : vanilla;
 }
+int32_t psx_ws_screen_x_bound(int32_t vanilla) {
+    return g_cbs.ws_screen_x_bound ? g_cbs.ws_screen_x_bound(vanilla) : vanilla;
+}
+void psx_mod_instruction(CPUState *cpu, uint32_t address, uint32_t word) {
+    overlay_flush_cycles();
+    if (g_cbs.mod_instruction) g_cbs.mod_instruction(cpu, address, word);
+}
+uint32_t psx_mod_memory_address(const CPUState *cpu, uint32_t pc, uint32_t word, uint32_t address) {
+    overlay_flush_cycles();
+    return g_cbs.mod_memory_address ? g_cbs.mod_memory_address(cpu, pc, word, address) : address;
+}
+uint32_t psx_mod_immediate_select(uint32_t group) {
+    return g_cbs.mod_immediate_select ? g_cbs.mod_immediate_select(group) : 0u;
+}
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
+    overlay_flush_cycles();
+    return g_cbs.mod_function_entry ? g_cbs.mod_function_entry(cpu, address) : 0;
+}
+int psx_mod_try_function_replacement(CPUState *cpu, uint32_t address) {
+    overlay_flush_cycles();
+    return g_cbs.mod_try_function_replacement ?
+        g_cbs.mod_try_function_replacement(cpu, address) : 0;
+}
 int32_t psx_ws_depth_bound(int32_t imm) {
     return g_cbs.ws_depth_bound ? g_cbs.ws_depth_bound(imm) : imm;
 }
@@ -242,10 +326,20 @@ int32_t psx_ws_plane_nx(int32_t nx) {
 uint32_t psx_ws_xclip_bound(uint32_t vanilla) {
     return g_cbs.ws_xclip_bound ? g_cbs.ws_xclip_bound(vanilla) : vanilla;
 }
+/* [[widescreen.cull.sxy]] fold AND (ws_cull_edge.h). MUST match gpu.c. */
+uint32_t psx_ws_cull_sxy_and(uint32_t acc, uint32_t sxy) {
+    return psx_ws_sxy_and_value(acc, sxy, psx_ws_x_margin());
+}
 uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
     return g_cbs.ws_cull_keep_result
         ? g_cbs.ws_cull_keep_result(vanilla, forced)
         : vanilla;
+}
+int psx_ws_masked_reject(uint32_t flags, uint32_t mask) {
+    return g_cbs.ws_masked_reject ? g_cbs.ws_masked_reject(flags, mask) : flags != 0u;
+}
+int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla) {
+    return g_cbs.ws_nclip_branch ? g_cbs.ws_nclip_branch(pc, instr, mac0, vanilla) : vanilla;
 }
 uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
                                    uint32_t object, int32_t x, int32_t z,
@@ -259,6 +353,16 @@ uint32_t psx_ws_angle_widen(uint32_t vanilla) {
         ? g_cbs.ws_angle_widen(vanilla)
         : vanilla;
 }
+int32_t psx_ws_cull_scale(int32_t bound, int32_t half_extent) {
+    return g_cbs.ws_cull_scale
+        ? g_cbs.ws_cull_scale(bound, half_extent)
+        : bound;
+}
+int32_t gte_nclip_exact_sign(int32_t native_mac0, uint32_t pc) {
+    return g_cbs.nclip_exact_sign
+        ? g_cbs.nclip_exact_sign(native_mac0, pc)
+        : (native_mac0 < 0 ? -1 : (native_mac0 > 0 ? 1 : 0));
+}
 /* Sub-pixel GTE precision-store tracker (ABI v14). The emitter emits a direct
  * gte_precision_store_word() call for every swc2 (GTE store-word), including in
  * overlay-resident code, so the DLL must define it or the shard fails to link
@@ -270,7 +374,7 @@ void gte_precision_store_word(uint32_t addr, uint8_t reg) {
     if (g_cbs.gte_precision_store_word) g_cbs.gte_precision_store_word(addr, reg);
 }
 #if defined(PSX_PGXP) && PSX_PGXP
-/* PGXP dataflow-shadowing hooks (pgxp_hooks.h; ENHANCEMENTS.md G1.10). Only a
+/* PGXP dataflow-shadowing hooks (pgxp_hooks.h; docs/ENHANCEMENTS.md G1.10). Only a
  * pgxp-flavour shard (compiled -DPSX_PGXP=1, flavor bit set) references these
  * — base-flavour shards preprocess the PGXP_*() macros away, so this block is
  * compiled out of them entirely. Forwards to the host engine through the

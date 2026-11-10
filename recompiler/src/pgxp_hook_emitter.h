@@ -6,7 +6,7 @@
 
 namespace PSXRecomp {
 
-/* PGXP dataflow-shadowing hook emission (ENHANCEMENTS.md G1.10; runtime
+/* PGXP dataflow-shadowing hook emission (docs/ENHANCEMENTS.md G1.10; runtime
  * pgxp_hooks.h). Shared by BOTH emitters — CodeGenerator (game) and
  * StrictTranslator (BIOS) — so the hook grammar can never drift between them.
  *
@@ -42,7 +42,8 @@ namespace PSXRecomp {
 " + indent instead of a space when this returns true. */
 bool emission_ends_on_preprocessor_directive(const std::string& code);
 
-void append_pgxp_hooks(uint32_t instr, std::string& code);
+void append_pgxp_hooks(uint32_t instr, std::string& code,
+                       const std::string& memory_addr = "");
 
 } // namespace PSXRecomp
 

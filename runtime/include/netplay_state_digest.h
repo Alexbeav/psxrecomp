@@ -28,6 +28,7 @@ typedef struct NetplayCoreParts {
     uint32_t timers;    /* timer snapshot */
     uint32_t ram;       /* 2 MiB main RAM */
     uint32_t dirty;     /* dirty-RAM bitmap words */
+    uint32_t mod;       /* trusted profile's canonical host gameplay state */
     uint32_t core;      /* full core (same as netplay_core_digest) */
 } NetplayCoreParts;
 
@@ -62,6 +63,9 @@ typedef struct NetplaySioParts {
 void netplay_sio_digest_parts(NetplaySioParts *out);
 /* Baseline dig_c: crc(aux, cd, spad, dma, sio). Refuse doomed Replay. */
 uint32_t netplay_baseline_ext_digest(void);
+/* Same value, from an aux digest the caller already computed (saves the
+ * second SPU RAM pass when both are wanted). */
+uint32_t netplay_baseline_ext_digest_with_aux(uint32_t aux);
 
 #ifdef __cplusplus
 }

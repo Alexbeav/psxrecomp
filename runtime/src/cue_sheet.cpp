@@ -1,9 +1,11 @@
 // cue_sheet.cpp — see cue_sheet.h.
 
 #include "cue_sheet.h"
+#include "host_path.h"
 
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -94,7 +96,7 @@ fs::path resolve_cue_relative_file(const fs::path& dir, const std::string& name)
         named = fs::path(slashed);
     }
 
-    const fs::path literal = named.is_absolute() ? named : (dir / named);
+    const fs::path literal = PSXRecompV4::host_path_is_absolute(named) ? named : (dir / named);
     std::error_code ec;
     if (fs::exists(literal, ec)) return literal;
 
@@ -124,8 +126,13 @@ CueSheet parse_cue_sheet(const fs::path& cue_path) {
     std::string line;
     int      cur_track_num   = -1;
     bool     cur_track_audio = false;
+    uint32_t cur_sector_size = 0;
     uint32_t cur_index00     = 0;
     bool     cur_has_index00 = false;
+    uint32_t cur_pregap      = 0;
+    // A TRACK whose INDEX 01 has been recorded, so a trailing POSTGAP line
+    // (which follows INDEX 01) still attaches to it.
+    int      last_pushed_track = -1;
 
     while (std::getline(cue, line)) {
         // Strip a trailing CR so cues with CRLF endings parse on POSIX.
@@ -149,20 +156,46 @@ CueSheet parse_cue_sheet(const fs::path& cue_path) {
             cur_track_num   = -1;
             cur_has_index00 = false;
             cur_index00     = 0;
+            cur_pregap      = 0;
+            last_pushed_track = -1;
             continue;
         }
 
         int  tn = 0;
         char type_buf[32] = {0};
         if (std::sscanf(upper.c_str(), " TRACK %d %31s", &tn, type_buf) == 2) {
+            const std::string type(type_buf);
             cur_track_num   = tn;
-            cur_track_audio = (std::string(type_buf).find("AUDIO") != std::string::npos);
+            cur_track_audio = (type.find("AUDIO") != std::string::npos);
+            // "MODE2/2352" etc. name the stored sector size; AUDIO is always
+            // 2352. Anything else (CDG, malformed) leaves it unknown.
+            cur_sector_size = 0;
+            const size_t slash = type.find('/');
+            if (cur_track_audio) {
+                cur_sector_size = 2352;
+            } else if (slash != std::string::npos) {
+                const unsigned long n = std::strtoul(type.c_str() + slash + 1, nullptr, 10);
+                if (n == 2048 || n == 2336 || n == 2352) cur_sector_size = (uint32_t)n;
+            }
             cur_index00     = 0;
             cur_has_index00 = false;
+            cur_pregap      = 0;
+            last_pushed_track = -1;
             continue;
         }
 
         int idx = 0, mm = 0, ss = 0, ff = 0;
+        if (std::sscanf(upper.c_str(), " PREGAP %d:%d:%d", &mm, &ss, &ff) == 3) {
+            if (cur_track_num >= 1)
+                cur_pregap = (uint32_t)(((mm * 60 + ss) * 75) + ff);
+            continue;
+        }
+        if (std::sscanf(upper.c_str(), " POSTGAP %d:%d:%d", &mm, &ss, &ff) == 3) {
+            if (last_pushed_track >= 0 && !sheet.tracks.empty() &&
+                sheet.tracks.back().number == last_pushed_track)
+                sheet.tracks.back().postgap = (uint32_t)(((mm * 60 + ss) * 75) + ff);
+            continue;
+        }
         if (std::sscanf(upper.c_str(), " INDEX %d %d:%d:%d", &idx, &mm, &ss, &ff) == 4 &&
             cur_track_num >= 1 && !sheet.files.empty()) {
             const uint32_t index_lba = (uint32_t)(((mm * 60 + ss) * 75) + ff);
@@ -179,7 +212,10 @@ CueSheet parse_cue_sheet(const fs::path& cue_path) {
             t.index01     = index_lba;
             t.index00     = cur_index00;
             t.has_index00 = cur_has_index00;
+            t.pregap      = cur_pregap;
+            t.sector_size = cur_sector_size;
             sheet.tracks.push_back(t);
+            last_pushed_track = cur_track_num;
             cur_track_num = -1;
         }
     }

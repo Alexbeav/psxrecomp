@@ -1,0 +1,42 @@
+{
+  "native_host": "SDL3 + Dear ImGui, original Studio process runner b04011e219d014fe57451bc33b4f2c869bf53890",
+  "json_source": "https://github.com/nlohmann/json/tree/9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+  "json_header_bytes": 919975,
+  "json_header_sha256": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6",
+  "art_reader_source_core": "20ec7255304b7c20ea87f6e05577defa1b5e5948",
+  "cover_source": "https://raw.githubusercontent.com/xlenore/psx-covers/main/covers/default/",
+  "bundled_frontend_assets": {
+    "LatoLatin-Regular.ttf": {
+      "bytes": 148540,
+      "sha256": "d785334ac4e7810f571def986bbad41161f68ac385db8813f798bf04d71478e1"
+    },
+    "LatoLatin-Bold.ttf": {
+      "bytes": 146156,
+      "sha256": "74dc638cf436cce77a0217a2a55ce7906a4cc9e4c595c6f1dcd9dd858078c1b6"
+    },
+    "libchdr.dll": {
+      "bytes": 403456,
+      "sha256": "4fa78100563ee395e7a42334b41aa95584c88656a549434b4624e990b1b9fed8"
+    },
+    "licenses/imgui-MIT.txt": {
+      "bytes": 1104,
+      "sha256": "55e058cc5899e6077a819ad1005d6d1f4528f65ae100795c9692f9fa6525a8ce"
+    },
+    "licenses/json-MIT.txt": {
+      "bytes": 1076,
+      "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+    },
+    "licenses/Lato-OFL.txt": {
+      "bytes": 4399,
+      "sha256": "636351bc82f621d9bb4fe37848513baea767701f679ec015d1140b853b7a16e5"
+    },
+    "licenses/libchdr-NOTICES.txt": {
+      "bytes": 4629,
+      "sha256": "f71e8f9a0f6f83ef00338f4d38fe0c1281d39859ade499e7487ce42d3270fc83"
+    },
+    "licenses/SDL3-Zlib.txt": {
+      "bytes": 884,
+      "sha256": "1c040b8271b37e5076359f8fd54240e371114112924d2df81ef87c7d6a1dfdfd"
+    }
+  }
+}

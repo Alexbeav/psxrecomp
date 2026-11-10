@@ -62,12 +62,28 @@ struct TranslateResult {
 class StrictTranslator {
 public:
     // Translate a single decoded instruction. Pure function — no state.
+    // d.address is the compile (ROM) address; it names the function-scope
+    // temporaries (psx_ldd_/psx_brA_/psx_jt_) and terminator_target, which
+    // the emitter resolves in ROM space.
+    //
+    // runtime_pc is the PC the CPU executes the instruction at (for the BIOS,
+    // BiosAddressModel::runtime_pc: relocated kernel/shell code runs at its
+    // RAM address). Every PC the non-terminator c_code hands the runtime goes
+    // through it: the store-PC stamp (memory.c store filters and the GP0
+    // source key compare it), the syscall EPC (cpu->pc), the break PC and
+    // the unaligned-access PC (docs/SEGMENT_AWARE_CODE.md §5.2). Terminator
+    // c_code is the Phase 1a slice walker's and keeps d.address; that walker
+    // covers the in-place boot slice only, where the two are equal. The
+    // one-argument form translates at runtime_pc == d.address.
     static TranslateResult translate(const PSXRecomp::DecodedInstruction& d);
+    static TranslateResult translate(const PSXRecomp::DecodedInstruction& d,
+                                     uint32_t runtime_pc);
 
 private:
     // The per-opcode translation body; translate() wraps its c_code with the
     // shared PGXP hook grammar (CodeGenerator::append_pgxp_hooks).
-    static TranslateResult translate_impl(const PSXRecomp::DecodedInstruction& d);
+    static TranslateResult translate_impl(const PSXRecomp::DecodedInstruction& d,
+                                          uint32_t runtime_pc);
 
 public:
 };

@@ -137,6 +137,44 @@ static inline int psx_sdl_get_current_display_mode(
     return 0;
 }
 
+/* The highest refresh the display offers at the current mode's size (a VRR
+ * or ProMotion panel's maximum); 0 when unknown. */
+static inline double psx_sdl_display_max_refresh(SDL_DisplayID display)
+{
+    if (!display) display = SDL_GetPrimaryDisplay();
+    const SDL_DisplayMode *cur = SDL_GetCurrentDisplayMode(display);
+    double best = cur ? (double)cur->refresh_rate : 0.0;
+    int count = 0;
+    SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(display, &count);
+    if (modes) {
+        for (int i = 0; i < count; ++i)
+            if (modes[i] && cur && modes[i]->w == cur->w && modes[i]->h == cur->h &&
+                (double)modes[i]->refresh_rate > best)
+                best = (double)modes[i]->refresh_rate;
+        SDL_free(modes);
+    }
+    return best;
+}
+
+/* Opt-in high-pixel-density game window. Without it, SDL3 on a Retina Mac
+ * gives the GL context a drawable in POINTS (half the panel resolution) and
+ * the compositor stretches it, so any internal resolution above that is
+ * averaged away. Only set when the player chose an internal resolution. */
+#define PSX_SDL_WINDOW_HIGH_DENSITY SDL_WINDOW_HIGH_PIXEL_DENSITY
+
+/* Pixel height of the display a window is on (the primary display when the
+ * window is NULL), for "Match display". 0 when unknown. */
+static inline int psx_sdl_display_pixel_height(SDL_Window *window)
+{
+    SDL_DisplayID display = window ? SDL_GetDisplayForWindow(window) : 0;
+    if (!display) display = SDL_GetPrimaryDisplay();
+    if (!display) return 0;
+    const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(display);
+    if (!mode || mode->h <= 0) return 0;
+    float density = mode->pixel_density > 0.0f ? mode->pixel_density : 1.0f;
+    return (int)((float)mode->h * density + 0.5f);
+}
+
 static inline const Uint8 *psx_sdl_get_keyboard_state(int *count)
 {
     return (const Uint8 *)(const void *)SDL_GetKeyboardState(count);
@@ -239,4 +277,28 @@ static inline int psx_sdl_cond_wait_timeout(
 
 #include <SDL.h>
 
+#define PSX_SDL_WINDOW_HIGH_DENSITY SDL_WINDOW_ALLOW_HIGHDPI
+
+static inline int psx_sdl_display_pixel_height(SDL_Window *window)
+{
+    int index = window ? SDL_GetWindowDisplayIndex(window) : 0;
+    SDL_DisplayMode mode;
+    if (index < 0) index = 0;
+    if (SDL_GetCurrentDisplayMode(index, &mode) != 0 || mode.h <= 0) return 0;
+    return mode.h;
+}
+
+static inline double psx_sdl_display_max_refresh(int display)
+{
+    SDL_DisplayMode cur, m;
+    if (display < 0) display = 0;
+    if (SDL_GetCurrentDisplayMode(display, &cur) != 0) return 0.0;
+    double best = (double)cur.refresh_rate;
+    const int n = SDL_GetNumDisplayModes(display);
+    for (int i = 0; i < n; ++i)
+        if (SDL_GetDisplayMode(display, i, &m) == 0 && m.w == cur.w && m.h == cur.h &&
+            (double)m.refresh_rate > best)
+            best = (double)m.refresh_rate;
+    return best;
+}
 #endif

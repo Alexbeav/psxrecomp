@@ -1,5 +1,9 @@
 # AOT Overlay Sharding — Spike Findings & Plan (Tomba-first)
 
+For the current workflow and reusable producer boundary, see
+[AOT sharding](AOT_SHARDING.md). This document preserves dated experiments;
+historical observed-PC coverage figures are not exhaustive correctness proofs.
+
 Status: ENHANCEMENT SPIKE (2026-07-17). Foundation executed and live-proven.
 Author: investigation via 4 parallel agents + adversarial source verification.
 Scope: can we move overlay sharding from *runtime discovery* to *build-time (AOT)*,
@@ -304,15 +308,23 @@ capacity boundary instead of allowing worker scheduling to choose the winner.
 The runtime rejects legacy/no-CRC and malformed range manifests, keeping its
 registration contract identical to the inventory parser.
 That shared contract is deliberately narrow: ASCII records, LF/CRLF physical
-lines, bounded line widths, canonical KSEG0 entries, one authoritative CRC,
-1..16 in-RAM ranges containing the entry, and no duplicate physical `F` entry.
+lines, bounded line widths, entries in the manifest's segment, one
+authoritative CRC, 1..16 in-RAM ranges containing the entry, and no duplicate
+physical `F` entry. `F` entries are full VAs: KSEG0 unless an `S` record before
+the first `F` names KUSEG (`S 00000000`) or KSEG1 (`S A0000000`), and the
+segment must be the one the shard's directory stands for (KUSEG and KSEG1
+shards live in the tag's `seg-kuseg/` and `seg-kseg1/`;
+docs/SEGMENT_AWARE_CODE.md §5.7). `R` records stay KSEG0-spelled byte extents.
 GCC/TCC tier filenames use the host filesystem's case rules. A DLL is accepted
 atomically only when its ABI, optional pair id, and every manifest-declared
 `func_*` export agree; a partial-export bundle registers zero candidates.
 
 `executed_pcs`/`dispatch_entry_pcs` come from always-on interpreter ring tables
 (`g_dirty_ram_pc_table`, `g_dirty_ram_exec_pc_table`) — **execution-verified**, not
-disassembly guesses.
+disassembly guesses. Schema v3 adds `dispatch_entry_segments`, the segments
+(KUSEG, KSEG0, KSEG1) each dispatch entry entered through, and
+`compile_overlays.py` builds one shard per segment with entries
+(docs/SEGMENT_AWARE_CODE.md §5.7). A record without it is KSEG0 only.
 
 #### Durable capture history (opt-in)
 
@@ -481,7 +493,7 @@ Gaps 3 and 4 are why capture is runtime-only today.
 
 **F1 — Naive disc-scan AOT is dead for Tomba (two independent kills):**
 - (a) Scatter-load means the reconstituted RAM image is **not contiguous anywhere on
-  disc** (`docs/overlay-discovery.md:36-45`). A CRC/byte scan can't find it.
+  disc** (`docs/internal/overlay-discovery.md:36-45`). A CRC/byte scan can't find it.
 - (b) Even after de-scattering + decompressing, the executable bytes differ from the
   raw payload because the game applies **load-time fixups (relocated jump tables)**.
   Capturing pre-fixup DMA bytes was tried and caused the **village→overworld blue
@@ -598,7 +610,7 @@ Remove dependence on a recorded route.
   shards CRC-match (native path taken on first entry, no compile).
 - **Artifact:** `game.toml [[overlays]]` populated automatically from the enumerated
   table (finally implementing the documented-but-empty schema; note the current
-  discrepancy in `overlay-discovery.md` that `[[overlays]]` is unimplemented).
+  discrepancy in `docs/internal/overlay-discovery.md` that `[[overlays]]` is unimplemented).
 
 ### T3 — Generalize the framework (Class A static fast-path + other titles)
 - For Class-A titles (position-fixed, disc==RAM), add a pure-static extractor

@@ -27,9 +27,9 @@ record; the submodule pointer is the source of truth). The framework evolves on
 its own cadence; a game only moves to a newer framework when someone deliberately
 bumps that submodule pointer.
 
-**Starting a new title or shipping a setup-host zip?** Follow
+**Starting a new title or shipping a release?** Follow
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (layout, CI template
-under `docs/ci/templates/setup-release.yml`, release checklist). Also see
+under `docs/ci/templates/game-release.yml`, release checklist). Also see
 [Linking the framework](docs/BUILDING.md#linking-the-framework) and
 [Framework changes and the pin](#framework-changes-and-the-pin) below.
 
@@ -38,14 +38,14 @@ under `docs/ci/templates/setup-release.yml`, release checklist). Also see
 These are non-negotiable because violating them is how past efforts turned into
 un-debuggable emulators. The full engineering constitution is
 [`CLAUDE.md`](CLAUDE.md); the debugging philosophy is
-[`PRINCIPLES.md`](PRINCIPLES.md). The short version:
+[`docs/internal/PRINCIPLES.md`](docs/internal/PRINCIPLES.md). The short version:
 
 1. **Build the faithful core; no per-game hacks in the foundation.** The correct
    fix is the general, hardware-accurate one, not a surgical workaround for one
    title. No title checks in the runtime, no magic PC addresses, no spoofed
    return values for one game. (Per-game *enhancements* — widescreen, faster
    loads — are legitimate once the faithful core is proven; see
-   [`ENHANCEMENTS.md`](ENHANCEMENTS.md).)
+   [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md).)
 2. **No stubs.** A function is fully implemented or it fails loudly. No
    `return 0;` placeholders, no `// TODO` behavior, no hand-delivered fake
    events. If execution reaches code we can't handle, we stop and fix
@@ -61,7 +61,7 @@ un-debuggable emulators. The full engineering constitution is
    continuously checked against the Beetle oracle — never a "produce the answer
    the BIOS would have" shim.
 5. **No `printf`/log-file debugging.** Runtime inspection goes through the TCP
-   debug server ([`TCP_COMMANDS.md`](TCP_COMMANDS.md)) and always-on ring
+   debug server ([`docs/TCP_COMMANDS.md`](docs/TCP_COMMANDS.md)) and always-on ring
    buffers, not `fprintf`.
 6. **Fix broken tooling immediately** — don't route around it with indirect
    evidence, and don't infer correctness from two implementations sharing a bug.
@@ -81,6 +81,26 @@ written — is likely to be rejected if it:
 - Introduces regressions in known-working games.
 - Contains code the contributor cannot reasonably explain, or whose verification
   cannot be stated.
+
+### Commit messages
+
+Use a subject only by default. Add a body only when the reason is not clear
+from the diff, and keep it to 1-3 lines. Do not add per-file changelogs or
+repeat the diff or PR description.
+
+### BIOS emitter changes
+
+After changing a BIOS fingerprint input, run
+`bash tools/regen_bios.sh --config bios/OpenBIOS.toml` and commit the regenerated
+OpenBIOS output and stamp together. PR CI checks the committed stamps without
+requiring a retail BIOS dump. Never update a stamp without regenerating.
+
+Retail-dump users must also regenerate each linked retail stem, for example
+`bash tools/regen_bios.sh --config bios/SCPH1001.toml`. Retail dumps and generated
+retail C/stamps stay local and gitignored. In the PR validation notes, name the
+BIOS stems checked and whether their output changed; explicitly say when a
+retail stem was not checked. Unchanged OpenBIOS output does not establish
+unchanged SCPH1001 output.
 
 ## Game-specific work belongs in game repos
 
@@ -140,6 +160,11 @@ cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
+
+On Windows, read [`docs/WINDOWS_TOOLCHAIN_TRAPS.md`](docs/WINDOWS_TOOLCHAIN_TRAPS.md)
+before the first build: the toolchain's `bin` folder must be first on `PATH` in
+every shell, or the test programs fail to load and the suite reports failures
+that are not in the code.
 
 38 tests, under five seconds, no BIOS dump or disc image required. See
 [`docs/TESTING.md`](docs/TESTING.md) for running individual tests, what the
@@ -252,6 +277,11 @@ out when not needed. Avoid cleverness unless it's clearly justified.
 By contributing, you agree your contribution is licensed under the same license as
 the project. Do not submit code you don't have the right to contribute, and do not
 copy from incompatible licenses or proprietary sources.
+
+Runtime comments cite hardware facts to PSX-SPX, and emulators are used only as
+black-box references whose outputs we compare. See
+[`docs/PROVENANCE.md`](docs/PROVENANCE.md) for the rules and for the passages
+still to be replaced.
 
 ### Upstream-derived work and credit
 

@@ -1,0 +1,21 @@
+{
+  "schema": "t172-cd-implicit-provenance-v1",
+  "base": "cab60489d74d5f6d7b62b7d96712ccc178322a49",
+  "tested_commit": "a63da6d2d5bc44e8804a38db6f2af702b8849141",
+  "owned_function": "static int implicit_read_seek_cycles(void)",
+  "authority": "Sanitized root declaration/caller/domain contract; independently authored opaque probes and model. No unowned implementation, root tool/model or compiler-log reads.",
+  "primary_reference": "Pinned PSX-SPX a253f078553f83b4e540f087abf0c28d954b6293; cd-implicit-seek-preflight-v1.json binds references.",
+  "receipt": "..\\evidence\\validation-receipt-cd-implicit-v1.json",
+  "receipt_sha256": "09ae09648685cc07957ed03dcb2361a5947059abb4b2ce9ff77ebf77a01bcb51",
+  "totals": {
+    "cases": 6324,
+    "rows": 6324,
+    "events": 41008
+  },
+  "negative_controls": 56,
+  "full_translation_unit_checks": 7,
+  "scope": "Only implicit_read_seek_cycles. Actual MSF, accepted head update and seek wrapper/header byte-preserved. Synthetic jitter/speed return seams; no actual PRNG/speed policy. Bounded MSF/head position/deadline arithmetic; no overflow/nontermination/fullrestore/media/lifecycle/hardware/legal claim.",
+  "identity_note": "Root confirmed head_sha256 labels owned implicit fragment, same as selected_header_sha256; preservation checks dependencies_sha256, seek_header_sha256, wrapper_sha256 and sha_source_sha256.",
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "publication": "Pending independent T77 review/publication; no worker push."
+}

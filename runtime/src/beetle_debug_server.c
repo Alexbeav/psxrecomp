@@ -5,7 +5,8 @@
  * set_input, clear_input, pad_status, screenshot_file, sio_trace_*,
  * wtrace_*, fntrace_*.
  *
- * Default port: 4380 (compile-time DEFAULT_DEBUG_PORT).
+ * Port: psx-beetle passes 4382 unless --port is given (beetle_main.cpp);
+ * 4380 is only the fallback for a port <= 0.
  * JSON-over-newline protocol, same as recomp side.
  */
 
@@ -14,6 +15,8 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+
+#include "host_time.h"
 
 #ifndef DEFAULT_DEBUG_PORT
 #error DEFAULT_DEBUG_PORT must be defined by the beetle runtime target.
@@ -28,6 +31,7 @@
 #  define sock_close closesocket
 #else
 #  include <sys/socket.h>
+#  include <sys/select.h>
 #  include <netinet/in.h>
 #  include <unistd.h>
 #  include <fcntl.h>
@@ -45,6 +49,10 @@ extern uint16_t beetle_get_pad(void);
 extern int      beetle_get_framebuffer(uint32_t **out_pixels,
                                         unsigned *out_w, unsigned *out_h);
 extern uint32_t beetle_get_frame_count(void);
+/* Disc change through the core's own disk-control interface (tray open,
+ * replace image, tray closed) — lets a psx-runtime "Change disc" route be
+ * replayed against the oracle. */
+extern int      beetle_disc_change(const char *path);
 /* Absolute guest CPU cycles since boot (oracle cycle clock, beetle-psx
  * libretro.cpp). For native<->Beetle cycle-drift comparison
  * (FAITHFUL_TIMING_PLAN.md). */
@@ -189,17 +197,50 @@ static int s_input_override = -1;
 static int s_input_frames   = 0;
 
 /* ---- Send helpers ---- */
+
+/* The client socket is non-blocking. A reply larger than the free space in
+ * the kernel send buffer (a 2 MB read_ram is ~4 MB of hex; macOS starts a
+ * TCP send buffer at 128 KB) makes send() fail with EWOULDBLOCK
+ * part-way through. Wait for the socket to drain and carry on, like
+ * debug_server.c's send_all_blocking, instead of dropping the connection
+ * and leaving the client a truncated JSON line. */
+#define SEND_TOTAL_BUDGET_MS 15000
+
+static int send_would_block(void) {
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+}
+
+/* Wait up to 100 ms for the client socket to become writable. */
+static int send_wait_writable(void) {
+    fd_set wr;
+    FD_ZERO(&wr);
+    FD_SET(s_client, &wr);
+    struct timeval tv = { 0, 100 * 1000 };
+    return select((int)s_client + 1, NULL, &wr, NULL, &tv) >= 0;
+}
+
 static void send_raw(const char *data, int n) {
     if (s_client == SOCK_INVALID) return;
     int off = 0;
+    const uint64_t t_start = psx_host_mono_ms();
     while (off < n) {
         int k = send(s_client, data + off, n - off, 0);
-        if (k <= 0) {
-            sock_close(s_client);
-            s_client = SOCK_INVALID;
-            return;
+        if (k > 0) {
+            off += k;
+            continue;
         }
-        off += k;
+        if (k < 0 && send_would_block() &&
+            psx_host_mono_ms() - t_start < SEND_TOTAL_BUDGET_MS &&
+            send_wait_writable()) {
+            continue;
+        }
+        sock_close(s_client);
+        s_client = SOCK_INVALID;
+        return;
     }
 }
 
@@ -259,6 +300,30 @@ static uint32_t hex_to_u32(const char *s) {
 }
 
 /* ---- Command handlers ---- */
+
+/* frame — the native server's frame-counter command, same shape here so one
+ * poller drives both ports (Rule 16). */
+static void h_frame(int id, const char *json) {
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%u}\n", id, beetle_get_frame_count());
+}
+
+/* disc_change — swap the mounted image the way a frontend does, so the guest
+ * sees Beetle's own eject/insert sequence and a psx-runtime Change-disc route
+ * can be compared like for like. */
+static void h_disc_change(int id, const char *json) {
+    char path[4096];
+    if (!json_get_str(json, "path", path, sizeof(path))) {
+        send_err(id, "path_required"); return;
+    }
+    const int rc = beetle_disc_change(path);
+    if (rc != 0) {
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"disc_change\",\"rc\":%d}\n", id, rc);
+        return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"frame\":%u}\n",
+             id, path, beetle_get_frame_count());
+}
 
 static void h_ping(int id, const char *json) {
     (void)json;
@@ -1614,6 +1679,12 @@ typedef struct { const char *name; cmd_handler handler; } CmdEntry;
 
 static const CmdEntry CMDS[] = {
     { "ping",                  h_ping },
+    /* Rule 16 protocol parity: the native server answers `frame` with just the
+     * frame count, so one tool polls either port by name. (T13 landed this as a
+     * ping alias; h_frame answers the native shape instead of ping's wider
+     * payload, which is what a poller written against psx-runtime expects.) */
+    { "frame",                 h_frame },
+    { "disc_change",           h_disc_change },
     { "parity_dump",           h_parity_dump },
     { "parity_ctl",            h_parity_ctl },
     { "devtrace_dump",         h_devtrace_dump },
@@ -1721,7 +1792,7 @@ void beetle_debug_server_init(int port) {
     memset(&sin, 0, sizeof(sin));
     sin.sin_family      = AF_INET;
     sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    sin.sin_port        = htons((u_short)s_port);
+    sin.sin_port        = htons((uint16_t)s_port);
     if (bind(s_listen, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
         fprintf(stderr, "[beetle-dbg] bind(%d) failed\n", s_port);
         sock_close(s_listen); s_listen = SOCK_INVALID; return;

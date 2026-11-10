@@ -12,13 +12,22 @@
  *   - No fake events found (clean)
  */
 
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "memcard.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #ifdef _WIN32
 #include <direct.h>
+#include <io.h>
+#include <process.h>
+#include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #define MAX_CARDS 2
@@ -28,9 +37,134 @@ typedef struct {
     char filepath[512];
     int present;
     int dirty;
+    uint8_t* extension;
+    uint32_t extension_size;
+    int extension_read_failed;
+    int extension_codec_failed;
+    int flush_result;
 } MemCard;
 
 static MemCard cards[MAX_CARDS];
+static MemCard replay_saved_cards[MAX_CARDS];
+static int replay_cards_in;
+static MemcardExtensionLoad extension_load;
+static MemcardExtensionSave extension_save;
+
+void memcard_set_extension_codec(MemcardExtensionLoad load,
+                                MemcardExtensionSave save) {
+    extension_load = load && save ? load : NULL;
+    extension_save = load && save ? save : NULL;
+    /* A newly selected codec has not validated any currently mounted card.
+     * Registration must not turn a rejected load into permission to encode.
+     * Session initialization/reload runs the loader before publication. */
+    for (int i = 0; i < MAX_CARDS; ++i)
+        cards[i].extension_codec_failed = extension_load && cards[i].present;
+}
+
+int memcard_last_flush_result(int card) {
+    return card >= 0 && card < MAX_CARDS ? cards[card].flush_result : -1;
+}
+
+int memcard_extension_codec_active(void) {
+    return extension_load != NULL && extension_save != NULL;
+}
+
+static void discard_extension(MemCard* card) {
+    free(card->extension);
+    card->extension = NULL;
+    card->extension_size = 0;
+    card->extension_read_failed = card->extension_codec_failed = 0;
+}
+
+static void notify_extension_load(int card) {
+    MemCard* c = &cards[card];
+    c->extension_codec_failed = extension_load &&
+        extension_load(card, c->data, c->extension, c->extension_size) < 0;
+}
+
+/* Read one extra byte to distinguish an exactly bounded tail from overflow.
+ * Overflow/allocation/read failures block publication, rather than truncating
+ * bytes that the device cannot see but the owning game still needs. */
+static int load_card_image(int card, FILE* f) {
+    MemCard* c = &cards[card];
+    int first;
+    discard_extension(c);
+    if (fread(c->data, 1, MEMCARD_SIZE, f) != MEMCARD_SIZE) return -1;
+    first = fgetc(f);
+    if (first != EOF) {
+        c->extension = (uint8_t*)malloc(MEMCARD_EXTENSION_MAX + 1u);
+        if (!c->extension) { c->extension_read_failed = 1; return 0; }
+        c->extension[0] = (uint8_t)first;
+        size_t count = 1u + fread(c->extension + 1, 1, MEMCARD_EXTENSION_MAX, f);
+        if (count > MEMCARD_EXTENSION_MAX || ferror(f)) {
+            discard_extension(c);
+            c->extension_read_failed = 1;
+            return 0;
+        }
+        c->extension_size = (uint32_t)count;
+    } else if (ferror(f)) {
+        c->extension_read_failed = 1;
+        return 0;
+    }
+    notify_extension_load(card);
+    return 0;
+}
+
+/* Publish base and tail together. The exclusive temporary is beside the card,
+ * so rename never crosses filesystems. Failed writes never replace the card. */
+static int publish_card(const MemCard* c, const uint8_t* tail, uint32_t size) {
+    static unsigned sequence;
+    char temporary[576];
+    FILE* f = NULL;
+    int descriptor = -1;
+    for (unsigned attempt = 0; attempt < 32u; ++attempt) {
+#ifdef _WIN32
+        snprintf(temporary, sizeof temporary, "%s.tmp.%lu.%u", c->filepath,
+                 (unsigned long)_getpid(), ++sequence);
+        descriptor = _open(temporary, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,
+                           _S_IREAD | _S_IWRITE);
+#else
+        snprintf(temporary, sizeof temporary, "%s.tmp.%lu.%u", c->filepath,
+                 (unsigned long)getpid(), ++sequence);
+        descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL, 0600);
+#endif
+        if (descriptor >= 0) break;
+    }
+    if (descriptor < 0) return -1;
+#ifdef _WIN32
+    f = _fdopen(descriptor, "wb");
+#else
+    f = fdopen(descriptor, "wb");
+#endif
+    if (!f) {
+#ifdef _WIN32
+        _close(descriptor);
+#else
+        close(descriptor);
+#endif
+        remove(temporary);
+        return -1;
+    }
+    int ok = fwrite(c->data, 1, MEMCARD_SIZE, f) == MEMCARD_SIZE;
+    if (ok && size) ok = fwrite(tail, 1, size, f) == size;
+    if (fflush(f) != 0) ok = 0;
+#ifdef _WIN32
+    if (ok && _commit(_fileno(f)) != 0) ok = 0;
+#else
+    if (ok && fsync(fileno(f)) != 0) ok = 0;
+#endif
+    if (fclose(f) != 0) ok = 0;
+    if (ok) {
+#ifdef _WIN32
+        ok = MoveFileExA(temporary, c->filepath,
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+        ok = rename(temporary, c->filepath) == 0;
+#endif
+    }
+    if (!ok) remove(temporary);
+    return ok ? 0 : -1;
+}
 
 /* XOR checksum of bytes 0x00-0x7E, stored at 0x7F. */
 static uint8_t frame_checksum(const uint8_t *frame) {
@@ -41,7 +175,9 @@ static uint8_t frame_checksum(const uint8_t *frame) {
 }
 
 /* Format a 128KB card image to match a real PS1 blank card.
- * Layout verified against DuckStation's MemoryCardImage::Format(). */
+ * Layout per PSX-SPX controllersandmemorycards, "Memory Card Data Format":
+ * header frame, directory frames (free A0h, next FFFFh), broken sector
+ * list (FFFFFFFFh = none) and the write test frame 63. */
 static void memcard_format(uint8_t *data) {
     memset(data, 0xFF, MEMCARD_SIZE);
 
@@ -118,6 +254,8 @@ static void memcard_ensure_dir(const char* dir) {
 }
 
 void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
+    if (replay_cards_in) return;
+    for (int i = 0; i < MAX_CARDS; ++i) discard_extension(&cards[i]);
     memset(cards, 0, sizeof(cards));
     memcard_ensure_dir(dir);
 
@@ -140,9 +278,9 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
 
         FILE* f = fopen(cards[i].filepath, "rb");
         if (f) {
-            size_t n = fread(cards[i].data, 1, MEMCARD_SIZE, f);
+            int result = load_card_image(i, f);
             fclose(f);
-            if (n == MEMCARD_SIZE) {
+            if (result == 0) {
                 cards[i].present = 1;
             }
         } else {
@@ -154,6 +292,7 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
                 int close_ok = (fclose(f) == 0);
                 if (n == MEMCARD_SIZE && flush_ok && close_ok) {
                     cards[i].present = 1;
+                    notify_extension_load(i);
                 }
             }
         }
@@ -213,10 +352,16 @@ int memcard_summary_path(const char* path, MemcardSummary* out) {
 
 #ifdef _WIN32
     struct _stat64 st;
-    if (_stat64(path, &st) == 0) out->mtime = (long long)st.st_mtime;
+    if (_stat64(path, &st) == 0) {
+        out->mtime = (long long)st.st_mtime;
+        out->size_bytes = (long long)st.st_size;
+    }
 #else
     struct stat st;
-    if (stat(path, &st) == 0) out->mtime = (long long)st.st_mtime;
+    if (stat(path, &st) == 0) {
+        out->mtime = (long long)st.st_mtime;
+        out->size_bytes = (long long)st.st_size;
+    }
 #endif
     return 0;
 }
@@ -241,19 +386,42 @@ int memcard_write_sector(int card, int sector, const uint8_t* buf) {
 }
 
 void memcard_flush(int card) {
+    if (replay_cards_in) return;
     if (card < 0 || card >= MAX_CARDS) return;
     if (!cards[card].dirty) return;
     if (cards[card].filepath[0] == '\0') return;
 
-    FILE* f = fopen(cards[card].filepath, "wb");
-    if (f) {
-        size_t n = fwrite(cards[card].data, 1, MEMCARD_SIZE, f);
-        int flush_ok = (fflush(f) == 0);
-        int close_ok = (fclose(f) == 0);
-        if (n == MEMCARD_SIZE && flush_ok && close_ok) {
-            cards[card].dirty = 0;
+    MemCard* c = &cards[card];
+    uint8_t* updated = NULL;
+    const uint8_t* tail = c->extension;
+    uint32_t size = c->extension_size;
+    if (c->extension_read_failed || c->extension_codec_failed) {
+        c->flush_result = -2;
+        return;
+    }
+    if (extension_save) {
+        updated = (uint8_t*)malloc(MEMCARD_EXTENSION_MAX);
+        if (!updated) { c->flush_result = -1; return; }
+        int count = extension_save(card, c->data, updated, MEMCARD_EXTENSION_MAX);
+        if (count < 0 || (uint32_t)count > MEMCARD_EXTENSION_MAX) {
+            free(updated);
+            c->flush_result = -2;
+            return;
+        }
+        tail = updated;
+        size = (uint32_t)count;
+    }
+    c->flush_result = publish_card(c, tail, size);
+    if (c->flush_result == 0) {
+        c->dirty = 0;
+        if (updated) {
+            free(c->extension);
+            c->extension = updated;
+            c->extension_size = size;
+            updated = NULL;
         }
     }
+    free(updated);
 }
 
 void memcard_flush_all(void) {
@@ -302,13 +470,52 @@ int memcard_import_raw(int card, const uint8_t *src) {
     if (card < 0 || card >= MAX_CARDS || !src) return -1;
     if (cards[card].filepath[0] == '\0') return -1;
     memcpy(cards[card].data, src, MEMCARD_SIZE);
+    discard_extension(&cards[card]);
+    notify_extension_load(card);
     cards[card].present = 1;
     cards[card].dirty = 1;
     memcard_flush(card);
+    return cards[card].flush_result;
+}
+
+int memcard_replay_supported(void) {
+    if (memcard_extension_codec_active()) return 0;
+    for (int i = 0; i < MAX_CARDS; ++i)
+        if (cards[i].extension_size || cards[i].extension_read_failed || cards[i].extension_codec_failed)
+            return 0;
+    return 1;
+}
+
+int memcard_replay_begin(const uint8_t *images, unsigned mask) {
+    if (!images || (mask & ~3u) || !memcard_replay_supported()) return -1;
+    if (!replay_cards_in) {
+        memcard_flush_all();
+        for (int i = 0; i < MAX_CARDS; ++i)
+            if (cards[i].dirty && cards[i].filepath[0]) return -1;
+        memcpy(replay_saved_cards,cards,sizeof(cards));
+        memset(cards,0,sizeof(cards));
+        replay_cards_in = 1;
+    } else {
+        for (int i = 0; i < MAX_CARDS; ++i) discard_extension(&cards[i]);
+        memset(cards,0,sizeof(cards));
+    }
+    for (int i = 0; i < MAX_CARDS; ++i) {
+        memcpy(cards[i].data,images + (size_t)i * MEMCARD_SIZE,MEMCARD_SIZE);
+        cards[i].present = (int)((mask >> i) & 1u);
+    }
     return 0;
 }
 
+void memcard_replay_end(void) {
+    if (!replay_cards_in) return;
+    for (int i = 0; i < MAX_CARDS; ++i) discard_extension(&cards[i]);
+    memcpy(cards,replay_saved_cards,sizeof(cards));
+    memset(replay_saved_cards,0,sizeof(replay_saved_cards));
+    replay_cards_in = 0;
+}
+
 int memcard_rebind_dir(const char *dir) {
+    if (replay_cards_in) return -1;
     int i;
     if (!dir || !dir[0]) return -1;
     memcard_ensure_dir(dir);
@@ -326,6 +533,7 @@ int memcard_rebind_dir(const char *dir) {
 }
 
 int memcard_rebind_paths(const char *path0, const char *path1) {
+    if (replay_cards_in) return -1;
     if (path0 && path0[0]) {
         snprintf(cards[0].filepath, sizeof(cards[0].filepath), "%s", path0);
     }
@@ -335,22 +543,51 @@ int memcard_rebind_paths(const char *path0, const char *path1) {
     return 0;
 }
 
+int memcard_rebind_path(int card, const char *path) {
+    if (replay_cards_in) return -1;
+    if (card < 0 || card >= MAX_CARDS) return -1;
+    if (path && path[0]) {
+        snprintf(cards[card].filepath, sizeof(cards[card].filepath), "%s", path);
+        /* The first flush must not fail on a missing directory (the host's
+         * netplay/ dir does not exist until a guest card is bound there). */
+        {
+            char dir[sizeof(cards[card].filepath)];
+            size_t n;
+            snprintf(dir, sizeof(dir), "%s", path);
+            n = strlen(dir);
+            while (n > 0 && dir[n - 1] != '/' && dir[n - 1] != '\\') --n;
+            if (n > 1) {
+                dir[n - 1] = '\0';
+                memcard_ensure_dir(dir);
+            }
+        }
+    } else {
+        cards[card].filepath[0] = '\0';
+        cards[card].present = 0;
+        cards[card].dirty = 0;
+    }
+    return 0;
+}
+
 int memcard_reload_bound(void) {
+    if (replay_cards_in) return 0;
     int i;
     for (i = 0; i < MAX_CARDS; i++) {
         FILE *f;
         if (cards[i].filepath[0] == '\0') {
+            discard_extension(&cards[i]);
             cards[i].present = 0;
             cards[i].dirty = 0;
             continue;
         }
         f = fopen(cards[i].filepath, "rb");
         if (!f) {
+            discard_extension(&cards[i]);
             cards[i].present = 0;
             cards[i].dirty = 0;
             continue;
         }
-        if (fread(cards[i].data, 1, MEMCARD_SIZE, f) == MEMCARD_SIZE) {
+        if (load_card_image(i, f) == 0) {
             cards[i].present = 1;
             cards[i].dirty = 0;
         } else {

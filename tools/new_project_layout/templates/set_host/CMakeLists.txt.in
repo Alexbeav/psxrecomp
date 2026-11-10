@@ -1,0 +1,38 @@
+# @HOST_STAMP@
+#
+# The setup program of a set whose discs boot different programs (set.toml).
+# This project is the setup program and nothing else: it never links game code.
+# Each program is its own project under programs/, built by
+# `psxrecomp_cli.py rebuild --config set.toml`, which then joins the programs
+# into build-release/.
+cmake_minimum_required(VERSION 3.20)
+set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp" CACHE PATH
+    "Path to psxrecomp")
+if(NOT EXISTS "${PSXRECOMP_ROOT}/runtime/runtime.cmake")
+    message(FATAL_ERROR
+        "PSXRecomp runtime is missing: ${PSXRECOMP_ROOT}/runtime/runtime.cmake\n"
+        "This project expects the psxrecomp framework at ${PSXRECOMP_ROOT}.")
+endif()
+
+project(@PROJECT_CMAKE_NAME@ LANGUAGES C CXX)
+
+# Always the setup program, also after Generate wrote its marker: the marker of
+# a set is a record, not game code, and there is nothing here to link it with.
+set(PSXRECOMP_FORCE_SETUP_HOST ON CACHE BOOL
+    "The project of a set is only ever its setup program" FORCE)
+set(PSX_RECOMP_UI ON CACHE BOOL "Use recomp-ui" FORCE)
+set(PSX_NETPLAY OFF CACHE BOOL "The setup program has no netplay" FORCE)
+set(PSX_SETUP_WIZARD ON CACHE BOOL "Enable owned-input setup" FORCE)
+@BIOS_CMAKE_BLOCK@
+include("${PSXRECOMP_ROOT}/runtime/runtime.cmake")
+
+psxrecomp_add_game_runtime(psx-runtime
+    PRELOADED_MODS_DIR "NONE"
+    ENABLE_SETUP_WIZARD
+    EXE_NAME "@SET_EXE_NAME@"
+    WINDOW_TITLE "@SET_TITLE@"
+    DEFAULT_GAME_CONFIG_PATH "@SET_FILE@"
+    MAX_PLAYERS 1
+    GEN_MARKER "generated/@SET_MARKER@"
+    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"
+)

@@ -11,7 +11,7 @@ FunctionAnalyzer::FunctionAnalyzer(const PS1Executable& exe) : exe_(exe) {}
 
 void FunctionAnalyzer::add_forced_entry(uint32_t addr) {
     // Validate address is within the EXE range
-    if (addr >= exe_.header.load_address && addr < exe_.end_address()) {
+    if (addr >= exe_.header.load_address && addr < exe_.analysis_end_address()) {
         forced_entry_points_.push_back(addr);
     }
 }
@@ -440,9 +440,11 @@ bool FunctionAnalyzer::is_likely_data_section(uint32_t start_addr, uint32_t end_
 
         // Check for JAL with invalid target
         if (opcode == 3) {  // JAL opcode
-            // PS1 JAL target: upper 4 bits from PC region (0x80000000), low 28 bits from instr
-            uint32_t target = ((instr & 0x03FFFFFFu) << 2) | 0x80000000u;
-            if (target > 0x801FFFFFu) {
+            // PS1 JAL target: upper 4 bits from the delay slot's PC (the
+            // image's own segment), low 28 bits from instr. Valid targets lie
+            // in the first 2 MiB of RAM.
+            uint32_t target = ((addr + 4u) & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);
+            if ((target & 0x0FFFFFFFu) > 0x001FFFFFu) {
                 invalid_jal_count++;
             }
         }
@@ -782,7 +784,7 @@ bool resolve_exact_bounded_jump_table(
     };
     if (producer_lo == 0u && producer_hi == 0u) {
         producer_lo = exe.header.load_address;
-        producer_hi = exe.end_address();
+        producer_hi = exe.analysis_end_address();
     }
     if (producer_lo >= producer_hi || (producer_lo & 3u) != 0u ||
         (producer_hi & 3u) != 0u) {
@@ -894,16 +896,36 @@ bool resolve_exact_bounded_jump_table(
         return false;
     }
 
-    // Exact canonical guard: sltiu; beq; nop; sll. This is the same accepted
-    // suffix as the Python capture verifier and excludes unrelated bounds.
+    // Exact guards: sltiu; beq; nop; sll, or sltiu; beq; lui; addiu; sll.
+    // The latter schedules the table's LUI in the bounds branch's delay slot.
+    // Keep both forms in parity with the Python capture verifier.
     if (sll_pc < entry + 12u) return false;
     uint32_t guard_pc = sll_pc - 8u;
     uint32_t bound_pc = sll_pc - 12u;
+    auto before_scale = read(sll_pc - 4u);
+    if (!before_scale.has_value()) return false;
+    bool scheduled_base = *before_scale != 0u;
+    if (scheduled_base) {
+        // R3000 JR would see the old target register without this load delay.
+        if (lw_pc != jr_pc - 8u) return false;
+        if (sll_pc < entry + 16u) return false;
+        guard_pc -= 4u;
+        bound_pc -= 4u;
+        auto upper_word = read(sll_pc - 8u);
+        if (!upper_word.has_value()) return false;
+        uint32_t upper_reg = (*upper_word >> 16) & 0x1Fu;
+        if ((*upper_word >> 26) != 0x0Fu ||
+            ((*upper_word >> 21) & 0x1Fu) != 0u || upper_reg == 0u ||
+            (*before_scale >> 26) != 0x09u ||
+            ((*before_scale >> 21) & 0x1Fu) != upper_reg ||
+            ((*before_scale >> 16) & 0x1Fu) != base_reg ||
+            upper_reg == index_reg || base_reg == index_reg) {
+            return false;
+        }
+    }
     auto guard_word_opt = read(guard_pc);
     auto bound_word = read(bound_pc);
-    auto guard_delay = read(sll_pc - 4u);
-    if (!guard_word_opt.has_value() || !bound_word.has_value() ||
-        !guard_delay.has_value() || *guard_delay != 0u) {
+    if (!guard_word_opt.has_value() || !bound_word.has_value()) {
         return false;
     }
     uint32_t guard_word = *guard_word_opt;
@@ -920,20 +942,23 @@ bool resolve_exact_bounded_jump_table(
     uint32_t bound_rt = (*bound_word >> 16) & 0x1Fu;
     uint32_t count = *bound_word & 0xFFFFu;
     if (bound_op != 0x0Bu || bound_rs != index_reg ||
-        bound_rt != bound_reg || count == 0u || count >= 512u ||
+        bound_rt != bound_reg || bound_reg == index_reg ||
+        count == 0u || count >= 512u ||
         in_delay_slot(bound_pc)) {
         return false;
     }
     uint32_t guard_target = exact_branch_target(guard_pc, guard_word);
     if ((guard_target & 3u) != 0u || guard_target < entry ||
         guard_target >= hard_cap ||
-        (guard_target >= sll_pc && guard_target < jr_pc + 8u)) {
+        (guard_target >= sll_pc && guard_target < jr_pc + 8u) ||
+        (scheduled_base && guard_target > bound_pc && guard_target < jr_pc + 8u)) {
         return false;
     }
 
     // Resolve the table-base reaching definition. Cross-register constants
     // (`lui rA; addiu rB,rA,lo`) are valid, but both definitions must be local,
-    // unskippable, outside delay slots, and unclobbered before use.
+    // unskippable and unclobbered before use. Only the validated scheduled
+    // form permits LUI in a delay slot, exactly that of the bounds BEQ.
     uint32_t low_pc = 0, source_reg = base_reg;
     int16_t low = 0;
     uint32_t lui_pc = 0, upper = 0;
@@ -974,7 +999,9 @@ bool resolve_exact_bounded_jump_table(
             break;
         }
     }
-    if (lui_pc == 0u || in_delay_slot(lui_pc) ||
+    if (scheduled_base && (lui_pc != guard_pc + 4u || low_pc != sll_pc - 4u))
+        return false;
+    if (lui_pc == 0u || (in_delay_slot(lui_pc) && !scheduled_base) ||
         (low_pc != 0u && in_delay_slot(low_pc)) ||
         inbound_skips(lui_pc, addu_pc) ||
         (low_pc != 0u && inbound_skips(low_pc, addu_pc)) ||
@@ -1026,6 +1053,7 @@ bool resolve_exact_bounded_jump_table(
         uint32_t runtime_target = *target_word;
         uint32_t image_target = mapped(runtime_target);
         if (image_target < entry || image_target >= hard_cap ||
+            (scheduled_base && image_target > bound_pc && image_target < jr_pc + 8u) ||
             image_target < producer_lo || image_target >= producer_hi ||
             (image_target & 3u) != 0u) {
             return false;
@@ -1089,6 +1117,7 @@ bool resolve_exact_bounded_jump_table(
             break;
         }
     }
+    uint32_t protected_pc = scheduled_base ? bound_pc : lui_pc;
     for (uint32_t source = entry; source < hard_cap; source += 4u) {
         auto word = read(source);
         if (!word.has_value()) return false;
@@ -1096,9 +1125,9 @@ bool resolve_exact_bounded_jump_table(
         bool direct = cf.kind == ExactCfKind::Branch ||
                       cf.kind == ExactCfKind::Jump ||
                       cf.kind == ExactCfKind::Jal;
-        if (direct && cf.target > lui_pc && cf.target <= jr_pc &&
-            (source < lui_pc || source > jr_pc) &&
-            !case_reachable.count(source)) {
+        if (direct && cf.target > protected_pc && cf.target <= jr_pc &&
+            (source < protected_pc || source > jr_pc) &&
+            (scheduled_base || !case_reachable.count(source))) {
             return false;
         }
     }
@@ -1106,10 +1135,292 @@ bool resolve_exact_bounded_jump_table(
     return true;
 }
 
+bool resolve_computed_stride_jump(
+    const PS1Executable& exe,
+    uint32_t entry,
+    uint32_t hard_cap,
+    uint32_t jr_pc,
+    uint32_t jr_rs,
+    ExactJumpTable& table,
+    ExactAddressMapper runtime_to_image) {
+    table = {};
+    if (entry >= hard_cap || jr_pc < entry || jr_pc + 8u >= hard_cap ||
+        (entry & 3u) != 0u || (hard_cap & 3u) != 0u ||
+        (jr_pc & 3u) != 0u || jr_rs == 0u || jr_rs == 31u) {
+        return false;
+    }
+    auto read = [&](uint32_t pc) { return exe.read_word(pc); };
+    auto jr_word = read(jr_pc);
+    if (!jr_word.has_value() ||
+        *jr_word != ((jr_rs & 0x1Fu) << 21u | 0x08u)) {
+        return false;
+    }
+
+    // Nearest definition of `reg` strictly before `use_pc`, walking back at
+    // most `window` instructions through straight-line code only. A control
+    // transfer (or its delay slot) in the way ends the search: the chain
+    // must be one basic block so every path to the jr computes the same
+    // shape.
+    auto nearest_def = [&](uint32_t reg, uint32_t use_pc,
+                           uint32_t window) -> std::optional<uint32_t> {
+        if (reg == 0u) return std::nullopt;
+        uint32_t pc = use_pc;
+        for (uint32_t n = 0; n < window && pc >= entry + 4u; ++n) {
+            pc -= 4u;
+            auto w = read(pc);
+            if (!w.has_value()) return std::nullopt;
+            if (exact_classify_cf(pc, *w).kind != ExactCfKind::Normal)
+                return std::nullopt;
+            if (exact_instruction_writes_gpr(*w, reg)) return pc;
+        }
+        return std::nullopt;
+    };
+    auto fields = [&](uint32_t w, uint32_t& op, uint32_t& rs, uint32_t& rt,
+                      uint32_t& rd, uint32_t& sa, uint32_t& fn) {
+        op = (w >> 26) & 0x3Fu; rs = (w >> 21) & 0x1Fu; rt = (w >> 16) & 0x1Fu;
+        rd = (w >> 11) & 0x1Fu; sa = (w >> 6) & 0x1Fu; fn = w & 0x3Fu;
+    };
+    auto is_addu = [&](uint32_t w, uint32_t& rd, uint32_t& rs, uint32_t& rt) {
+        uint32_t op, sa, fn;
+        fields(w, op, rs, rt, rd, sa, fn);
+        return op == 0u && fn == 0x21u && sa == 0u && rd != 0u;
+    };
+    // sll rd, rt, sa  ->  (rd, index rt, shift)
+    auto is_sll = [&](uint32_t w, uint32_t& rd, uint32_t& idx, uint32_t& sh) {
+        uint32_t op, rs, fn;
+        fields(w, op, rs, idx, rd, sh, fn);
+        return op == 0u && fn == 0u && rs == 0u && rd != 0u && idx != 0u && w != 0u;
+    };
+
+    // 1. jr_rs = addu B, S (either order), nearest definition before the jr.
+    auto addu_pc = nearest_def(jr_rs, jr_pc, 8u);
+    if (!addu_pc.has_value()) return false;
+    uint32_t a_rd, a_rs, a_rt;
+    if (!is_addu(*read(*addu_pc), a_rd, a_rs, a_rt) || a_rs == a_rt ||
+        a_rs == 0u || a_rt == 0u) {
+        return false;
+    }
+
+    // 2. One operand is the scaled index: sll S,I,k or the two-sll sum.
+    //    Try each operand as the scaled register; the other is the base.
+    auto scaled_stride = [&](uint32_t s_reg, uint32_t use_pc) -> uint32_t {
+        auto def = nearest_def(s_reg, use_pc, 8u);
+        if (!def.has_value()) return 0u;
+        uint32_t w = *read(*def);
+        uint32_t rd, idx, sh;
+        if (is_sll(w, rd, idx, sh)) {
+            return (sh >= 2u && sh <= 8u) ? (1u << sh) : 0u;
+        }
+        uint32_t s_rd, p, q;
+        if (!is_addu(w, s_rd, p, q) || p == q || p == 0u || q == 0u) return 0u;
+        auto p_def = nearest_def(p, *def, 8u);
+        auto q_def = nearest_def(q, *def, 8u);
+        if (!p_def.has_value() || !q_def.has_value()) return 0u;
+        uint32_t p_rd, p_idx, p_sh, q_rd, q_idx, q_sh;
+        if (!is_sll(*read(*p_def), p_rd, p_idx, p_sh) ||
+            !is_sll(*read(*q_def), q_rd, q_idx, q_sh) ||
+            p_idx != q_idx || p_sh == q_sh || p_sh > 8u || q_sh > 8u) {
+            return 0u;
+        }
+        // The index must reach both shifts unchanged: no write to it between
+        // the earlier sll and the later one.
+        uint32_t lo = std::min(*p_def, *q_def), hi = std::max(*p_def, *q_def);
+        for (uint32_t pc = lo + 4u; pc < hi; pc += 4u) {
+            if (exact_instruction_writes_gpr(*read(pc), p_idx)) return 0u;
+        }
+        return (1u << p_sh) + (1u << q_sh);
+    };
+    uint32_t stride = scaled_stride(a_rt, *addu_pc);
+    if (stride == 0u) stride = scaled_stride(a_rs, *addu_pc);
+    if (stride == 0u || (stride & 3u) != 0u || stride > 256u) return false;
+
+    // 3. The run: N >= 2 shape-identical groups right after the delay slot.
+    //    Same opcode/register fields per position; immediates free; no
+    //    control flow inside group 0 (so every group is straight-line).
+    const uint32_t run_start = jr_pc + 8u;
+    const uint32_t words_per_group = stride / 4u;
+    if (run_start + stride > hard_cap) return false;
+    auto shape = [](uint32_t w) -> uint32_t {
+        uint32_t op = (w >> 26) & 0x3Fu;
+        // I-type: keep opcode + rs + rt, drop the immediate. J-type and
+        // SPECIAL/REGIMM/COP forms compare whole.
+        if (op == 0u || op == 1u || op == 2u || op == 3u || op == 0x10u ||
+            op == 0x12u) {
+            return w;
+        }
+        return w & 0xFFFF0000u;
+    };
+    std::vector<uint32_t> group0;
+    bool all_nop = true;
+    for (uint32_t i = 0; i < words_per_group; ++i) {
+        auto w = read(run_start + i * 4u);
+        if (!w.has_value()) return false;
+        if (exact_classify_cf(run_start + i * 4u, *w).kind != ExactCfKind::Normal)
+            return false;
+        if (*w != 0u) all_nop = false;
+        group0.push_back(*w);
+    }
+    if (all_nop) return false;
+    uint32_t groups = 1;
+    for (;;) {
+        uint32_t g = run_start + groups * stride;
+        if (g + stride > hard_cap) break;
+        bool same = true;
+        for (uint32_t i = 0; i < words_per_group && same; ++i) {
+            auto w = read(g + i * 4u);
+            same = w.has_value() && shape(*w) == shape(group0[i]);
+        }
+        if (!same) break;
+        ++groups;
+    }
+    if (groups < 2u) return false;
+
+    auto mapped = [&](uint32_t addr) {
+        return runtime_to_image ? runtime_to_image(addr, exe) : addr;
+    };
+    ExactJumpTable resolved;
+    resolved.table_base = run_start;
+    resolved.stride = stride;
+    for (uint32_t k = 0; k <= groups; ++k) {
+        uint32_t t = run_start + k * stride;
+        if (t >= hard_cap) break;
+        resolved.targets.emplace_back(t, mapped(t));
+    }
+    resolved.table_count = static_cast<uint32_t>(resolved.targets.size());
+    table = std::move(resolved);
+    return true;
+}
+
+bool resolve_self_limited_jump_table(
+    const PS1Executable& exe,
+    uint32_t entry,
+    uint32_t hard_cap,
+    uint32_t jr_pc,
+    uint32_t jr_rs,
+    ExactJumpTable& table,
+    ExactAddressMapper runtime_to_image) {
+    table = {};
+    if (entry >= hard_cap || jr_pc < entry || jr_pc + 8u > hard_cap ||
+        (entry & 3u) != 0u || (hard_cap & 3u) != 0u ||
+        (jr_pc & 3u) != 0u || jr_rs == 0u || jr_rs == 31u) {
+        return false;
+    }
+    auto read = [&](uint32_t pc) { return exe.read_word(pc); };
+    auto jr_word = read(jr_pc);
+    if (!jr_word.has_value() ||
+        *jr_word != ((jr_rs & 0x1Fu) << 21u | 0x08u)) {
+        return false;
+    }
+    auto nearest_def = [&](uint32_t reg, uint32_t use_pc,
+                           uint32_t window) -> std::optional<uint32_t> {
+        if (reg == 0u) return std::nullopt;
+        uint32_t pc = use_pc;
+        for (uint32_t n = 0; n < window && pc >= entry + 4u; ++n) {
+            pc -= 4u;
+            auto w = read(pc);
+            if (!w.has_value()) return std::nullopt;
+            if (exact_classify_cf(pc, *w).kind != ExactCfKind::Normal)
+                return std::nullopt;
+            if (exact_instruction_writes_gpr(*w, reg)) return pc;
+        }
+        return std::nullopt;
+    };
+
+    // lw R, off(T) — the nearest definition of the jr register; allow the
+    // canonical single nop between the load and the jr.
+    auto lw_pc = nearest_def(jr_rs, jr_pc, 2u);
+    if (!lw_pc.has_value()) return false;
+    uint32_t lw = *read(*lw_pc);
+    if (((lw >> 26) & 0x3Fu) != 0x23u || ((lw >> 16) & 0x1Fu) != jr_rs)
+        return false;
+    uint32_t t_reg = (lw >> 21) & 0x1Fu;
+    int32_t lw_off = static_cast<int32_t>(static_cast<int16_t>(lw & 0xFFFFu));
+    if (t_reg == 0u) return false;
+
+    // addu T, A, B
+    auto addu_pc = nearest_def(t_reg, *lw_pc, 6u);
+    if (!addu_pc.has_value()) return false;
+    uint32_t au = *read(*addu_pc);
+    if (((au >> 26) & 0x3Fu) != 0u || (au & 0x3Fu) != 0x21u ||
+        ((au >> 6) & 0x1Fu) != 0u || ((au >> 11) & 0x1Fu) != t_reg) {
+        return false;
+    }
+    uint32_t a = (au >> 21) & 0x1Fu, b = (au >> 16) & 0x1Fu;
+    if (a == 0u || b == 0u || a == b) return false;
+
+    // One operand is `lui X,hi; ori|addiu X,X,lo` — an in-function constant.
+    auto constant_of = [&](uint32_t reg, uint32_t use_pc) -> std::optional<uint32_t> {
+        auto lo_pc = nearest_def(reg, use_pc, 6u);
+        if (!lo_pc.has_value()) return std::nullopt;
+        uint32_t lo = *read(*lo_pc);
+        uint32_t op = (lo >> 26) & 0x3Fu;
+        uint32_t rs = (lo >> 21) & 0x1Fu, rt = (lo >> 16) & 0x1Fu;
+        if ((op != 0x0Du && op != 0x09u) || rt != reg || rs != reg)
+            return std::nullopt;
+        auto hi_pc = nearest_def(reg, *lo_pc, 6u);
+        if (!hi_pc.has_value()) return std::nullopt;
+        uint32_t hi = *read(*hi_pc);
+        if (((hi >> 26) & 0x3Fu) != 0x0Fu || ((hi >> 16) & 0x1Fu) != reg)
+            return std::nullopt;
+        uint32_t v = (hi & 0xFFFFu) << 16;
+        if (op == 0x0Du) v |= (lo & 0xFFFFu);
+        else v += static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(lo & 0xFFFFu)));
+        return v;
+    };
+    std::optional<uint32_t> base = constant_of(a, *addu_pc);
+    if (!base.has_value()) base = constant_of(b, *addu_pc);
+    if (!base.has_value()) return false;
+    const uint32_t runtime_base = *base + static_cast<uint32_t>(lw_off);
+    auto mapped = [&](uint32_t addr) {
+        return runtime_to_image ? runtime_to_image(addr, exe) : addr;
+    };
+    const uint32_t image_base = mapped(runtime_base);
+    if ((image_base & 3u) != 0u || image_base < entry || image_base >= hard_cap)
+        return false;
+
+    auto in_delay_slot = [&](uint32_t pc) {
+        if (pc < entry + 4u) return false;
+        auto prev = read(pc - 4u);
+        return prev.has_value() &&
+               exact_classify_cf(pc - 4u, *prev).kind != ExactCfKind::Normal;
+    };
+
+    // Walk the table: stop at the first word that is not an in-function code
+    // address, or when the walk reaches the lowest target seen so far.
+    ExactJumpTable resolved;
+    resolved.table_base = runtime_base;
+    resolved.self_limited = true;
+    uint32_t lowest_target = hard_cap;
+    for (uint32_t i = 0; i < 256u; ++i) {
+        uint32_t slot = image_base + i * 4u;
+        if (slot >= lowest_target || slot + 4u > hard_cap) break;
+        auto word = read(slot);
+        if (!word.has_value()) break;
+        uint32_t rt_target = *word;
+        uint32_t it_target = mapped(rt_target);
+        if ((it_target & 3u) != 0u || it_target < entry || it_target >= hard_cap ||
+            it_target == jr_pc + 4u || in_delay_slot(it_target)) {
+            break;
+        }
+        auto first = read(it_target);
+        if (!first.has_value() || !exact_is_valid_mips_word(*first)) break;
+        // A target inside the table itself would be data run as code.
+        if (it_target >= image_base && it_target <= slot) break;
+        resolved.targets.emplace_back(rt_target, it_target);
+        lowest_target = std::min(lowest_target, it_target);
+    }
+    if (resolved.targets.size() < 2u) return false;
+    resolved.table_count = static_cast<uint32_t>(resolved.targets.size());
+    table = std::move(resolved);
+    return true;
+}
+
 FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
     const std::vector<uint32_t>& entries,
     const std::vector<std::pair<uint32_t, uint32_t>>& producer_ranges,
-    const std::set<uint32_t>& cross_call_allow) {
+    const std::set<uint32_t>& cross_call_allow,
+    bool no_split_guard,
+    const std::set<uint32_t>& trusted_entries) {
     FunctionAnalysisResult result;
     result.total_instructions = 0;
     result.jr_ra_count = 0;
@@ -1119,8 +1430,13 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
 
     fmt::print("\n=== Exact-Entry Function Analysis ===\n\n");
 
+    // Discovery bound, NOT the read bound. An overlay capture deliberately
+    // carries trailing delay-slot guard words (ps1_exe_parser.h exe_tag):
+    // readable so a branch at the last analysable word can emit its slot, but
+    // never admissible as code themselves, because the word after a guard
+    // word does not exist in the image.
     auto in_exe = [&](uint32_t addr) {
-        return addr >= exe_.header.load_address && addr < exe_.end_address() && (addr & 3u) == 0;
+        return addr >= exe_.header.load_address && addr < exe_.analysis_end_address() && (addr & 3u) == 0;
     };
 
     auto producer_for = [&](uint32_t addr) -> int {
@@ -1265,14 +1581,18 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
                     } else {
                         ExactJumpTable table;
                         uint32_t producer_lo = exe_.header.load_address;
-                        uint32_t producer_hi = exe_.end_address();
+                        uint32_t producer_hi = exe_.analysis_end_address();
                         if (entry_producer >= 0) {
                             producer_lo = producer_ranges[entry_producer].first;
                             producer_hi = producer_ranges[entry_producer].second;
                         }
                         if (resolve_exact_bounded_jump_table(
                                 exe_, entry, hard_cap, pc, jr_rs, table,
-                                nullptr, producer_lo, producer_hi)) {
+                                nullptr, producer_lo, producer_hi) ||
+                            resolve_computed_stride_jump(
+                                exe_, entry, hard_cap, pc, jr_rs, table) ||
+                            resolve_self_limited_jump_table(
+                                exe_, entry, hard_cap, pc, jr_rs, table)) {
                             bool all_owned = std::all_of(
                                 table.targets.begin(), table.targets.end(),
                                 [&](const auto& target_pair) {
@@ -1310,6 +1630,61 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
     std::map<uint32_t, std::set<std::pair<uint32_t, bool>>> derived_evidence;
     fmt::print("Explicit entries: {}\n", explicit_count);
 
+    // No-split guard: fixed point over EVERY non-trusted entry (explicit and
+    // derived); same rule as compile_overlays.no_split_partition. For each
+    // host, the run of following entries its UNCAPPED walk reaches (stopping
+    // at the first it does not reach, or a trusted entry) may be inside it;
+    // walk the host capped at the end of the run, shrink the run to the first
+    // entry that walk misses, and absorb the rest together. Absorbing the run
+    // at once lets a switch whose table targets several entries resolve
+    // (every target must lie inside the walk); stopping at the first
+    // unreached entry keeps a forward tail call over an unrelated function
+    // from orphaning its target. Absorbing only removes caps, so repeat.
+    auto absorb_split_entries = [&](std::set<uint32_t>& entries) {
+        const uint32_t analysis_end = exe_.analysis_end_address();
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            std::vector<uint32_t> roots(entries.begin(), entries.end());
+            std::vector<uint32_t> kept;
+            size_t index = 0;
+            while (index < roots.size()) {
+                const uint32_t host = roots[index];
+                kept.push_back(host);
+                const ExactWalkResult reach = walk(host, analysis_end);
+                // A wider range can reject a jump table, so the walk capped
+                // at the successor is not always a subset: consult both.
+                const ExactWalkResult succ = index + 1 < roots.size()
+                    ? walk(host, roots[index + 1]) : ExactWalkResult{};
+                auto reached = [&](uint32_t a) {
+                    return reach.visited.count(a) || succ.visited.count(a);
+                };
+                size_t end = index + 1;
+                while (end < roots.size() && reached(roots[end]) &&
+                       !trusted_entries.count(roots[end]))
+                    end++;
+                while (end > index + 1) {
+                    const uint32_t cap =
+                        end < roots.size() ? roots[end] : analysis_end;
+                    const ExactWalkResult inner = walk(host, cap);
+                    size_t blocked = end;
+                    for (size_t k = index + 1; k < end; k++) {
+                        if (!inner.visited.count(roots[k])) {
+                            blocked = k;
+                            break;
+                        }
+                    }
+                    if (blocked == end) break;
+                    end = blocked;
+                }
+                if (end > index + 1) changed = true;
+                index = end;
+            }
+            entries = std::set<uint32_t>(kept.begin(), kept.end());
+        }
+    };
+    if (no_split_guard) absorb_split_entries(known_entries);
+
     // Discover callees in rounds against one stable entry partition. Processing
     // roots sequentially let an early caller insert a JAL target that actually
     // lay inside a later explicit root. That new entry hard-capped the later
@@ -1325,6 +1700,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
             fmt::print("WARNING: exact-entry ownership did not converge; "
                        "falling back to explicit roots only\n");
             known_entries = explicit_entries;
+            if (no_split_guard) absorb_split_entries(known_entries);
             derived_entries.clear();
             derived_evidence.clear();
             break;
@@ -1337,7 +1713,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
         std::map<uint32_t, std::set<std::pair<uint32_t, bool>>> candidate_evidence;
         for (size_t i = 0; i < round_entries.size(); i++) {
             uint32_t hard_cap = (i + 1 < round_entries.size())
-                ? round_entries[i + 1] : exe_.end_address();
+                ? round_entries[i + 1] : exe_.analysis_end_address();
             ExactWalkResult wr = walk(round_entries[i], hard_cap);
             candidate_targets.insert(wr.direct_jal_targets.begin(),
                                      wr.direct_jal_targets.end());
@@ -1362,7 +1738,9 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
         // "absorbed forever" set therefore loses reachable code.
         known_entries = explicit_entries;
         known_entries.insert(derived_entries.begin(), derived_entries.end());
-        for (uint32_t target : derived_entries) {
+        if (no_split_guard) {
+            absorb_split_entries(known_entries);
+        } else for (uint32_t target : derived_entries) {
             auto target_it = known_entries.find(target);
             if (target_it == known_entries.end() ||
                 explicit_entries.count(target) ||
@@ -1372,7 +1750,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
             auto owner_it = std::prev(target_it);
             auto next_it = std::next(target_it);
             uint32_t hard_cap = next_it != known_entries.end()
-                ? *next_it : exe_.end_address();
+                ? *next_it : exe_.analysis_end_address();
             ExactWalkResult owner_walk = walk(*owner_it, hard_cap);
             if (owner_walk.visited.count(target)) {
                 known_entries.erase(target_it);
@@ -1383,8 +1761,15 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
             derived_entries == previous_derived) break;
     }
 
-    result.call_discovered_count = static_cast<int>(known_entries.size() - explicit_count);
+    size_t explicit_kept = 0;
+    for (uint32_t entry : known_entries)
+        explicit_kept += explicit_entries.count(entry);
+    result.call_discovered_count =
+        static_cast<int>(known_entries.size() - explicit_kept);
     fmt::print("Direct-JAL entries: {}\n", result.call_discovered_count);
+    if (no_split_guard)
+        fmt::print("No-split guard absorbed explicit entries: {}\n",
+                   explicit_count - explicit_kept);
     fmt::print("Total exact entries: {}\n\n", known_entries.size());
 
     std::vector<uint32_t> starts_vec(known_entries.begin(), known_entries.end());
@@ -1392,7 +1777,11 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
 
     for (size_t i = 0; i < starts_vec.size(); i++) {
         uint32_t entry = starts_vec[i];
-        uint32_t hard_cap = (i + 1 < starts_vec.size()) ? starts_vec[i + 1] : exe_.end_address();
+        // The final entry's cap is the ANALYSIS end, not the image end, so a
+        // walk that falls through the last real word of an overlay capture
+        // stops there instead of absorbing the trailing guard word into
+        // func.end_addr (which made the guard word the last block's leader).
+        uint32_t hard_cap = (i + 1 < starts_vec.size()) ? starts_vec[i + 1] : exe_.analysis_end_address();
         ExactWalkResult wr = walk(entry, hard_cap);
         if (wr.visited.empty()) continue;
 
@@ -1437,7 +1826,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
     for (size_t i = 0; i < starts_vec.size(); i++) {
         uint32_t host_start = starts_vec[i];
         uint32_t hard_cap = (i + 1 < starts_vec.size())
-            ? starts_vec[i + 1] : exe_.end_address();
+            ? starts_vec[i + 1] : exe_.analysis_end_address();
         ExactWalkResult wr = walk(host_start, hard_cap);
         if (wr.visited.empty()) continue;
         uint32_t host_end = *wr.visited.rbegin() + 4u;
@@ -1462,6 +1851,26 @@ FunctionAnalysisResult FunctionAnalyzer::analyze_exact_entries(
             break;
         }
     }
+    // Explicit entries the no-split guard absorbed: the proof is the host's
+    // own walk (fallthrough/branch), so the host start is the source. A
+    // delay-slot target is not exported: an alias there would make the slot
+    // a block leader. It stays with the interpreter.
+    if (no_split_guard) {
+        for (uint32_t target : explicit_entries) {
+            if (final_starts.count(target)) continue;
+            if (target >= exe_.header.load_address + 4u) {
+                auto prev = exe_.read_word(target - 4u);
+                if (prev.has_value() && is_branch_or_jump(*prev)) continue;
+            }
+            for (const auto& [host, wr] : final_walks) {
+                if (!wr.visited.count(target)) continue;
+                result.absorbed_entries.push_back(
+                    {target, host.start_addr, host.end_addr,
+                     host.start_addr, false});
+                break;
+            }
+        }
+    }
 
     return result;
 }
@@ -1483,7 +1892,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
     std::vector<uint32_t> return_addresses;
 
     uint32_t current_addr = exe_.header.load_address;
-    uint32_t end_addr = exe_.end_address();
+    uint32_t end_addr = exe_.analysis_end_address();
 
     fmt::print("Scanning {} KB of code for function returns...\n",
                (end_addr - current_addr) / 1024);
@@ -1537,7 +1946,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
     fmt::print("Following JAL call targets to discover additional functions...\n");
 
     uint32_t exe_start = exe_.header.load_address;
-    uint32_t exe_end   = exe_.end_address();
+    uint32_t exe_end   = exe_.analysis_end_address();
 
     for (uint32_t addr = exe_start; addr < exe_end; addr += 4) {
         auto word_opt = exe_.read_word(addr);
@@ -1546,8 +1955,9 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
 
         uint32_t opcode = (instr >> 26) & 0x3F;
         if (opcode == 3) {  // JAL
-            // PS1 JAL target: upper 4 bits from KSEG0 region (0x80000000)
-            uint32_t target = ((instr & 0x03FFFFFFu) << 2) | 0x80000000u;
+            // PS1 JAL target: upper 4 bits from the delay slot's PC, so a
+            // KUSEG-linked image calls KUSEG targets (§5.3).
+            uint32_t target = ((addr + 4u) & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);
 
             // Only add if target is within EXE range and word-aligned
             if (target >= exe_start && target < exe_end && (target & 3) == 0) {
@@ -1713,7 +2123,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
         uint32_t opcode = (instr >> 26) & 0x3F;
         if (opcode != 3) continue;  // JAL
 
-        uint32_t target = ((instr & 0x03FFFFFFu) << 2) | 0x80000000u;
+        uint32_t target = ((addr + 4u) & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);
         uint32_t cont = addr + 8;
         if (target < exe_start || target >= exe_end || (target & 3) != 0) continue;
         if (cont < exe_start || cont >= exe_end || (cont & 3) != 0) continue;
@@ -1832,7 +2242,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
     // tables minted as function starts (those never walk as clean code:
     // ~44% of random data words carry an invalid primary opcode).
     auto in_exe_p3 = [&](uint32_t a) {
-        return a >= exe_.header.load_address && a < exe_.end_address() && (a & 3u) == 0;
+        return a >= exe_.header.load_address && a < exe_.analysis_end_address() && (a & 3u) == 0;
     };
     // Same primary-opcode validity table as is_likely_data_section so the two
     // agree on what "clean code" means (COP2/GTE, LWC2/SWC2 are valid PS1 ops).

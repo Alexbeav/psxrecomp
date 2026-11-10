@@ -1,0 +1,9 @@
+# Private interface test candidate
+
+Run Workbench Studio.cmd from this folder. Python 3.14.3 and Tk are included. No system installation is required. Settings and any later build cache use this candidate's public-studio-data folder. Personal Studio is unchanged.
+
+You can test dark/light settings, persistent BIOS files/region choices, output folder, One Game/Multiple Games, playlist grouping, SBI selection and local BUILD enablement. The main interface remains a native Tk implementation; the approved HTML preview does not prove native appearance.
+
+BUILD IS INCOMPLETE AND UNVERIFIED. This candidate accepts custom source folders and GitHub source references; it does not yet consume existing packaged Core.json/UI.json pins or their original proven builder. The source-adaptation/module profile is unfinished. Do not use this package as a completed game builder. No real title has been built by this edition yet.
+
+No discs, BIOS, personal settings, source/core payloads or dependency cache are bundled. Opening/settings/selection perform no package download. Click Build only if you intend to exercise the current unfinished path, which may fetch sources before reporting its real error. Close cancels the active process tree.

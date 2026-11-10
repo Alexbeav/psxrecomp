@@ -3,10 +3,16 @@
 #include "psx_savestate_menu.h"
 
 #include "host_keymap.h"
+#include "replay_session.h"
 #include "savestate.h"
+
+#if defined(RECOMP_LAUNCHER)
+#include "recomp_runtime_ui.h"
+#endif
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #define SSM_W 640
@@ -56,7 +62,15 @@ static const uint8_t FONT8[59][8] = {
 
 static int s_open;
 static int s_selected;
+static int s_replays;   /* 1: the Replays page (PS1B-191) */
+static char s_notice[96]; /* drawn over the key hints while set */
+static char s_names[SAVESTATE_SLOTS][REPLAY_NAME_MAX + 1];
+static int s_runtime_open;
+static int s_route_swapped;
+static int s_route_available;
+static RecompRuntimeUi *s_runtime_ui;
 static int s_dirty = 1;
+static char s_unavailable[96];
 static uint32_t s_panel[SSM_W * SSM_H];
 static uint32_t s_thumbs[SAVESTATE_SLOTS][SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
 static int s_have_thumb[SAVESTATE_SLOTS];
@@ -137,6 +151,11 @@ static void draw_psx_button(uint32_t *dst, int x, int y, char kind)
         fill_disc(dst, x + 9, y + 9, 8, 0xFFFF6B6Bu);
         fill_disc(dst, x + 9, y + 9, 5, 0xFF171B25u);
         break;
+    case 't':
+        draw_line(dst, x + 9, y + 3, x + 3, y + 15, 2, 0xFF5FE0B0u);
+        draw_line(dst, x + 9, y + 3, x + 15, y + 15, 2, 0xFF5FE0B0u);
+        draw_line(dst, x + 3, y + 15, x + 15, y + 15, 2, 0xFF5FE0B0u);
+        break;
     default:
         fill_rect(dst, x + 7, y + 2, 5, 15, 0xFFD7DCE6u);
         fill_rect(dst, x + 2, y + 7, 15, 5, 0xFFD7DCE6u);
@@ -191,14 +210,24 @@ static void blit_thumb(uint32_t *dst, int x0, int y0, int w, int h,
     }
 }
 
+static int replay_slot_mtime(int slot, int64_t *out)
+{
+    char path[1024];
+    struct stat st;
+    if (!replay_session_slot_path(slot, path, sizeof(path)) || stat(path, &st) != 0)
+        return 0;
+    *out = (int64_t)st.st_mtime;
+    return 1;
+}
+
 static void format_slot_status(int slot, char *out, size_t cap)
 {
     int64_t mt64 = 0;
     time_t mt;
     struct tm tmv;
     if (!out || cap == 0) return;
-    if (!savestate_slot_mtime(slot, &mt64)) {
-        snprintf(out, cap, "NEW SLOT");
+    if (!(s_replays ? replay_slot_mtime(slot, &mt64) : savestate_slot_mtime(slot, &mt64))) {
+        snprintf(out, cap, s_replays ? "EMPTY" : "NEW SLOT");
         return;
     }
     mt = (time_t)mt64;
@@ -220,6 +249,32 @@ static void refresh_thumbs(void)
     }
 }
 
+/* Replay names and thumbnails come from the replay files themselves. */
+static void refresh_replay_info(void)
+{
+    int i;
+    for (i = 0; i < SAVESTATE_SLOTS; i++) {
+        s_thumbs[i][0] = 0;
+        s_names[i][0] = 0;
+        s_have_thumb[i] = replay_session_slot_info(i, s_names[i], sizeof(s_names[i]), s_thumbs[i]) &&
+                          (s_thumbs[i][0] >> 24) != 0;
+    }
+}
+
+/* The 8x8 font is ASCII: the middle dot becomes '-', other non-ASCII '?'. */
+static void ascii_name(const char *in, char *out, size_t cap, size_t max_chars)
+{
+    size_t n = 0;
+    const unsigned char *p = (const unsigned char *)in;
+    for (; *p && n + 1 < cap; ++p) {
+        if (n == max_chars) { if (n >= 2) { out[n - 2] = '.'; out[n - 1] = '.'; } break; }
+        if (p[0] == 0xC2 && p[1] == 0xB7) { out[n++] = '-'; ++p; }
+        else if (*p >= 0x80) { out[n++] = '?'; while ((p[1] & 0xC0) == 0x80) ++p; }
+        else out[n++] = (char)*p;
+    }
+    out[n] = 0;
+}
+
 static void rasterize_panel(void)
 {
     int i, first;
@@ -229,14 +284,17 @@ static void rasterize_panel(void)
     for (i = 0; i < SSM_W * SSM_H; i++)
         s_panel[i] = 0xFF0F1118u;
 
-    fill_rect(s_panel, 0, 0, SSM_W, 46, 0xFF171B25u);
-    draw_text(s_panel, 24, 14, "SAVE STATES", 0xFFFFD24Du, 2);
+    fill_rect(s_panel, 0, 0, SSM_W, 60, 0xFF171B25u);
+    draw_text(s_panel, 24, 14, s_replays ? "REPLAYS" : "SAVE STATES", 0xFFFFD24Du, 2);
+    draw_text(s_panel, 330, 42, s_replays ? "TAB / L1 R1: STATES" : "TAB / L1 R1: REPLAYS",
+              0xFF7F8796u, 1);
     host_keymap_label(HOST_KEYMAP_SAVE_STATE_MENU, key, sizeof(key));
     snprintf(buf, sizeof(buf), "%s MENU",
              key[0] ? key : "F7");
-    draw_text(s_panel, 432, 18, buf, 0xFFB8BDC8u, 1);
+    draw_text(s_panel, 330, 16, buf, 0xFFB8BDC8u, 1);
 
-    refresh_thumbs();
+    if (s_replays) refresh_replay_info();
+    else refresh_thumbs();
     first = s_selected - 1;
     if (first < 0) first = 0;
     if (first > SAVESTATE_SLOTS - SSM_VISIBLE_ROWS)
@@ -255,7 +313,7 @@ static void rasterize_panel(void)
         fill_rect(s_panel, SSM_ROWS_X, y, SSM_ROWS_W, SSM_ROW_H, bg);
         stroke_rect(s_panel, SSM_ROWS_X, y, SSM_ROWS_W, SSM_ROW_H,
                     sel ? 0xFFFFD24Du : 0xFF303746u);
-        snprintf(buf, sizeof(buf), "SLOT %02d", i + 1);
+        snprintf(buf, sizeof(buf), s_replays ? "REPLAY %02d" : "SLOT %02d", i + 1);
         draw_text(s_panel, SSM_ROWS_X + 18, y + 18, buf, fg, 1);
         if (s_have_thumb[i]) {
             blit_thumb(s_panel, SSM_ROWS_X + 118, y + 3,
@@ -265,8 +323,18 @@ static void rasterize_panel(void)
                       SSM_THUMB_W, SSM_THUMB_H, 0xFF242A35u);
             stroke_rect(s_panel, SSM_ROWS_X + 118, y + 3,
                         SSM_THUMB_W, SSM_THUMB_H, 0xFF3A4352u);
-            draw_text(s_panel, SSM_ROWS_X + 169, y + 46, "NEW",
-                      0xFF707887u, 1);
+            if (s_replays && replay_session_slot_exists(i)) {
+                /* No thumbnail: a red record dot marks a stored replay. */
+                fill_disc(s_panel, SSM_ROWS_X + 118 + SSM_THUMB_W / 2,
+                          y + 3 + SSM_THUMB_H / 2, 12, 0xFFE8262Au);
+            } else {
+                draw_text(s_panel, SSM_ROWS_X + 169, y + 46,
+                          s_replays ? "---" : "NEW", 0xFF707887u, 1);
+            }
+        }
+        if (s_replays && s_names[i][0]) {
+            ascii_name(s_names[i], buf, sizeof(buf), 36);
+            draw_text(s_panel, SSM_ROWS_X + 278, y + 22, buf, fg, 1);
         }
         format_slot_status(i, buf, sizeof(buf));
         draw_text(s_panel, SSM_ROWS_X + 278, y + 42, buf, sub, 1);
@@ -279,13 +347,79 @@ static void rasterize_panel(void)
     draw_psx_button(s_panel, 32, 424, 'd');
     draw_text(s_panel, 56, 428, "SLOT", 0xFFE2E5EBu, 1);
     draw_psx_button(s_panel, 132, 424, 'x');
-    draw_text(s_panel, 156, 428, "LOAD", 0xFFE2E5EBu, 1);
+    draw_text(s_panel, 156, 428, s_replays ? "PLAY" : "LOAD", 0xFFE2E5EBu, 1);
     draw_psx_button(s_panel, 230, 424, 's');
-    draw_text(s_panel, 254, 428, "SAVE", 0xFFE2E5EBu, 1);
-    draw_psx_button(s_panel, 328, 424, 'o');
-    draw_text(s_panel, 352, 428, "BACK", 0xFFE2E5EBu, 1);
-    draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER/L LOAD  SHIFT+ENTER/S SAVE  ESC BACK",
-              0xFFB8BDC8u, 1);
+    draw_text(s_panel, 254, 428, s_replays ? "EXPORT" : "SAVE", 0xFFE2E5EBu, 1);
+    if (s_replays) {
+        draw_psx_button(s_panel, 352, 424, 't');
+        draw_text(s_panel, 376, 428, "DELETE", 0xFFE2E5EBu, 1);
+    }
+    draw_psx_button(s_panel, s_replays ? 470 : 352, 424, 'o');
+    draw_text(s_panel, s_replays ? 494 : 376, 428, "BACK", 0xFFE2E5EBu, 1);
+    if (!s_replays && s_unavailable[0]) {
+        draw_text(s_panel, 32, 454, s_unavailable, 0xFFFFD24Du, 1);
+    } else if (s_notice[0]) {
+        fill_rect(s_panel, 0, 446, SSM_W, 24, 0xFF3A3218u);
+        draw_text(s_panel, 32, 454, s_notice, 0xFFFFD24Du, 1);
+    } else if (s_replays) {
+        draw_text(s_panel, 32, 454, "KEYS: ARROWS  ENTER PLAY  E EXPORT  DEL DELETE  F2 RENAME  ESC",
+                  0xFFB8BDC8u, 1);
+    } else {
+        draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER/L LOAD  SHIFT+ENTER/S SAVE  ESC BACK",
+                  0xFFB8BDC8u, 1);
+    }
+    s_dirty = 0;
+}
+
+static void rasterize_runtime_panel(void)
+{
+    int i;
+    char key[32];
+    char buf[96];
+    const uint32_t active = 0xFFFFD24Du;
+    const uint32_t text = 0xFFE2E5EBu;
+    const uint32_t sub = 0xFFB2B8C2u;
+
+    for (i = 0; i < SSM_W * SSM_H; i++)
+        s_panel[i] = 0xFF0F1118u;
+    fill_rect(s_panel, 0, 0, SSM_W, 54, 0xFF171B25u);
+    draw_text(s_panel, 24, 16, "RUNTIME SETTINGS", active, 2);
+    host_keymap_label(HOST_KEYMAP_RUNTIME_MENU, key, sizeof(key));
+    snprintf(buf, sizeof(buf), "%s MENU", key[0] ? key : "F1");
+    draw_text(s_panel, 480, 20, buf, 0xFFB8BDC8u, 1);
+
+    draw_text(s_panel, 44, 96, "CONTROLLER ROUTE", text, 1);
+    fill_rect(s_panel, 36, 124, 568, 96, 0xFF202631u);
+    stroke_rect(s_panel, 36, 124, 568, 96,
+                s_route_available ? active : 0xFF596171u);
+    draw_text(s_panel, 58, 146, "HOST CONTROLLER 1", sub, 1);
+    draw_text(s_panel, 58, 174, "CONNECTED TO", 0xFF7F8796u, 1);
+    if (!s_route_available) {
+        draw_text(s_panel, 296, 158, "UNAVAILABLE", 0xFFFF6B6Bu, 2);
+        draw_text(s_panel, 58, 236,
+                  "DISABLED DURING NETPLAY OR MULTITAP", 0xFFB8BDC8u, 1);
+    } else if (s_route_swapped) {
+        draw_text(s_panel, 360, 158, "PORT 2", active, 2);
+        draw_text(s_panel, 58, 236,
+                  "PSYCHO MANTIS MODE: CONTROLLER 1 DRIVES CONSOLE PORT 2",
+                  text, 1);
+    } else {
+        draw_text(s_panel, 360, 158, "PORT 1", active, 2);
+        draw_text(s_panel, 58, 236,
+                  "NORMAL MODE: CONTROLLER 1 DRIVES CONSOLE PORT 1",
+                  text, 1);
+    }
+
+    host_keymap_label(HOST_KEYMAP_SWAP_CONTROLLER_PORTS, key, sizeof(key));
+    snprintf(buf, sizeof(buf), "%s QUICK SWAP", key[0] ? key : "F6");
+    draw_text(s_panel, 58, 284, buf, sub, 1);
+    draw_text(s_panel, 58, 316,
+              "ENTER / LEFT / RIGHT  TOGGLE ROUTE", text, 1);
+    draw_text(s_panel, 58, 344,
+              "ESC / BACK  RESUME GAME", text, 1);
+    draw_text(s_panel, 58, 396,
+              "THE GAME IS PAUSED WHILE THIS MENU IS OPEN.",
+              0xFF7F8796u, 1);
     s_dirty = 0;
 }
 
@@ -304,23 +438,101 @@ void psx_savestate_menu_note_slots_changed(void)
     s_dirty = 1;
 }
 
+void psx_savestate_menu_set_notice(const char *text)
+{
+    const char *t = text ? text : "";
+    if (strncmp(s_notice, t, sizeof(s_notice) - 1) == 0) return;
+    snprintf(s_notice, sizeof(s_notice), "%s", t);
+    s_dirty = 1;
+}
+
+void psx_savestate_menu_set_replays(int replays)
+{
+    replays = replays ? 1 : 0;
+    if (s_replays != replays) s_dirty = 1;
+    s_replays = replays;
+}
+
+void psx_savestate_menu_set_runtime_settings(int open, int route_swapped,
+                                             int route_available)
+{
+    open = open ? 1 : 0;
+    route_swapped = route_swapped ? 1 : 0;
+    route_available = route_available ? 1 : 0;
+    if (s_runtime_open != open || s_route_swapped != route_swapped ||
+        s_route_available != route_available)
+        s_dirty = 1;
+    s_runtime_open = open;
+    s_route_swapped = route_swapped;
+    s_route_available = route_available;
+}
+
+void psx_savestate_menu_set_runtime_ui(RecompRuntimeUi *ui)
+{
+    if (s_runtime_ui != ui)
+        s_dirty = 1;
+    s_runtime_ui = ui;
+}
+
+void psx_savestate_menu_note_runtime_changed(void)
+{
+    s_dirty = 1;
+}
+
 int psx_savestate_menu_needs_present(void)
 {
-    return s_open;
+    return s_open || s_runtime_open;
 }
 
 int psx_savestate_menu_overlay_image(const uint32_t **pixels, int *w, int *h)
 {
-    if (!s_open) {
+    if (!s_open && !s_runtime_open) {
         if (pixels) *pixels = NULL;
         if (w) *w = 0;
         if (h) *h = 0;
         return 0;
     }
-    if (s_dirty)
-        rasterize_panel();
+    if (s_runtime_open && s_runtime_ui) {
+#if defined(RECOMP_LAUNCHER)
+        /* The shared renderer composites over its input.  This plane is an
+         * opaque host overlay rather than a captured game frame, so seed it
+         * with the same deep-blue floor used by the legacy panel.  Render on
+         * every paused present: callback-owned values can change outside the
+         * menu (volume hotkeys/controller quick-swap) without a parallel dirty
+         * protocol. */
+        int i;
+        for (i = 0; i < SSM_W * SSM_H; ++i)
+            s_panel[i] = 0xFF0F1118u;
+        recomp_runtime_ui_render_argb8888(
+            s_runtime_ui, s_panel, SSM_W, SSM_H,
+            SSM_W * (int)sizeof(s_panel[0]));
+        s_dirty = 0;
+#else
+        rasterize_runtime_panel();
+#endif
+    } else if (s_dirty) {
+        if (s_runtime_open)
+            rasterize_runtime_panel();
+        else
+            rasterize_panel();
+    }
     if (pixels) *pixels = s_panel;
     if (w) *w = SSM_W;
     if (h) *h = SSM_H;
     return 1;
+}
+
+void psx_savestate_menu_set_unavailable(const char *reason)
+{
+    const char *text = reason ? reason : "";
+    if (!strcmp(s_unavailable, text)) return;
+    snprintf(s_unavailable, sizeof(s_unavailable), "%s", text);
+    s_dirty = 1;
+}
+
+void psx_savestate_menu_get_state(int *open, int *selected_slot, int *unavailable)
+{
+    if (open) *open = s_open;
+    if (selected_slot) *selected_slot = s_selected;
+    if (unavailable) *unavailable = s_unavailable[0] != '\0';
 }

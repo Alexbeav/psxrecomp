@@ -157,6 +157,17 @@ p2_mode = "digital"
               controller_defaults_config.runtime.default_p2_mode ==
                   PSXRecompV4::PAD_MODE_DIGITAL,
           "parser preserves per-game controller device defaults");
+    check(!controller_defaults_config.runtime.has_multitap_default,
+          "offline multitap keeps the framework default when unset");
+
+    const auto no_multitap = write_config(root, "no-multitap", R"toml(
+[controller]
+multitap = false
+)toml");
+    const auto no_multitap_config = PSXRecompV4::load_game_config(no_multitap);
+    check(no_multitap_config.runtime.has_multitap_default &&
+              !no_multitap_config.runtime.multitap_default,
+          "parser preserves a title's offline multitap default");
 
     const auto netplay_viewport = write_config(root, "netplay-viewport", R"toml(
 [runtime]
@@ -311,6 +322,50 @@ result = 0
               keep_config.ws_cull_keep_sites[1].result == 0u,
           "parser preserves full-word-guarded maximal-participation sites");
 
+    const auto scale = write_config(root, "cull-scale", R"toml(
+[[widescreen.cull.scale]]
+address = "0x8002C734"
+expected = "0x0062182A"
+operand = "rt"
+half_extent = 160
+
+[[widescreen.cull.scale]]
+address = "0x8002C758"
+expected = "0x0043102A"
+operand = "rs"
+half_extent = 160
+)toml");
+    const auto scale_config = PSXRecompV4::load_game_config(scale);
+    check(scale_config.ws_cull_scale_sites.size() == 2 &&
+              scale_config.ws_cull_scale_sites[0].address == 0x8002C734u &&
+              scale_config.ws_cull_scale_sites[0].expected == 0x0062182Au &&
+              scale_config.ws_cull_scale_sites[0].operand == 1u &&
+              scale_config.ws_cull_scale_sites[0].half_extent == 160u &&
+              scale_config.ws_cull_scale_sites[1].operand == 0u,
+          "parser preserves register-register frustum-edge scale sites");
+
+    const auto signed_bound = write_config(root, "signed-x-bound", R"toml(
+[[widescreen.signed_x_bound]]
+address = "0x8002D290"
+expected = "0x2402FF00"
+
+[[widescreen.signed_x_bound]]
+address = "0x8002D298"
+expected = "0x3C02FFF0"
+)toml");
+    const auto signed_bound_config =
+        PSXRecompV4::load_game_config(signed_bound);
+    check(signed_bound_config.ws_signed_x_bound_sites.size() == 2 &&
+              signed_bound_config.ws_signed_x_bound_sites[0].address ==
+                  0x8002D290u &&
+              signed_bound_config.ws_signed_x_bound_sites[0].expected ==
+                  0x2402FF00u &&
+              signed_bound_config.ws_signed_x_bound_sites[1].address ==
+                  0x8002D298u &&
+              signed_bound_config.ws_signed_x_bound_sites[1].expected ==
+                  0x3C02FFF0u,
+          "parser preserves guarded signed pixel and Q16 X bounds");
+
     const auto bad_keep = write_config(root, "cull-keep-bad", R"toml(
 [[widescreen.cull.keep]]
 address = "0x8002B310"
@@ -324,13 +379,21 @@ result = 1
     const auto range = write_config(root, "range-cull", R"toml(
 [widescreen.cull]
 range_sites = ["0x80012340"]
+bias_lower_sites = ["0x80012348"]
 activation_guard_pixels = 256
 )toml");
     const auto range_config = PSXRecompV4::load_game_config(range);
     check(range_config.ws_cull_range_sites ==
               std::vector<uint32_t>{0x80012340u} &&
+              range_config.ws_cull_bias_lower_sites ==
+              std::vector<uint32_t>{0x80012348u} &&
               range_config.ws_cull_activation_guard_pixels == 256,
           "parser preserves explicit range sites and activation guard");
+    auto changed_lower_config = range_config;
+    changed_lower_config.ws_cull_bias_lower_sites.clear();
+    check(PSXRecompV4::overlay_codegen_config_hash(range_config) !=
+              PSXRecompV4::overlay_codegen_config_hash(changed_lower_config),
+          "lower activation endpoint changes overlay cache identity");
 
     const auto bad_activation_guard =
         write_config(root, "range-cull-bad-activation-guard", R"toml(
@@ -373,7 +436,7 @@ expected = "0x24420155"
                  "expected must be ADDI/ADDIU rt,zero,imm",
                  "parser rejects non-constant terrain-angle instructions");
 
-    const auto aspect_cone = write_config(root, "aspect-cone", R"toml(
+    const std::string aspect_tables = R"toml(
 [widescreen.cull.aspect_cone]
 forward_addr = "0x1F8000E8"
 object_type_offset = 12
@@ -400,7 +463,8 @@ x_reg = 19
 z_reg = 18
 y_reg = 17
 queue_guard = false
-)toml");
+)toml";
+    const auto aspect_cone = write_config(root, "aspect-cone", aspect_tables);
     const auto aspect_config =
         PSXRecompV4::load_game_config(aspect_cone);
     check(aspect_config.ws_aspect_cone.sites.size() == 2 &&
@@ -421,6 +485,8 @@ queue_guard = false
               !aspect_config.ws_aspect_cone.sites[1].queue_guard &&
               aspect_config.ws_aspect_cone.forward_addr ==
                   0x1F8000E8u &&
+              aspect_config.ws_aspect_cone.forward_offsets ==
+                  std::array<uint32_t, 3>{0u, 2u, 4u} &&
               aspect_config.ws_aspect_cone.object_reg == 19u &&
               aspect_config.ws_aspect_cone.x_reg == 16u &&
               aspect_config.ws_aspect_cone.z_reg == 17u &&
@@ -433,6 +499,22 @@ queue_guard = false
 
     const auto aspect_hash = PSXRecompV4::overlay_codegen_config_hash(
         aspect_config);
+    auto axis_tables = aspect_tables;
+    axis_tables.insert(axis_tables.find("forward_addr"),
+                       "forward_offsets = [0, 4, 2]\n");
+    const auto axis_config = PSXRecompV4::load_game_config(
+        write_config(root, "aspect-cone-axis-order", axis_tables));
+    check(axis_config.ws_aspect_cone.forward_offsets ==
+              std::array<uint32_t, 3>{0u, 4u, 2u},
+          "parser maps a middle-vertical forward vector explicitly");
+    check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(axis_config),
+          "forward component order changes overlay cache identity");
+    axis_tables.replace(axis_tables.find("[0, 4, 2]"), 9, "[0, 2, 2]");
+    const auto bad_axis_config =
+        write_config(root, "aspect-cone-repeated-axis", axis_tables);
+    check_throws([&] { (void)PSXRecompV4::load_game_config(bad_axis_config); },
+                 "forward_offsets must be a permutation",
+                 "parser rejects a duplicated forward component");
     auto changed_aspect_config = aspect_config;
     changed_aspect_config.ws_aspect_cone.hysteresis_pixels++;
     check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
@@ -700,6 +782,30 @@ void codegen_tests() {
     check(depth_overlay_mismatch.find("ws cull depth") == std::string::npos,
           "overlay nonmatching depth variant remains unchanged");
 
+    PSXRecomp::CodeGenConfig signed_bound_config;
+    signed_bound_config.ws_signed_x_bound_sites.push_back(
+        {0x80010000u, 0x2402FF00u}); // addiu v0,zero,-256
+    const std::string signed_pixel_bound = generate_first_instruction(
+        0x2402FF00u, {}, false, signed_bound_config);
+    check(signed_pixel_bound.find("psx_ws_screen_x_bound(-256)") !=
+              std::string::npos,
+          "codegen emits guarded signed screen-pixel X bound");
+
+    signed_bound_config.ws_signed_x_bound_sites[0] =
+        {0x80010000u, 0x3C02FFF0u}; // lui v0,0xfff0
+    const std::string signed_q16_bound = generate_first_instruction(
+        0x3C02FFF0u, {}, false, signed_bound_config);
+    check(signed_q16_bound.find(
+              "psx_ws_player_x_bound((int32_t)0xFFF00000)") !=
+              std::string::npos,
+          "codegen keeps guarded LUI X bounds on the Q16 helper");
+
+    const std::string signed_bound_overlay_mismatch = generate_first_instruction(
+        0x24020078u, {}, true, signed_bound_config);
+    check(signed_bound_overlay_mismatch.find("typed native-wide signed") ==
+              std::string::npos,
+          "overlay nonmatching signed-bound variant remains unchanged");
+
     PSXRecomp::CodeGenConfig range_config;
     range_config.ws_cull_range_sites.insert(0x80010000u);
     const std::string range = generate_first_instruction(
@@ -728,6 +834,27 @@ void codegen_tests() {
               std::string::npos,
           "activation bias gains the same isolated resident-object lead");
 
+    PSXRecomp::CodeGenConfig lower_bias_config;
+    lower_bias_config.ws_cull_bias_lower_sites.insert(0x80010000u);
+    for (const uint32_t opcode : {0x2082FFD0u, 0x2482FFD0u}) {
+        const std::string lower = generate_first_instruction(opcode, {}, false, lower_bias_config);
+        check(lower.find("((int32_t)-48 - psx_ws_x_margin())") != std::string::npos,
+              "ADDI/ADDIU lower endpoint expands left without changing camera source");
+        check(lower.find("PGXP_ALU(") != std::string::npos &&
+              lower.find("_pgx1 = cpu->gpr[4]") != std::string::npos,
+              "lower bound preserves native ALU precision tracking");
+    }
+    lower_bias_config.ws_cull_activation_guard_pixels = 32;
+    const std::string lower_guard = generate_first_instruction(
+        0x2482FFD0u, {}, false, lower_bias_config);
+    check(lower_guard.find("-48 - (psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 32 : 0)") !=
+              std::string::npos,
+          "lower endpoint includes activation guard only while wide");
+    const std::string lower_mismatch = generate_first_instruction(
+        0x3482FFD0u, {}, true, lower_bias_config); // ORI variant is not an add.
+    check(lower_mismatch.find("psx_ws_x_margin()") == std::string::npos,
+          "lower bias leaves a nonmatching overlay opcode unchanged");
+
     PSXRecomp::CodeGenConfig branch_keep_config;
     branch_keep_config.ws_cull_branch_keep_sites.insert(0x80010000u);
     const std::string branch_keep = generate_first_instruction(
@@ -743,10 +870,23 @@ void codegen_tests() {
     const std::string nclip_exact = generate_first_instruction(
         0x04400002u, {}, false, nclip_exact_config); // bltz v0,+2
     check(nclip_exact.find(
-              "gte_nclip_precise_bltz((int32_t)cpu->gpr[2])") !=
+              "gte_nclip_exact_sign((int32_t)cpu->gpr[2], 0x80010000u) < 0") !=
               std::string::npos &&
               nclip_exact.find("ws exact nclip") != std::string::npos,
           "codegen emits title-scoped exact NCLIP predicate");
+    for (uint32_t word : {0x18400002u, 0x1C400002u, 0x04410002u}) {
+        const std::string guarded = generate_first_instruction(word, {}, false, nclip_exact_config);
+        check(guarded.find("psx_ws_nclip_branch(0x80010000u,") != std::string::npos &&
+              guarded.find("guarded wide nclip") != std::string::npos,
+              "inclusive/keep NCLIP branches carry full-word identity to the host");
+    }
+    PSXRecomp::CodeGenConfig nclip_keep_config;
+    nclip_keep_config.ws_cull_nclip_keep_sites.insert(0x80010000u);
+    const std::string nclip_keep_blez = generate_first_instruction(
+        0x18400002u, {}, false, nclip_keep_config);
+    check(nclip_keep_blez.find("psx_ws_x_margin() > 0 ? 0 : ((int32_t)cpu->gpr[2] <= 0)") !=
+              std::string::npos,
+          "codegen NCLIP keep covers blez");
 
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);
@@ -795,6 +935,27 @@ void codegen_tests() {
     check(keep_overlay_mismatch.find("maximal object/model participation") ==
               std::string::npos,
           "overlay full-word mismatch leaves keep site unchanged");
+
+    PSXRecomp::CodeGenConfig scale_config_gen;
+    scale_config_gen.ws_cull_scale_sites.push_back(
+        {0x80010000u, 0x0062182Au, 1u, 160u}); // slt v1,v1,v0: scale rt
+    const std::string scale_rt = generate_first_instruction(
+        0x0062182Au, {}, false, scale_config_gen);
+    check(scale_rt.find("psx_ws_cull_scale((int32_t)") != std::string::npos &&
+              scale_rt.find(", 160)") != std::string::npos &&
+              scale_rt.find("(int32_t)cpu->gpr[3] < (int32_t)(uint32_t)psx_ws_cull_scale") !=
+                  std::string::npos,
+          "codegen scales the configured rt bound of a signed frustum edge");
+    scale_config_gen.ws_cull_scale_sites[0] = {0x80010000u, 0x0043102Au, 0u, 160u};
+    const std::string scale_rs = generate_first_instruction(
+        0x0043102Au, {}, false, scale_config_gen);
+    check(scale_rs.find("(int32_t)(uint32_t)psx_ws_cull_scale((int32_t)cpu->gpr[2], 160) < (int32_t)cpu->gpr[3]") !=
+              std::string::npos,
+          "codegen scales the configured rs bound of the opposite edge");
+    const std::string scale_overlay_mismatch = generate_first_instruction(
+        0x0043102Bu, {}, true, scale_config_gen); // sltu at same overlay VA
+    check(scale_overlay_mismatch.find("psx_ws_cull_scale") == std::string::npos,
+          "overlay full-word mismatch leaves scale site unchanged");
 
     PSXRecomp::CodeGenConfig angle_config;
     angle_config.ws_cull_angle_sites.push_back(
@@ -1022,6 +1183,29 @@ void jump_table_producer_codegen_test() {
           unbounded_alias_generated.front().full_code.find("/* jump table") !=
               std::string::npos,
           "alias regression fixture reaches the table when ownership is absent");
+
+    // The scheduled variant must feed code generation too, not merely the
+    // discovery report. Its table base overwrites the guard in the BEQ delay
+    // slot, so the existing branch emitter must preserve the tested condition.
+    write_word(exe, base + 0x500u, 0u);
+    write_word(exe, base + 0x504u, 0u);
+    write_word(exe, base + 0x508u, 0x2C620003u);
+    write_word(exe, base + 0x50Cu, 0x1040001Cu);
+    write_word(exe, base + 0x510u, 0x3C028001u);
+    write_word(exe, base + 0x514u, 0x24420A00u);
+    write_word(exe, base + 0x518u, 0x00031880u);
+    write_word(exe, base + 0x51Cu, 0x00621821u);
+    write_word(exe, base + 0x520u, 0x8C620000u);
+    PSXRecomp::ControlFlowAnalyzer scheduled_analyzer(exe);
+    const auto scheduled_cfg = scheduled_analyzer.analyze_function(function);
+    PSXRecomp::CodeGenerator scheduled_generator(exe);
+    const auto scheduled = scheduled_generator.generate_function(
+        function, scheduled_cfg).full_code;
+    check(scheduled.find("/* jump table") != std::string::npos,
+          "codegen emits a switch with its table LUI in the bounds delay slot");
+    for (uint32_t target : cases)
+        check(scheduled.find(fmt::format("goto block_{:08X}", target)) != std::string::npos,
+              "every scheduled case has an emitted native control-flow edge");
 }
 
 void cfg_codegen_load_delay_test() {
@@ -1046,14 +1230,184 @@ void cfg_codegen_load_delay_test() {
     PSXRecomp::CodeGenerator generator(exe);
     const std::string code = generator.generate_function(function, cfg).full_code;
 
-    const size_t deferred = code.find("uint32_t psx_ldd_80003590 =");
+    const size_t deferred = code.find("psx_load_value_arm(cpu, 26u");
     const size_t successor = code.find("cpu->gpr[1] = cpu->gpr[26]");
-    const size_t writeback = code.find(
-        "cpu->gpr[26] = psx_ldd_80003590;  /* load-delay writeback */");
+    const size_t writeback = code.find("psx_load_value_begin(cpu);", successor);
     check(deferred != std::string::npos && successor != std::string::npos &&
           writeback != std::string::npos && deferred < successor &&
           successor < writeback,
           "CFG codegen preserves MIPS-I dependent load-delay value semantics");
+}
+
+void mod_function_completion_codegen_test() {
+    PSXRecomp::CodeGenConfig config{};
+    config.mod_function_entry_funcs.insert(0x80010000u);
+    for (bool overlay : {false, true}) {
+        const auto code = generate_first_instruction(0x2402002Au, {}, overlay, config);
+        check(code.find("if (psx_mod_function_entry(cpu, 0x80010000u)) return;") != std::string::npos,
+              overlay ? "overlay body honors trusted mod completion" : "main body honors trusted mod completion");
+    }
+    const auto stock = generate_first_instruction(0x2402002Au, {}, false);
+    check(stock.find("psx_mod_function_entry(cpu,") == std::string::npos,
+          "unconfigured functions retain the stock entry path");
+}
+
+void mod_instruction_codegen_test(const fs::path& root) {
+    const auto path = write_config(root, "instruction-hooks",
+        "mod_instruction_sites = [\"0x80010000\", \"0x80010004\"]\n");
+    const auto parsed = PSXRecompV4::load_game_config(path);
+    check(parsed.mod_instruction_sites.size() == 2, "instruction sites parse");
+    auto changed = parsed;
+    changed.mod_instruction_sites.clear();
+    check(PSXRecompV4::overlay_codegen_config_hash(parsed) !=
+          PSXRecompV4::overlay_codegen_config_hash(changed), "instruction sites invalidate cached code");
+    const auto invalid = write_config(root, "instruction-unaligned",
+        "mod_instruction_sites = [\"0x80010001\"]\n");
+    check_throws([&] { PSXRecompV4::load_game_config(invalid); }, "aligned main RAM",
+                 "instruction sites reject invalid addresses");
+    PSXRecomp::CodeGenConfig config{};
+    config.mod_instruction_sites = {0x80010000u, 0x80010004u};
+    for (bool overlay : {false, true}) {
+        for (uint32_t word : {0x2402002Au, 0x10400002u}) {
+            const auto code = generate_first_instruction(word, {}, overlay, config);
+            check(code.find(fmt::format("psx_mod_instruction(cpu, 0x80010000u, 0x{:08X}u);", word)) != std::string::npos,
+                  "native/overlay emits instruction guard for ALU and branch");
+            check(code.find("psx_mod_instruction(cpu, 0x80010004u, 0x00000000u);") != std::string::npos,
+                  "native/overlay includes sequential and branch delay-slot hooks");
+        }
+    }
+    check(generate_first_instruction(0x2402002Au, {}, false).find("psx_mod_instruction(cpu,") == std::string::npos,
+          "unconfigured code emits no instruction callbacks");
+}
+
+void local_viewport_tests(const fs::path& root) {
+    const std::string prefix = "\n[netplay]\nlocal_viewport=\"vertical_split\"\nlocal_viewport_renderer=\"projection\"\n";
+    const auto cfg = PSXRecompV4::load_game_config(write_config(root,"unsplit",prefix +
+        "local_viewport_width_sites=[\"0x80010000\"]\nlocal_viewport_state_addr=\"0x80018000\"\nlocal_viewport_state_values=[\"0x0\"]\n"));
+    check(cfg.netplay_local_viewport_width_sites == std::vector<uint32_t>{0x80010000}, "unsplit width sites parse");
+    check(cfg.netplay_local_viewport_renderer == "projection" && cfg.netplay_local_viewport_state_addr == 0x80018000 &&
+        cfg.netplay_local_viewport_state_values == std::vector<uint32_t>{0}, "unsplit renderer and pause gate parse");
+    auto changed = cfg; changed.netplay_local_viewport_width_sites.clear();
+    check(PSXRecompV4::overlay_codegen_config_hash(cfg) != PSXRecompV4::overlay_codegen_config_hash(changed), "unsplit sites invalidate cached code");
+    for (auto bad : {"0x80010001", "0x1F800000", "0x80800000"}) {
+        auto path = write_config(root,"unsplit-bad",prefix+"local_viewport_width_sites=[\""+bad+"\"]\n");
+        check_throws([&]{PSXRecompV4::load_game_config(path);}, "aligned main RAM", "unsplit rejects invalid site");
+    }
+    auto dup = write_config(root,"unsplit-duplicate",prefix+"local_viewport_width_sites=[\"0x80010000\",\"0xA0010000\"]\n");
+    check_throws([&]{PSXRecompV4::load_game_config(dup);},"duplicate", "unsplit rejects aliased duplicates");
+    auto no_projection = write_config(root,"unsplit-renderer","\n[netplay]\nlocal_viewport_width_sites=[\"0x80010000\"]\n");
+    check_throws([&]{PSXRecompV4::load_game_config(no_projection);},"requires projection", "unsplit width requires projection");
+    PSXRecomp::CodeGenConfig codegen{};
+    codegen.netplay_local_viewport_width_sites.insert(0x80010000);
+    for (bool overlay : {false,true}) {
+        auto code=generate_first_instruction(0x8F820EDCu,{},overlay,codegen);
+        check(code.find("psx_ws_local_viewport_width((int32_t)psx_cyc_load_word") != std::string::npos, "unsplit keeps LW cycle accounting");
+    }
+    check(generate_first_instruction(0x8F820EDCu,{},false).find("= (uint32_t)psx_ws_local_viewport_width") == std::string::npos, "ordinary loads remain native");
+}
+
+void cfg_fallthrough_reachability_test() {
+    constexpr uint32_t base = 0x80010000u;
+    PSXRecomp::PS1Executable exe{};
+    exe.header.load_address = exe.header.initial_pc = base;
+    exe.header.file_size = 24;
+    append_word(exe.code_data, 0x03e00008u); // entry returns
+    append_word(exe.code_data, 0);
+    append_word(exe.code_data, 0x08004004u); // unreachable jump to final block
+    append_word(exe.code_data, 0);
+    append_word(exe.code_data, 0x24020001u);
+    append_word(exe.code_data, 0);
+    PSXRecomp::Function f{};
+    f.start_addr = base; f.end_addr = base + 24; f.size = 24;
+    auto check_tail = [&](bool reachable, const char* name) {
+        const auto cfg = PSXRecomp::ControlFlowAnalyzer(exe).analyze_function(f);
+        check(!cfg.blocks.at(base + 16).predecessors.empty(),
+              std::string(name) + " retains the real incoming edge");
+        PSXRecomp::CodeGenerator generator(exe);
+        const auto named = generator.generate_function(f, cfg, "func_80010018").full_code;
+        const auto edge = generator.generate_function(f, cfg).full_code;
+        check((named.find("/* fallthrough to next function */") != std::string::npos) == reachable,
+              std::string(name) + " named final safety net uses entry reachability");
+        check((edge.find("/* image-edge fallthrough: tail-transfer */") != std::string::npos) == reachable,
+              std::string(name) + " image-edge final safety net uses entry reachability");
+    };
+    check_tail(false, "unreachable predecessor");
+    write_word(exe, base, 0x08004002u); // entry now reaches +8 -> +16
+    check_tail(true, "reachable predecessor");
+    write_word(exe, base, 0x03e00008u);
+    f.alias_walk_lo = base; f.start_addr = base + 16;
+    f.alias_group_entries = {base + 16};
+    check_tail(true, "independent alias entry");
+}
+
+void uncached_fetch_codegen_test() {
+    for (const uint32_t base : {0x00010000u, 0x80010000u, 0xA0010000u}) {
+        PSXRecomp::PS1Executable exe{};
+        exe.header.load_address = base;
+        exe.header.initial_pc = base;
+        exe.header.file_size = 24u;
+        for (const uint32_t word : {0x24080001u, 0x25080001u, 0x25080001u,
+                                   0x25080001u, 0x03E00008u, 0x00000000u})
+            append_word(exe.code_data, word);
+        PSXRecomp::Function function{};
+        function.start_addr = base;
+        function.end_addr = base + 24u;
+        function.size = 24u;
+        function.name = "fetch_test";
+        PSXRecomp::ControlFlowAnalyzer analyzer(exe);
+        const auto cfg = analyzer.analyze_function(function);
+        PSXRecomp::CodeGenerator generator(exe);
+        const std::string code = generator.generate_function(function, cfg).full_code;
+        if (const char* output = std::getenv("PSX_TEST_FETCH_OUTPUT_DIR")) {
+            std::ofstream generated(fs::path(output)/fmt::format("cfg-fetch-{:08X}.c",base));
+            generated << "#include \"cpu_state.h\"\n#include \"psx_icache.h\"\n#include \"psx_cyc.h\"\n" << code;
+        }
+        for (uint32_t offset = 0; offset < 24; offset += 4) {
+            const std::string needle = fmt::format("psx_icache_fetch(cpu, 0x{:08X}u);", base + offset);
+            const size_t found = code.find(needle);
+            check((found != std::string::npos) == (base >= 0xA0000000u || (offset & 15u) == 0),
+                  fmt::format("virtual fetch policy at {:08X}, including return slot", base + offset));
+            check(found == std::string::npos || code.find(needle, found + 1) == std::string::npos,
+                  "one fetch per emitted instruction site");
+        }
+    }
+}
+
+void syscall_codegen_transfer_test() {
+    for (const uint32_t base : {0x80010000u, 0xA0010000u}) {
+        PSXRecomp::PS1Executable exe{};
+        exe.header.load_address = base; exe.header.initial_pc = base;
+        exe.header.file_size = 20;
+        for (uint32_t word : {0x24040001u, 0x0000000Cu, 0x25080001u,
+                              0x03E00008u, 0x00000000u}) append_word(exe.code_data, word);
+        PSXRecomp::Function function{};
+        function.start_addr=base; function.end_addr=base+20; function.size=20;
+        function.name=fmt::format("func_{:08X}",base);
+        PSXRecomp::ControlFlowAnalyzer analyzer(exe);
+        auto cfg=analyzer.analyze_function(function);
+        PSXRecomp::CodeGenerator generator(exe);
+        auto generated=generator.generate_function(function,cfg);
+        check(generated.full_code.find(fmt::format(
+            "cpu->pc = 0x{:08X}u; if (psx_syscall(cpu, 0)) return;",base+4))!=std::string::npos,
+            "game syscall sets executing virtual PC and preserves transfer");
+        check(cfg.blocks.count(base+8)==1 && generator.cps_continuations().count(base+8)==1,
+            "post-syscall instruction has a dispatchable continuation");
+        if (const char *dir=std::getenv("PSX_TEST_SYSCALL_OUTPUT_DIR")) {
+            std::ofstream out(fs::path(dir)/fmt::format("syscall-{:08X}.c",base));
+            out << "#include <assert.h>\n#include <stdint.h>\n#include \"cpu_state.h\"\n"
+                   "#define PSX_NO_DEBUG_TOOLS 1\n"
+                   "static int transfer; static uint32_t seen;\n"
+                   "void debug_server_log_call_entry(uint32_t x) {(void)x;}\n"
+                   "void psx_check_interrupts_at(CPUState*c,uint32_t p){(void)c;(void)p;}\n"
+                   "int psx_syscall(CPUState*c,uint32_t code){seen=c->pc;c->pc=transfer?0x80000080:0;return transfer;}\n";
+            out << generated.full_code;
+            out << fmt::format("\nint main(void){{CPUState c={{0}};c.gpr[31]=0x80090000;transfer=1;"
+                "func_{0:08X}(&c);assert(seen==0x{1:08X}u&&c.pc==0x80000080&&c.gpr[8]==0);"
+                "c.pc=0x{2:08X}u;func_{0:08X}(&c);assert(c.gpr[8]==1&&c.pc==c.gpr[31]);"
+                "c.pc=0;c.gpr[8]=0;transfer=0;func_{0:08X}(&c);assert(c.gpr[8]==1&&seen==0x{1:08X}u);return 0;}}\n",
+                base,base+4,base+8);
+        }
+    }
 }
 
 } // namespace
@@ -1071,6 +1425,12 @@ int main() {
         gte_codegen_classification_tests();
         jump_table_producer_codegen_test();
         cfg_codegen_load_delay_test();
+        mod_function_completion_codegen_test();
+        mod_instruction_codegen_test(root);
+        local_viewport_tests(root);
+        cfg_fallthrough_reachability_test();
+        uncached_fetch_codegen_test();
+        syscall_codegen_transfer_test();
     } catch (const std::exception& e) {
         fmt::print(stderr, "FAIL  unexpected exception: {}\n", e.what());
         ++failures;

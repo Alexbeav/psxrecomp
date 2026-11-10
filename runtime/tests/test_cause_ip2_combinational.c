@@ -14,11 +14,11 @@
  * it. A kernel exception dispatcher that loops on CAUSE.IP & SR.IM to decide
  * whether to service again then sees a pending interrupt that no longer exists.
  *
- * Cross-checked against the independent Beetle oracle rather than asserted:
- * beetle-psx/mednafen/psx/irq.cpp recomputes the line as
- * AssertIRQ(0, (Status & Mask)) at power-on, at every assert, and at BOTH the
- * status-ack and mask-write halves of a register write; cpu.cpp's AssertIRQ
- * clears bit (10+n) unconditionally before re-setting it from the level.
+ * Cited to PSX-SPX (docs/interrupts.md "Interrupt Request / Execution" and
+ * "PSX specific COP0 Notes"; see irq_cause_ip2.h): bit 10 is not a latch. The
+ * line is recomputed at power-on, at every device assert, and at both the
+ * status-acknowledge and mask-write halves of a register write, and the bit
+ * is cleared before it is re-set from the level.
  *
  * The mirror under test is deliberately tiny and depends only on i_stat/i_mask
  * plus a caller-supplied CAUSE pointer, so it is exercised directly here rather

@@ -23,6 +23,7 @@
  */
 
 #include "psx_selfcheck.h"
+#include "psx_memory.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,11 +206,12 @@ static void sc_apply_rows(const ScBoundary *b)
         const ScRow *r = &b->rows[i];
         if (!r->present)
             continue;
-        if (sio_pad_on_multitap(i))
-            sio_set_pad_config_capable(i, 0);
-        sio_set_pad_state_slot(i, r->buttons);
-        sio_set_pad_sticks(i, r->lx, r->ly, r->rx, r->ry);
-        sio_request_pad_type(i, r->analog ? 1 : 0);
+        PsxNetPad pad;
+        pad.buttons = r->buttons;
+        pad.lx = r->lx; pad.ly = r->ly; pad.rx = r->rx; pad.ry = r->ry;
+        pad.analog = r->analog <= PSX_NETPAD_TYPE_MAX ? r->analog : 0;
+        pad.connected = 1;
+        psx_pad_apply_to_sio(i, &pad);
     }
 }
 
@@ -753,7 +755,7 @@ static void sc_do_load(struct CPUState *cpu, const char *via)
         extern uint64_t g_guest_store_count;
         extern uint64_t g_irqctx_seq;
         extern uint32_t dirty_ram_text_diverged_pages(void);
-        uint64_t kb[6];
+        uint64_t kb[8];
         const int next_pass = s_warming ? 0 : (s_pass == 0 ? 1 : s_pass + 1);
         psx_kernel_bless_stats(kb);
         fprintf(stderr,
@@ -925,7 +927,7 @@ static int sc_resume_pc_ok(uint32_t pc)
     if ((pc & 0xfff00000u) == 0xbfc00000u)
         return 1;
     phys = pc & 0x1fffffffu;
-    if (phys >= 0x1000u && phys < 0x200000u)
+    if (phys >= 0x1000u && phys < psx_ram_live_bytes())
         return 1;
     return 0;
 }

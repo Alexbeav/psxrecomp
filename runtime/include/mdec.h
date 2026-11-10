@@ -18,6 +18,16 @@ uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words);
 uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words);
 int mdec_dma_write_ready(void);
 int mdec_dma_read_ready(void);
+/* Optional source FIFO service; the DMA boundary owns elapsed guest cycles. */
+int mdec_source_active(void);
+void mdec_source_advance(uint32_t clocks);
+uint32_t mdec_source_dma_read(uint32_t *word_offset);
+
+
+/* Explicit cold Octoshock2.3 compatibility; service is owned by source DMA. */
+int mdec_source_active(void);
+void mdec_source_advance(uint32_t clocks);
+uint32_t mdec_source_dma_read(uint32_t *word_offset);
 
 /* FMV detector: nonzero if a colour (15/24-bit) MDEC decode ran within the
  * last `within_frames` vblanks. Streamed video decodes continuously; the
@@ -84,7 +94,11 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words);
 /* boot_state / savestate: full MDEC FIFO + tables (required for FMV resume). */
 uint32_t mdec_snapshot_bytes(void);
 void     mdec_snapshot_write(uint8_t *p);
+/* Validate and reserve host buffers without changing guest state. */
+int      mdec_snapshot_prepare(const uint8_t *p, uint32_t len);
 int      mdec_snapshot_read(const uint8_t *p, uint32_t len);
+/* 1 iff mdec_snapshot_read(p, len) would accept the section; mutates nothing. */
+int      mdec_snapshot_validate(const uint8_t *p, uint32_t len);
 
 #ifdef __cplusplus
 }

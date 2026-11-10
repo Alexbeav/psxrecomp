@@ -8,6 +8,8 @@
 #ifndef PSXRECOMP_AUTOCOMPILE_H
 #define PSXRECOMP_AUTOCOMPILE_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,6 +27,19 @@ int  autocompile_configured(void);
  * over any CLI --out-dir/--captures. This is the single source of truth for the
  * cache location: no per-game config, no drift. */
 void autocompile_set_cache_paths(const char *cache_dir, const char *captures);
+
+/* Is the staged overlay toolchain the one THIS runtime was built with?
+ *
+ * The shard cache directory carries the codegen hash (gcc/<abi>/cg<N>_<hash>_...). A toolchain
+ * staged from an older emitter writes its shards under its own hash, a directory this runtime
+ * never reads: every compile succeeds, nothing is ever loaded, every overlay stays interpreted
+ * and the same regions are recompiled for the whole session (LoD playtest 2026-10-12: 27
+ * compile runs, 0 shards loaded). Reads <toolchain_include_dir>/overlay_codegen_hash.h and
+ * compares its PSX_OVERLAY_CODEGEN_HASH with `runtime_hash`.
+ * Returns 1 when usable or unknown (no/unparseable header, or runtime_hash == 0); returns 0 and
+ * records a degraded reason (autocompile_status "degraded_reason") on a mismatch. The caller
+ * must then NOT configure the bundled toolchain command. */
+int autocompile_check_toolchain_hash(const char *toolchain_include_dir, uint32_t runtime_hash);
 
 /* Probe whether a C compiler is actually reachable on PATH (gcc/cc/clang) — the
  * REAL "developer machine" signal, distinct from autocompile_configured() which
@@ -54,6 +69,39 @@ void autocompile_shutdown(void);
 /* JSON status blob for the debug server: state, run/fail counters, last
  * exit code, and the output tail. Returns bytes written. */
 int  autocompile_status_json(char *out, int cap);
+
+/* The overlay compile results of this start, as one JSON object for the run
+ * report (psx_last_run_report.json, key "overlay_compile"). A product has no
+ * debug server, so this is how a start says that units failed to compile and
+ * ran interpreted (PS1B-380). Fields:
+ *
+ *   configured, state            is a compile command set; idle/running/done
+ *   consistent                   0 when the copy was taken without the lock
+ *   runs, runs_failed            driver runs started; failures: a run that ended
+ *                                badly or a driver that could not be started,
+ *                                so runs_failed can be larger than runs
+ *   runs_with_result             runs that printed their PSX_SHARD_RESULT line
+ *   runs_stopped_at_quit         runs that a normal quit stopped; a result line
+ *                                such a run had printed is counted (PS1B-395)
+ *   units_compiled, units_failed, units_skipped
+ *                                those result lines, summed over the start
+ *   units_attempted              units_compiled + units_failed
+ *   fail_lines                   "SHARD FAIL" lines seen, counted as they
+ *                                arrive: it includes a run that the end of
+ *                                the start cut short, which has no result line
+ *   failure_classes              up to failure_classes_max entries:
+ *                                class, count, first (the first SHARD FAIL
+ *                                line of the class), first_error (the
+ *                                compiler's first error line for it, or "")
+ *   fail_lines_in_unnamed_classes  failures in classes past that bound
+ *   output_tail                  the last output_tail_max bytes of the latest
+ *                                run's output
+ *
+ * Each text is cut at failure_text_max bytes. A unit that fails in two runs is
+ * counted twice. Returns the bytes written; the object is always complete
+ * ("{}" when cap is too small). It never waits for a lock: it is called from
+ * the crash handler. */
+int  autocompile_report_json(char *out, int cap);
 
 /* Why overlay autocompile cannot work, or NULL if nothing is known to be wrong.
  *

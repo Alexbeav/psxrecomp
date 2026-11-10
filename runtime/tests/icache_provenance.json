@@ -1,0 +1,40 @@
+{
+  "task": "T172",
+  "status": "Independent cache implementation validated; T77 review and publication pending",
+  "base": "2d8b8336bb4c21783e1a36e19cf3fd25a8411bcc",
+  "tested_commit": "bfbd1612dd304c578c13766e0df0bae42db2abb3",
+  "scope": [
+    "runtime/include/psx_icache.h",
+    "runtime/src/psx_icache.c"
+  ],
+  "validation": {
+    "cases": 21504,
+    "rows": 307926,
+    "events": 20029,
+    "event_cpu_states": 20029,
+    "paired_restores": 144
+  },
+  "datasets": 84,
+  "negative_controls": 27,
+  "compile_checks": "14 baseline + 14 final candidate; C11 host TU, C++17 declarations, overlay forwarding",
+  "source_boundary": "Primary PSX-SPX context, declaration-only contracts and authored opaque experiments; old cache bodies/comments and inherited recipe tests unread.",
+  "evidence_plan": "icache-final-plan-v1.json",
+  "evidence_report": "icache-final-validation-v1.json",
+  "limitations": [
+    "Non-null live CPUState; instruction addresses aligned4; isolated-store inputs any u32",
+    "PSX_ICACHE only unset, empty, 0, 1; resolver process state",
+    "CPU codec does not include external cache/clock/callback/private shadow state; paired tests restore observable context separately",
+    "Scheduler/callback observational seams; no instruction data execution or full isolated-store decoder",
+    "No full runtime link, DLL loading, MSVC, boot restoration, hardware accuracy or performance claim"
+  ],
+  "retained_attempts": [
+    "660571b948a9b9739dcbd2fb1157dd456d5ccfae: replay gates rejected by holdouts",
+    "bcc38aac32a3b3c339e3a4d0859d911fb243b4ea: matching uncached-region public tags rejected by holdout",
+    "edge-v1 duplicate case IDs rejected before execution",
+    "paired-capture-v1 synthetic read_fudge>32 rejected by unchanged codec; v2 valid domain"
+  ],
+  "notice_status": "T77 inspected original files: no explicit copyright/SPDX/license grant notice to preserve; original comments retained in immutable git history; root LICENSE unchanged.",
+  "exposure_incident": "Earlier service-clock warning exposed three unrelated GPU command-cost fragments; no unexposed or blanket clean-room claim for those fragments.",
+  "legal_claim": "None; broader origin audit remains separate.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}

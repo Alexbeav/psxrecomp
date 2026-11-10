@@ -8,6 +8,8 @@ int g_ls_replay_active = 0;
 static uint64_t test_cycles = 0;
 
 void psx_advance_cycles(uint32_t cycles) { test_cycles += cycles; }
+/* I-cache refills are CPU work: they go through the CPU charge. */
+void psx_cpu_charge(uint32_t cycles) { psx_advance_cycles(cycles); }
 
 static int expect(int condition, const char *message) {
     if (condition) return 1;
@@ -92,3 +94,9 @@ int main(void) {
     puts("PASS: interpreter I-cache hit path preserves miss/refill semantics");
     return 0;
 }
+
+
+/* Cache tests own guest cycles; an overlay is not active in this fixture. */
+uint64_t psx_get_cycle_count(void) { return test_cycles; }
+void overlay_flush_cycles(void) {}
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t pc) { (void)cpu; (void)pc; }

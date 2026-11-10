@@ -1,0 +1,31 @@
+{
+  "task": "T172",
+  "status": "CD volume qualified; independent review pending",
+  "base": "86b1279fe44da79d80281520355322864b2a202f",
+  "tested_commit": "1d055ad6e7294f74dde0956cdb816f1d08081403",
+  "scope": "One cdrom.c region: cd_pending_vol and cd_decode_vol declarations plus cd_apply_decode_volume; actual clamp and all other code unchanged",
+  "validation": {
+    "datasets": 4,
+    "profile_cases": 2670,
+    "rows": 30274,
+    "applications": 14548,
+    "stereo_frames_evaluated": 1833956,
+    "negative_controls": 27,
+    "full_controller_and_declaration_compile_checks": 7
+  },
+  "arithmetic_evidence": "Independent signed integer reference checks every sample, unused tail, guard and both coefficient tables; observed per-product floor scaling before sum and saturation",
+  "plan": "cd-volume-plan-v1.json",
+  "receipt": "validation-receipt-cd-volume-v1.json",
+  "preservation": "cd-volume-preservation-v1.json; exact full prefix/suffix preserved",
+  "input_domains": "Signed16 interleaved samples, independent byte coefficient tables, signed32 frame counts -2147483648..8192; positive valid spans and nonpositive optional NULL; no sample/coefficient overlap",
+  "sources": "T77 declaration-only contract, pinned primary PSX-SPX preflight and independently authored opaque observations",
+  "exposure_boundary": "Old CD/SPU/reference bodies/comments, root selfchecks, harness, builder, exports and compiler logs unread",
+  "limitations": [
+    "8192-frame maximum is an observer bound, not a runtime limit",
+    "No decoding/resampling/latch/transport integration, audible game result, actual restore, hardware accuracy or legal clearance claim",
+    "Primary hardware saturation caveat remains distinct from observed runtime saturation"
+  ],
+  "notice_status": "Original file header and all unowned bytes retained; root reports no explicit notice inside owned region; LICENSE unchanged",
+  "documentation_impact": "Internal compatibility replacement; canonical specification/regression records updated; no public API or configuration change",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}

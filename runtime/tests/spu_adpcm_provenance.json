@@ -1,0 +1,63 @@
+{
+  "task": "T172",
+  "status": "Reviewable independent decoder replacement; audio/register/state/event regression gates pass",
+  "base": "9333800db8f84210bca53aec33c7b5a19e5722cd",
+  "sources": [
+    {
+      "repository": "https://github.com/psx-spx/psx-spx.github.io",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "path": "docs/soundprocessingunitspu.md",
+      "sha256": "e7ddff35a7faf8267f1cde0362a54c9011ee99a9cc6600faa4ab63c53b4e500d",
+      "lines_read": "1-48,85-209,719-747;214-325 Gaussian table/formula;1091-end state-machine discussion"
+    },
+    {
+      "repository": "https://github.com/psx-spx/psx-spx.github.io",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "path": "docs/cdromformat.md",
+      "sha256": "d391c98d5156b41edb15759e56b21e5619f73b12e2a541d9806f4bb68c981950",
+      "lines_read": "778-854"
+    }
+  ],
+  "exposure": "Hardware-document decoder pseudocode read; no emulator or suspect implementation body read. T77 provided declarations and caller responsibilities only. Notion ADPCM/SPU searches were metadata-only to avoid implementation recipes. Public diagnostic baseline traces were read to preserve destination-address and raw-flag event contracts; no implementation bodies were displayed.",
+  "test_origin": "New mathematical examples from documented nibble expansion, filter coefficients, rounding and saturation",
+  "unresolved": [
+    "Pre-existing full PCM/reference output differences, including explicit host normalization",
+    "Full-system scheduling and hardware qualification",
+    "Other audit candidates (timer2 next, timer1/GPU/CD and related inventory pending T77 review)"
+  ],
+  "legal_claim": "None",
+  "observed_rules": [
+    "Separate signed floor for each predictor product, then add residual and saturate signed16; clipped result feeds history",
+    "Invalid filter5..15 contributes zero prediction",
+    "Reserved shifts13..15 yield residual0 for nonnegative nibble and -128 for negative nibble",
+    "Four samples per packed word; observed IRQ/readback timing supports refill below11queued samples",
+    "Noise-mode end+mute sets ENDX without zeroing envelope",
+    "Runtime diagnostic END events report destination repeat address and classify raw repeat flag independently from noise muting; observed through public event API"
+  ],
+  "arithmetic_evidence": {
+    "script": "runtime/tests/analyze_spu_adpcm_prediction.py",
+    "receipt": "../evidence/adpcm-prediction-hypotheses-v1.json",
+    "exact_interior_observations": 30720,
+    "cases": 640,
+    "calibration": "T77 declared reference host output floor((3*x+2)/4); not inverted, not part of decoder implementation"
+  },
+  "validation": {
+    "tested_commit": "4a30634f3097843bd445afb2b947b7094efa3821",
+    "matrix": "spu-adpcm-experiments-v4.json",
+    "matrix_sha256": "954a0261f4a19b4b554911f48552c3260026c8fca8ea175b142cfb644a8153dd",
+    "cases": 1020,
+    "observations_per_profile": 141690,
+    "audio_and_registers_equal_baseline_both_profiles": true,
+    "reference_and_source_candidate_repeat_equal": true,
+    "snapshot_cases_per_profile": 522,
+    "snapshot_observations_per_profile": 66192,
+    "snapshot_registers_and_pcm_suffix_equal": true,
+    "envelope_regression_observations": 241260,
+    "envelope_regression_equal": true,
+    "preexisting_source_reference_field_differences": 136326,
+    "tested_final_commit": "3c508fc85b0b623002472fef755bb5886bf82887",
+    "diagnostic_cases_per_profile": 124,
+    "diagnostic_observations_per_profile": 17146,
+    "diagnostic_all_fields_equal_baseline": true
+  }
+}

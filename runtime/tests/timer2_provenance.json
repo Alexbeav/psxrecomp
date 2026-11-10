@@ -1,0 +1,50 @@
+{
+  "task": "T172",
+  "status": "Independent compatibility replacement; header and public saved-state gates pass; independent review pending",
+  "base": "62f3bf4ec0d18984af36d5fde6ed40686f21693b",
+  "sources": [
+    {
+      "path": "I:\\Projects\\PSX-References\\research-and-documentation\\psx-spx\\docs\\timers.md",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "sha256": "e24283cf10e3e4da93d05173d075d72cb09e6309913d495df01025251110c02c",
+      "lines_read": "entire file"
+    }
+  ],
+  "exposure": "Hardware timers.md and authored public register/IRQ/deadline traces; no old timer header/emulator source/profile test bodies read",
+  "interface": "T77 declaration-only PsxTimer2Source fields and five public static inline functions; no copyright/SPDX notice in replaced header; root LICENSE untouched",
+  "reference": "TASEmulators/BizHawk519e14aa1ad7a9d6df2edc7808c5ed687dfee046 unchanged research core",
+  "observed_compatibility": [
+    "Any sync-enable stops count",
+    "No two-cycle write delay",
+    "Read request bit10zero, toggle flag does not halve IRQ counts",
+    "Counter/mode writes rearm one-shot; target writes retain it",
+    "Divider phase runs through CPU clock and stopped modes after a mode write; reset and bit8 gate phase accumulation",
+    "Explicit unsplit clock updates coalesce IRQ assertions",
+    "Mode keeps low10bits, flags track target/wrap and clear on explicit read except retained equality",
+    "Clock bit8 gates CPU stepping and phase accumulation",
+    "Reset counting0; every mode write persists counting1, including stopped modes",
+    "Mode writes retain reached flags",
+    "Repeated assertions rearm on CPU progress; held zero-target reset retains its latch",
+    "Target/wrap collision clears the repeat latch; isolated enabled overflow sets it",
+    "Target reset reduces the unreduced count before overflow evaluation",
+    "Overflow-only equal-target reset schedules one CPU cycle, including stopped and divided modes"
+  ],
+  "scope": "Preserve existing runtime profile semantics, not a silicon accuracy change",
+  "unresolved": [
+    "Full CPU interrupt consumer and full-system save-state coverage",
+    "Hardware qualification beyond reference-profile preservation",
+    "Remaining T77 audit candidates"
+  ],
+  "legal_claim": "None",
+  "validation": {
+    "tested_commit": "2bd71c31dd5a508dc6b552cca61cf4cbd3ed4b37",
+    "header_cases": 5494,
+    "header_observations": 279747,
+    "all_fields_match_reference_and_baseline": true,
+    "wire_cases": 4450,
+    "wire_all_bytes_and_suffix_observations_match": true,
+    "wire_scope": "Actual timers.c public60byte APIs with scheduler deadline subdivision; includes cold and intermediate restore, all1024modes; CPU interrupt consumer stubbed",
+    "matrix_sha256": "22cd6f3e6f45ca6f9c8573450f57afb048ab73c8e25fedc4ac421cd610ae673e",
+    "wire_matrix_sha256": "f1a686a32010fc4da18ccb04052724c3d44eddf449cc36c583c1b39dbbcffd84"
+  }
+}

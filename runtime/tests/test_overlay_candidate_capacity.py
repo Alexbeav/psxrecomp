@@ -164,7 +164,10 @@ def main() -> int:
     require(r"s_cand_overflow\s*\+=\s*\(uint64_t\)needed", shortfall,
             "suppressed manifest identities must remain visible in telemetry")
 
-    load_one = function_body(source, "load_one_dll")
+    wrapper = function_body(source, "load_one_dll")
+    require(r"load_one_dll_impl\(dll_path,\s*prepared\)", wrapper,
+            "timed loader must delegate to the capacity-checked implementation")
+    load_one = function_body(source, "load_one_dll_impl")
     parse_pos = load_one.find("parse_manifest")
     guard_pos = load_one.find("cache_entry_suppress_at_capacity")
     load_pos = load_one.find("load_overlay_dll")

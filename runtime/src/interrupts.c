@@ -26,6 +26,10 @@
  */
 
 #include "interrupts.h"
+#include "psx_icache.h"
+#include "savestate.h"
+#include "mod_runtime.h"
+#include "psx_memory.h"
 #include "sio.h"
 #include "timers.h"
 #include "gpu.h"
@@ -36,8 +40,18 @@
 #include "event_ring.h"
 #include "lockstep.h"
 #include "psx_cycles.h"
+#include "input_route_raster_clock_wire.h"
+#include "psx_cycle_freeze.h"
 #include "psx_scheduler.h"
+#include "psx_video_timing.h"
 #include "spu.h"
+#include "input_route_field_clock.h"
+#include "pst_wire.h"
+#include "input_route_raster_clock.h"
+#include "source_gpu_runtime.h"
+#include "dispatch_publish.h"
+#include "device_trace.h"
+#include "irq_cause_ip2.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,9 +93,18 @@ typedef struct {
      * corrupt snapshot (0x801384AC paired with 0x801EFE80). */
     uint32_t entry_sp;     /* cpu->gpr[29] at exception entry */
     uint32_t pump_site;    /* g_cosim_dirty_pump_site at entry (which delivery path) */
+    uint64_t exit_cycle;   /* guest cycle at the exit restore decision (0 = not exited) */
 } IrqCtxEntry;
 IrqCtxEntry g_irqctx_ring[IRQCTX_RING_CAP];
 uint64_t    g_irqctx_seq = 0;
+/* Always-on per-source exception accounting (irq_exc_stats). A delivery is
+ * charged to every I_STAT&I_MASK bit pending at entry (index 11 = software
+ * interrupt only); cycles are guest cycles from entry to the exit restore
+ * decision, so a handler that stalls (e.g. a held DMA kick) shows up here. */
+uint64_t g_exc_src_deliveries[12];
+uint64_t g_exc_src_cycles[12];
+uint64_t g_exc_cycles_total;
+uint64_t g_exc_exits_total;
 extern uint64_t psx_get_cycle_count(void);
 
 /* Record an interrupt-delivery decision into the event ring. GATE outcomes are
@@ -132,14 +155,13 @@ extern uint32_t i_mask;
  * again sees a pending interrupt that no longer exists and can spin in its
  * event scan forever.
  *
- * Verified against the independent Beetle oracle rather than asserted:
- * beetle-psx/mednafen/psx/irq.cpp defines
- *     #define Recalc() PSX_CPU->AssertIRQ(0, (bool)(Status & Mask))
- * and calls it from IRQ_Assert (raise), from IRQ_Write for BOTH the Status ack
- * and the Mask write, and at power-on; cpu.cpp's AssertIRQ clears bit (10+n)
- * unconditionally and re-sets it only when the level is asserted. So the line
- * is recomputed at every point (I_STAT & I_MASK) can change, which is exactly
- * the set of call sites below.
+ * PSX-SPX interrupts, "PSX specific COP0 Notes": cop0r13.bit10 "is NOT a
+ * latch, ie. it gets automatically cleared as soon as (I_STAT AND
+ * I_MASK)=zero", and "Interrupt Request / Execution": it is set while
+ * (I_STAT AND I_MASK) is nonzero. So the bit is recomputed at every point
+ * (I_STAT & I_MASK) can change: a raise, a Status ack, a Mask write and
+ * power-on, which is exactly the set of call sites below. The Beetle
+ * reference behaves the same.
  *
  * Ownership: this function is the ONLY writer of CAUSE bit 10. The delivery
  * path no longer ORs it in separately — one owner, no divergence.
@@ -160,7 +182,7 @@ void psx_irq_refresh_cause_ip2(void)
 void psx_irq_set_cause_ptr(uint32_t *p)
 {
     s_cause_ptr = p;
-    /* Power-on recompute, mirroring Beetle's IRQ_Power() -> Recalc(). Without
+    /* Power-on recompute (the Beetle reference also recomputes here). Without
      * this the first mirror only happens at the first raise/ack, so a CAUSE
      * read before any interrupt activity would show a stale bit. */
     psx_irq_refresh_cause_ip2();
@@ -178,8 +200,37 @@ void psx_irq_raise(uint32_t bit, uint32_t detail)
 
 /* Dispatch counter for vblank scheduling. */
 #define VBLANK_INTERVAL 50000        /* legacy: dispatch-count fallback (unused for VBlank gating now) */
-#define VBLANK_CYCLES   564480u      /* 33.8688 MHz / 60 Hz — real PSX NTSC VBlank period */
-#define VBLANK_DEFER_STALE_CYCLES (VBLANK_CYCLES * 10ull)
+#define VBLANK_DEFER_STALE_CYCLES ((uint64_t)VBLANK_CYCLES * 10ull)
+/* The VBlank period follows the GPU's live video standard (GP1(08h) bit 3):
+ * NTSC 564480 cycles (60 Hz), PAL 677376 (50 Hz). See psx_video_timing.h. */
+static int input_route_source_fields;
+static InputRouteFieldClock input_route_field_clock;
+static int input_route_source_raster;
+static int input_route_source_gpu_status;
+static InputRouteRasterClock input_route_raster;
+static uint64_t input_route_raster_deadline;
+static uint32_t input_route_raster_pending;
+static void input_route_raster_recompute(void) {
+    uint32_t distance=input_route_raster_until_rise(&input_route_raster);
+    input_route_raster_deadline=distance==UINT32_MAX ? UINT64_MAX : input_route_raster.cycle+distance;
+}
+
+static inline uint32_t vblank_period_cycles(void) {
+    if (input_route_source_raster) {
+        if (input_route_raster_deadline==UINT64_MAX) return UINT32_MAX;
+        return (uint32_t)(input_route_raster_deadline-input_route_raster.last_rise);
+    }
+    if (input_route_source_fields) {
+        if (gpu_video_standard_is_pal()) {
+            fprintf(stderr, "[input-field-clock] NTSC comparison profile cannot run PAL display mode\n");
+            exit(4);
+        }
+        return input_route_field_clock.current_cycles;
+    }
+    return g_psx_vblank_cycles;
+}
+
+#define VBLANK_CYCLES vblank_period_cycles()
 static uint32_t dispatch_count;
 static uint64_t total_checks;
 static uint32_t cycles_since_vblank;  /* incremented by interrupts_advance_cycles */
@@ -187,11 +238,41 @@ extern uint64_t g_vblank_raise_count;
 extern int g_cosim_dirty_pump_site;
 
 /* Reentrancy guard: prevent interrupt handler from triggering interrupts. */
+void interrupts_raster_gp1(uint32_t word) {
+    if (!input_route_source_raster) return;
+    if (input_route_raster.cycle!=psx_cycle_count || !input_route_raster_gp1(&input_route_raster,word)) {
+        fprintf(stderr,"[input-raster-clock] unsynchronized GP1 or unsupported PAL mode\n");
+        exit(4);
+    }
+    uint32_t command=(word>>24)&63u;
+    if (command==0 || command==7 || command==8) {
+        extern uint64_t g_psx_cycle_fast_limit;
+        input_route_raster_recompute();
+        g_psx_cycle_fast_limit=0;
+        /* Existing MMIO sync ran before this write. Publish the new deadline
+         * after changing the raster controls so a prior later deadline cannot
+         * let the CPU cross an earlier newly programmed vertical boundary. */
+        psx_devices_mmio_sync();
+    }
+}
+int interrupts_raster_gpu_status(uint32_t *bits) {
+    if (!input_route_source_gpu_status) return 0;
+    if (input_route_raster.cycle!=psx_cycle_count) {
+        fprintf(stderr,"[input-raster-status] unsynchronized GPUSTAT read\n");
+        exit(4);
+    }
+    *bits=input_route_raster_status(&input_route_raster);
+    return 1;
+}
+
 static int in_exception;
 /* Guest-cycle deadline: IRQ delivery is blocked while psx_get_cycle_count() is
  * below this. 0 = no cooldown active. Counted in guest cycles (not calls) so both
  * backends make the identical delivery decision — see the cooldown constants. */
 static uint64_t post_exception_cooldown_until;
+static struct { uint32_t pc, target, cause; } source_irq_slot;
+static int s_state_load_raster_present;
+int g_psx_irq_delivering;
 
 static uint32_t last_sio_seq_seen;
 static uint64_t last_sio_progress_cycle;
@@ -418,7 +499,6 @@ static int spu_sample_event_mode(void) {
 }
 
 uint32_t psx_spu_sample_event_cycles_to_next(void) {
-    SpuGlobalState state;
     g_spu_sample_deadline_queries++;
     if (!spu_sample_event_mode()) {
         g_spu_sample_mode_rejects++;
@@ -428,8 +508,11 @@ uint32_t psx_spu_sample_event_cycles_to_next(void) {
         g_spu_sample_pump_null_rejects++;
         return UINT32_MAX;
     }
-    spu_get_global_state(&state);
-    if ((state.ctrl & 0x0040u) == 0) {
+    /* Gate on SPUCNT alone — this runs on every deadline recompute, and the
+     * full SpuGlobalState snapshot here dominated the emu thread under an
+     * MMIO-polling guest loop (Capcom FMV, gdb-sampled 2026-09-01). */
+    /* Source-field comparisons retain the per-sample producer even with IRQ9 off. */
+    if (!input_route_source_raster && (spu_ctrl_read() & 0x0040u) == 0) {
         g_spu_sample_ctrl_rejects++;
         return UINT32_MAX;
     }
@@ -449,9 +532,9 @@ void psx_spu_sample_event_service(void) {
     g_spu_sample_service_checks++;
     if (!spu_sample_event_mode() || !s_midframe_audio_pump)
         return;
-    SpuGlobalState state;
-    spu_get_global_state(&state);
-    if ((state.ctrl & 0x0040u) != 0) {
+    /* SPUCNT alone — same hot-gate rationale as the deadline query above. */
+    const uint16_t ctrl = spu_ctrl_read();
+    if ((ctrl & 0x0040u) != 0) {
         g_spu_sample_enabled_services++;
         g_spu_sample_last_service_phase = (uint32_t)(psx_cycle_count % 768u);
     }
@@ -460,7 +543,7 @@ void psx_spu_sample_event_service(void) {
         if ((psx_get_cycle_count() % 768u) != 0)
             g_spu_sample_deferred_mismatches++;
     }
-    if ((state.ctrl & 0x0040u) != 0 &&
+    if ((ctrl & 0x0040u) != 0 &&
         (psx_get_cycle_count() % 768u) == 0) {
         g_spu_sample_service_pumps++;
         s_midframe_audio_pump();
@@ -471,17 +554,24 @@ static void fire_vblank_edge(void) {
     /* Subtract one VBlank period rather than reset to 0 so cycle overshoot
      * carries forward. Prevents long-running blocks from rounding multiple
      * VBlanks together. */
-    cycles_since_vblank -= VBLANK_CYCLES;
+    if(input_route_source_raster){--input_route_raster_pending;cycles_since_vblank=(uint32_t)(input_route_raster.cycle-input_route_raster.last_rise);}
+    else if (input_route_source_fields) {
+        cycles_since_vblank -= VBLANK_CYCLES;
+        input_route_field_clock_next(&input_route_field_clock, gpu_display_is_interlaced());
+    } else psx_vblank_consume_edge(&cycles_since_vblank);
     dispatch_count = 0;
     /* DEQUEUE: this VBlank fired. ENQUEUE: next VBlank scheduled one period out. */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_VBLANK,
                           (uint32_t)psx_get_cycle_count());
     event_ring_record_aux(EV_ENQ, (uint8_t)SRC_VBLANK,
-                          (uint32_t)(psx_get_cycle_count() + VBLANK_CYCLES));
+                          (uint32_t)(psx_get_cycle_count() + g_psx_vblank_cycles));
     psx_irq_raise(IRQ_VBLANK, 0);
     g_vblank_raise_count++;
     event_ring_record(EV_ISTAT_RAISE, IRQ_VBLANK);
     gpu_vblank_tick();  /* Toggle LCF (GPUSTAT bit 31) */
+    /* [timing] guest_cycle_scale_gate: RAM predicates are judged here, at a
+     * guest-time point (no-op without one). */
+    psx_guest_cycle_scale_vblank();
 #ifndef PSX_ENABLE_BLOCK_CYCLES
     timers_tick(33868); /* ~1 NTSC frame worth of cycles */
     cdrom_tick();      /* Process pending CDROM responses */
@@ -491,8 +581,20 @@ static void fire_vblank_edge(void) {
 }
 
 void interrupts_service_scheduled_events(void) {
+    { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* scheduled events may fire below */
     note_sio_progress_cycle();
-    if (in_exception) return;
+    /* Device time continues while the CPU handles an exception, including
+     * with IEc clear. A handler may poll GPUSTAT's field bit. CPU interrupt
+     * delivery remains gated separately by psx_check_interrupts. The same
+     * holds for a source raster edge: it latches I_STAT while a handler
+     * runs with IEc clear. */
+    if (input_route_source_raster) {
+        if (input_route_raster_pending && !should_defer_vblank_for_sio()) fire_vblank_edge();
+        return;
+    }
+    /* VBLANK_CYCLES is vblank_period_cycles(): the PAL/NTSC-aware
+     * vblank_cycles unless a source profile is armed, so this default
+     * path matches c3 exactly. */
     while (cycles_since_vblank >= VBLANK_CYCLES) {
         if (should_defer_vblank_for_sio()) return;
         fire_vblank_edge();
@@ -500,6 +602,11 @@ void interrupts_service_scheduled_events(void) {
 }
 
 uint32_t interrupts_cycles_to_vblank(void) {
+    if (input_route_source_raster) {
+        if (input_route_raster_pending) return 0;
+        if (input_route_raster_deadline==UINT64_MAX) return UINT32_MAX;
+        return input_route_raster_deadline<=input_route_raster.cycle ? 0 : (uint32_t)(input_route_raster_deadline-input_route_raster.cycle);
+    }
     if (cycles_since_vblank >= VBLANK_CYCLES) return 0;
     return VBLANK_CYCLES - cycles_since_vblank;
 }
@@ -509,11 +616,32 @@ uint32_t interrupts_get_cycles_since_vblank(void) {
 }
 
 void interrupts_set_cycles_since_vblank(uint32_t v) {
+    if ((input_route_source_fields || input_route_source_raster) &&
+        !s_state_load_raster_present) {
+        fprintf(stderr, "[input-field-clock] refuse: comparison profile restore "
+                        "without BS_SEC_RASTER (raster clock would be a stub)\n");
+        exit(4);
+    }
     cycles_since_vblank = v;
 }
 
 void interrupts_advance_cycles(uint32_t cycles) {
     cycles_since_vblank += cycles;
+    if (input_route_source_raster) {
+        uint32_t old=input_route_raster.rises;
+        if(timers_source_raster_enabled()) {
+            input_route_raster_advance_observed(&input_route_raster,cycles,timers_source_raster_event,NULL);
+            timers_source_raster_finish(input_route_raster.cycle);
+        } else input_route_raster_advance(&input_route_raster,cycles);
+        if (input_route_raster.rises!=old) {
+            input_route_raster_pending+=input_route_raster.rises-old;
+            if (input_route_raster_pending>1) {
+                fprintf(stderr,"[input-raster-clock] more than one undelivered VBlank; comparison unsupported\n");
+                exit(4);
+            }
+            input_route_raster_recompute();
+        }
+    }
     interrupts_service_scheduled_events();
 }
 
@@ -533,6 +661,8 @@ static uint64_t exception_reentry_blocks;
  * synchronous-handler recursion is so the nested-delivery path (hardware
  * IEc-re-enabled semantics, see the gate below) can cap host-stack use. */
 static int exception_nest_depth;
+/* Delivery-owned notification; not guest or serialized timing state. */
+static int s_changethread_in_handler_switch;
 /* Nested-delivery gate veto attribution (freeze_check). One counter per guard
  * in the refinement gate below; first-true-wins ordering matches the gate. */
 uint64_t g_nestgate_depth, g_nestgate_rfepend, g_nestgate_escreason, g_nestgate_iec;
@@ -626,12 +756,69 @@ uint32_t psx_compiled_irq_resume_pc(void) { return s_compiled_interrupt_resume_p
 uint64_t psx_last_irq_check_cycle(void) { return s_last_interrupt_check_cycle; }
 uint64_t psx_interrupt_total_checks(void) { return total_checks; }
 uint32_t psx_interrupt_fast_maintenance(void) { return s_fast_maintenance; }
+int psx_irq_resume_context_snapshot_site(void)
+{
+    return g_cosim_dirty_pump_site;
+}
+
+static unsigned s_snapshot_host_call_depth;
+void psx_snapshot_host_call_begin(void) { ++s_snapshot_host_call_depth; }
+void psx_snapshot_host_call_end(void) {
+    if (s_snapshot_host_call_depth) --s_snapshot_host_call_depth;
+}
+void psx_snapshot_host_call_reset(void) { s_snapshot_host_call_depth = 0; }
+unsigned psx_snapshot_host_call_depth(void) { return s_snapshot_host_call_depth; }
+void psx_snapshot_host_call_restore(unsigned depth) { s_snapshot_host_call_depth = depth; }
+
+static void reset_dirty_snapshot_scope(void)
+{
+    g_dirty_safe_resume_pc = 0;
+    /* A restore can abandon the dirty pump's scoped epilogue via longjmp. */
+    g_cosim_dirty_pump_site = 0;
+}
+
+uint32_t psx_irq_resume_context_snapshot_pc(void)
+{
+    return g_dirty_safe_resume_pc;
+}
+
+int psx_irq_resume_context_snapshot_safe_at(uint32_t resume_pc)
+{
+    extern int psx_mod_function_entry_active(void);
+    if (psx_mod_function_entry_active()) return 0;
+    if (s_snapshot_host_call_depth) return 0;
+    if (g_cosim_dirty_pump_site == 0)
+        return 1;
+
+    /* Dirty interpreter pump sites are IRQ-precise, but only a subset are
+     * whole-machine snapshot-safe: the interpreted instruction stream has fully
+     * retired into CPUState, no host call unit is active, and the published
+     * dirty resume PC is the same PC the caller intends to serialize. Keep
+     * call-return and precise-IRQ pump sites rejected; those are the contexts
+     * that can pair a plausible resume PC with stale nested-call registers. */
+    extern int g_call_unit_depth;
+    if (in_exception || g_call_unit_depth != 0 || g_psx_dispatch_depth > 1)
+        return 0;
+    if (resume_pc == 0u || (resume_pc & 3u) != 0u)
+        return 0;
+    if (g_dirty_safe_resume_pc == 0u ||
+        ((g_dirty_safe_resume_pc ^ resume_pc) & 0x1FFFFFFFu) != 0u)
+        return 0;
+    switch (g_cosim_dirty_pump_site) {
+    case 1: /* transfer surface: target PC is materialized in CPUState */
+    case 2: /* stop_addr reached: straight-line dirty flow fully retired */
+    case 3: /* left dirty page: next dispatch PC is materialized */
+    case 4: /* interpreter guard-yield: CPUState PC was flushed */
+    case 6: /* public dirty dispatch pump after handled block */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 int psx_irq_resume_context_snapshot_safe(void)
 {
-    /* Dirty interpreter pump sites are IRQ-precise but not save-state safe:
-     * they can publish a valid committed PC while CPUState still describes a
-     * helper/device or previous local context. Snapshot only at normal polls. */
-    return g_cosim_dirty_pump_site == 0;
+    return psx_irq_resume_context_snapshot_safe_at(g_dirty_safe_resume_pc);
 }
 
 void psx_irq_clear_resume_latches(void)
@@ -686,6 +873,10 @@ static int same_guest_pc(uint32_t a, uint32_t b) {
 }
 
 int psx_get_in_exception(void) { return in_exception; }
+int psx_exception_nest_depth(void) { return exception_nest_depth; }
+void psx_note_changethread_in_handler_switch(void) {
+    s_changethread_in_handler_switch = 1;
+}
 
 /* Co-sim (COSIM_ORACLE.md): fold the GENUINE guest-timing interrupt statics into the
  * state hash. Deliberately EXCLUDES total_checks / dispatch_count / post_exception_
@@ -723,8 +914,23 @@ extern void psx_exception_longjmp(void);
  * commits cpu->pc = real EPC. On a fiber/thread resume (in_exception==0) this is a
  * no-op and the real EPC is dispatched directly — that is how a suspended thread
  * resumes at its own PC. */
+static int rfe_steps_over_gte_command(uint32_t pc, uint32_t epc) {
+    uint32_t insn;
+    return same_guest_pc(pc, epc + 4u) &&
+           memory_peek_instruction_word(epc, &insn) &&
+           (insn & 0xFE000000u) == 0x4A000000u;
+}
+
+static void rfe_outside_window_unwind(CPUState* cpu);
+
 void psx_rfe_mark_escape(void) {
-    if (!in_exception) return;
+    if (!in_exception) {
+        /* Outside the handler window (PS1B-324): the paired jump is checked
+         * once, in psx_rfe_escape_check, for host frames that the return must
+         * not leave behind. Exception entry clears the flag. */
+        g_rfe_escape_pending = 1;
+        return;
+    }
     /* Arm on EVERY handler-window RFE, including LEGACY_SENTINEL deliveries.
      * The old blanket decline assumed a sentinel delivery always resumes AT
      * the sentinel — but a handler that switches threads (the guest's own
@@ -742,7 +948,30 @@ void psx_rfe_mark_escape(void) {
 /* Called in the dispatch trampoline after a function returns (cpu->pc holds the
  * real resume EPC). If an RFE armed the escape inside the synchronous handler,
  * longjmp back to psx_check_interrupts (cpu->pc preserved across the longjmp). */
+static void rfe_outside_window_unwind(CPUState* cpu) {
+    extern int g_call_unit_depth;
+    extern int overlay_loader_shadow_native_thread_switch_bail(void);
+    if (g_psx_dispatch_depth <= 1 && g_call_unit_depth == 0) return;
+    if (!psx_scheduler_can_resume_at(cpu->pc)) return;
+    /* Host continuation inspection must not consume guest/lockstep reads. */
+    uint32_t pcb, tcb, saved_epc;
+    if (!psx_peek_word(0x108u, &pcb) || !pcb ||
+        !psx_peek_word(pcb & 0x1FFFFFFFu, &tcb) || !tcb ||
+        !psx_peek_word((tcb & 0x1FFFFFFFu) + 0x88u, &saved_epc) ||
+        !same_guest_pc(cpu->pc, saved_epc)) return;
+    if (overlay_loader_shadow_native_thread_switch_bail()) return;
+    psx_cyc_batch_flush();
+    s_compiled_interrupt_resume_pc = 0;
+    g_dirty_interp_active = 0;
+    psx_scheduler_rfe_resume(cpu, cpu->pc, 0u);
+}
+
 void psx_rfe_escape_check(CPUState* cpu) {
+    if (g_rfe_escape_pending && !in_exception) {
+        g_rfe_escape_pending = 0;
+        rfe_outside_window_unwind(cpu);
+        return;
+    }
     /* Escape ONLY when this RFE is the synchronous handler completing on the SAME
      * fiber that set up the exception (the owner of exception_jmpbuf). in_exception
      * is a single global, so a thread RESUMED on a different fiber (its own real EPC
@@ -792,9 +1021,43 @@ void psx_get_freeze_diag(uint64_t *out_total_checks,
 }
 
 void interrupts_init(void) {
+    const char *field_model = getenv("PSX_INPUT_ROUTE_FIELD_MODEL");
+    input_route_source_fields = 0;
+    input_route_source_raster = 0;
+    input_route_raster_pending = 0;
+    input_route_source_gpu_status = 0;
+    if (field_model && *field_model) {
+        int raster=strcmp(field_model,"octoshock-2.2.2-ntsc-raster")==0;
+        if ((!raster && strcmp(field_model, "octoshock-2.2.2-ntsc-fields") != 0) ||
+            !getenv("PSX_INPUT_ROUTE_FILE")) {
+            fprintf(stderr, "[input-field-clock] invalid model or missing input route\n");
+            exit(4);
+        }
+        if (raster) {
+            input_route_source_raster=1;
+            input_route_raster_reset(&input_route_raster);
+            input_route_raster_recompute();
+            fprintf(stderr,"[input-raster-clock] experimental NTSC raster VBlank deadlines; first=%llu; native IRQ deferral/GPUSTAT/timers retained\n",(unsigned long long)input_route_raster_deadline);
+        } else {
+        input_route_source_fields = 1;
+        input_route_field_clock_reset(&input_route_field_clock);
+        fprintf(stderr, "[input-field-clock] experimental cold-boot NTSC field durations; first=%u, ratio=103896/65536\n",
+                input_route_field_clock.current_cycles);
+        }
+    }
+    const char *status_model=getenv("PSX_GPU_STATUS_MODEL");
+    if (status_model && *status_model) {
+        if (strcmp(status_model,"octoshock-2.2.2-raster") || !input_route_source_raster) {
+            fprintf(stderr,"[input-raster-status] invalid model or missing NTSC raster clock\n");
+            exit(4);
+        }
+        input_route_source_gpu_status=1;
+        fprintf(stderr,"[input-raster-status] experimental source GPUSTAT31/13; native readiness and rendering retained\n");
+    }
     dispatch_count = 0;
     in_exception = 0;
     exception_nest_depth = 0;
+    s_changethread_in_handler_switch = 0;
     g_psx_dispatch_depth = 0;
     total_checks = 0;
     post_exception_cooldown_until = 0;
@@ -825,10 +1088,7 @@ void interrupts_init(void) {
     g_rfe_escape_pending = 0;
     g_pending_exception_longjmp = 0;
     s_fast_maintenance = 0;
-    {
-        extern uint32_t g_dirty_safe_resume_pc;
-        g_dirty_safe_resume_pc = 0;
-    }
+    reset_dirty_snapshot_scope();
 }
 
 void interrupts_resync_after_restore(void) {
@@ -846,6 +1106,7 @@ void interrupts_resync_after_restore(void) {
     dispatch_count = 0;
     in_exception = 0;
     exception_nest_depth = 0;
+    s_changethread_in_handler_switch = 0;
     last_sio_seq_seen = sio_get_seq();
     last_sio_progress_cycle = psx_get_cycle_count();
     s_defer_switch_pending = 0;
@@ -870,10 +1131,7 @@ void interrupts_resync_after_restore(void) {
     s_last_interrupt_check_cycle = UINT64_MAX;
     s_fast_maintenance = 0;
     total_checks = 0;
-    {
-        extern uint32_t g_dirty_safe_resume_pc;
-        g_dirty_safe_resume_pc = 0;
-    }
+    reset_dirty_snapshot_scope();
     /* Load longjmp from mid-path abandons PSX_CHECK_INTERRUPTS_RETURN's
      * g_ls_suppress_record-- — clamp so suppress cannot accumulate. */
     {
@@ -984,8 +1242,7 @@ uint32_t cycles_to_next_event(void) {
      * card-SIO case only pushes VBlank LATER, so this estimate stays a safe
      * under-estimate. */
     if (i_mask & (1u << IRQ_VBLANK)) {
-        uint32_t d = (cycles_since_vblank >= VBLANK_CYCLES)
-                       ? 0u : (VBLANK_CYCLES - cycles_since_vblank);
+        uint32_t d = psx_vblank_cycles_to_edge(cycles_since_vblank);
         if (d < best) best = d;
     }
     uint32_t t = timers_cycles_to_irq(i_mask); if (t < best) best = t;
@@ -1027,6 +1284,9 @@ void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
 }
 
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
+    /* Render passes and uncharged calls run in frozen guest time: nothing
+     * is delivered. */
+    if (g_psx_guest_time_frozen) return 0;
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
     if ((i_stat & i_mask) == 0) { s_skip_none++; return 0; }
 
@@ -1050,7 +1310,19 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
     return 1;
 }
 
+static void poll_staged_user_snapshot(CPUState* cpu) {
+    extern uint32_t g_dirty_safe_resume_pc;
+    if (!in_exception && g_psx_savestate_pending) {
+        uint32_t pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
+                                           : s_compiled_interrupt_resume_pc;
+        savestate_poll(cpu, pc);
+    }
+}
+
 void psx_check_interrupts(CPUState* cpu) {
+    /* Frozen guest time (psx_cycle_freeze.h): no delivery, and no
+     * check-boundary bookkeeping that the stock timeline would not do. */
+    if (g_psx_guest_time_frozen) return;
     psx_cyc_batch_flush();
     extern int g_ls_suppress_record;
     extern int psx_netplay_active(void);
@@ -1126,6 +1398,12 @@ void psx_check_interrupts(CPUState* cpu) {
         }
     }
 
+    /* Quiet native/HLE gameplay may execute far fewer than 0x4000 BB checks
+     * in a frame. A staged user snapshot must not wait for that amortized
+     * maintenance counter: short actions/voices can finish before capture.
+     * Keep exception, host-adapter and resume-PC gates in savestate_poll, and
+     * retain the canonical netplay edge gate above. Idle work stays amortized. */
+    poll_staged_user_snapshot(cpu);
     s_irq_path_entry++;
 
     /* MotK VLC / FMV hot edge: sticky unmasked I_STAT (CD/VBlank) while
@@ -1137,7 +1415,7 @@ void psx_check_interrupts(CPUState* cpu) {
         uint32_t sr = cpu->cop0[COP0_SR];
         if (!(sr & 0x01u) || !(sr & (1u << 10))) {
             s_irq_path_fast_sr++;
-            if ((++s_fast_maintenance & 0x3FFFu) == 0) {
+            if ((++s_fast_maintenance & 0x3FFFu) == 0 || g_psx_savestate_pending) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
@@ -1191,7 +1469,7 @@ void psx_check_interrupts(CPUState* cpu) {
         }
         if ((i_stat & i_mask) == 0 && sw_pending == 0) {
             s_irq_path_fast_none++;
-            if ((++s_fast_maintenance & 0x3FFFu) == 0) {
+            if ((++s_fast_maintenance & 0x3FFFu) == 0 || g_psx_savestate_pending) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
@@ -1220,7 +1498,7 @@ void psx_check_interrupts(CPUState* cpu) {
         s_last_interrupt_check_cycle = psx_get_cycle_count();
         g_ls_suppress_record++;
         total_checks++;
-        if ((total_checks & 0x3FFFu) == 0) {
+        if ((total_checks & 0x3FFFu) == 0 || g_psx_savestate_pending) {
             extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
             extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
             extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
@@ -1255,12 +1533,6 @@ void psx_check_interrupts(CPUState* cpu) {
      * waiting for it to re-appear.  If we tick here, the IRQ fires
      * during the delay loop BEFORE the clear, and the BIOS never
      * sees it. */
-    /* Ape LOAD: libcard may poll nest/busy in RAM with no SIO MMIO, so
-     * sio_tick never runs. Throttled nest-repair pump only. */
-    if ((total_checks & 0xFFu) == 0) {
-        extern void sio_ape_card_unstick_pump(void);
-        sio_ape_card_unstick_pump();
-    }
 
     interrupts_service_scheduled_events();
 
@@ -1465,6 +1737,7 @@ irq_deliver_eval:
         PSX_CHECK_INTERRUPTS_RETURN();
     } /* No deliverable interrupt source (hw masked and no sw pending) */
 
+    uint32_t source_irq_cause_ce = 0;
     /* Architectural take-PC = the resume PC (same selection the async-RFE block
      * below uses): the dirty-interp commits the exact interrupted instruction in
      * g_dirty_safe_resume_pc; compiled code passes its block-entry PC via
@@ -1474,6 +1747,86 @@ irq_deliver_eval:
         extern uint32_t g_dirty_safe_resume_pc;
         uint32_t take_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
                                                   : s_compiled_interrupt_resume_pc;
+        /* The existing cache/cycle model fetches the interrupted opcode before
+         * selecting the interrupt operation. Preserve that fetch's tags and
+         * load-absorb effects, but never execute its register/store effects.
+         * Authored guest IRQ/JR/RFE cases run on the oracle pin this order;
+         * it is not a claim of physical pipeline timing. Unknown legacy entry
+         * sentinels have no guest fetch identity and retain their old behavior.
+         * Keep this before SR/EPC mutation and before the delivery timestamp. */
+        uint32_t fetch_pc = source_irq_slot.pc?source_irq_slot.pc:take_pc;
+        if (fetch_pc == 0u) {
+            extern int psx_scheduler_top_level_resume_active(void);
+            if (psx_scheduler_top_level_resume_active()) fetch_pc = cpu->pc;
+        }
+        /* Source profile: a pending interrupt does not pre-empt a COP2
+         * instruction; the instruction runs first. Do not fetch/charge a
+         * synthetic interrupt operation at that opcode; the normal executor
+         * owns its effects and the next recognition point. [Held in place by
+         * the TAS route replays; no isolated fixture.] */
+        if(fetch_pc && !psx_irq_opcode_eligible(fetch_pc))
+            PSX_CHECK_INTERRUPTS_RETURN();
+        uint32_t fetch_phys = fetch_pc & 0x1FFFFFFFu;
+        /* T163. This admits a FETCH, not a resume. fetch_pc is the opcode the
+         * interrupt preempted — for a delay-slot take, source_irq_slot.pc, i.e.
+         * the SLOT — and the block below charges its I-cache fetch and one base
+         * step, exactly as the comment above states: tags and load-absorb
+         * effects, never register or store effects. The hardware fetched that
+         * opcode whether or not the static dispatch table can re-enter there,
+         * so re-enterability is the wrong question and must not gate it.
+         *
+         * This once carried `&& psx_is_dispatchable(fetch_pc)` on the ROM
+         * branch. It was harmless when written (5cda8cf9c, which introduced the
+         * guard and the comment above together): psx_is_dispatchable then
+         * returned 0 only for pc == 0 and for PSX_EXC_SENTINEL_PC. On THIS
+         * branch it could never return 0 — `fetch_pc != 0u` is tested above,
+         * and the sentinel is 0x80000048, whose phys 0x48 takes the RAM branch
+         * and never reaches here. The term was a tautology.
+         *
+         * T110 (702d1cd88) made psx_is_dispatchable exact WITHOUT touching this
+         * line, and the tautology silently became a behaviour change. A delay
+         * slot is deliberately excluded from the dispatch table, so every ROM
+         * delay-slot take stopped charging its preempted fetch: 4 cycles for
+         * the KSEG1 miss plus 1 for the base step. The machine then runs one
+         * instruction ahead of itself from that exception onward. Abe's
+         * Oddysee: returns 700-703 one instruction early at an identical clock,
+         * converting to five cycles fast from 704. Removing the term returns
+         * all four rows to the source values, the clock at 704 included.
+         *
+         * What the guard actually requires is that fetch_pc be a plausible
+         * instruction address: non-zero, aligned, and inside RAM or the BIOS
+         * window. Those tests remain and are sufficient on their own —
+         * psx_icache_fetch reads no guest memory, it charges cycles and updates
+         * cache tags, so no address in range can harm it. */
+        if (source_gpu_runtime_active() && fetch_pc != 0u && (fetch_pc & 3u) == 0u &&
+            (fetch_phys < memory_get_ram_bytes() ||
+             (fetch_phys >= 0x1FC00000u && fetch_phys < 0x1FC80000u))) {
+            extern int source_gpu_runtime_active(void);
+            if (source_gpu_runtime_active() && !source_irq_slot.pc) {
+                uint32_t instruction;
+                if (memory_peek_instruction_word(fetch_pc, &instruction))
+                    source_irq_cause_ce = (instruction << 2) & 0x30000000u;
+            }
+            /* This fetch reaches the CPU boundary callback before in_exception is
+             * set; the compiled-code IRQ handoff must not re-enter delivery here.
+             * The same pre-fetch callback can save a TAS checkpoint while IRQ
+             * entry is pending, including a preempted branch delay slot. */
+            extern void dirty_ram_checkpoint_enter(uint32_t,int,uint32_t,int);
+            extern void dirty_ram_checkpoint_leave(void);
+            { extern int g_psx_irq_delivering; g_psx_irq_delivering++;
+              dirty_ram_checkpoint_enter(fetch_pc, source_irq_slot.pc != 0u,
+                  source_irq_slot.pc ? source_irq_slot.target : 0u,
+                  source_irq_slot.pc && (source_irq_slot.cause & 0x40000000u));
+              psx_icache_fetch(cpu, fetch_pc);
+              dirty_ram_checkpoint_leave();
+              g_psx_irq_delivering--; }
+#ifdef PSX_ENABLE_BLOCK_CYCLES
+            /* Interrupt dispatch has no dependencies on the preempted opcode.
+             * Its ordinary step still consumes base/load-absorb timing. */
+            psx_cyc_step(cpu, 0u);
+            psx_cyc_batch_flush();
+#endif
+        }
         irq_record_outcome(EV_IRQ_DELIVER, 0, take_pc);
     }
     g_irq_deliver_count++;
@@ -1521,7 +1874,18 @@ irq_deliver_eval:
      * delivery that races an ack cannot leave a stale bit behind, and a
      * software-interrupt delivery gets IP2 reflecting the true line state
      * instead of whatever bit 10 happened to be left as. */
-    cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & ~0x7C) | (0 << 2);
+    cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & 0x0000FF00u) | (0 << 2);
+    if(source_irq_slot.pc) {
+        cpu->cop0[COP0_CAUSE]=(cpu->cop0[COP0_CAUSE]&0x0000ff00u)|source_irq_slot.cause;
+        cpu->cop0[6]=source_irq_slot.target; /* source TAR / branch destination */
+        source_irq_slot.pc=0; /* nested handler entries have their own context */
+    } else {
+        extern int source_gpu_runtime_active(void);
+        /* In the source profile CAUSE.CE comes from the fetched opcode at an IRQ too.
+         * This is source-model compatibility, not a physical-CPU CE claim. */
+        if(source_gpu_runtime_active())
+            cpu->cop0[COP0_CAUSE]=(cpu->cop0[COP0_CAUSE]&0x0000ff00u)|source_irq_cause_ce;
+    }
     psx_irq_refresh_cause_ip2();
 
     /* Push SR exception stack: shift bits [5:0] left by 2. */
@@ -1564,12 +1928,12 @@ irq_deliver_eval:
             if (psx_scheduler_top_level_resume_active() &&
                 cpu->pc != 0u && (cpu->pc & 3u) == 0u) {
                 uint32_t phys = cpu->pc & 0x1FFFFFFFu;
-                if (phys < 0x00200000u ||
+                if (phys < psx_ram_live_bytes() ||
                     (phys >= 0x1FC00000u && phys < 0x1FC80000u))
                     real_pc = cpu->pc;
             }
         }
-        /* Accept the real resume PC from guest RAM (<2MB) OR the BIOS ROM
+        /* Accept the real resume PC from live guest RAM OR the BIOS ROM
          * window. The old RAM-only guard rejected ROM-space block leaders
          * (e.g. OpenBIOS mcWaitForStatus spinning at 0xBFC076xx during a
          * card op), forcing EVERY such delivery onto the legacy sentinel.
@@ -1584,7 +1948,7 @@ irq_deliver_eval:
          * ROM pc still falls back to the sentinel (pre-fix behavior);
          * RAM acceptance is unchanged byte-for-byte. */
         uint32_t real_phys = real_pc & 0x1FFFFFFFu;
-        int resume_in_ram  = real_phys < 0x00200000u;
+        int resume_in_ram  = real_phys < psx_ram_live_bytes();
         int resume_in_rom  = real_phys >= 0x1FC00000u && real_phys < 0x1FC80000u &&
                              psx_is_dispatchable(real_pc);
         if (real_pc != 0u && (real_pc & 0x3u) == 0u &&
@@ -1594,7 +1958,7 @@ irq_deliver_eval:
             g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE; /* set at the actual RFE/SYSCALL return */
         } else {
             uint32_t sentinel = PSX_EXC_SENTINEL_PC;
-            cpu->write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
+            psx_host_write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
             cpu->cop0[COP0_EPC]  = sentinel;
             g_exception_real_epc = sentinel;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_LEGACY_SENTINEL;
@@ -1620,12 +1984,15 @@ irq_deliver_eval:
         }
     }
 
+    /* Keep this delivery's EPC stable across nested handler dispatches. */
+    const uint32_t delivered_epc = g_exception_real_epc;
+
     /* Save the interrupted code's full register state.
      *
-     * On real hardware, the exception handler saves all GPRs to the
-     * TCB save area at entry, and ReturnFromException restores them
-     * before jumping back to EPC.  The interrupted code always gets
-     * its exact pre-exception register values back.
+     * The BIOS handler saves the interrupted context to the TCB and restores
+     * it before returning to EPC. Kernel scratch registers may instead retain
+     * the handler's architectural result: the qualified real-RFE path below
+     * keeps its post-handler k0. Other host-restored values use this snapshot.
      *
      * In our model, the recompiled handler runs as a C function and
      * its `return;` goes back here — not to EPC.  The handler's
@@ -1633,9 +2000,11 @@ irq_deliver_eval:
      * kernel jmpbuf (intended for longjmp to WaitEvent's caller),
      * which corrupts the interrupted code's registers.
      *
-     * We save all GPRs/HI/LO before the handler and restore them
-     * after, so the interrupted code resumes with its original state
-     * — matching real hardware behaviour. */
+     * Save all GPRs/HI/LO before the handler for the host restore policy
+     * below. Its qualified RFE path preserves the actual handler k0 result
+     * rather than overwriting it with the interrupted snapshot. */
+    /* Preserve the completed load, not the value preceding the interrupt. */
+    psx_load_value_commit(cpu);
     uint32_t saved_gpr[32];
     uint32_t saved_hi, saved_lo;
     for (int i = 0; i < 32; i++) saved_gpr[i] = cpu->gpr[i];
@@ -1766,9 +2135,18 @@ irq_deliver_eval:
      * own live frame. */
     jmp_buf saved_exception_jmpbuf;
     memcpy(&saved_exception_jmpbuf, &exception_jmpbuf, sizeof(jmp_buf));
+    ModFunctionEntryContext saved_mod_callback;
+    mod_runtime_function_entry_context_save(&saved_mod_callback);
+    const unsigned saved_host_call_depth = psx_snapshot_host_call_depth();
     g_exc_setjmp_epoch++;   /* new setjmp frame armed (see decl above) */
     for (;;) {
         int jmp_val = setjmp(exception_jmpbuf);
+        if (jmp_val != 0) {
+            /* RFE/RestoreState can skip a callback and its guest-call adapter.
+             * Preserve callbacks below this handler; discard only its scopes. */
+            mod_runtime_function_entry_context_restore(&saved_mod_callback);
+            psx_snapshot_host_call_restore(saved_host_call_depth);
+        }
         if (jmp_val == 2) {
             /* RestoreState redirect: re-dispatch to cpu->pc.
              * GPRs were already set by RestoreState — do NOT restore.
@@ -1832,9 +2210,9 @@ irq_deliver_eval:
      * interrupted — either the LEGACY sentinel exit, OR a real-EPC RFE that
      * resumes at exactly the PC we installed as EPC (no ChangeThread happened).
      *
-     * Real hardware saves and restores ALL GPRs across every exception, so a
-     * transparent same-thread interrupt must give the interrupted code its exact
-     * pre-exception registers back. The original Fix B skipped this for all
+     * The modern default retains only the qualified real-RFE k0 result.
+     * The explicit source-field comparison keeps the handler's k0/k1 scratch
+     * registers, as in the retained replay observations. The original Fix B skipped this for all
      * real-EPC resumes, trusting the recompiled BIOS handler's TCB restore — but
      * for a same-thread compiled resume that restore is incomplete, so a live
      * value held in a register across a block-leader IRQ check gets clobbered by
@@ -1934,6 +2312,38 @@ irq_deliver_eval:
             }
         }
     }
+    /* Same-thread return to a PC the handler chose (PS1B-324).
+     *
+     * Discworld II's VBlank handler copies the saved context out of the TCB,
+     * rewrites the TCB's EPC and sp to start a task, and calls
+     * ReturnFromException. Hardware resumes at the TCB's EPC with the TCB's
+     * registers (PSX-SPX, BIOS exception handling). A compiled block-leader
+     * poll never re-reads cpu->pc, so returning from here ran the interrupted
+     * block on the task's stack: VSync read a frame it never built, timed out
+     * and returned to PC 0.
+     *
+     * The interrupted block cannot continue, so keep the TCB's registers and
+     * resume at cpu->pc through the scheduler (below, after the epilogue).
+     * The test is exact: the return went to the TCB's saved EPC, and that is
+     * no longer the EPC this delivery installed. Not taken for:
+     *   - a sentinel delivery, whose post-return PC is only approximate;
+     *   - a dirty-interpreter pump, which re-reads cpu->pc on return;
+     *   - a nested delivery, whose outer handler frame is still live;
+     *   - the kernel's own step over an interrupted GTE command. */
+    uint32_t rfe_tcb_epc;
+    int rfe_redirect =
+        prev_in_exception == 0 && saved_dirty_resume_pc == 0u &&
+        (g_exc_escape_reason == PSX_EXC_ESCAPE_RFE_RETURN ||
+         g_exc_escape_reason == PSX_EXC_ESCAPE_SYSCALL_RETURN) &&
+        delivered_epc != 0u && delivered_epc != (uint32_t)PSX_EXC_SENTINEL_PC &&
+        entry_tcb != 0u && entry_tcb == exit_tcb &&
+        cpu->pc != 0u && !same_guest_pc(cpu->pc, delivered_epc) &&
+        psx_scheduler_can_resume_at(cpu->pc) &&
+        psx_peek_word((exit_tcb & 0x1FFFFFFFu) + 0x88u, &rfe_tcb_epc) &&
+        same_guest_pc(cpu->pc, rfe_tcb_epc) &&
+        !rfe_steps_over_gte_command(cpu->pc, delivered_epc);
+    if (rfe_redirect)
+        same_thread_resume = 0;   /* the TCB's registers are the context */
     int do_restore =
         (g_exc_escape_reason == PSX_EXC_ESCAPE_LEGACY_SENTINEL || same_thread_resume);
     /* Ring exit-half: every delivery records which escape path it took and
@@ -1950,12 +2360,41 @@ irq_deliver_eval:
         e->v1_saved    = saved_gpr[3];
         e->ra_exit     = cpu->gpr[31];
         e->ra_saved    = saved_gpr[31];
+        e->exit_cycle  = psx_get_cycle_count();
+        {
+            const uint64_t spent = e->exit_cycle - e->cycle;
+            const uint32_t pend = (e->istat & e->imask) & 0x7FFu;
+            g_exc_cycles_total += spent;
+            g_exc_exits_total++;
+            if (!pend) { g_exc_src_deliveries[11]++; g_exc_src_cycles[11] += spent; }
+            for (int b = 0; b < 11; b++) {
+                if (pend & (1u << b)) {
+                    g_exc_src_deliveries[b]++;
+                    g_exc_src_cycles[b] += spent;
+                }
+            }
+        }
     }
+    /* A real same-thread RFE leaves the handler's jump register live.
+     * Preserve its actual result only for the primary mode-1 return; legacy,
+     * syscall, nested, changed-target/global-EPC and other restore modes keep
+     * the old copy. A RestoreState redirect that returns to the original EPC
+     * with the same TCB can still qualify. */
+    const int keep_handler_k0 = do_restore && s_str_mode == 1 &&
+        same_thread_resume && g_exc_escape_reason == PSX_EXC_ESCAPE_RFE_RETURN &&
+        prev_in_exception == 0 && entry_tcb != 0u && entry_tcb == exit_tcb &&
+        delivered_epc != 0u && delivered_epc != (uint32_t)PSX_EXC_SENTINEL_PC &&
+        same_guest_pc(cpu->pc, delivered_epc) &&
+        same_guest_pc(g_exception_real_epc, delivered_epc);
     if (do_restore) {
-        for (int i = 0; i < 32; i++) cpu->gpr[i] = saved_gpr[i];
+        for (int i = 0; i < 32; i++)
+            if ((i != 26 || !(input_route_source_raster || keep_handler_k0)) &&
+                (i != 27 || !input_route_source_raster)) cpu->gpr[i] = saved_gpr[i];
         cpu->hi = saved_hi;
         cpu->lo = saved_lo;
     }
+    const int changethread_at_call = s_changethread_in_handler_switch;
+    s_changethread_in_handler_switch = 0;
     g_rfe_escape_pending = 0;
     g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE;
 
@@ -1996,6 +2435,21 @@ irq_deliver_eval:
     }
     if (g_ls_suppress_record > 0) g_ls_suppress_record--;
 
+    /* Same-thread return to a PC the handler chose (see rfe_redirect above).
+     * The escape skips psx_check_interrupts_at's restore of the compiled
+     * resume-PC latch and the interpreter's mode flag, as the thread switch
+     * below does. */
+    if (rfe_redirect) {
+        extern int overlay_loader_shadow_native_thread_switch_bail(void);
+        if (overlay_loader_shadow_native_thread_switch_bail())
+            PSX_CHECK_INTERRUPTS_RETURN();
+        psx_cyc_batch_flush();   /* the unwind drops any unpublished cycle batch */
+        s_compiled_interrupt_resume_pc = 0;
+        g_dirty_interp_active = 0;
+        psx_scheduler_rfe_resume(cpu, cpu->pc, delivered_epc); /* never returns */
+    }
+
+
     /* In-exception thread switch (Ape Escape NEW GAME memcard scene).
      *
      * A game can run its OWN cooperative scheduler inside the kernel exception
@@ -2028,7 +2482,9 @@ irq_deliver_eval:
         entry_tcb != 0u && exit_tcb != 0u && entry_tcb != exit_tcb) {
         extern uint32_t psx_read_word(uint32_t addr);   /* memory.c (plain RAM read) */
         uint32_t new_state = psx_read_word(exit_tcb & 0x1FFFFFFFu);
-        if (new_state == 0x4000u) {   /* the new current thread must be runnable */
+        /* Explicit ChangeThread takes any valid block, regardless of its state.
+         * A handler that moved PCB[0] directly still requires a runnable block. */
+        if (new_state == 0x4000u || changethread_at_call) {
             /* A native-only shadow pass must never commit the handler's TCB/RAM
              * changes or escape past the authoritative restore. Bail before
              * configuring either immediate or deferred scheduler state. */
@@ -2061,7 +2517,10 @@ irq_deliver_eval:
              * starve a target thread by re-entering the same VBlank EPC forever.
              * (Card-guard overrides were tried for Ape LOAD and did not help —
              * tip already defers like master; the hang is post-probe arming.) */
-            int can_defer = defer_switch_enabled() && !low_kernel_epc && !at_outermost &&
+            /* The game holds the interrupted context; executing more of that
+             * thread before an explicit switch would repeat its work later. */
+            int can_defer = defer_switch_enabled() && !changethread_at_call &&
+                            !low_kernel_epc && !at_outermost &&
                             g_exception_real_epc != 0u &&
                             (g_exception_real_epc & 0x3u) == 0u &&
                             g_exception_real_epc != (uint32_t)PSX_EXC_SENTINEL_PC &&
@@ -2148,4 +2607,149 @@ void psx_check_interrupts_dispatch_entry(CPUState* cpu, uint32_t resume_pc) {
         return;
     }
     psx_check_interrupts_at(cpu, resume_pc);
+}
+
+/* Source raster context is carried in the configured GPU source tail; legacy
+ * IRQ phase alone is never accepted as this complete state. */
+uint32_t interrupts_source_snapshot_bytes(void){return input_route_source_raster?92u:0u;}
+void interrupts_source_snapshot_write(uint8_t *p){
+ if(!input_route_source_raster)return;PstW w;pst_w_init(&w,p,12);pst_w_u32(&w,0x31525349u);pst_w_u32(&w,1u|(input_route_source_gpu_status?2u:0u));pst_w_u32(&w,input_route_raster_pending);input_route_raster_wire_write(&input_route_raster,p+12);
+}
+int interrupts_source_snapshot_read(const uint8_t *p,uint32_t len,int apply){
+ if(len!=interrupts_source_snapshot_bytes())return 0;if(!len)return 1;if(!p)return 0;
+ PstR r;uint32_t magic,flags,pending;InputRouteRasterClock next;pst_r_init(&r,p,12);
+ if(!pst_r_u32(&r,&magic)||magic!=0x31525349u||!pst_r_u32(&r,&flags)||flags!=(1u|(input_route_source_gpu_status?2u:0u))||!pst_r_u32(&r,&pending)||pending>1||!input_route_raster_wire_read(&next,p+12,80))return 0;
+ if(apply){input_route_raster=next;input_route_raster_pending=pending;input_route_raster_recompute();psx_next_service_cycle=0;}return 1;
+}
+
+/* Preserved replay state and exception-boundary interfaces. */
+#define IRQ_TIMING_WIRE_BYTES 64u
+uint32_t interrupts_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES; }
+
+void interrupts_raster_wire_write(uint8_t *out) {
+    input_route_raster_wire_write(&input_route_raster, out);
+}
+
+int interrupts_raster_wire_read(const uint8_t *in, uint32_t len) {
+    return input_route_raster_wire_read(&input_route_raster, in, len);
+}
+
+int interrupts_raster_comparison_active(void) { return input_route_source_raster; }
+
+int interrupts_raster_perturb(const char *field) {
+    if (!field || !*field) return 0;
+    if (strcmp(field, "raster_fraction") == 0) {
+        input_route_raster.fraction += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.fraction -> %u\n",
+                input_route_raster.fraction);
+        return 1;
+    }
+    if (strcmp(field, "raster_cycle") == 0) {
+        input_route_raster.cycle += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.cycle -> %llu\n",
+                (unsigned long long)input_route_raster.cycle);
+        return 1;
+    }
+    if (strcmp(field, "raster_rises") == 0) {
+        input_route_raster.rises += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.rises -> %u\n",
+                input_route_raster.rises);
+        return 1;
+    }
+    return 0;
+}
+
+void interrupts_note_state_load(int raster_section_present) {
+    s_state_load_raster_present = raster_section_present ? 1 : 0;
+    /* input_route_raster_deadline is DERIVED from the raster clock
+     * (cycle + until_rise), so it is not on the wire; recompute it here, after
+     * every section has loaded -- the same treatment as return_clock. */
+    input_route_raster_recompute();
+}
+
+uint32_t interrupts_timing_wire_bytes(void) { return IRQ_TIMING_WIRE_BYTES; }
+
+void interrupts_timing_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, IRQ_TIMING_WIRE_BYTES);
+    pst_w_u32(&w, input_route_field_clock.remainder);
+    pst_w_u32(&w, input_route_field_clock.line_phase);
+    pst_w_u32(&w, input_route_field_clock.field);
+    pst_w_u32(&w, input_route_field_clock.current_cycles);
+    pst_w_u32(&w, input_route_raster_pending);
+    pst_w_u32(&w, last_sio_seq_seen);
+    pst_w_u64(&w, last_sio_progress_cycle);
+    pst_w_u64(&w, post_exception_cooldown_until);
+    pst_w_u32(&w, source_irq_slot.pc);
+    pst_w_u32(&w, source_irq_slot.target);
+    pst_w_u32(&w, source_irq_slot.cause);
+    pst_w_u32(&w, s_defer_switch_from);
+    pst_w_u32(&w, s_defer_switch_target);
+    pst_w_u32(&w, (uint32_t)s_defer_switch_pending);
+}
+
+int interrupts_timing_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r; uint32_t pending;
+    if (len != IRQ_TIMING_WIRE_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u32(&r, &input_route_field_clock.remainder)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.line_phase)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.field)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.current_cycles)) return 0;
+    if (!pst_r_u32(&r, &input_route_raster_pending)) return 0;
+    if (!pst_r_u32(&r, &last_sio_seq_seen)) return 0;
+    if (!pst_r_u64(&r, &last_sio_progress_cycle)) return 0;
+    if (!pst_r_u64(&r, &post_exception_cooldown_until)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.pc)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.target)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.cause)) return 0;
+    if (!pst_r_u32(&r, &s_defer_switch_from)) return 0;
+    if (!pst_r_u32(&r, &s_defer_switch_target)) return 0;
+    if (!pst_r_u32(&r, &pending)) return 0;
+    s_defer_switch_pending = pending ? 1 : 0;
+    return 1;
+}
+
+int interrupts_source_irq_slot_live(void) {
+    return source_irq_slot.pc != 0u || source_irq_slot.target != 0u || source_irq_slot.cause != 0u;
+}
+
+int interrupts_timing_perturb(const char *field) {
+    if (!field || strcmp(field,"irq_cooldown")) return 0;
+    post_exception_cooldown_until = psx_get_cycle_count() + 1000000u;
+    return 1;
+}
+
+int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
+
+int psx_irq_opcode_eligible(uint32_t pc) {
+    uint32_t instruction;
+    return !source_gpu_runtime_active() ||
+        !memory_peek_instruction_word(pc,&instruction) || (instruction>>26)!=0x12u;
+}
+
+int psx_interrupt_cooldown_active(void) {
+    return post_exception_cooldown_until != 0 &&
+           psx_get_cycle_count() < post_exception_cooldown_until;
+}
+
+int psx_check_interrupts_delay_slot(CPUState *cpu,uint32_t slot_pc,
+                                  uint32_t target,int taken,uint32_t instruction) {
+    if(source_gpu_runtime_active() && (instruction>>26)==0x12u)return 0;
+    extern uint32_t g_dirty_safe_resume_pc;
+    uint32_t previous=g_dirty_safe_resume_pc;
+    uint64_t before=g_irq_deliver_count;
+    source_irq_slot.pc=slot_pc;source_irq_slot.target=target;
+    source_irq_slot.cause=0x80000000u|(taken?0x40000000u:0u)|((instruction<<2)&0x30000000u);
+    g_dirty_safe_resume_pc=slot_pc-4u;cpu->pc=slot_pc-4u;
+    psx_publish_note(PSX_PUB_EPC_DELAY_SLOT,slot_pc-4u,slot_pc);
+    psx_check_interrupts_at(cpu,slot_pc-4u);
+    g_dirty_safe_resume_pc=previous;source_irq_slot.pc=0;
+    if(g_irq_deliver_count!=before && !cpu->pc)cpu->pc=slot_pc-4u;
+    return g_irq_deliver_count!=before;
+}
+
+void interrupts_observer_field_state(uint32_t *out) {
+    out[0]=cycles_since_vblank; out[1]=VBLANK_CYCLES;
+    out[2]=input_route_source_fields ? input_route_field_clock.field : UINT32_MAX;
+    if (input_route_source_raster) out[2]=input_route_raster.field;
 }

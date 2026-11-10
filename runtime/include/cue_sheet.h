@@ -40,6 +40,16 @@ struct CueTrackRef {
     uint32_t index01     = 0;      // track start, file-relative LBA
     uint32_t index00     = 0;      // pregap start, file-relative LBA
     bool     has_index00 = false;
+    // PREGAP / POSTGAP lengths in sectors. Unlike INDEX 00, these gaps are
+    // NOT stored in the file: the mount must insert them as silent sectors,
+    // shifting every later disc LBA (and the TOC) accordingly.
+    uint32_t pregap      = 0;
+    uint32_t postgap     = 0;
+    // Bytes per stored sector declared by the TRACK mode: 2352 for AUDIO and
+    // every "/2352" mode, 2048 or 2336 for the cooked modes. 0 = the mode named
+    // no size (unknown). The cue is the authority for a file's geometry; the
+    // file length is not (dumps can carry a partial trailing sector).
+    uint32_t sector_size = 0;
 };
 
 struct CueSheet {

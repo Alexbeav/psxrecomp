@@ -21,7 +21,7 @@ int main(void) {
         {1, 168, 16, 100, 16}, {1, 184, 16, 100, 16}, {1, 200, 16, 100, 16},
         {1, 216, 16, 100, 16}, {1, 232, 16, 100, 16}, {1, 248, 16, 100, 16},
     };
-    ws_ui_group_assign(text, 9, display_width, 0);
+    ws_ui_group_assign(text, 9, display_width, 0, 0);
     for (int i = 0; i < 9; i++) assert(text[i].anchor == 192);
     assert(scale_about(184, text[3].anchor, 4, 7) ==
            scale_about(184, text[4].anchor, 4, 7));
@@ -30,7 +30,7 @@ int main(void) {
         {2, 300, 16, 100, 16}, {2, 320, 16, 100, 16},
         {2, 340, 16, 100, 16}, {2, 360, 16, 100, 16},
     };
-    ws_ui_group_assign(monkeys, 4, display_width, 0);
+    ws_ui_group_assign(monkeys, 4, display_width, 0, 0);
     for (int i = 0; i < 4; i++) assert(monkeys[i].anchor == 384);
     for (int i = 0; i < 3; i++) {
         int32_t a = scale_about(monkeys[i].x, monkeys[i].anchor, 3, 4);
@@ -43,12 +43,12 @@ int main(void) {
         {3, 20, 16, 100, 16}, {3, 36, 16, 100, 16},
         {3, 330, 16, 100, 16}, {3, 346, 16, 100, 16},
     };
-    ws_ui_group_assign(edge_runs, 4, display_width, 0);
+    ws_ui_group_assign(edge_runs, 4, display_width, 0, 0);
     assert(edge_runs[0].anchor == 0 && edge_runs[1].anchor == 0);
     assert(edge_runs[2].anchor == 384 && edge_runs[3].anchor == 384);
 
     WsUiGroupItem dense[] = {{4, 8, 16, 100, 16}, {5, 340, 16, 100, 16}};
-    ws_ui_group_assign(dense, 2, display_width, 1);
+    ws_ui_group_assign(dense, 2, display_width, 1, 0);
     assert(dense[0].anchor == 192 && dense[1].anchor == 192);
 
     /* A digit drawn on top of its background box is ONE element even though
@@ -62,7 +62,7 @@ int main(void) {
         {12, 204, 60, 191,  8, 0, 0},  /* label stacked directly above it */
         {11, 205, 24,  10, 16, 0, 0},  /* top row, same columns           */
     };
-    ws_ui_group_assign(stacked, 4, display_width, 0);
+    ws_ui_group_assign(stacked, 4, display_width, 0, 0);
     assert(stacked[0].root == stacked[1].root);
     /* One scanline of seam between the label and the box is still one
      * element — this is the WipEout 3 lap readout that flew apart. */
@@ -82,7 +82,7 @@ int main(void) {
         {0xb938, 306,112, 236,  6, 0, 0},  /* meter bar, gap 18, rows meet */
         {0xf3e1, 418, 16, 236,  8, 0, 0},  /* bar end cap                  */
     };
-    ws_ui_group_assign(submitted, 4, 508, 0);
+    ws_ui_group_assign(submitted, 4, 508, 0, 0);
     assert(submitted[1].root == submitted[2].root);   /* readout joins meters */
     assert(submitted[2].root == submitted[3].root);
     assert(submitted[0].root != submitted[1].root);   /* left stays separate  */
@@ -96,8 +96,31 @@ int main(void) {
         {0x1111,  10,  4,  10, 4, 0, 0},   /* unrelated, breaks adjacency */
         {0xb938, 306,112, 236, 6, 0, 0},
     };
-    ws_ui_group_assign(apart, 3, 508, 0);
+    ws_ui_group_assign(apart, 3, 508, 0, 0);
     assert(apart[0].root != apart[2].root);
+
+    /* in_place: each run squashes about its own centre. Spider-Man's compass
+     * is two ring quads at [381,482] around a GTE-projected arrow the UI
+     * correction never moves; an edge anchor (512) pulled the ring ~70 px
+     * off the arrow at 32:9. The run keeps one shared anchor, so its two
+     * halves still meet. */
+    WsUiGroupItem compass[] = {
+        {0x5d9e901c, 381, 51, 184, 40, 0, 0},
+        {0x5d9e901c, 431, 51, 184, 40, 0, 0},
+        {0x2f754f62,  23, 26,  63, 12, 0, 0},  /* top-left health readout */
+    };
+    ws_ui_group_assign(compass, 3, 512, 0, 0);
+    assert(compass[0].anchor == 512 && compass[1].anchor == 512);
+    assert(compass[2].anchor == 0);
+    ws_ui_group_assign(compass, 3, 512, 0, 1);
+    assert(compass[0].anchor == 431 && compass[1].anchor == 431);
+    assert(compass[0].root == compass[1].root);
+    assert(compass[2].anchor == 23 + 26 / 2);
+    assert(scale_about(381 + 51, compass[0].anchor, 9, 32) ==
+           scale_about(431, compass[1].anchor, 9, 32));
+    /* A dense 2D menu still centres every item, whatever the anchor mode. */
+    ws_ui_group_assign(dense, 2, display_width, 1, 1);
+    assert(dense[0].anchor == 192 && dense[1].anchor == 192);
 
     assert(ws_ui_anchor_for_bounds(8, 32, display_width) == 0);
     assert(ws_ui_anchor_for_bounds(344, 32, display_width) == 384);

@@ -69,6 +69,31 @@ the paths to its generated C. The runtime provides:
   scheduler on host fibers (`psx_fiber.c`: Win32 Fibers / POSIX `ucontext`), and
   the optional debug TCP server (`debug_server.c`).
 
+### Device time during interrupts
+
+Scheduled video events continue while the CPU handles an interrupt, including
+when its interrupt-enable bit is clear. `interrupts_service_scheduled_events`
+advances the field clock and raises pending hardware status;
+`psx_check_interrupts` separately decides whether the CPU can take an interrupt.
+This lets a guest callback poll video status without stopping the video clock.
+
+In 480-line interlace, `gpu_read_gpustat` clears bit31 during the blank interval
+derived from the current field phase and GP1 vertical display range. Reads do
+not advance time. This retains the existing whole-field approximation; it does
+not implement complete raster timing or GPU command execution latency. See
+[GPU timing limits](../accuracy/axis5_gpu.md#d9--field-status-uses-the-existing-whole-field-clock).
+
+The GCC CTest targets `vblank_in_exception_test` and
+`gpu_interlace_status_test` exercise these production owners without retail data.
+
+In 480-line interlace with drawing-to-display disabled, GP0 primitives and
+GP0(02h) quick fills preserve the active field, one of the two alternating row
+sets. `gr_fill_rect` uses the shared field predicate before backend dispatch.
+It leaves draw-area and mask behavior unchanged. Copies and uploads still write
+both row sets. `gpu_interlace_render_test` covers this distinction, memory-edge
+wrapping and scaled output. Interlaced fills submit one native row at a time;
+this does not establish complete GPU timing or general performance.
+
 ### BIOS: LLE baseline + a swappable HLE tier
 
 The recompiled `SCPH1001.BIN` is the **low-level (LLE) baseline**: it *is* the
@@ -129,7 +154,11 @@ The backend tier is resolved in `overlay_backend.c` (see `main.cpp` around the
 
 Compiled overlays are stored in a content-addressed cache namespaced by
 compiler and target ABI (`<game>/gcc/<arch-abi>/…` vs `<game>/tcc/…`); a `gcc`
-shard wins over a `tcc` shard for the same region. See
+shard wins over a `tcc` shard for the same region. The `<arch-abi>` is the
+runtime's own (`PSX_OVERLAY_ARCH_ABI` in `overlay_loader.h`, the running slice
+of a universal macOS binary): the runtime exports it to every compile it spawns
+and macOS compiles pass the matching `-arch`, so an x86_64 runtime under Rosetta
+gets x86_64 shards even though Xcode's clang defaults to arm64. See
 [`docs/FEATURES.md`](FEATURES.md), [`docs/OVERLAY_CACHE_V2.md`](OVERLAY_CACHE_V2.md),
 and [`docs/ASYNC_OVERLAY_COMPILE.md`](ASYNC_OVERLAY_COMPILE.md).
 
@@ -147,7 +176,7 @@ Three GPU backends behind one interface:
   request it, otherwise the runtime falls back to OpenGL.
 
 Widescreen (a genuine wider GTE FOV, not a stretch) is opt-in and gen-time; see
-[`WIDESCREEN.md`](../WIDESCREEN.md) and
+[`WIDESCREEN.md`](WIDESCREEN.md) and
 [`docs/internal/NATIVE_WIDE_PLAN.md`](internal/NATIVE_WIDE_PLAN.md).
 
 ## The oracle model (how correctness is checked)
@@ -163,7 +192,7 @@ checking is done by querying both, never by sharing state in one process. There
 is also a first-divergence **co-sim** build that cycle-locksteps the compiled
 backend against the interpreter. See
 [`docs/internal/COSIM_ORACLE.md`](internal/COSIM_ORACLE.md),
-[`docs/config_schema.md`](config_schema.md), and [`TCP_COMMANDS.md`](../TCP_COMMANDS.md).
+[`docs/config_schema.md`](config_schema.md), and [`TCP_COMMANDS.md`](TCP_COMMANDS.md).
 
 ## Configuration
 

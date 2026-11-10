@@ -78,7 +78,7 @@ def gen_c(recompiler, overlay, tmp):
         raise SystemExit(f"no _full*.c emitted in {out}")
     chunks = []
     for name in full:
-        with open(os.path.join(out, name)) as f:
+        with open(os.path.join(out, name), encoding='utf-8') as f:
             chunks.append(f.read())
     return "\n".join(chunks)
 

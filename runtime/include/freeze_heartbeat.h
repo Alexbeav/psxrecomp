@@ -22,8 +22,16 @@ extern "C" {
 /* Spawn the heartbeat thread. Idempotent — second call is a no-op.
  * `backend_label` is written into the heartbeat JSON as "backend"
  * (e.g. "psx-runtime" or "psx-beetle") so a reader can tell which
- * binary produced the file. */
+ * binary produced the file. No-op in PSX_NO_DEBUG_TOOLS builds.
+ * Reads PSX_DUMP_AT_FRAME=<n> here: one full dump at the first sample whose
+ * frame count is n or more, outside the automatic dump budget. */
 void freeze_heartbeat_start(const char *backend_label);
+
+/* Suppress automatic wedge classification while the host intentionally parks
+ * guest execution, such as save-state/rewind overlays or netplay admit waits.
+ * Heartbeat JSON still updates; the detector window is reset while paused so
+ * the first post-resume window is built only from live guest samples. */
+void freeze_heartbeat_set_paused(int paused);
 
 #ifdef __cplusplus
 }

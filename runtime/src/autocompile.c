@@ -1,7 +1,10 @@
-/* autocompile.c — see autocompile.h. Windows-first (the project's dev
- * platform); on other hosts the spawn is a graceful no-op and the manual
- * compile_overlays.py flow still works. */
+/* autocompile.c — see autocompile.h. Windows spawns through CreateProcess
+ * with a kill-on-close job and an incremental PSX_SHARD_PUBLISHED handoff;
+ * Linux/macOS spawn through fork/exec (/bin/sh -c) in their own process group
+ * and pick every shard up with the batch-end cache rescan. The manual
+ * compile_overlays.py flow still works everywhere. */
 #include "autocompile.h"
+#include "host_span_ring.h"
 #include "overlay_loader.h"
 
 #include <stdarg.h>   /* autocompile_set_degraded takes a format + varargs */
@@ -13,13 +16,29 @@
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#else
+#  include <errno.h>
+#  include <fcntl.h>
+#  include <pthread.h>
+#  include <signal.h>
+#  include <sys/wait.h>
+#  include <time.h>
+#  include <unistd.h>
+#  ifdef __linux__
+#    include <sys/prctl.h>
+#  endif
 #endif
 
 #ifndef PSX_OVERLAY_FLAVOR
 #define PSX_OVERLAY_FLAVOR 0
 #endif
 
-static char s_cmd[4096];   /* large: the runtime-constructed bundled tcc cmd has
+/* 8192, not 4096: a 208-address --force-interior list made the runtime-built command
+ * 6,392 chars, and snprintf's silent truncation cut it mid-argument, so every compile
+ * failed identically and autocompile latched degraded for the process lifetime
+ * (Parasite Eve, 2026-09-15). cmd.exe's own line limit is ~8,191 chars, so this is the
+ * useful ceiling; beyond it the invocation needs an @file, not a bigger buffer. */
+static char s_cmd[8192];   /* large: the runtime-constructed bundled tcc cmd has
                             * many absolute paths (python+script+recompiler+tcc+...) */
 static char s_cwd[512];
 /* Canonical loader cache dir + captures file (see autocompile_set_cache_paths).
@@ -27,6 +46,9 @@ static char s_cwd[512];
  * the loader's READ location, regardless of what the configured command says. */
 static char s_cache_dir[512];
 static char s_captures[512];
+#ifdef _WIN32
+#include "autocompile_child_env.h"
+#endif
 
 enum { AC_IDLE = 0, AC_RUNNING = 1, AC_DONE = 2 };
 #ifdef _WIN32
@@ -39,10 +61,16 @@ static void ac_state_store(int value) {
     InterlockedExchange(&s_state, (LONG)value);
 }
 #else
+/* Written by the watcher thread (DONE) and the emulation thread (RUNNING/IDLE),
+ * read by both: same seq-cst discipline as the Interlocked pair above. */
 static int s_state     = AC_IDLE;
 static int s_exit_code = -1;
-static int ac_state_load(void) { return s_state; }
-static void ac_state_store(int value) { s_state = value; }
+static int ac_state_load(void) {
+    return __atomic_load_n(&s_state, __ATOMIC_SEQ_CST);
+}
+static void ac_state_store(int value) {
+    __atomic_store_n(&s_state, value, __ATOMIC_SEQ_CST);
+}
 #endif
 static uint32_t     s_runs      = 0;
 static uint32_t     s_fails     = 0;
@@ -60,7 +88,9 @@ static uint64_t autocompile_now_ms(void) {
 #ifdef _WIN32
     return (uint64_t)GetTickCount64();
 #else
-    return 0;
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
 #endif
 }
 
@@ -77,11 +107,6 @@ static uint64_t autocompile_now_ms(void) {
 static int s_reported_broken = 0;
 /* Defined below, once the child-output tail ring it reads is declared. */
 static void autocompile_report_broken_once(void);
-#ifndef _WIN32
-/* The compile spawner and its output ring are Windows-only in this file, so
- * there is no child output to quote off-Windows and nothing to report. */
-static void autocompile_report_broken_once(void) { }
-#endif
 
 static void autocompile_note_failure(void) {
     s_fails++;
@@ -112,6 +137,29 @@ static uint32_t     s_shard_skipped    = 0;   /* last run */
 static uint32_t     s_shard_fail_total = 0;   /* accumulated across all runs */
 static int          s_shard_result_seen = 0;  /* did we parse a result line? */
 
+#define AC_FAIL_CLASS_MAX   8
+#define AC_FAIL_TEXT_MAX    240
+#define AC_REPORT_TAIL_MAX  2000
+typedef struct {
+    char     name[32];
+    unsigned count;
+    char     first[AC_FAIL_TEXT_MAX];        /* the first SHARD FAIL line */
+    char     first_error[AC_FAIL_TEXT_MAX];  /* the compiler's line, or "" */
+} AcFailClass;
+static AcFailClass  s_fail_class[AC_FAIL_CLASS_MAX];
+static unsigned     s_fail_class_count = 0;
+static unsigned     s_fail_lines = 0;            /* SHARD FAIL lines, all runs */
+static unsigned     s_fail_lines_unclassed = 0;  /* of them, in classes past the bound */
+static uint32_t     s_units_ok_total = 0;        /* finished runs, summed */
+static uint32_t     s_units_skipped_total = 0;
+static uint32_t     s_runs_with_result = 0;      /* finished runs that printed a result line */
+static uint32_t     s_runs_stopped_at_quit = 0;  /* runs a normal quit stopped (PS1B-395) */
+/* The compiler's error line that belongs to the next SHARD FAIL line. */
+static char         s_pending_error[AC_FAIL_TEXT_MAX];
+static int          s_after_compile_error = 0;
+
+
+
 /* ---- Degraded-state channel (portable; read by autocompile_status_json) ----
  *
  * Every warning in this file goes to stdout, and the shipped runtime links
@@ -137,6 +185,32 @@ static void autocompile_set_degraded(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(s_degraded, sizeof(s_degraded), fmt, ap);
     va_end(ap);
+}
+
+int autocompile_check_toolchain_hash(const char *toolchain_include_dir, uint32_t runtime_hash) {
+    if (!toolchain_include_dir || !toolchain_include_dir[0] || runtime_hash == 0) return 1;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/overlay_codegen_hash.h", toolchain_include_dir);
+    FILE *f = fopen(path, "rb");
+    if (!f) return 1;
+    char text[1024];
+    size_t n = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[n] = '\0';
+    const char *key = strstr(text, "PSX_OVERLAY_CODEGEN_HASH");
+    if (!key) return 1;
+    key += strlen("PSX_OVERLAY_CODEGEN_HASH");
+    char *end = NULL;
+    unsigned long tk = strtoul(key, &end, 0);
+    if (end == key) return 1;
+    if ((uint32_t)tk == runtime_hash) return 1;
+    autocompile_set_degraded(
+        "stale overlay toolchain: %s names codegen hash 0x%08lx but this runtime was built with "
+        "0x%08x, so compiled shards would land in a cache directory the runtime never reads and "
+        "every overlay would stay interpreted. Restage overlay_toolchain/ from the framework this "
+        "runtime was built against (psxrecomp_cli.py rebuild, or tools/release_stage.py).",
+        path, tk, (unsigned)runtime_hash);
+    return 0;
 }
 
 const char *autocompile_degraded_reason(void) {
@@ -185,9 +259,12 @@ static unsigned s_publish_prepare_count;
 static unsigned s_publish_prepare_fail;
 static unsigned s_publish_prepare_retry;
 static unsigned s_publish_prepare_giveup;
+#endif /* _WIN32 */
+/* One child stdout line being assembled by the watcher (both platforms). */
 static char s_child_line[1024];
 static int  s_child_line_len = 0;
 static int  s_child_line_overflow = 0;
+#ifdef _WIN32
 
 /* See the forward declaration above for why this is loud. */
 static void autocompile_report_broken_once(void) {
@@ -225,6 +302,8 @@ static void autocompile_report_broken_once(void) {
         (n > 0 && tail[n - 1] != '\n') ? "\n" : "");
     fflush(stdout);
 }
+
+#endif /* _WIN32 */
 
 /* Parse result markers while stdout is streaming, not from s_out after exit.
  * The configured child command may chain post-processing after
@@ -273,7 +352,89 @@ static int shard_result_line_locked(const char *line) {
     return 1;
 }
 
+/* Per-platform: Windows also queues PSX_SHARD_PUBLISHED paths for the
+ * incremental publisher; POSIX only records the result counts and lets the
+ * batch-end rescan load what the run wrote. Both run under the output lock. */
+static void fail_text_copy(char *dst, const char *src) {
+    while (*src == ' ' || *src == '\t') src++;
+    snprintf(dst, AC_FAIL_TEXT_MAX, "%s", src);
+}
+
+static void compile_report_line_locked(const char *line) {
+    const char *t = line;
+    while (*t == ' ' || *t == '\t') t++;
+    if (strncmp(t, "SHARD FAIL [", 12) == 0) {
+        const char *cls = t + 12;
+        const char *end = strchr(cls, ']');
+        if (!end || end == cls) return;
+        size_t n = (size_t)(end - cls);
+        if (n >= sizeof(s_fail_class[0].name)) n = sizeof(s_fail_class[0].name) - 1;
+        s_fail_lines++;
+        AcFailClass *hit = NULL;
+        for (unsigned i = 0; i < s_fail_class_count; i++) {
+            if (strlen(s_fail_class[i].name) == n &&
+                memcmp(s_fail_class[i].name, cls, n) == 0) {
+                hit = &s_fail_class[i];
+                break;
+            }
+        }
+        if (hit) {
+            hit->count++;
+        } else if (s_fail_class_count < AC_FAIL_CLASS_MAX) {
+            hit = &s_fail_class[s_fail_class_count++];
+            memcpy(hit->name, cls, n);
+            hit->name[n] = '\0';
+            hit->count = 1;
+            fail_text_copy(hit->first, t);
+            snprintf(hit->first_error, sizeof(hit->first_error), "%s",
+                     s_pending_error);
+            /* Once per class per start, on stderr, so a headless log shows
+             * it. The run report carries the same two lines and the counts. */
+            fprintf(stderr,
+                    "psxrecomp: overlay compile: a unit failed and runs "
+                    "interpreted: %s%s%s\n",
+                    hit->first, hit->first_error[0] ? " | " : "",
+                    hit->first_error);
+        } else {
+            if (!s_fail_lines_unclassed)
+                fprintf(stderr,
+                        "psxrecomp: overlay compile: more than %d failure "
+                        "classes; later classes are counted, not named\n",
+                        AC_FAIL_CLASS_MAX);
+            s_fail_lines_unclassed++;
+        }
+        s_pending_error[0] = '\0';
+        s_after_compile_error = 0;
+        return;
+    }
+    if (strncmp(t, "COMPILE ERROR", 13) == 0 ||
+        strncmp(t, "TCC COMPILE ERROR", 17) == 0) {
+        s_after_compile_error = 1;
+        s_pending_error[0] = '\0';
+        /* "COMPILE ERROR: <text>" says it on the same line. "COMPILE ERROR
+         * (exit N):" is followed by the compiler's own output. */
+        const char *colon = strchr(t, ':');
+        if (colon) {
+            colon++;
+            while (*colon == ' ' || *colon == '\t') colon++;
+            if (*colon) fail_text_copy(s_pending_error, colon);
+        }
+        return;
+    }
+    if (s_after_compile_error && *t) {
+        /* Keep the first line; prefer the first one that says "error" (a
+         * compiler opens with "In file included from ..." as often as not). */
+        if (!s_pending_error[0] ||
+            (!strstr(s_pending_error, "error") && strstr(t, "error")))
+            fail_text_copy(s_pending_error, t);
+    }
+}
+
+static void child_line_locked(void);
+
+#ifdef _WIN32
 static void child_line_locked(void) {
+    compile_report_line_locked(s_child_line);
     if (shard_result_line_locked(s_child_line)) return;
     static const char marker[] = "PSX_SHARD_PUBLISHED ";
     if (strncmp(s_child_line, marker, sizeof(marker) - 1) != 0) return;
@@ -294,6 +455,7 @@ static void child_line_locked(void) {
     s_publish_raw_tail = item;
     WakeConditionVariable(&s_publish_cv);
 }
+#endif /* _WIN32 */
 
 static void publish_parse_locked(const char *buf, int n) {
     for (int i = 0; i < n; i++) {
@@ -315,6 +477,7 @@ static void publish_parse_locked(const char *buf, int n) {
     }
 }
 
+#ifdef _WIN32
 /* The pipe reader only queues paths. A separate worker first-maps them, so a
  * slow antivirus/disk/loader event cannot stop stdout draining and deadlock the
  * compiler. There is exactly one mapped handoff at a time. The worker also
@@ -355,7 +518,9 @@ static DWORD WINAPI publish_prepare_thread_main(LPVOID unused) {
         int attempts = 0;
         for (;;) {
             QueryPerformanceCounter(&q0);
+            const uint64_t span_t0 = host_span_begin();
             item->image = overlay_loader_prepare_published(item->path);
+            host_span_end(HSPAN_AC_PREPARE_IMAGE, span_t0, item->image ? 1u : 0u);
             QueryPerformanceCounter(&q1);
             attempts++;
             if (item->image || attempts >= AC_PREPARE_ATTEMPTS) break;
@@ -574,6 +739,7 @@ typedef struct { HANDLE read_pipe; HANDLE proc; } WatchCtx;
 
 static DWORD WINAPI watch_thread(LPVOID arg) {
     WatchCtx *ctx = (WatchCtx *)arg;
+    const uint64_t watch_t0 = host_span_begin();
     char buf[1024];
     DWORD got;
     while (ReadFile(ctx->read_pipe, buf, sizeof(buf), &got, NULL) && got > 0)
@@ -582,6 +748,7 @@ static DWORD WINAPI watch_thread(LPVOID arg) {
     WaitForSingleObject(ctx->proc, INFINITE);
     DWORD code = (DWORD)-1;
     GetExitCodeProcess(ctx->proc, &code);
+    host_span_end(HSPAN_AC_CHILD, watch_t0, (uint32_t)code);
     EnterCriticalSection(&s_out_lock);
     /* A marker/result line cut off by child termination is not trustworthy.
      * Completion will force the idempotent directory rescan instead. */
@@ -602,6 +769,175 @@ static DWORD WINAPI watch_thread(LPVOID arg) {
     return 0;
 }
 #endif /* _WIN32 */
+
+#ifndef _WIN32
+/* ---- POSIX spawner (Linux / macOS) ------------------------------------
+ *
+ * Mirrors the Windows path above with fork/exec: `/bin/sh -c <cmd>` runs the
+ * configured command in its own process group, stdout+stderr flow through one
+ * pipe into the same tail ring, a watcher thread drains the pipe and reaps
+ * the child, and the emulation thread's poll turns DONE into the one
+ * idempotent cache rescan that makes every shard the run wrote loadable.
+ * There is no PSX_SHARD_PUBLISHED handoff off Windows; the rescan is the
+ * same fallback the Windows path takes when a marker line is cut off.
+ *
+ * Until 2026-09-16 autocompile_request() was `return 0` on every non-Windows
+ * host. Captures were written, the packager staged a working toolchain, the
+ * boot log said "overlay autocompile enabled", and not one shard was ever
+ * compiled: a Linux or macOS player ran every overlay interpreted for the
+ * whole session (Parasite Eve on Rocky 9: 1.35e9 interpreted instructions by
+ * frame 13k with /usr/bin/gcc beside the exe). */
+static pthread_mutex_t s_out_lock = PTHREAD_MUTEX_INITIALIZER;
+static int       s_out_lock_init = 0;     /* autocompile_configure() ran */
+static pid_t     s_child = 0;             /* live child; guarded by s_out_lock */
+static pthread_t s_watch_thread;
+static int       s_watch_thread_live = 0; /* emulation thread only */
+
+typedef struct { int read_fd; pid_t pid; } PosixWatchCtx;
+
+static void autocompile_report_broken_once(void) {
+    if (s_reported_broken || s_consecutive_fails < AC_LOUD_AFTER_FAILS) return;
+    s_reported_broken = 1;
+    autocompile_set_degraded(
+        "overlay autocompile failed %u consecutive runs (last exit %d); "
+        "nothing is being compiled to native code, so overlay execution stays "
+        "in the interpreter. Check [runtime] overlay_autocompile_cmd in "
+        "game.toml: every path in it must resolve from the process working "
+        "directory.",
+        s_consecutive_fails, (int)s_exit_code);
+    char tail[AC_OUT_CAP];
+    int n = 0;
+    if (s_out_lock_init) {
+        pthread_mutex_lock(&s_out_lock);
+        n = s_out_len < (int)sizeof tail - 1 ? s_out_len : (int)sizeof tail - 1;
+        if (n > 0) memcpy(tail, s_out + (s_out_len - n), (size_t)n);
+        pthread_mutex_unlock(&s_out_lock);
+    }
+    tail[n > 0 ? n : 0] = '\0';
+    fprintf(stdout,
+        "psxrecomp: WARNING: overlay autocompile has failed %u consecutive "
+        "runs (last exit %d).\n"
+        "  Nothing is being compiled to native code, so overlay execution "
+        "stays in the interpreter and\n"
+        "  frame times will be far worse than this build is capable of.\n"
+        "  Check [runtime] overlay_autocompile_cmd in game.toml: every path in "
+        "it must resolve from the\n"
+        "  process working directory, and the recompiler and "
+        "tools/compile_overlays.py it names must exist.\n"
+        "  Last compiler output:\n%s%s",
+        s_consecutive_fails, (int)s_exit_code,
+        n > 0 ? tail : "    (no output captured)\n",
+        (n > 0 && tail[n - 1] != '\n') ? "\n" : "");
+    fflush(stdout);
+}
+
+static void child_line_locked(void) {
+    compile_report_line_locked(s_child_line);
+    (void)shard_result_line_locked(s_child_line);
+}
+
+static void out_append(const char *buf, int n) {
+    pthread_mutex_lock(&s_out_lock);
+    publish_parse_locked(buf, n);
+    if (n >= AC_OUT_CAP) {
+        memcpy(s_out, buf + (n - AC_OUT_CAP), AC_OUT_CAP);
+        s_out_len = AC_OUT_CAP;
+    } else {
+        if (s_out_len + n > AC_OUT_CAP) {
+            int keep = AC_OUT_CAP - n;
+            memmove(s_out, s_out + (s_out_len - keep), keep);
+            s_out_len = keep;
+        }
+        memcpy(s_out + s_out_len, buf, n);
+        s_out_len += n;
+    }
+    pthread_mutex_unlock(&s_out_lock);
+}
+
+static void *posix_watch_thread(void *arg) {
+    PosixWatchCtx *ctx = (PosixWatchCtx *)arg;
+    char buf[1024];
+    for (;;) {
+        ssize_t got = read(ctx->read_fd, buf, sizeof buf);
+        if (got > 0) { out_append(buf, (int)got); continue; }
+        if (got < 0 && errno == EINTR) continue;
+        break;   /* EOF: every holder of the write end (sh, python, gcc) is gone */
+    }
+    close(ctx->read_fd);
+    int status = 0;
+    pid_t r;
+    do { r = waitpid(ctx->pid, &status, 0); } while (r < 0 && errno == EINTR);
+    int code = -1;
+    if (r == ctx->pid) {
+        if (WIFEXITED(status))        code = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status)) code = 128 + WTERMSIG(status);
+    }
+    pthread_mutex_lock(&s_out_lock);
+    /* A marker/result line cut off by child termination is not trustworthy.
+     * Completion will force the idempotent directory rescan instead. */
+    if (s_child_line_len || s_child_line_overflow) {
+        s_publish_parse_fail_run++;
+        s_child_line_len = 0;
+        s_child_line_overflow = 0;
+    }
+    if (s_child == ctx->pid) s_child = 0;
+    pthread_mutex_unlock(&s_out_lock);
+    free(ctx);
+    __atomic_store_n(&s_exit_code, code, __ATOMIC_SEQ_CST);
+    ac_state_store(AC_DONE);
+    return NULL;
+}
+
+/* Name the interpreter the spawn will run, once, at configure time: the
+ * command's first token, resolved the way `sh -c` resolves it. A path that
+ * does not exist or is not executable means every run fails identically, so
+ * say so before the first compile instead of after three failed spawns. A
+ * bare name (`python3`) is left to PATH. */
+static void autocompile_report_interpreter(void) {
+    char tok[1024];
+    size_t n = 0;
+    const char *p = s_cmd;
+    if (*p == '"' || *p == '\'') {
+        const char q = *p++;
+        while (*p && *p != q && n + 1 < sizeof(tok)) tok[n++] = *p++;
+    } else {
+        while (*p && *p != ' ' && *p != '\t' && n + 1 < sizeof(tok)) tok[n++] = *p++;
+    }
+    tok[n] = '\0';
+    if (!tok[0] || !strchr(tok, '/')) return;
+    if (access(tok, X_OK) == 0) {
+        fprintf(stdout, "psxrecomp: overlay autocompile interpreter: %s\n", tok);
+        return;
+    }
+    autocompile_set_degraded(
+        "overlay autocompile interpreter \"%s\" is missing or not executable; "
+        "every compile run will fail and overlay execution will stay in the "
+        "interpreter.", tok);
+    fprintf(stdout,
+        "psxrecomp: overlay autocompile interpreter '%s' is missing or not "
+        "executable — every compile run will fail.\n", tok);
+    fflush(stdout);
+}
+
+/* Kill the whole compile tree (sh -> python -> gcc share the child's process
+ * group), then reap it through the watcher. SIGTERM first so a compiler can
+ * finish its current write; SIGKILL if the tree ignores it. */
+static void posix_kill_child_tree(void) {
+    pid_t child;
+    pthread_mutex_lock(&s_out_lock);
+    child = s_child;
+    pthread_mutex_unlock(&s_out_lock);
+    if (child <= 0) return;
+    if (kill(-child, SIGTERM) != 0) (void)kill(child, SIGTERM);
+    for (int i = 0; i < 30 && ac_state_load() == AC_RUNNING; i++) {
+        struct timespec ts = { 0, 100000000L };   /* 100 ms */
+        nanosleep(&ts, NULL);
+    }
+    if (ac_state_load() == AC_RUNNING) {
+        if (kill(-child, SIGKILL) != 0) (void)kill(child, SIGKILL);
+    }
+}
+#endif /* !_WIN32 */
 
 #ifdef _WIN32
 /* Name the interpreter the spawn will actually run, once, at configure time.
@@ -754,6 +1090,18 @@ static void autocompile_check_path_args(void) {
 #endif /* _WIN32 */
 
 void autocompile_configure(const char *cmd, const char *cwd) {
+    if (cmd && strlen(cmd) >= sizeof(s_cmd)) {
+        /* Loud, and off: a truncated command line fails argparse on every retry
+         * with an error that never mentions the real cause. */
+        fprintf(stderr,
+                "psxrecomp: overlay autocompile command is %zu chars, over the %zu-char "
+                "limit; autocompile DISABLED. Shorten the command (an @file for long "
+                "--force-interior lists) instead of relying on truncation.\n",
+                strlen(cmd), sizeof(s_cmd) - 1);
+        s_cmd[0] = '\0';
+        snprintf(s_cwd, sizeof(s_cwd), "%s", cwd ? cwd : "");
+        return;
+    }
     snprintf(s_cmd, sizeof(s_cmd), "%s", cmd ? cmd : "");
     snprintf(s_cwd, sizeof(s_cwd), "%s", cwd ? cwd : "");
 #ifdef _WIN32
@@ -766,6 +1114,27 @@ void autocompile_configure(const char *cmd, const char *cwd) {
         autocompile_report_interpreter();
         autocompile_check_path_args();
     }
+#else
+    s_out_lock_init = 1;
+    /* Pin WRITE cache + READ captures + flavor + arch-abi to the loader's
+     * canonical values in the environment every child inherits: same contract
+     * as the SetEnvironmentVariableA block in the Windows request path (see it for
+     * why each matters). Done once here, on the emulation thread before any
+     * worker exists, because glibc's setenv is not safe against a concurrent
+     * getenv on another thread. autocompile_set_cache_paths() runs first. */
+    if (s_cache_dir[0]) setenv("PSX_OVERLAY_CACHE_DIR", s_cache_dir, 1);
+    if (s_captures[0])  setenv("PSX_OVERLAY_CAPTURES",  s_captures, 1);
+    setenv("PSX_OVERLAY_LIVE_AUTOCOMPILE", "1", 1);
+    {
+        char flavor_buf[16];
+        snprintf(flavor_buf, sizeof flavor_buf, "%d", (int)PSX_OVERLAY_FLAVOR);
+        setenv("PSX_OVERLAY_FLAVOR", flavor_buf, 1);
+    }
+    /* The architecture too (see the Windows block): Xcode's clang is an
+     * arm64-only binary and defaults to arm64, so an x86_64 runtime under
+     * Rosetta used to get arm64 shards it could never load. */
+    setenv("PSX_OVERLAY_ARCH_ABI", PSX_OVERLAY_ARCH_ABI, 1);
+    if (s_cmd[0]) autocompile_report_interpreter();
 #endif
 }
 
@@ -815,7 +1184,15 @@ int autocompile_toolchain_available(void) {
     return found;
 }
 
+static int autocompile_request_impl(void);
 int autocompile_request(void) {
+    const uint64_t span_t0 = host_span_begin();
+    int started = autocompile_request_impl();
+    if (started) host_span_end(HSPAN_AC_REQUEST, span_t0, 0);
+    return started;
+}
+
+static int autocompile_request_impl(void) {
     /* DONE owns an unconsumed cache rescan/result. Only the emulation-thread
      * poll may return it to IDLE; never overwrite it with another child. */
     if (!autocompile_configured() || ac_state_load() != AC_IDLE) return 0;
@@ -869,6 +1246,12 @@ int autocompile_request(void) {
         snprintf(flavor_buf, sizeof flavor_buf, "%d", (int)PSX_OVERLAY_FLAVOR);
         SetEnvironmentVariableA("PSX_OVERLAY_FLAVOR", flavor_buf);
     }
+    /* And the ARCHITECTURE: shards must be this runtime's "<os>-<arch>"
+     * (overlay_loader.h), whatever the Python or the compiler binary runs as.
+     * On Windows the bundled Python, MinGW gcc and tcc are all x64, so this
+     * names what the tool derives anyway; on macOS it is what makes an x64
+     * runtime under Rosetta get x86_64 shards from an arm64-only clang. */
+    SetEnvironmentVariableA("PSX_OVERLAY_ARCH_ABI", PSX_OVERLAY_ARCH_ABI);
 
     /* cmd.exe /C resolves the command via PATH and supports the relative
      * paths in the configured line (cwd = project root). The WHOLE command is
@@ -879,15 +1262,39 @@ int autocompile_request(void) {
      * is incorrect" — every autocompile run failed and the reshard silently
      * never happened). With the outer quotes cmd strips exactly those two and
      * executes the inner command verbatim. */
-    char full[4200];
+    char full[sizeof(s_cmd) + 32];   /* grows with s_cmd: the wrapper must never be the new truncation point */
     snprintf(full, sizeof(full), "cmd.exe /C \"%s\"", s_cmd);
 
-    STARTUPINFOA si;
+    STARTUPINFOEXA si;
     memset(&si, 0, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = wr;
-    si.hStdError  = wr;
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdOutput = wr;
+    si.StartupInfo.hStdError  = wr;
+    /* Only the log pipe belongs to the compiler. Inheriting an open save,
+     * replay or settings handle would prevent its rename while compiling. */
+    HANDLE inherit_list[1] = { wr };
+    SIZE_T attr_size = 0;
+    (void)InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+    si.lpAttributeList = attr_size
+        ? (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, attr_size)
+        : NULL;
+    if (!si.lpAttributeList ||
+        !InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attr_size)) {
+        if (si.lpAttributeList) HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+        CloseHandle(wr); CloseHandle(rd);
+        autocompile_note_failure();
+        return 0;
+    }
+    if (!UpdateProcThreadAttribute(si.lpAttributeList, 0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit_list, sizeof(inherit_list),
+            NULL, NULL)) {
+        DeleteProcThreadAttributeList(si.lpAttributeList);
+        HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+        CloseHandle(wr); CloseHandle(rd);
+        autocompile_note_failure();
+        return 0;
+    }
     PROCESS_INFORMATION pi;
     memset(&pi, 0, sizeof(pi));
     /* Kill-on-close job for the whole compile tree. Created before the child
@@ -911,10 +1318,22 @@ int autocompile_request(void) {
     /* Compilation is opportunistic: it must never outrank the interpreter that
      * keeps the current frame alive. cmd -> python -> gcc inherit below-normal
      * priority, while the live compile script also defaults to one worker. */
+    char *child_env = s_cache_dir[0] ? ac_child_environment(s_cache_dir) : NULL;
+    if (s_cache_dir[0] && !child_env) {
+        DeleteProcThreadAttributeList(si.lpAttributeList);
+        HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+        if (job) CloseHandle(job);
+        CloseHandle(rd); CloseHandle(wr);
+        autocompile_note_failure();
+        return 0;
+    }
     BOOL ok = CreateProcessA(NULL, full, NULL, NULL, TRUE,
                              CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS |
-                                 CREATE_SUSPENDED,
-                             NULL, s_cwd[0] ? s_cwd : NULL, &si, &pi);
+                                 CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+                             child_env, s_cwd[0] ? s_cwd : NULL, &si.StartupInfo, &pi);
+    DeleteProcThreadAttributeList(si.lpAttributeList);
+    HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+    free(child_env);
     CloseHandle(wr);
     if (!ok) {
         if (job) CloseHandle(job);
@@ -985,7 +1404,97 @@ int autocompile_request(void) {
     }
     return 1;
 #else
-    return 0;  /* non-Windows hosts: manual compile flow only */
+    pthread_mutex_lock(&s_out_lock);
+    s_publish_drops_run = 0;
+    s_publish_load_fail_run = s_publish_parse_fail_run = 0;
+    s_child_line_len = 0;
+    s_child_line_overflow = 0;
+    s_out_len = 0;
+    s_shard_ok = s_shard_fail = s_shard_skipped = 0;
+    s_shard_result_seen = 0;
+    pthread_mutex_unlock(&s_out_lock);
+    __atomic_store_n(&s_exit_code, -1, __ATOMIC_SEQ_CST);
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        autocompile_note_failure();
+        return 0;
+    }
+    /* Close-on-exec on both ends: the child's dup2 onto 1/2 makes fresh
+     * descriptors without the flag, and nothing else may inherit the pipe. */
+    (void)fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+
+    /* The child inherits the PSX_OVERLAY_* pins set once in configure(). */
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        autocompile_note_failure();
+        return 0;
+    }
+    if (pid == 0) {
+        /* Child: async-signal-safe calls only until exec. Own process group so
+         * shutdown can kill sh -> python -> gcc together; nice(10) keeps the
+         * compile below the emulation thread (BELOW_NORMAL_PRIORITY_CLASS). */
+        (void)setpgid(0, 0);
+        (void)nice(10);
+#ifdef __linux__
+        /* Crash-orphan protection for the direct child, the POSIX stand-in
+         * for the Windows kill-on-close job: if the runtime dies without
+         * reaching autocompile_shutdown, the kernel signals sh. A grandchild
+         * (python, gcc) outliving sh dies on its next write to the pipe
+         * whose read end went away with the runtime (SIGPIPE). */
+        (void)prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if (getppid() == 1) _exit(125);   /* parent already gone before prctl */
+#endif
+        if (s_cwd[0] && chdir(s_cwd) != 0) _exit(126);
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            (void)dup2(devnull, 0);
+            if (devnull > 2) close(devnull);
+        }
+        (void)dup2(fds[1], 1);
+        (void)dup2(fds[1], 2);
+        execl("/bin/sh", "sh", "-c", s_cmd, (char *)NULL);
+        _exit(127);
+    }
+    (void)setpgid(pid, pid);   /* both sides set it: no window for the kill */
+    close(fds[1]);
+
+    PosixWatchCtx *ctx = (PosixWatchCtx *)calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        /* The child is already running. Leaving it detached would permit the
+         * state to remain IDLE and a second writer to enter the same cache. */
+        (void)kill(-pid, SIGKILL);
+        (void)waitpid(pid, NULL, 0);
+        close(fds[0]);
+        autocompile_note_failure();
+        return 0;
+    }
+    ctx->read_fd = fds[0];
+    ctx->pid     = pid;
+    pthread_mutex_lock(&s_out_lock);
+    s_child = pid;
+    pthread_mutex_unlock(&s_out_lock);
+    ac_state_store(AC_RUNNING);
+    s_runs++;
+    if (pthread_create(&s_watch_thread, NULL, posix_watch_thread, ctx) != 0) {
+        /* Without the watcher nobody drains stdout, observes completion, or
+         * reaps the child. Cancel the just-created child fail-closed. */
+        (void)kill(-pid, SIGKILL);
+        (void)waitpid(pid, NULL, 0);
+        close(fds[0]);
+        free(ctx);
+        pthread_mutex_lock(&s_out_lock);
+        s_child = 0;
+        pthread_mutex_unlock(&s_out_lock);
+        ac_state_store(AC_IDLE);
+        autocompile_note_failure();
+        return 0;
+    }
+    s_watch_thread_live = 1;
+    return 1;
 #endif
 }
 
@@ -993,14 +1502,20 @@ int autocompile_request(void) {
  * skipped=K" line and record the counts. Returns 1 if a result line was found.
  * Called from autocompile_poll_main (emu thread) after the child exits. */
 static int parse_shard_result(void) {
-#ifdef _WIN32
     char buf[AC_OUT_CAP + 1];
     int n = 0;
     if (s_out_lock_init) {
+#ifdef _WIN32
         EnterCriticalSection(&s_out_lock);
         n = s_out_len;
         memcpy(buf, s_out, (size_t)n);
         LeaveCriticalSection(&s_out_lock);
+#else
+        pthread_mutex_lock(&s_out_lock);
+        n = s_out_len;
+        memcpy(buf, s_out, (size_t)n);
+        pthread_mutex_unlock(&s_out_lock);
+#endif
     }
     buf[n] = '\0';
     /* Find the LAST occurrence (a run may print more than once over its life). */
@@ -1025,9 +1540,6 @@ static int parse_shard_result(void) {
     s_shard_fail    = failed;
     s_shard_skipped = skipped;
     return 1;
-#else
-    return 0;
-#endif
 }
 
 void autocompile_poll_main(void) {
@@ -1049,10 +1561,20 @@ void autocompile_poll_main(void) {
         s_rescans++;
     }
     if (ac_state_load() == AC_RUNNING) return;
+#else
+    if (!s_out_lock_init) return;
 #endif
     if (ac_state_load() != AC_DONE) return;
-#ifdef _WIN32
+#ifndef _WIN32
+    /* DONE is published by the watcher just before it returns. Join it before
+     * exposing IDLE so a new run cannot race its exit-code/ring writes. */
+    if (s_watch_thread_live) {
+        pthread_join(s_watch_thread, NULL);
+        s_watch_thread_live = 0;
+    }
+#else
     if (publish_pending()) return;
+    const uint64_t join_t0 = host_span_begin();
     /* DONE is published immediately before the preparer returns. Join both
      * per-run workers before exposing IDLE, so a new run cannot inherit a live
      * consumer of the shared FIFO. Neither worker needs the emulation thread. */
@@ -1072,14 +1594,19 @@ void autocompile_poll_main(void) {
         CloseHandle(s_job);
         s_job = NULL;
     }
+    host_span_end(HSPAN_AC_DONE_JOIN, join_t0, 0);
 #endif
     /* Streaming parsing survives arbitrarily large chained post-processing
      * output.  Retain the tail scan as a compatibility fallback for output
      * injected by older/test paths that bypass the line parser. */
     if (!s_shard_result_seen)
         s_shard_result_seen = parse_shard_result();
-    if (s_shard_result_seen && s_shard_fail)
+    if (s_shard_result_seen) {
         s_shard_fail_total += s_shard_fail;
+        s_units_ok_total += s_shard_ok;
+        s_units_skipped_total += s_shard_skipped;
+        s_runs_with_result++;
+    }
     ac_state_store(AC_IDLE);
     /* Direct markers minimize handoff latency, then one idempotent batch-end
      * rescan makes every successfully published artifact visible to additive
@@ -1098,7 +1625,20 @@ void autocompile_poll_main(void) {
         autocompile_note_success();
 }
 
+static void account_run_at_quit(int state_at_quit) {
+    if (state_at_quit == AC_IDLE) return;
+    if (state_at_quit == AC_RUNNING) s_runs_stopped_at_quit++;
+    if (s_shard_result_seen) {
+        s_shard_fail_total += s_shard_fail;
+        s_units_ok_total += s_shard_ok;
+        s_units_skipped_total += s_shard_skipped;
+        s_runs_with_result++;
+        s_shard_result_seen = 0;
+    }
+}
+
 void autocompile_shutdown(void) {
+    const int state_at_quit = ac_state_load();
 #ifdef _WIN32
     if (!s_out_lock_init) return;   /* never configured — nothing to stop */
     /* Halt the pipeline first so the preparer can never START another
@@ -1137,7 +1677,16 @@ void autocompile_shutdown(void) {
      * preparing or committing: the discard cannot be refused. */
     (void)publish_discard_all();
     ac_state_store(AC_IDLE);
+#else
+    if (!s_out_lock_init) return;   /* never configured — nothing to stop */
+    posix_kill_child_tree();
+    if (s_watch_thread_live) {
+        pthread_join(s_watch_thread, NULL);
+        s_watch_thread_live = 0;
+    }
+    ac_state_store(AC_IDLE);
 #endif
+    account_run_at_quit(state_at_quit);
 }
 
 /* Minimal JSON string escaper for the output tail. */
@@ -1189,6 +1738,14 @@ int autocompile_status_json(char *out, int cap) {
         publish_prepare_last_us = s_publish_prepare_last_us;
         LeaveCriticalSection(&s_out_lock);
     }
+#else
+    if (s_out_lock_init) {
+        pthread_mutex_lock(&s_out_lock);
+        int take = s_out_len < 900 ? s_out_len : 900;   /* newest tail */
+        tn = json_escape_into(tail, sizeof(tail),
+                              s_out + (s_out_len - take), take);
+        pthread_mutex_unlock(&s_out_lock);
+    }
 #endif
     (void)tn;
     uint64_t retry_ms = 0;
@@ -1231,4 +1788,97 @@ int autocompile_status_json(char *out, int cap) {
         (unsigned long long)publish_prepare_total_us,
         (unsigned long long)publish_prepare_max_us,
         (unsigned long long)publish_prepare_last_us, tail);
+}
+
+
+int autocompile_report_json(char *out, int cap) {
+    static const char *names[] = { "idle", "running", "done", "?" };
+    AcFailClass classes[AC_FAIL_CLASS_MAX];
+    char tail_raw[AC_REPORT_TAIL_MAX + 1];
+    char esc[AC_FAIL_TEXT_MAX * 6 + 16];
+    char tail_esc[AC_REPORT_TAIL_MAX * 6 + 16];
+    unsigned class_count, fail_lines, unclassed, ok, failed, skipped, results;
+    int tail_len = 0, locked = 0, o = 0;
+    if (!out || cap < 3) return 0;
+
+    if (s_out_lock_init) {
+#ifdef _WIN32
+        locked = TryEnterCriticalSection(&s_out_lock) ? 1 : 0;
+#else
+        locked = pthread_mutex_trylock(&s_out_lock) == 0;
+#endif
+    }
+    memcpy(classes, s_fail_class, sizeof(classes));
+    class_count = s_fail_class_count;
+    fail_lines = s_fail_lines;
+    unclassed = s_fail_lines_unclassed;
+    ok = s_units_ok_total;
+    failed = s_shard_fail_total;
+    skipped = s_units_skipped_total;
+    results = s_runs_with_result;
+    const int state = ac_state_load();
+    if (state != AC_IDLE && s_shard_result_seen) {
+        /* A run that printed its result line and was not accounted yet (the
+         * start ended first): count it here, once. */
+        ok += s_shard_ok;
+        failed += s_shard_fail;
+        skipped += s_shard_skipped;
+        results++;
+    }
+    {
+        int len = s_out_len;
+        if (len < 0) len = 0;
+        if (len > AC_OUT_CAP) len = AC_OUT_CAP;
+        tail_len = len < AC_REPORT_TAIL_MAX ? len : AC_REPORT_TAIL_MAX;
+        memcpy(tail_raw, s_out + (len - tail_len), (size_t)tail_len);
+        tail_raw[tail_len] = '\0';
+    }
+    if (locked) {
+#ifdef _WIN32
+        LeaveCriticalSection(&s_out_lock);
+#else
+        pthread_mutex_unlock(&s_out_lock);
+#endif
+    }
+    if (class_count > AC_FAIL_CLASS_MAX) class_count = AC_FAIL_CLASS_MAX;
+
+    o = snprintf(out, (size_t)cap,
+        "{\"configured\":%d,\"consistent\":%d,\"state\":\"%s\","
+        "\"runs\":%u,\"runs_failed\":%u,\"runs_with_result\":%u,"
+        "\"units_attempted\":%u,\"units_compiled\":%u,\"units_failed\":%u,"
+        "\"units_skipped\":%u,\"fail_lines\":%u,\"runs_stopped_at_quit\":%u,"
+        "\"failure_classes_max\":%d,\"failure_text_max\":%d,"
+        "\"fail_lines_in_unnamed_classes\":%u,\"failure_classes\":[",
+        autocompile_configured(), (locked || !s_out_lock_init) ? 1 : 0,
+        names[state & 3], s_runs, s_fails, results,
+        ok + failed, ok, failed, skipped, fail_lines, s_runs_stopped_at_quit,
+        AC_FAIL_CLASS_MAX, AC_FAIL_TEXT_MAX - 1, unclassed);
+    for (unsigned i = 0; i < class_count && o > 0 && o < cap; i++) {
+        AcFailClass *c = &classes[i];
+        c->name[sizeof(c->name) - 1] = '\0';
+        c->first[sizeof(c->first) - 1] = '\0';
+        c->first_error[sizeof(c->first_error) - 1] = '\0';
+        json_escape_into(esc, (int)sizeof(esc), c->name, (int)strlen(c->name));
+        o += snprintf(out + o, (size_t)(cap - o), "%s{\"class\":\"%s\",\"count\":%u,",
+                      i ? "," : "", esc, c->count);
+        if (o >= cap) break;
+        json_escape_into(esc, (int)sizeof(esc), c->first, (int)strlen(c->first));
+        o += snprintf(out + o, (size_t)(cap - o), "\"first\":\"%s\",", esc);
+        if (o >= cap) break;
+        json_escape_into(esc, (int)sizeof(esc), c->first_error,
+                         (int)strlen(c->first_error));
+        o += snprintf(out + o, (size_t)(cap - o), "\"first_error\":\"%s\"}", esc);
+    }
+    if (o > 0 && o < cap) {
+        json_escape_into(tail_esc, (int)sizeof(tail_esc), tail_raw, tail_len);
+        o += snprintf(out + o, (size_t)(cap - o),
+                      "],\"output_tail_max\":%d,\"output_tail\":\"%s\"}",
+                      AC_REPORT_TAIL_MAX, tail_esc);
+    }
+    if (o <= 0 || o >= cap) {
+        /* Too small for the whole object: say nothing rather than half of it. */
+        snprintf(out, (size_t)cap, "{}");
+        return 2;
+    }
+    return o;
 }

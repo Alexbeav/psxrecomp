@@ -20,13 +20,15 @@
 
 extern uint64_t s_frame_count;
 
-/* FMV-activity detector: host display-frame stamp of the newest colour
- * (15/24-bit) MDEC decode. Used only by mdec_recently_active() for local
- * frontend / rewind policy — never folded into netplay digests. */
-static uint64_t mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
-/* Guest-cycle stamp of the same event — snap age is relative to this so
- * peers with identical FIFO/tables but different present rates hash equal. */
-static uint64_t mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
+/* FMV-activity detector: guest-cycle stamp of the newest colour (15/24-bit)
+ * MDEC decode, read by mdec_recently_active() / mdec_color_age_cycles(). The
+ * snapshot carries its age, so peers with identical FIFO/tables but different
+ * present rates hash equal. MDEC_NEVER_DECODED = no colour decode yet. */
+#define MDEC_NEVER_DECODED ((uint64_t)0 - 1000u)
+static uint64_t mdec_last_color_decode_cycle = MDEC_NEVER_DECODED;
+
+/* Beetle OutFIFO depth: 0x20 words (MDEC_DMACanRead's block size). */
+#define MDEC_OUT_FIFO_BYTES (0x20u * 4u)
 
 enum {
     MDEC_CMD_NOP = 0,
@@ -418,12 +420,12 @@ static int decode_rle_block(int16_t *block, const uint8_t *quant,
                             uint32_t *pos, uint32_t end) {
     memset(block, 0, 64 * sizeof(int16_t));
     if (*pos >= end) return 0;
-    mdec.decode_blocks++;
-
     uint16_t word = mdec.input[(*pos)++];
     while (word == 0xFE00u && *pos < end) {
         word = mdec.input[(*pos)++];
     }
+    if (word == 0xFE00u) return 0; /* trailing alignment is not a block */
+    mdec.decode_blocks++;
 
     /* Dequant in Beetle's <<4 fixed-point domain (mdec.cpp:439-485), clamp
      * ±0x4000. DC uses quant[0] with no qscale; AC uses qscale*quant[k]. Each
@@ -504,10 +506,21 @@ static uint8_t *emit_rgb_pixel(uint8_t *out, int y, int cr, int cb) {
 }
 
 static void append_luma_block(const int16_t *yblk) {
-    uint8_t *out = output_reserve(64u);
+    uint32_t bytes = mdec.output_depth == 0 ? 32u : 64u;
+    uint8_t *out = output_reserve(bytes);
     if (!out) return;
-    for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
-    mdec.output_size += 64u;
+    if (mdec.output_depth == 0) {
+        for (int i = 0; i < 64; i += 2) {
+            unsigned lo = (clamp_int(yblk[i], -128, 127) + 136) >> 4;
+            unsigned hi = (clamp_int(yblk[i+1], -128, 127) + 136) >> 4;
+            if (lo > 15) lo = 15;
+            if (hi > 15) hi = 15;
+            out[i/2] = (uint8_t)((lo | (hi << 4)) ^ (mdec.output_signed ? 0x88u : 0u));
+        }
+    } else {
+        for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
+    }
+    mdec.output_size += bytes;
 }
 
 #if defined(MDEC_HAVE_SSE2)
@@ -691,7 +704,6 @@ static void execute_decode(void) {
     mdec.decode_input_pos = pos;
     /* FMV detector: stamp colour (15/24-bit) decodes only — streamed video.
      * The 4/8-bit luma path above is texture decompression, not video. */
-    mdec_last_color_decode_frame = s_frame_count;
     mdec_last_color_decode_cycle = psx_cycle_count;
     trace_event(MDEC_EVT_DECODE_DONE, mdec.output_size);
 }
@@ -784,28 +796,32 @@ int mdec_recently_active(uint32_t within_frames) {
 }
 
 uint64_t mdec_color_age_cycles(void) {
-    if (mdec_last_color_decode_cycle == (uint64_t)0 - 1000u)
+    if (mdec_last_color_decode_cycle == MDEC_NEVER_DECODED)
         return (uint64_t)0 - 1u;
     if (psx_cycle_count < mdec_last_color_decode_cycle)
         return (uint64_t)0 - 1u;
     return psx_cycle_count - mdec_last_color_decode_cycle;
 }
 
+#include "mdec_source_profile.inc"
+
 void mdec_init(void) {
     memset(&mdec, 0, sizeof(mdec));
     memset(mdec_trace, 0, sizeof(mdec_trace));
     mdec_trace_seq = 0;
     mdec_trace_head = 0;
-    /* Rematch resets s_frame_count; a stale stamp makes mdec_recently_active
-     * wrap and lie for the whole next session. */
-    mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
-    mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
+    /* A rematch resets the guest clock; a stale stamp would make
+     * mdec_recently_active lie for the whole next session. */
+    mdec_last_color_decode_cycle = MDEC_NEVER_DECODED;
     for (int i = 0; i < 64; i++) {
         mdec.y_quant[i] = 1;
         mdec.uv_quant[i] = 1;
     }
     mdec.output_depth = 3;
     mdec.current_block = 4;
+    mdec_source_profile_init();
+    /* The optional controller uses the separate authored scalar decoder. */
+    if (source_mdec_enabled) return;
 #if defined(MDEC_HAVE_SSE2)
     idct_simd_selfcheck();
     memset(mdec.scale, 0, sizeof(mdec.scale));
@@ -863,6 +879,7 @@ void mdec_init(void) {
 }
 
 uint32_t mdec_read(uint32_t addr) {
+    if(source_mdec_enabled)return (addr&4u)?source_mdec_status(&source_mdec):source_mdec_read(&source_mdec,0,NULL);
     uint32_t offset = addr & 7u;
     if (offset == 0) {
         return mdec_dma_read_word();
@@ -882,13 +899,29 @@ uint32_t mdec_read(uint32_t addr) {
     if (!write_ready) status |= 1u << 30;
     if (mdec.enable_dma_out && mdec_dma_read_ready()) status |= 1u << 27;
     if (mdec.enable_dma_in && write_ready) status |= 1u << 28;
-    if (mdec.busy) status |= 1u << 29;
+    /* Bit 29 is Beetle's InCommand (mdec.c MDEC_Read). The hardware decodes
+     * progressively and stalls while its 32-word OutFIFO is full, so a decode
+     * command stays in progress until all but the last FIFO-load of its output
+     * has been read. This model decodes a whole command at once, so derive that
+     * from the unread output instead of clearing the bit at execute time:
+     * libpress DecDCTin spins on this bit before issuing the next frame, and
+     * reporting ready early let Breath of Fire IV's player issue the next
+     * DecDCTin/DecDCTout while a column DMA was mid-transfer. DecDCTout's
+     * CHCR=0 restart then dropped the words already moved, misaligning every
+     * later column (vertical stripes + one-macroblock wrap in the FMV). */
+    if (mdec.busy || mdec.output_size - mdec.output_pos > MDEC_OUT_FIFO_BYTES)
+        status |= 1u << 29;
     if (mdec.output_pos >= mdec.output_size) status |= 1u << 31;
     mdec.last_status = status;
     return status;
 }
 
 void mdec_write(uint32_t addr, uint32_t value) {
+    if(source_mdec_enabled){
+        if(addr&4u)source_mdec_control(&source_mdec,value);
+        else source_mdec_write(&source_mdec,value,0);
+        source_mdec_require();return;
+    }
     uint32_t offset = addr & 7u;
     if (offset == 0) {
         write_data(value);
@@ -905,6 +938,7 @@ void mdec_write(uint32_t addr, uint32_t value) {
 }
 
 void mdec_dma_write_word(uint32_t value) {
+    if(source_mdec_enabled){source_mdec_write(&source_mdec,value,1);source_mdec_require();return;}
     write_data(value);
 }
 
@@ -912,6 +946,7 @@ void mdec_dma_write_word(uint32_t value) {
  * early if the FIFO becomes not-ready after a decode completes mid-burst.
  * Guest bytes + decode triggers match N× mdec_dma_write_word. */
 uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
+    if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.in_count<32)mdec_dma_write_word(src[n++]);return n;}
     uint32_t moved = 0;
     while (moved < max_words) {
         if (!mdec_dma_write_ready()) break;
@@ -940,6 +975,7 @@ uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
 }
 
 uint32_t mdec_dma_read_word(void) {
+    if(source_mdec_enabled){uint32_t offset;return mdec_source_dma_read(&offset);}
     uint32_t value = 0;
     uint32_t start_pos = mdec.output_pos;
     uint32_t avail = (start_pos < mdec.output_size)
@@ -970,6 +1006,7 @@ uint32_t mdec_dma_read_word(void) {
 
 /* Drain up to `max_words` into a contiguous LE destination (DMA ch1). */
 uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
+    if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.out_count)dst[n++]=mdec_dma_read_word();return n;}
     uint32_t moved = 0;
     while (moved < max_words && mdec.output_pos < mdec.output_size) {
         dst[moved] = mdec_dma_read_word();
@@ -979,11 +1016,13 @@ uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
 }
 
 int mdec_dma_write_ready(void) {
+    if(source_mdec_enabled)return source_mdec_can_write(&source_mdec);
     if (mdec.output_pos < mdec.output_size) return 0;
     return !mdec.busy || mdec.input_count < mdec.expected_halfwords;
 }
 
 int mdec_dma_read_ready(void) {
+    if(source_mdec_enabled)return source_mdec_can_read(&source_mdec);
     return mdec.output_pos < mdec.output_size;
 }
 
@@ -1057,7 +1096,14 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
 }
 
 /* ---- boot_state snapshot (variable-length input/output FIFOs) ------------ */
-#define MDEC_SNAP_VER 1u
+/* v2: the colour-decode age is MDEC_SNAP_AGE_NEVER when nothing was decoded.
+ * v1 wrote age 1000 for that case, which a load turned into "decoded 1000
+ * cycles ago" -- a false FMV for the next ~8 frames after every snapshot load
+ * made before the first video (issue #475). v1 payloads still load. */
+#define MDEC_SNAP_VER 2u
+#define MDEC_SNAP_VER_V1 1u
+#define MDEC_SNAP_AGE_NEVER UINT64_MAX
+#define MDEC_SNAP_V1_AGE_NEVER 1000ull
 #define MDEC_SNAP_INPUT_MAX  (4u * 1024u * 1024u) /* halfwords */
 #define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
@@ -1075,7 +1121,7 @@ static uint32_t mdec_snap_fixed_bytes(void) {
 uint32_t mdec_snapshot_bytes(void) {
     uint64_t n = (uint64_t)mdec_snap_fixed_bytes() +
                  (uint64_t)mdec.input_count * 2u +
-                 (uint64_t)mdec.output_size;
+                 (uint64_t)mdec.output_size + mdec_source_tail_bytes();
     if (n > 0xffffffffu) return 0;
     return (uint32_t)n;
 }
@@ -1116,94 +1162,142 @@ void mdec_snapshot_write(uint8_t *p) {
     (void)pst_w_u32(&w, mdec.input_count);
     (void)pst_w_u32(&w, mdec.output_size);
     /* Guest-cycle age (not host s_frame_count) — netplay aux digests this blob. */
-    if (psx_cycle_count >= mdec_last_color_decode_cycle)
-        age = psx_cycle_count - mdec_last_color_decode_cycle;
+    if (mdec_last_color_decode_cycle == MDEC_NEVER_DECODED ||
+        psx_cycle_count < mdec_last_color_decode_cycle)
+        age = MDEC_SNAP_AGE_NEVER;
     else
-        age = 1000ull;
+        age = psx_cycle_count - mdec_last_color_decode_cycle;
     (void)pst_w_u64(&w, age);
     for (uint32_t i = 0; i < mdec.input_count; i++)
         (void)pst_w_u16(&w, mdec.input ? mdec.input[i] : 0u);
     if (mdec.output_size && mdec.output)
         (void)pst_w_bytes(&w, mdec.output, mdec.output_size);
+    (void)mdec_source_tail_write(&w);
 }
 
-int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
+/* Wire offsets of the fields mdec_snapshot_read gates on (layout above): ver
+ * first, output_pos the 12th scalar, then the two counts and the u64 age that
+ * close the fixed part. */
+#define MDEC_SNAP_OFF_OUTPUT_POS (4u + 11u * 4u)
+#define MDEC_SNAP_OFF_COUNTS     (mdec_snap_fixed_bytes() - 16u)
+
+static uint32_t mdec_wire_u32(const uint8_t *p, uint32_t off) {
+    return (uint32_t)p[off] | ((uint32_t)p[off + 1u] << 8) |
+           ((uint32_t)p[off + 2u] << 16) | ((uint32_t)p[off + 3u] << 24);
+}
+
+/* Non-mutating pre-check for boot_state's two-pass load. mdec_snapshot_read
+ * runs it first, so the two cannot disagree: a section that passes here
+ * cannot fail the reader short of the FIFO allocation itself failing. */
+int mdec_snapshot_validate(const uint8_t *p, uint32_t len) {
+    uint32_t input_count, output_size;
+    if (!p || len < mdec_snap_fixed_bytes()) return 0;
+    if (mdec_wire_u32(p, 0u) != MDEC_SNAP_VER &&
+        mdec_wire_u32(p, 0u) != MDEC_SNAP_VER_V1) return 0;
+    input_count = mdec_wire_u32(p, MDEC_SNAP_OFF_COUNTS);
+    output_size = mdec_wire_u32(p, MDEC_SNAP_OFF_COUNTS + 4u);
+    if (input_count > MDEC_SNAP_INPUT_MAX ||
+        mdec_wire_u32(p, 8u) > MDEC_SNAP_INPUT_MAX || /* expected_halfwords */
+        output_size > MDEC_SNAP_OUTPUT_MAX)
+        return 0;
+    if (mdec_wire_u32(p, MDEC_SNAP_OFF_OUTPUT_POS) > output_size) return 0;
+    uint64_t base=(uint64_t)mdec_snap_fixed_bytes()+(uint64_t)input_count*2u+output_size;
+    if (base>len) return 0;
+    if (source_mdec_enabled)
+        return mdec_source_tail_read(p+(size_t)base,len-(uint32_t)base,0);
+    return 1;
+}
+
+static int mdec_snapshot_parse(const uint8_t *p, uint32_t len,
+                               MDECState *next, PstR *payload, uint64_t *out_age) {
     PstR r;
     uint32_t ver = 0, input_count = 0, output_size = 0, reserved;
-    uint64_t age = 1000ull;
+    uint64_t age = MDEC_SNAP_AGE_NEVER;
     int16_t s16;
-    if (!p || len < mdec_snap_fixed_bytes()) return 0;
+    if (!mdec_snapshot_validate(p, len)) return 0;
     pst_r_init(&r, p, len);
-    if (!pst_r_u32(&r, &ver) || ver != MDEC_SNAP_VER) return 0;
-    if (!pst_r_u32(&r, &mdec.command) ||
-        !pst_r_u32(&r, &mdec.expected_halfwords) ||
-        !pst_r_u32(&r, &mdec.last_status) ||
-        !pst_r_u32(&r, &mdec.decode_macroblocks) ||
-        !pst_r_u32(&r, &mdec.decode_blocks) ||
-        !pst_r_u32(&r, &mdec.decode_stop_reason) ||
-        !pst_r_u32(&r, &mdec.decode_input_pos) ||
-        !pst_r_u32(&r, &mdec.decode_input_end) ||
-        !pst_r_u32(&r, &mdec.dma_in_words) ||
-        !pst_r_u32(&r, &mdec.dma_out_words) ||
-        !pst_r_u32(&r, &mdec.dma_read_underflows) ||
-        !pst_r_u32(&r, &mdec.output_pos) ||
+    if (!pst_r_u32(&r, &ver) ||
+        (ver != MDEC_SNAP_VER && ver != MDEC_SNAP_VER_V1)) return 0;
+    if (!pst_r_u32(&r, &next->command) ||
+        !pst_r_u32(&r, &next->expected_halfwords) ||
+        !pst_r_u32(&r, &next->last_status) ||
+        !pst_r_u32(&r, &next->decode_macroblocks) ||
+        !pst_r_u32(&r, &next->decode_blocks) ||
+        !pst_r_u32(&r, &next->decode_stop_reason) ||
+        !pst_r_u32(&r, &next->decode_input_pos) ||
+        !pst_r_u32(&r, &next->decode_input_end) ||
+        !pst_r_u32(&r, &next->dma_in_words) ||
+        !pst_r_u32(&r, &next->dma_out_words) ||
+        !pst_r_u32(&r, &next->dma_read_underflows) ||
+        !pst_r_u32(&r, &next->output_pos) ||
         !pst_r_u32(&r, &reserved) ||
         !pst_r_u32(&r, &reserved))
         return 0;
-    if (!pst_r_u8(&r, &mdec.output_bit15) ||
-        !pst_r_u8(&r, &mdec.output_signed) ||
-        !pst_r_u8(&r, &mdec.output_depth) ||
-        !pst_r_u8(&r, &mdec.current_block) ||
-        !pst_r_u8(&r, &mdec.busy) ||
-        !pst_r_u8(&r, &mdec.input_full) ||
-        !pst_r_u8(&r, &mdec.enable_dma_in) ||
-        !pst_r_u8(&r, &mdec.enable_dma_out))
+    if (!pst_r_u8(&r, &next->output_bit15) ||
+        !pst_r_u8(&r, &next->output_signed) ||
+        !pst_r_u8(&r, &next->output_depth) ||
+        !pst_r_u8(&r, &next->current_block) ||
+        !pst_r_u8(&r, &next->busy) ||
+        !pst_r_u8(&r, &next->input_full) ||
+        !pst_r_u8(&r, &next->enable_dma_in) ||
+        !pst_r_u8(&r, &next->enable_dma_out))
         return 0;
-    if (!pst_r_bytes(&r, mdec.y_quant, 64u) ||
-        !pst_r_bytes(&r, mdec.uv_quant, 64u))
+    if (!pst_r_bytes(&r, next->y_quant, 64u) ||
+        !pst_r_bytes(&r, next->uv_quant, 64u))
         return 0;
     for (int i = 0; i < 64; i++) {
         if (!pst_r_i16(&r, &s16)) return 0;
-        mdec.scale[i] = s16;
+        next->scale[i] = s16;
     }
     if (!pst_r_u32(&r, &input_count) || !pst_r_u32(&r, &output_size) ||
         !pst_r_u64(&r, &age))
         return 0;
     if (input_count > MDEC_SNAP_INPUT_MAX || output_size > MDEC_SNAP_OUTPUT_MAX)
         return 0;
-    if (mdec.output_pos > output_size) return 0;
+    if (next->output_pos > output_size) return 0;
     if ((size_t)(r.end - r.p) <
         (size_t)input_count * 2u + (size_t)output_size)
         return 0;
-    if (!ensure_input_capacity(input_count ? input_count : 1u)) return 0;
-    if (!ensure_output_capacity(output_size ? output_size : 1u)) return 0;
-    mdec.input_count = input_count;
-    mdec.output_size = output_size;
-    for (uint32_t i = 0; i < input_count; i++) {
-        uint16_t hw;
-        if (!pst_r_u16(&r, &hw)) return 0;
-        mdec.input[i] = hw;
-    }
-    if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
-        return 0;
-    /* Age is guest cycles since last colour decode (SNAP_VER=1 payload). */
-    if (age > (1ull << 40))
-        age = (1ull << 40);
-    if (age >= psx_cycle_count)
-        mdec_last_color_decode_cycle = 0;
-    else
-        mdec_last_color_decode_cycle = psx_cycle_count - age;
-    /* Refresh host-frame hysteresis for local FMV policy only (~1 frame ≈
-     * 338688 cycles @ NTSC). Cap so recently_active stays meaningful. */
-    {
-        const uint64_t cycles_per_frame = 338688ull;
-        uint64_t frames_ago = age / cycles_per_frame;
-        if (frames_ago > 100000ull)
-            frames_ago = 100000ull;
-        if (frames_ago >= s_frame_count)
-            mdec_last_color_decode_frame = 0;
-        else
-            mdec_last_color_decode_frame = s_frame_count - frames_ago;
-    }
+    next->input_count = input_count;
+    next->output_size = output_size;
+    if (ver == MDEC_SNAP_VER_V1 && age == MDEC_SNAP_V1_AGE_NEVER)
+        age = MDEC_SNAP_AGE_NEVER;
+    *payload = r;
+    *out_age = age;
+    return 1;
+}
+
+/* Reserve the full in-progress command before the machine-wide commit. */
+int mdec_snapshot_prepare(const uint8_t *p, uint32_t len) {
+    MDECState next = mdec;
+    PstR payload;
+    uint64_t age;
+    if (!mdec_snapshot_parse(p, len, &next, &payload, &age)) return 0;
+    uint32_t need = next.input_count > next.expected_halfwords
+                  ? next.input_count : next.expected_halfwords;
+    return (!(need || !source_mdec_enabled) || ensure_input_capacity(need ? need : 1u)) &&
+           (!(next.output_size || !source_mdec_enabled) ||
+            ensure_output_capacity(next.output_size ? next.output_size : 1u));
+}
+
+int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
+    MDECState next = mdec;
+    PstR r;
+    uint64_t age;
+    if (!mdec_snapshot_parse(p, len, &next, &r, &age) ||
+        !mdec_snapshot_prepare(p, len)) return 0;
+    next.input = mdec.input;
+    next.input_cap = mdec.input_cap;
+    next.output = mdec.output;
+    next.output_cap = mdec.output_cap;
+    /* Parsing validated every read and source-profile tail before any commit. */
+    for (uint32_t i = 0; i < next.input_count; i++)
+        (void)pst_r_u16(&r, &next.input[i]);
+    if (next.output_size) (void)pst_r_bytes(&r, next.output, next.output_size);
+    if (source_mdec_enabled &&
+        !mdec_source_tail_read(r.p, (uint32_t)(r.end-r.p), 1)) return 0;
+    mdec = next;
+    mdec_last_color_decode_cycle = age == MDEC_SNAP_AGE_NEVER || age > psx_cycle_count
+                                ? MDEC_NEVER_DECODED : psx_cycle_count - age;
     return 1;
 }

@@ -1,0 +1,476 @@
+{
+  "schema": "ps1b529-generated-repin-v1",
+  "source_body": "f86cd9b9456473382d415acfd984a662c2a493b0",
+  "ui": "57022e4dec4993e3265ae44e58f0d7ba946d8ede",
+  "measurement": {
+    "as_of": "f86cd9b9456473382d415acfd984a662c2a493b0",
+    "issue": "PS1B-529",
+    "reason": "0.1.9 BREAK/IRQ adaptation uses ABI37/codegen19. Same actual source/inputs generated twice identically on Eagle. Against retained actual9079 producer,53 of76 keys change and no key is added/removed. The older registered64-key table already differed at all64 keys and lacked12 shards on9079; that inherited drift is recorded separately, not attributed to019.",
+    "detail": "Whole-file table updated to actual76 measured hashes. Integrity presence is not behavioural qualification. Both full GCC collections and original F1/Tekken affected routes remain required before delivery; no historic replay acceptance carries over.",
+    "dropped_lines": 66,
+    "added_lines": 78,
+    "from_blocks": 1,
+    "to_blocks": 1
+  },
+  "table_old_sha256": "1efc69caabc7c705ca10697f1cfb4537dd21921618569dff3ff1dd94220dbf3e",
+  "table_new_sha256": "30d9c8da11e857bc93c861b4d5402e965ea45d1bcb90fddfe35566bb023ce372",
+  "records": [
+    {
+      "file": "generated/SCPH1001_dispatch.c",
+      "old_registered": "eecd5f1e584a80a94644d3b14d06ef65cfccb1cfc0afc9a7d6be438bbaca062f",
+      "baseline018": "f06bdacf8e0eaeb2b55c75fae8e11263eb3cba74635473a3b7e573ce00a23f91",
+      "candidate019": "f06bdacf8e0eaeb2b55c75fae8e11263eb3cba74635473a3b7e573ce00a23f91"
+    },
+    {
+      "file": "generated/SCPH1001_full.c",
+      "old_registered": "37c5917a788b4d7174c411ba0beb537c922bb9299449ad34795f781ef59d4b77",
+      "baseline018": "1bed609738d6e71dd06117f30b9e492401efaf8f371b5dc4f0ddaaf9534eae76",
+      "candidate019": "1bed609738d6e71dd06117f30b9e492401efaf8f371b5dc4f0ddaaf9534eae76"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_dispatch.c",
+      "old_registered": "c0ec3211cceb8165d0f705cf5143fa0b7050d66dd719461afd03e61f2b51ef17",
+      "baseline018": "7a174424f04f8397f5cdc733bb66b7395c154b17f6f6dedf475baf6f32a4db8c",
+      "candidate019": "dedbc40f7c5091be6caf0151801969b53b48ae1df7f5c0c785c8f409d17b88b8"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_00.c",
+      "old_registered": "8ac17032cb3fdc6707f090e347508e1d8a4dfd21eb96ac517e6d0ee7c577740a",
+      "baseline018": "d77addc19fb069d1053f01bf892d11dd4399e7575167a38bb9523ea3dd7bbf1f",
+      "candidate019": "83474e4ffcaef9e7e0dbb6ceda155b06e2c419461ae4ca84a698081d5b31a101"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_01.c",
+      "old_registered": "2f5bb225951d68424347bfe02e9ac036d529368512fe638a4770b34acb460b93",
+      "baseline018": "6586accddbe0f0f9cd54be47e56055f1d42411253532f0c0600d7fd19199835c",
+      "candidate019": "648ae05cc5068ec88458f777eb0e9ac90a0780764c20fd8433c2152292e8eebe"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_02.c",
+      "old_registered": "ba033881e727783b65f8699fe1b75b07831d3daef70963d54548821c2c38f531",
+      "baseline018": "7190b3828d84c656c3154cc0cc42c8bada3706d67818fe1ef60fcb8d72e19922",
+      "candidate019": "884653b59f03efba83d129119c5824d1cb80216d1a9fedbcab0a5e6885c22d49"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_03.c",
+      "old_registered": "4dfe44c659cd16ba00b959807785576228eed81153672c9e7c13ed336e0677fd",
+      "baseline018": "f67c5c9fac1fb3ae0c44e5cffc015e80252f7d5eb38d07ea6ea1821e0fc9db17",
+      "candidate019": "9eb19542b8324ffd0a87d044419124fdc9b8307d2ab7459a2b94b783e657aeaf"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_04.c",
+      "old_registered": "bcb5a40df0aaa1042c6ca77424ce3aa3ef0a542f13eea1d0aee636ce29177c1f",
+      "baseline018": "a4c9ee5a48ebeea39a607e6002e73197021be3217ea3bbf16f9a256e280938d7",
+      "candidate019": "2eef8f4bf2ac8e71e834927db672918e90d9a2a47bf930c791a1b1491998ef0e"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_05.c",
+      "old_registered": "4610c41c68986006381453597e8ff9defdbc760a7771e3e3a084c7d29efc596b",
+      "baseline018": "60a66debbd695d654d3c4dec8a45d235b1361f2798fe549dbcc309c1e6d6977c",
+      "candidate019": "e6be114489d043032f1bf78c40ea1afe590b18806c8a46bb85a9b72b0175eeba"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_06.c",
+      "old_registered": "101f28ccb3ff856b4e157edfeff358c646d292a3f3857eaf12576aaa049dad17",
+      "baseline018": "3d894e6150524f8e6783d29ddd409ad48d0438cda30a63162bf0e1fbd622294f",
+      "candidate019": "7ce7f18e8288ccb9c58577cc0cb57a27c9f89b2a68cb275822bc5dc4fcbd3a1b"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_07.c",
+      "old_registered": "37415aecf508c7c71d141b885b1521a401aee841988c697d02d867d2b4418c5e",
+      "baseline018": "3d8df247b9a6ffc1a3c654f73daae22d20533a7b8da4c865f6c3a98ab8ebffd8",
+      "candidate019": "f6850ab5ebcc87cb8b4f26ddc3bc5f5e74bb8b6b1899e3215532fb4bb3094811"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_08.c",
+      "old_registered": "ab1f3f27f90a502affadde73f789cbb9c2c427ad741f9011b52c1c7aa4314718",
+      "baseline018": "5f5ff8b1dbba1d5bd9c115e840513ff03fa0c9d30a27155ed3e4b93831851f72",
+      "candidate019": "77ee7e58dfa93293748088e927b7f88c47775273125cc232bc0d4858e747e6e3"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_09.c",
+      "old_registered": "475f9c0af70815ccec5b6ae5fff44786fd173e7bcbe83cbd1228da203adefa87",
+      "baseline018": "efbc6b3e78409b6afd73f9cf6a6e3f819c2bf9e8627df18e2ff38769fed99b86",
+      "candidate019": "71aa133bc734e25e86c0e28e2a79db61f4bc801add102a4e34340a81b904a7b4"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_10.c",
+      "old_registered": "8643bdf853b38b7a53143ea2625c17410f3b108d6653e6bc3ee9e6ac81728b06",
+      "baseline018": "4e7992ed68fcbf8e9c120f4033a74c3a988501eb6be1bdc440468c275ed05b9f",
+      "candidate019": "a4458f60aea8531f351dd049abd9013ff1afe6c1fa44cc8dcd05b5170f48b2d9"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_11.c",
+      "old_registered": "155be8c99a68dba8636ab6d69bcf0d68693e7d1fb5365ef94b930e538ea97b9e",
+      "baseline018": "3bd05e380817a6d52ec74bed396858e11c7b45ea0ac5971742f6ddefee39f05c",
+      "candidate019": "796f3f5ff74d8ee3e864a62d9c7f5108a8e9cf4c095fd466d330f6bf7ca1dd48"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_12.c",
+      "old_registered": "0d9079cf4ae1cf732ec143bcfb3be47e934b97c856d1cf53ed4ad55fd563260e",
+      "baseline018": "4c6d24257f08df8086873ead55d983f06c72626de05ba89297d277945dea25b6",
+      "candidate019": "7cdac420767dd9b5b7d4fcf063fa0bf97e3ab389f460a474b64718c94e3c9bff"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_13.c",
+      "old_registered": "0f6fea76f19810c3e4d9166437e355988e0121fb79986a094fb943de435a672b",
+      "baseline018": "3c2af5839cdf53fe0b848bb6cefaa0662fc52caddf4c669d291fd405e9d4a04f",
+      "candidate019": "3c2af5839cdf53fe0b848bb6cefaa0662fc52caddf4c669d291fd405e9d4a04f"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_14.c",
+      "old_registered": "886f1f534758116b9cc72711e749e2279c77d1caf1390c5cbea6b1673aadeea8",
+      "baseline018": "4f59416915c5d8930bf27b919cae1d84719d98b7a55f7467245b45f0c8d92248",
+      "candidate019": "4f59416915c5d8930bf27b919cae1d84719d98b7a55f7467245b45f0c8d92248"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_15.c",
+      "old_registered": "dedc8027043a8da11b1b66118de8e6a7f19191336f0677ef158df00f9c765af9",
+      "baseline018": "36b470aa979fdc340e71179b9a1180bfc5029a5ecdc632cecc1120cc560fffcf",
+      "candidate019": "36b470aa979fdc340e71179b9a1180bfc5029a5ecdc632cecc1120cc560fffcf"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_16.c",
+      "old_registered": "f8c2cb207bab85a09f12958fc120599159d38d01ee34762482ec8172717e2c2f",
+      "baseline018": "35180668a61ce52b73d9e4be44cce736220d4373e5483447d135bdd7dfa7b7d4",
+      "candidate019": "35180668a61ce52b73d9e4be44cce736220d4373e5483447d135bdd7dfa7b7d4"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_17.c",
+      "old_registered": "34dff494224cf9af1b86b5137beae4509d523f27a5c0381acb0b6ddae8b960ee",
+      "baseline018": "e82996b90fcc8b35c1c53f673a45853165ec15f85bca86b4ffabb64b5204aeaa",
+      "candidate019": "13cce3ab29af7d305945d62721f22883e65e7bf918e2e52ff375ab0974749d6f"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_18.c",
+      "old_registered": "0fdccccfea51fe3f49c818b57ffba899a4d58a1fe3a7301f9a6c3f8d54c54609",
+      "baseline018": "1d284dcde69453d4340de9a93ff0ec4c94f1fa1101bf7d51f7a6b290459ab660",
+      "candidate019": "94d8d11bd3983c32bab93b409ccbec3bb87a11ea78835dd8aaabf7c53d611dd9"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_19.c",
+      "old_registered": "00ef1848563ee8c62f5dce6100156bfa99e29f4971d42c2597ef75cef9986f2e",
+      "baseline018": "3d606e95dc61c8779a9f49ebde5ad76fda8b5c4c38562c99615e88e29d4c8b83",
+      "candidate019": "3d606e95dc61c8779a9f49ebde5ad76fda8b5c4c38562c99615e88e29d4c8b83"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_20.c",
+      "old_registered": "d71ac907863246f49ed1ccaac3bb9919b02aea8d3242b0cef304ef0aca3cd604",
+      "baseline018": "dbe3bdaa71aa1be9b59dbb9bd122cf6ac35e19182fdecb16bff1dba9322f546c",
+      "candidate019": "f117727f9ff3eff6c59e175a0fac7621c611757e3a8a037dfff18594ab665f33"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_21.c",
+      "old_registered": "64cc0fd451be7f9b0c3433cfa93a474285241fd22722f33987a9be3fea16fd44",
+      "baseline018": "42b0f1f8082c136f83c544e803b41fd5a3950e485d9f36cc0e669d294e325bac",
+      "candidate019": "573b36b78abe08e811578f58e2861610566ce4bc4c0c4b63fb7344c964095153"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_22.c",
+      "old_registered": "ba0342243fa9b840a8b03b7a8ff1fb772ff63a28237ff43cb500ef2a72daff5d",
+      "baseline018": "cdfd8e69cc4f4fb84d58340dab5cac17db62ceba4a04fa90ef07e54e0797c250",
+      "candidate019": "d30ee20c9bb9ca0bd2eef38e55bf57ef6863a2cdac2b2edec4f020eba77796a1"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_23.c",
+      "old_registered": "5d965216c23a387c39e079e2e5e7ad0d461e05017596600de27f20dce4f70bef",
+      "baseline018": "afbfd1ca02a73c98d62bb4127b7bb19d24a380bd31c07bcc4c6f9c0f43cc5fc4",
+      "candidate019": "e54ac45cebae65f578fcad080398b42851649278ef658b0311318b3951c0aeef"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_24.c",
+      "old_registered": "34f165a9ec3b6f633f71ead5537f79d6b0b88bd5d6f2af32f91a271925eda7c2",
+      "baseline018": "7418b892a485d648400e8a0e3f64dc357301a1c69ce192e92332c0c0666adb09",
+      "candidate019": "7418b892a485d648400e8a0e3f64dc357301a1c69ce192e92332c0c0666adb09"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_25.c",
+      "old_registered": "b687e9b27c0df2a4da703bf62fa4df6a8899af4ef3a4942e90e69c2b2e7c953e",
+      "baseline018": "65e81421311bdd550230eb322ba6b8e305951892d2f46d69f963e1598f730326",
+      "candidate019": "65e81421311bdd550230eb322ba6b8e305951892d2f46d69f963e1598f730326"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_26.c",
+      "old_registered": "5289910f3e56c26b69127f8c9e290ef58c9f7eea63db70a9fe554a39fb627fc1",
+      "baseline018": "0c92f9847a7655ceed456adbf392a8685af4fc0bc4218afa54289e2cad1deb59",
+      "candidate019": "8eac70483e1e0d84a1bfb8a2f32cb71423ee8a766448bd85eb65d137f96ee96d"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_27.c",
+      "old_registered": "03c1d9f333b4b0d259743241047a75a51089f67bd67c54692b7a5b97c8a92721",
+      "baseline018": "50a68feb71cf4a24d37ad9b195776e0642e8105bba365aed30b2c4b33b6629dc",
+      "candidate019": "50a68feb71cf4a24d37ad9b195776e0642e8105bba365aed30b2c4b33b6629dc"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_28.c",
+      "old_registered": "0dc2c2867bb4a14a53f13cf8797ba5a16593cbcb7a4de02196c68dc545ee1462",
+      "baseline018": "d6d45282590af4db2c9d4b9968e5fe0c8a666c036308d655c5bc1be229b221c1",
+      "candidate019": "8001494f2489ca29cc89e92e110d18c690bf04afc620b5b92f270321379a50be"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_29.c",
+      "old_registered": "a383760b27c85c06c47daddd436fbc6ffdde63345a4f20191c1b07718aba269b",
+      "baseline018": "cc61851994d5c9f0407c27a9beee90862fd11e09dd0874321e422189f9d6891b",
+      "candidate019": "cc61851994d5c9f0407c27a9beee90862fd11e09dd0874321e422189f9d6891b"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_30.c",
+      "old_registered": "7f10646cc05c4aeb6e38f66f0196738c76d8a59db0c5ae5584332c66db82e5a7",
+      "baseline018": "76fe6b57f04ee9da11f06944000eb885d65fc2ac55c67d5d69acbd2167a06be5",
+      "candidate019": "76fe6b57f04ee9da11f06944000eb885d65fc2ac55c67d5d69acbd2167a06be5"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_31.c",
+      "old_registered": "b77fd01c219a0f0d682294663de5ea339f43e009909916ba97c7653726860bf1",
+      "baseline018": "a389e63947eb4fb019e9f732ff3d061786deb389b8a80e9ebc6867e6cbc4aa6c",
+      "candidate019": "9cf292a8c52fdd5e217316e5fa0da2259c3773a721a5a4f0dc89ffc30c0c9159"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_32.c",
+      "old_registered": "7e71c58b52d5d662cc564ff0ef46c704e4a812734a91d66ba7f6095aae0f566d",
+      "baseline018": "14990aff8545a8226c2e3a9e2aa5b51806b01ae19639d8e627af3113dd0d5f08",
+      "candidate019": "21eb1080d5803b53ac14924d8e3282d9d9ac8affc35ea90d6939d61cf7a9f12a"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_33.c",
+      "old_registered": "de6a0478e6171ad4d50212caa90c992b87140be5c9d4936ce4d075e9f01e3975",
+      "baseline018": "00a3c1e6f20d7e85d173c4b798b6a822e7a47f14b95668ab048e2b542b244ee7",
+      "candidate019": "0f51400bf13dd4c1b871e7d0ca4de6b234ea5605f2fc7e46a3dfa86580167be2"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_34.c",
+      "old_registered": "de49a10bbeb4d70fb269f8000e97e880fb14ecfab8034b3647af2864cb911678",
+      "baseline018": "9e925148881fb1c2a9d70a009a5130e4a44ee1a2085b192c706701c63581c6f6",
+      "candidate019": "606c2cfc35188f310e019182514eee6705e900f7bf2111510435d89d11a2837f"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_35.c",
+      "old_registered": "796808ade9f88249859d7660d754e708bf04672b0baf5bae9f9313290fe94a73",
+      "baseline018": "2f5e2bd1e654f8db6922a061de86255f28c9ba40600af1792844eeb47ec05675",
+      "candidate019": "2f5e2bd1e654f8db6922a061de86255f28c9ba40600af1792844eeb47ec05675"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_36.c",
+      "old_registered": "911911be98f5f7a999387f2b573786879f5e3aa5a6d881d9aa43dae9f3e381c2",
+      "baseline018": "d8fb91b35d14d678f023e03cd72d7377f1f3da9a7078fbb5415b758a0bc4cecb",
+      "candidate019": "9c26b3f46fc6eb576040d07e715ced86dd6217916f6a8773048ba64b036faec0"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_37.c",
+      "old_registered": "ce8b36a0df70b861ae52bf31dbb2b3c15a9d98d75e3b62b4798cc1c7f530fb31",
+      "baseline018": "051456fa91c53532595a8a5e8beca5e3ff24576c988217605dd15fd5fb28dc54",
+      "candidate019": "03fe55a2aa64927a24833d8cfccd7ab33faa672b7d981432938bd78cf7803c4b"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_38.c",
+      "old_registered": "198107fbbb2b339c80273ce59ed072b9640771b912d77023b309aae224afadcb",
+      "baseline018": "d18e771c631b13330e85bd464aaf5a49a8a27b680fc74de64c74cf8b9dfd2b7c",
+      "candidate019": "cfe0149c8c6c202c16be7f07c888d71aa7f020ffb4f314a06cf96c9ad2329de5"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_39.c",
+      "old_registered": "1b829ddad27453d4ed157200667740ffe5bfcecc6c1c363bc1aa82d1f03edbb8",
+      "baseline018": "84b5bb5b89f53fccee24d39ea9e2d0b5948001d97d1660615169659122b1bf97",
+      "candidate019": "d60567b0aa53b364ee4c3ce514bf7817fc71735b692c692e07ca0574931d5463"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_40.c",
+      "old_registered": "7bacb42de558da6ddee716b3d25a3508deaf830ac3db98ba067bda9533398634",
+      "baseline018": "4f6776778316fd99552e45604e16ae07910c46cf285debb9317c5364345fea20",
+      "candidate019": "5010ac6144ba952e950c236b0c8983939219646334fa5b4ba3ae3a052b019c94"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_41.c",
+      "old_registered": "ecbfb9dd5f81bd50d41ea3b8a36ce0500ace7ee915b95583e58ae2eca7a5d025",
+      "baseline018": "8f149c6032f3e1d96c0e845242826cd0bd2b1b3150cf57403edf3bbb6b1f791a",
+      "candidate019": "8f149c6032f3e1d96c0e845242826cd0bd2b1b3150cf57403edf3bbb6b1f791a"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_42.c",
+      "old_registered": "f902831021dfba8f8642480f4090b1213c5da508eade41ae71211dbaf603413e",
+      "baseline018": "3781eab11a60b9d70721efd2307b068f450b10277679d4318cab4689938a6643",
+      "candidate019": "e7ac3b1af672dbbb918907d55ff5d307bc436a3fb4379966106be8dac2f8c870"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_43.c",
+      "old_registered": "1a8062fd0ffdad7929295de7df8b9e4f50740d43cb30fff4e7aa9eeb964ff3e9",
+      "baseline018": "6419195ebbb89f418bef319e071ff8914f921aa27c0f044c1073b8a134d437d0",
+      "candidate019": "7706f10acfbb6f7d2d77261bc9bc69de9607a45e46efe86126c0de28b32b550e"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_44.c",
+      "old_registered": "ee4a30aec06c67893e0d2ffffe2af969aa2a86633cf91bd9f3d6861c5c1458cd",
+      "baseline018": "11df61310bda75a1387fc07a0b7a8744af335a6b6f1175a31dae297f639a83f2",
+      "candidate019": "b45ae099a5402ae7cd94ea695ac367956ecfaa034a38181c0298b06e9bc7c13d"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_45.c",
+      "old_registered": "b529ace78d69f781eae59d98e0b8171836a16a027f90a3ec0ba1f51b06cfff96",
+      "baseline018": "32ee9e6667cd482ca7ad9d5e4e2a9e1dad03e6b3250c9e3cbabe3b5d3e28df83",
+      "candidate019": "87084c4ee6c85ddbfff57797a79d2af195698257ab65ebf51e74a157d1e60b5d"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_46.c",
+      "old_registered": "7eb084362d6571d526c605275325fb9fea5f45b8b84499160774c125bd7f4ea0",
+      "baseline018": "35c28dc0c9201a80698ba07b96c695defd64f54707e8f2f4165b14990c3adcc7",
+      "candidate019": "4c9cdfd798bdd93a3e2d387daa9c0c2c0472040cb49a545841aa051a41f9d697"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_47.c",
+      "old_registered": "bee85f467e8a8dc5ab83ae91c70aac5fab0b40325c9f047540fd2ce177396342",
+      "baseline018": "ab1f1585e40f178c6f8b532fdcda0f4b582354533f89219fd0268d769c338153",
+      "candidate019": "96d73b1248e5ef49e0b2d4dd4dad466470ee35d26d8872af96cabae92ed86e55"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_48.c",
+      "old_registered": "06189a51b859f28846ee6cc0c1e0ecce0ad7fe5bb7c0cc5940e0db2322fe2396",
+      "baseline018": "7708488ecbb6248d7d571138161a659109442cdbc970f2f11b8b295dbc1bf54a",
+      "candidate019": "c9d5bdbf34c1306e6451d5d8b7d9259665b93c75a640a6adf91b904f38cd2738"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_49.c",
+      "old_registered": "5fff420167692eaba93136a8b0397ca5c6854d643b9f42f3fe7ada502582fe68",
+      "baseline018": "ce00c5f760ae57d7f8f116e9a45ebb78a92caa083abf136045466507829689a0",
+      "candidate019": "c042b5a4d9a654d0eb470663ab5d700f3598fe02706d5a824ea2af1c568301d9"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_50.c",
+      "old_registered": "94808d1ba63808507b9b0f74e46c25451196c2c2f4306886edfaae95e9ec2b4b",
+      "baseline018": "9930a57019efd99cc082547db316713a28e31a11758170a9949ec493f0249032",
+      "candidate019": "9930a57019efd99cc082547db316713a28e31a11758170a9949ec493f0249032"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_51.c",
+      "old_registered": "7dd07667c95d1e17026193c3f57a0b15ccd97aafb1e69f354de7ee28c504d55c",
+      "baseline018": "e1373b6e91cfd608595f23aa7bbdcda5a04abbe9a88c8616ad91797c5aebf300",
+      "candidate019": "e1373b6e91cfd608595f23aa7bbdcda5a04abbe9a88c8616ad91797c5aebf300"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_52.c",
+      "old_registered": "d1bd30ddad5d81c2893dcc75c8f11abb2838ce64955e49487e114612c14ed032",
+      "baseline018": "8dba28f865e2a86ffc2a098f3541498a83eedefe96a3febb08c886c6e49a4209",
+      "candidate019": "781624f3aeebaf49a42f9013ad3a0a1a3453d79c76c9a7ceb32354eba9cd7ef0"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_53.c",
+      "old_registered": "bf4eaee14b5f87073b5ef95601b2b2ce2dcf6f9591733e9ab00e70a02c4b1dd6",
+      "baseline018": "43132fa26db01f727a6c93a7d176f4714550a92b50ad1eff682d24da783f56b3",
+      "candidate019": "48ba5c074ca5e31f989d328d1c3a49da3a83b6b32c7b452d6b64fd40e4d16232"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_54.c",
+      "old_registered": "e6ebe60274b5707a846a299e23c386e232aa46392f4189171e216f954b4cc460",
+      "baseline018": "4206aef6d2361baa42479be29fa4e66a9783962d677ba4d6bf7fafab6c23fd66",
+      "candidate019": "4283f2745346e5412c229d9bd7bde8353cde0809248ebb4e08da3a5451bf5aa5"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_55.c",
+      "old_registered": "e51449d2fefbd327cb9b065689123f9c6e23d6a71215d5b62d53a24b17f06446",
+      "baseline018": "da884a0ba214998a5b038f481ce457f060c59bc74a34b8ba5ad27acf135e7c42",
+      "candidate019": "1726dc5295e2b5230614d10f29cf0d5874df5970b5ca3ac495a08a832fc968cd"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_56.c",
+      "old_registered": "2f21f91c2c40dbd93c7a2997d0ee07f601e38b2f7ab74cd71504b2499f9e7014",
+      "baseline018": "136bb65fb4dfe945fb2bb4866c7e4a9c1cb9618bf9c52e7c677a6cbb0f421f72",
+      "candidate019": "ec095a8da7522fb37e332069bda5553d5f9d5f2d81a3dff43d1d516f901bb97e"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_57.c",
+      "old_registered": "ea4465e6479fed5e4897b1c794b68856ea5b19fca84da7358efb59cbbf20bf34",
+      "baseline018": "31125a9dd64d812d624a28acc36a850014034d5fc00d62eca82d061a9ddd77e2",
+      "candidate019": "ab687aea92e64990aeb7346e1239ec54b1f589103db828dae68b530f1a6551a9"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_58.c",
+      "old_registered": "0466d2e646ad72a2c9d92333ca3bad14c3d0ba3523c193f4612ae11dd9c9f66b",
+      "baseline018": "d48da9eb1931518c31e4f8e6408125d5f18f15603ad654363422f5485fcb95a9",
+      "candidate019": "d48da9eb1931518c31e4f8e6408125d5f18f15603ad654363422f5485fcb95a9"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_59.c",
+      "old_registered": "aa96fc40e1f9eafb15bb83c92a0c9bd7fe6746219de52f371537f716fc2bde06",
+      "baseline018": "930d4c6257024f434cf81bcace67bd20aa8ab682504207d2ffdcaa8d12c7a9b6",
+      "candidate019": "d38fc9b6412188655bd95a38b6c7398b6c6d21f79d69887c312cac68d1dff274"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_60.c",
+      "old_registered": "3bdc6441b5c035dc75b6c84ee4d50ebcb493186d3fd70438d4ad4a58a00de063",
+      "baseline018": "5006cd1da531a28fc429a6087d8f958df04526d5475aeae75c66e35726e2368c",
+      "candidate019": "5deba828536dd29dc40fa224da58219d02505b42d8e43a9c74836c9174b6b2c2"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_61.c",
+      "old_registered": null,
+      "baseline018": "c9843dd64e4c401eb6443e314e3bf672e22b42e221c10d38cdfadb3452b74dd9",
+      "candidate019": "c9843dd64e4c401eb6443e314e3bf672e22b42e221c10d38cdfadb3452b74dd9"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_62.c",
+      "old_registered": null,
+      "baseline018": "459ba0029decd2f3086a4f386926bce08d7f5c101bbe509914bc38296d7d08a9",
+      "candidate019": "45326c6be45c3c0ed250f73dbd5c917c4381d83d23f6d7aa3ca92e4d17313b23"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_63.c",
+      "old_registered": null,
+      "baseline018": "dbde6f4a606259b800ca928141fe8154c0284fc438f45ea7a66e9beb602adba3",
+      "candidate019": "f181fd3867e76b80036b15f8fef433136e8b9c7b2e2d635dc43d878590eb74fb"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_64.c",
+      "old_registered": null,
+      "baseline018": "199f08816dbf7c90ad33105e5650a16b373d581da4601f19964c43f11d7d1b8f",
+      "candidate019": "091eb124baf161f29c746358bfcb8c8af93ca3d411fc75844dc3c7dc49cc8997"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_65.c",
+      "old_registered": null,
+      "baseline018": "8c963561e15350826e08036520010d9e93c38d902e4486b7e3b5c3cc6900f9cf",
+      "candidate019": "957173498e1a24da1d123d235097149a7ff21b2d49913a126e42996044497acc"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_66.c",
+      "old_registered": null,
+      "baseline018": "c6d4c77d773a9c8e2196d602ab28dd07408a37815843c90ccbff100b73dc4d07",
+      "candidate019": "669d2b94126c62d97078cc37ade1a1516048e0fa703abd25bab9ed552a6987cb"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_67.c",
+      "old_registered": null,
+      "baseline018": "43008159ee9fd0c5fa5008758917451e8d182f6c853d74eac4b700b6ce5db641",
+      "candidate019": "b1aaa6cdb3168f0c2e4daf24f7593cffce46fe7a79fbfa606f86925a27dbb237"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_68.c",
+      "old_registered": null,
+      "baseline018": "23e5e94cd67884217c5201b0246d20f7521decac7d8cf6984a5268b58cdb24f1",
+      "candidate019": "23e5e94cd67884217c5201b0246d20f7521decac7d8cf6984a5268b58cdb24f1"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_69.c",
+      "old_registered": null,
+      "baseline018": "82d15d393ad8921e254fbd8ad245c4daa4ebbfadcd6f8174c353715e443a0370",
+      "candidate019": "82d15d393ad8921e254fbd8ad245c4daa4ebbfadcd6f8174c353715e443a0370"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_70.c",
+      "old_registered": null,
+      "baseline018": "09db466149980952c79398fb6b46dc96f02ba589dbb028adca9acec5f37d90b2",
+      "candidate019": "09db466149980952c79398fb6b46dc96f02ba589dbb028adca9acec5f37d90b2"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_71.c",
+      "old_registered": null,
+      "baseline018": "808176794abebb7c23cb47791dcbd2528e1b04c1c4111eb6a905ff9122b1c65e",
+      "candidate019": "808176794abebb7c23cb47791dcbd2528e1b04c1c4111eb6a905ff9122b1c65e"
+    },
+    {
+      "file": "build/tekken3/generated/SLUS_004.02_full_72.c",
+      "old_registered": null,
+      "baseline018": "7f76fdf784b696f5a6fee48deb069ef1c4b6652e302c35951300d9a4ec4f0951",
+      "candidate019": "7f76fdf784b696f5a6fee48deb069ef1c4b6652e302c35951300d9a4ec4f0951"
+    }
+  ],
+  "qualification": "candidate record only; fullGCC/affected routes are external delivery evidence, pending at record creation"
+}

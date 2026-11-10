@@ -5,11 +5,14 @@
 // which is what real .bin/.cue and .iso dumps use respectively).
 
 #include "disc_identity.h"
+#include "disc_roster.h"
+#include "disc_toc_fingerprint.h"
 
 #include "crc32.h"
 #include "disc_path.h"
 #include "iso_reader.h"
 #include "psx_sha256.h"
+#include "sbi_setup.h"
 
 #include <algorithm>
 #include <cctype>
@@ -56,16 +59,8 @@ std::string region_from_serial(const std::string& serial) {
 // "SCUS-94236". Pass-through for things already in game-id form. Returns ""
 // if the token doesn't look like a serial.
 std::string normalize_serial(const std::string& raw) {
-    std::string s;
-    for (char c : raw) {
-        if (std::isalnum((unsigned char)c)) s += (char)std::toupper((unsigned char)c);
-        // drop separators ('_', '.', '-')
-    }
-    // Expect 4 letters + 5 digits.
-    if (s.size() < 9) return std::string();
-    for (int i = 0; i < 4; i++) if (!std::isalpha((unsigned char)s[i])) return std::string();
-    for (int i = 4; i < 9; i++) if (!std::isdigit((unsigned char)s[i])) return std::string();
-    return s.substr(0, 4) + "-" + s.substr(4, 5);
+    const auto key = disc_roster_serial_key(raw);
+    return key.size() == 10 && key[4] == '-' ? key : std::string();
 }
 
 // Scan the SYSTEM.CNF text region for the BOOT serial. PSX SYSTEM.CNF holds a
@@ -115,16 +110,6 @@ uint32_t crc32_stream(std::ifstream& f) {
     return crc ^ 0xFFFFFFFFu;
 }
 
-std::string hex_sha256(const std::string& canonical) {
-    uint8_t dig[32];
-    psx_sha256_compute(reinterpret_cast<const uint8_t*>(canonical.data()),
-                       canonical.size(), dig);
-    char hex[65];
-    for (int i = 0; i < 32; i++)
-        std::snprintf(hex + i * 2, 3, "%02x", dig[i]);
-    hex[64] = '\0';
-    return std::string(hex);
-}
 
 void fill_toc_from_mount(DiscIdentity& v, const DiscPathResolution& resolved) {
     v.from_cue = resolved.from_cue;
@@ -140,23 +125,20 @@ void fill_toc_from_mount(DiscIdentity& v, const DiscPathResolution& resolved) {
         return;
     }
     v.toc_opened = true;
+    v.sbi_loaded = reader.HasSubChannelReplacements();
+    // SYSTEM.CNF can lie beyond the bounded early-image scan. Read the actual
+    // directory entry first; unrelated executable strings must not select a region.
+    uint8_t pvd[2048];
+    if (reader.ReadSector(16, pvd) && is_iso_pvd(pvd)) {
+        std::vector<uint8_t> cnf(4096);
+        cnf.resize(reader.ReadFile("SYSTEM.CNF", cnf.data(), cnf.size()));
+        v.detected_serial = scan_boot_serial(cnf);
+    }
     v.track_count = reader.TrackCount();
     if (v.track_count < 1) v.track_count = 1;
     v.leadout_lba = reader.GetSectorCount();
 
-    // Canonical TOC string — peers with the same mount geometry share disc_fp.
-    // Version prefix lets us evolve the format without silent collisions.
-    std::ostringstream toc;
-    toc << "psxrecomp-toc-v1\n";
-    toc << "tracks=" << v.track_count << "\n";
-    toc << "leadout=" << v.leadout_lba << "\n";
-    for (int t = 1; t <= v.track_count; t++) {
-        toc << "t=" << t
-            << ",a=" << (reader.TrackIsAudio(t) ? 1 : 0)
-            << ",start=" << reader.TrackStartLBA(t)
-            << ",pregap=" << reader.TrackPregapLBA(t) << "\n";
-    }
-    v.disc_fp = hex_sha256(toc.str());
+    v.disc_fp = disc_toc_fingerprint(reader);
 }
 
 bool is_chd_path(const fs::path& path) {
@@ -188,7 +170,10 @@ void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect
         id.netplay_detail = "Disc TOC could not be opened for netplay.";
         return;
     }
-    if (expect.require_cue) {
+    // require_cue keeps a bare .bin of a multi-track disc out. A .chd holds
+    // every track in one file, so it meets the rule; its tracks and its TOC
+    // fingerprint are checked below like a cue's (PS1B-294).
+    if (expect.require_cue && !id.from_chd) {
         if (id.cue_fallback || !id.from_cue) {
             id.netplay_ok = false;
             id.netplay_detail =
@@ -239,12 +224,23 @@ DiscIdentity identify_disc(const fs::path& path,
     // the .cue and its .bin must produce the same verdict, serial and CRC32.
     const DiscPathResolution resolved = resolve_disc_path(path);
     fill_toc_from_mount(v, resolved);
+    v.from_chd = is_chd_path(resolved.mount);
 
     const fs::path data_path = resolved.data;
     PS1::ISOReader disc;
-    if (is_chd_path(resolved.mount)) {
+    if (v.from_chd) {
+        // The title's netplay rule applies to a .chd as it does to a cue, at
+        // every way out of this branch. It was skipped here before, so a wrong
+        // or damaged .chd started a match that then fell apart (PS1B-294).
+        const auto netplay_verdict = [&]() {
+            if (netplay_expect)
+                apply_netplay_disc_expect(v, *netplay_expect);
+            else if (!v.toc_opened)
+                v.netplay_ok = false;
+        };
         if (!disc.Open(resolved.mount.string())) {
             v.detail = "Could not open or decode the CHD disc image.";
+            netplay_verdict();
             return v;
         }
         v.opened = true;
@@ -257,6 +253,7 @@ DiscIdentity identify_disc(const fs::path& path,
             v.detail =
                 "No ISO9660 CD001 header was found in the CHD data track.";
             v.region = region_from_serial(expected_serial);
+            netplay_verdict();
             return v;
         }
 
@@ -276,7 +273,7 @@ DiscIdentity identify_disc(const fs::path& path,
             }
         }
         if (scan_ok) {
-            v.detected_serial = scan_boot_serial(scan);
+            if (v.detected_serial.empty()) v.detected_serial = scan_boot_serial(scan);
             if (v.expected_serial_given) {
                 const std::string serial_id = uppercase_ascii(expected_serial);
                 std::string exe_id = serial_id;
@@ -306,6 +303,9 @@ DiscIdentity identify_disc(const fs::path& path,
                 v.crc_matches = v.crc == expected_crc;
             }
         }
+        netplay_verdict();
+        v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
+                                            !v.toc_opened || v.sbi_loaded);
         return v;
     }
 
@@ -354,7 +354,7 @@ DiscIdentity identify_disc(const fs::path& path,
     const size_t scan_len = (size_t)std::min<uint64_t>(size, 16ull * 1024ull * 1024ull);
     std::vector<uint8_t> scan(scan_len);
     if (read_at(f, 0, scan.data(), scan.size())) {
-        v.detected_serial = scan_boot_serial(scan);
+        if (v.detected_serial.empty()) v.detected_serial = scan_boot_serial(scan);
 
         if (v.expected_serial_given) {
             // Match either the game-id form (SCUS-94236) or the EXE form (SCUS_942.36).
@@ -391,6 +391,8 @@ DiscIdentity identify_disc(const fs::path& path,
     if (netplay_expect)
         apply_netplay_disc_expect(v, *netplay_expect);
 
+    v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
+                                        !v.toc_opened || v.sbi_loaded);
     return v;
 }
 

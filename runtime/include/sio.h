@@ -54,6 +54,14 @@ extern "C" {
 /* SIO0 register base: 0x1F801040 */
 #define SIO_BASE 0x1F801040
 
+/* Emulated controller identity used by the game's SIO poll. */
+enum {
+    SIO_PAD_DIGITAL = 0,
+    SIO_PAD_DUALSHOCK = 1,
+    SIO_PAD_JOGCON = 2,
+    SIO_PAD_NEGCON = 3   /* NPC-101: ID 0x23, twist + analog I/II/L, no config */
+};
+
 /* Phase 1.0c-v2: cycle-paced SIO model. Default 1 enables the dispatch-
  * loop quantum tick (gated by g_sio_timing_active). Set to 0 to revert
  * to legacy access-paced behavior across all callers. */
@@ -141,6 +149,11 @@ void sio_set_pad_state_slot(int slot, uint16_t buttons);
  * 0x73, with the four 0..255 stick axes appended; 0x80 = centred). */
 void sio_set_pad_analog(int slot, int enabled,
                         uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
+/* Set one of SIO_PAD_* explicitly. JogCon consumes left-X as a signed
+ * steering position, centered at 0x80; NeGcon consumes left-X as its 0..255
+ * twist (0x80 centred). Both ignore the remaining axes. */
+void sio_set_pad_type(int slot, int type,
+                      uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
 
 /* Per-frame input plumbing for the coherent-DualShock model. Update the sticks
  * every frame with sio_set_pad_sticks; change the reported pad type with
@@ -149,7 +162,26 @@ void sio_set_pad_analog(int slot, int enabled,
  * flip can never split a poll or a config handshake. Do NOT call
  * sio_set_pad_analog every frame for the type — that is for boot/hotplug only. */
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
-void sio_request_pad_type(int slot, int analog);
+/* Request SIO_PAD_* at the next idle, non-config bus boundary. A game's 0x44
+ * mode lock holds DualShock/digital/JogCon flips; entering or leaving NeGcon is
+ * a device swap that applies anyway and clears the lock, config latch and
+ * motor map (a different controller in the port). */
+void sio_request_pad_type(int slot, int type);
+/* NeGcon analog buttons I, II and L for the next poll (0 released .. 0xFF
+ * fully pressed). Host input like the sticks; ignored unless the slot reports
+ * SIO_PAD_NEGCON. */
+void sio_set_pad_negcon(int slot, uint8_t i, uint8_t ii, uint8_t l);
+void sio_get_pad_negcon(int slot, uint8_t out[3]);
+/* 1 while the game has locked the pad's analog mode (0x44 lock byte 0x03). */
+int sio_get_pad_mode_locked(int slot);
+/* Configuration replies carry stick axes even when analog mode is off. */
+int sio_get_pad_config_mode(int slot);
+/* Press the Analog button once. Returns 0 for a plain pad, locked mode or
+ * a special peripheral; accepted presses wait for an idle bus boundary. */
+int sio_toggle_pad_mode(int slot);
+/* Boot/device replacement: digital-start DualShock, unlocked, neutral inputs.
+ * The caller owns the port's connection and peripheral selection. */
+void sio_reset_dualshock(int slot);
 
 /* Connect / disconnect a logical pad (0 .. PSX_MAX_PLAYERS-1). By default no
  * pads are connected during initial BIOS boot. */
@@ -172,12 +204,16 @@ void sio_netplay_canonicalize_session_pads(int slot_count);
  * => 1) at boot/hotplug. Default is 1 (config-capable) so existing
  * analog/hybrid behaviour is unchanged. */
 void sio_set_pad_config_capable(int slot, int capable);
+int sio_get_pad_config_capable(int slot);
 
 /* Read the raw DualShock motor state selected by the guest's 0x4D rumble map
  * and most recent 0x42 poll. `small` is the fixed-strength high-frequency
  * motor byte; `large` is the variable-strength low-frequency motor byte.
  * The frontend translates these values to its host controller API. */
 void sio_get_pad_rumble(int slot, uint8_t *small, uint8_t *large);
+/* JogCon motor: last command nibble and strength (0..15) the guest sent; 0, 0
+ * unless the slot is a connected JogCon. Host force feedback reads it. */
+void sio_get_pad_jogcon_motor(int slot, uint8_t *command, uint8_t *strength);
 
 /* Return current pad button state (for debug server). _slot targets a logical
  * pad 0 .. PSX_MAX_PLAYERS-1. */
@@ -191,11 +227,66 @@ uint16_t sio_get_pad_buttons_slot(int slot);
 uint16_t sio_peek_stat(void);
 uint16_t sio_peek_ctrl(void);
 uint8_t  sio_peek_rx_data(void);
+/* SIO_STAT reads left before a visible ACK clears (side-effect free). */
+int      sio_peek_ack_visible_reads(void);
 
 /* Debug accessors: is a logical pad connected, and is it in analog mode. */
 int sio_get_pad_connected(int slot);
 int sio_get_pad_analog(int slot);
 void sio_get_pad_sticks(int slot, uint8_t out[4]);
+
+/* ---- Port device kind (PS1B-279) ----
+ * Which device answers on a logical pad slot. SIO_DEVICE_PAD (the default) is
+ * the digital pad / DualShock above; nothing about it changes. SIO_DEVICE_MOUSE
+ * is the Sony PS1 Mouse (SCPH-1030/1090): ID 5A12h, it answers only the 42h
+ * read with 6 bytes (12h 5Ah FFh buttons dX dY) and ignores every other
+ * command. Spec: recomp-corpus references/ps1/PERIPHERAL-MOUSE-SPEC.md.
+ * The kind is a host preference (which plug is in the port), like the
+ * multitap: it survives sio_init and is not part of the snapshot wire.
+ * Switching a slot's kind clears that slot's mouse motion, buttons, config
+ * latch and rumble map. Connection is still sio_set_pad_connected. */
+#define SIO_DEVICE_PAD    0
+#define SIO_DEVICE_MOUSE  1
+/* SIO_DEVICE_NEGCON (PS1B-304) is the Namco neGcon twist controller: ID 5A23h,
+ * it answers only the 42h read with 8 bytes (23h 5Ah, two button bytes, twist,
+ * I, II, L) and ignores every other command. Spec: recomp-corpus
+ * references/ps1/PERIPHERAL-NEGCON-SPEC.md. Switching a slot to or from it
+ * resets its neGcon state to idle (no button, twist centred, I/II/L 00h). */
+#define SIO_DEVICE_NEGCON 2
+/* SIO_DEVICE_GUNCON (PS1B-305) is the Namco GunCon cinch-type light gun: ID
+ * 5A63h, it answers only the 42h read with 8 bytes (63h 5Ah, two button
+ * bytes, X and Y as little-endian halfwords) and ignores every other command.
+ * Spec: recomp-corpus references/ps1/PERIPHERAL-GUNCON-SPEC.md. Switching a
+ * slot to or from it resets it to idle: no button, "no light" (X=0001h,
+ * Y=000Ah). */
+#define SIO_DEVICE_GUNCON 3
+#define SIO_GUNCON_NO_LIGHT_X 0x0001u
+#define SIO_GUNCON_NO_LIGHT_Y 0x000Au
+void sio_set_port_device(int slot, int kind);
+int  sio_get_port_device(int slot);
+/* Host mouse motion in device counts (positive X = right, positive Y = down).
+ * Added to a per-slot accumulator that each read drains by at most one byte
+ * (-128..+127) per axis; the rest carries to the next read. The accumulator
+ * is clamped to +/-SIO_MOUSE_ACCUM_MAX so a long gap between reads does not
+ * store a large jump. No effect unless the slot is a mouse. */
+#define SIO_MOUSE_ACCUM_MAX 1024
+void sio_mouse_add_motion(int slot, int dx, int dy);
+/* Host button state: nonzero = pressed. */
+void sio_set_mouse_buttons(int slot, int left, int right);
+/* Drop any motion not yet read (capture released, focus lost). */
+void sio_mouse_clear_motion(int slot);
+/* neGcon state for the next reads. buttons is the neGcon halfword as sent
+ * (active low: bit 3 Start, 4-7 D-pad, 11 R, 12 B, 13 A); bits the neGcon does
+ * not have are forced to 1. twist 80h = centre; i, ii, l 00h = released.
+ * No effect unless the slot is a neGcon. */
+void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
+                          uint8_t i, uint8_t ii, uint8_t l);
+/* GunCon state for the next reads. buttons is the GunCon halfword as sent
+ * (active low: bit 3 A, bit 13 trigger, bit 14 B); bits it does not have are
+ * forced to 1. x is 8 MHz clocks since HSYNC, y scanlines since VSYNC; pass
+ * SIO_GUNCON_NO_LIGHT_X/Y when the gun sees no light. No effect unless the
+ * slot is a GunCon. */
+void sio_set_guncon_state(int slot, uint16_t buttons, uint16_t x, uint16_t y);
 
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
@@ -237,48 +328,22 @@ uint32_t sio_get_seq(void);
  * transaction by issuing 0x01 on the SIO bus mid-read. */
 int sio_card_protocol_active(void);
 
-/* 1 while a card txn/protocol is live or a card ACK just fired. interrupts.c
- * uses this to defer in-exception ChangeThread so the game's SIO IntRP can
- * finish its A6C10/B4E38 handshake (Ape Escape LOAD). */
-int sio_should_defer_thread_switch(void);
-
-/* -------------------------------------------------------------------------
- * Ape Escape LOAD GAME — IMPORTANT memcard path
- *
- * LibCardIntRP needs one distinct IRQ7 edge per nest pop. SIO pacing (MT=1),
- * ACK defer, I_MASK.7 hold, and nest IRQ pulses below exist so presence-probe
- * → directory → file-list can complete.
- * EXPERIMENT (TwistedMetal4Recomp): formerly netplay-inert / MotK-uncapped;
- * ungated for local netplay desync testing. PSX_APE_CARD_UNSTICK=0 disables
- * nest repair + bit7 hold. See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md.
- * ------------------------------------------------------------------------- */
-
-/* Post-probe handoff ring: bit7 enable → TX 0x57 (debug_server card_handoff). */
+/* Post-probe handoff ring: diagnostic device state only, no guest-RAM probes. */
 typedef struct {
-    uint8_t  kind;   /* 1=probe_abort 2=b7_set 3=b7_clear 4=tx 5=card_ack
-                      * 6=unstick 7=select_flush_ack 8=ack_deferred_istat7
-                      * 9=nest_irq_pulse 10=b7_hold */
+    uint8_t  kind;   /* 1=probe_abort 2=b7_set 3=b7_clear 4=tx 5=card_ack */
     uint8_t  byte;
     uint16_t imask;
     uint32_t pc;
     uint32_t func;
-    uint32_t a6c10;
-    uint32_t b4e30;
-    uint32_t b4e38;
+    uint32_t ctrl;
+    uint32_t stat;
+    uint32_t card_state;
     uint64_t cyc;
 } SioCardHandoffEntry;
 const SioCardHandoffEntry *sio_get_card_handoff(int *idx_out, int *count_out);
 int sio_card_handoff_cap(void);
 int sio_card_handoff_armed(void);
 void sio_card_handoff_on_imask(uint32_t old_mask, uint32_t new_mask);
-/* Ape Escape: 1 while libcard nest is stuck post-probe — keep I_MASK.7 so
- * IntRP can finish (BIOS otherwise clears bit7 ~tens of cycles after SELECT
- * abort, before the pending SIO edge is taken). */
-int sio_card_should_hold_imask_bit7(void);
-/* Ape Escape: nest repair pump when the guest waiter polls RAM only
- * (no SIO MMIO → sio_tick never runs). IRQ re-edge only — never poke A6C10 /
- * invent B4E38. */
-void sio_ape_card_unstick_pump(void);
 
 /* Netplay deferred-present coexistence: 1 while native memcard SIO is
  * busy and still making progress. Callers keep s_present_pending and
@@ -367,6 +432,15 @@ typedef struct {
 } SioIrqEntry;
 
 uint32_t sio_get_irq_ring(const SioIrqEntry **buf_out, int *write_idx_out);
+
+int sio_snapshot_shape_ok(uint32_t len);
+void sio_set_pad_mode_button(int slot, int pressed);
+
+int sio_get_pad_mode_button(int slot);
+
+int sio_source_fsm_live(int *pad_live, int *mc_live);
+
+void sio_source_survey_sizes(uint32_t out[5]);
 
 #ifdef __cplusplus
 }

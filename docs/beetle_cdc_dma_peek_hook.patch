@@ -1,0 +1,58 @@
+diff --git a/mednafen/psx/cdc.cpp b/mednafen/psx/cdc.cpp
+index a6b31b66..f2c460b9 100644
+--- a/mednafen/psx/cdc.cpp
++++ b/mednafen/psx/cdc.cpp
+@@ -2438,3 +2438,23 @@ PS_CDC::CDC_CTEntry PS_CDC::Commands[0x20] =
+    { /* 0x1E, */ 0, 0, "ReadTOC", &PS_CDC::Command_ReadTOC, &PS_CDC::Command_ReadTOC_Part2 },
+    { /* 0x1F, */ 0, 0, NULL, NULL, NULL },
+ };
++
++/* PSXRecomp oracle peeks. */
++void PS_CDC::PSXRecomp_GetDecodeVolume(uint8 out[2][2]) const
++{
++   for(unsigned i = 0; i < 2; i++)
++      for(unsigned j = 0; j < 2; j++)
++         out[i][j] = DecodeVolume[i][j];
++}
++
++uint8 PS_CDC::PSXRecomp_GetIRQBuffer(void) const
++{
++   return IRQBuffer;
++}
++
++/* INT type of the pending CD interrupt (low nibble of IRQBuffer:
++ * 1=data ready, 2=complete, 3=acknowledge, 4=data end, 5=error). */
++extern "C" unsigned psxrecomp_cdc_irq_type(void)
++{
++   return PSX_CDC ? (unsigned)(PSX_CDC->PSXRecomp_GetIRQBuffer() & 0xF) : 0u;
++}
+diff --git a/mednafen/psx/cdc.h b/mednafen/psx/cdc.h
+index fabf2053..c582b9f5 100644
+--- a/mednafen/psx/cdc.h
++++ b/mednafen/psx/cdc.h
+@@ -44,6 +44,10 @@ class PS_CDC
+       int DriveStatus;
+ #endif
+ 
++      /* PSXRecomp oracle peeks (read-only, no side effects). */
++      void PSXRecomp_GetDecodeVolume(uint8 out[2][2]) const;	// [data_source][output_port], 0x80 = unity
++      uint8 PSXRecomp_GetIRQBuffer(void) const;
++
+    private:
+       CDIF *Cur_CDIF;
+       bool DiscChanged;
+diff --git a/mednafen/psx/dma.cpp b/mednafen/psx/dma.cpp
+index 27da2cd2..2f58b8ca 100644
+--- a/mednafen/psx/dma.cpp
++++ b/mednafen/psx/dma.cpp
+@@ -727,3 +727,10 @@ int DMA_StateAction(StateMem *sm, int load, int data_only)
+ 
+    return(ret);
+ }
++
++/* PSXRecomp oracle peek: per-channel DMA completion flags (DICR bits 24-30,
++ * bit n = channel n completed). */
++extern "C" unsigned psxrecomp_dma_int_status(void)
++{
++   return (unsigned)DMAIntStatus;
++}

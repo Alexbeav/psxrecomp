@@ -7,8 +7,28 @@
 extern "C" {
 #endif
 
+typedef struct RecompRuntimeUi RecompRuntimeUi;
+
 void psx_savestate_menu_set_state(int open, int selected_slot);
+/* A visible mode/ownership restriction; NULL clears it. */
+void psx_savestate_menu_set_unavailable(const char *reason);
+void psx_savestate_menu_get_state(int *open, int *selected_slot, int *unavailable);
 void psx_savestate_menu_note_slots_changed(void);
+/* 1 shows the Replays page (PS1B-191) instead of the save-state slots. */
+void psx_savestate_menu_set_replays(int replays);
+/* A message drawn inside the menu (the menu covers the OSD); "" clears it. */
+void psx_savestate_menu_set_notice(const char *text);
+/* The renderer historically owns the full-screen save-state bitmap through
+ * this module. Reuse that single overlay plane for the paused runtime menu so
+ * GL/Vulkan/software all present identical host UI. Only one panel opens at a
+ * time; `route_swapped` is host state, not guest/savestate state. */
+void psx_savestate_menu_set_runtime_settings(int open, int route_swapped,
+                                             int route_available);
+/* When recomp-ui is linked, let its renderer-agnostic model own the runtime
+ * panel while retaining this module's one cross-backend 640x480 overlay
+ * plane.  NULL restores the legacy controller-route-only panel. */
+void psx_savestate_menu_set_runtime_ui(RecompRuntimeUi *ui);
+void psx_savestate_menu_note_runtime_changed(void);
 int  psx_savestate_menu_needs_present(void);
 int  psx_savestate_menu_overlay_image(const uint32_t **pixels, int *w, int *h);
 

@@ -31,6 +31,13 @@ extern "C" {
 
 #define PSXKB_MAX_PLAYERS 5
 
+/* Shared pseudo-scancodes for INI Mouse1..Mouse5. Keep them outside SDL's
+ * keyboard array and check them before indexing it. Mouse3 is right. */
+#define PSXKB_MOUSE_SC_BASE 512
+#define PSXKB_MOUSE_SC(btn) ((SDL_Scancode)(PSXKB_MOUSE_SC_BASE + (btn)))
+#define PSXKB_IS_MOUSE_SC(sc) \
+    ((int)(sc) > PSXKB_MOUSE_SC_BASE && (int)(sc) <= PSXKB_MOUSE_SC_BASE + 5)
+
 /* Button indices — stable order, matches the order keybinds.ini writes and the
  * order the launcher's rebind chips are laid out. Keep in sync with kButtons[]
  * in psx_keybinds.c. */
@@ -61,11 +68,26 @@ typedef struct {
 
 /* Initialize from <exe_dir>/keybinds.ini. Generates a default file if one does
  * not exist. exe_path may be NULL/argv[0]/the exe directory itself — the .ini is
- * placed in that file's directory (or the path itself when it is a directory). */
+ * placed in that file's directory (or the path itself when it is an existing
+ * directory or ends in a path separator). Executable names need no extension. */
 void psx_keybinds_init(const char *exe_path);
 
 /* Read-only view of the current bindings. */
 const PsxKeyBinds *psx_keybinds_get(void);
+/* Trusted title mod's temporary sampling profile. Does not edit or save the
+ * user's primary/alternate bindings. Cleared at each session boundary. */
+int psx_keybinds_set_session_player(int player, const PsxPlayerBinds *profile);
+void psx_keybinds_clear_session_players(void);
+
+/* Runtime-owned host controls consumed by optional local input capture.
+ * Suppression is per source/player, before PSX folding, and lasts through
+ * release. It never clears a merged PSX button held by another source. */
+void psx_keybinds_suppress_control(int player, SDL_Scancode sc);
+void psx_keybinds_release_control(int player, SDL_Scancode sc);
+int psx_keybinds_control_suppressed(int player, SDL_Scancode sc);
+/* Host hotkey polling gets a keyboard view excluding consumed P1 sources.
+ * The original SDL state and other players' PSX folds remain unchanged. */
+void psx_keybinds_host_keys(const uint8_t *keys, uint8_t out[SDL_NUM_SCANCODES]);
 
 /* ── Runtime read helpers (keyboard -> PSX pad), player is 1..PSXKB_MAX_PLAYERS */
 
@@ -104,6 +126,25 @@ void         psx_keybinds_reset_player(int player);
 /* Persist the current bindings to keybinds.ini (path resolved by
  * psx_keybinds_init; call that first). */
 void         psx_keybinds_save(void);
+
+/* ── GunCon controls (PS1B-305) ────────────────────────────────────────────── */
+/* The light-gun seat's host controls, in keybinds.ini [guncon]. The pointer
+ * aims; these press the gun's trigger and its side buttons A (left side) and
+ * B (right side). no_light holds "no light" (aim off-screen, e.g. to reload);
+ * offscreen_shot holds no light and the trigger together (RE Survivor walks
+ * on it). Each control has a primary and an optional alt binding, keys or
+ * Mouse1..5, like the pad binds. A file without [guncon] keeps the defaults:
+ * trigger = Mouse1; a = Mouse3 (right button), A; b = Mouse2 (middle), D;
+ * no_light = Mouse4; offscreen_shot = W. */
+enum PsxGunconControl {
+    PSX_GC_TRIGGER = 0, PSX_GC_A, PSX_GC_B, PSX_GC_NO_LIGHT, PSX_GC_OFFSCREEN_SHOT,
+    PSX_GC_COUNT
+};
+/* 1 while the control's primary or alt binding is held. */
+int          psx_keybinds_guncon_held(const uint8_t *keys, int control);
+/* The control's primary (alt == 0) or alt binding; UNKNOWN when unbound. */
+SDL_Scancode psx_keybinds_guncon_get(int control, int alt);
+const char  *psx_keybinds_guncon_name(int control);        /* ini key */
 
 #ifdef __cplusplus
 }

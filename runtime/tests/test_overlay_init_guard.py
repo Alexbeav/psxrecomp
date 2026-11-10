@@ -49,11 +49,13 @@ def require_before(body: str, guard_pattern: str, state_pattern: str, name: str)
 def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
 
+    # overlay_loader_dispatch guards, then hands the PC to the per-segment
+    # lookup (docs/SEGMENT_AWARE_CODE.md §5.7), which reads the index tables.
     dispatch = function_body(source, "overlay_loader_dispatch")
     require_before(
         dispatch,
         r"if\s*\(\s*!s_active\s*\)\s*return\s+0\s*;",
-        r"idx_head\s*\(",
+        r"(?:idx_head(?:_seg)?|overlay_loader_dispatch_seg)\s*\(",
         "overlay_loader_dispatch",
     )
 
@@ -69,7 +71,7 @@ def main() -> int:
     require_before(
         call_native,
         r"if\s*\(\s*!s_active\s*\|\|\s*!s_native_exec\s*\)\s*return\s+0\s*;",
-        r"idx_head\s*\(",
+        r"idx_head(?:_seg)?\s*\(",
         "overlay_loader_call_native",
     )
 

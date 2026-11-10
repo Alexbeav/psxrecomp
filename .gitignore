@@ -21,6 +21,7 @@ ghidra/
 .happypath/
 
 # Build artifacts
+/build-integration-*/
 recompiler/build/
 recompiler/build-asan/
 recompiler/build-asan2/
@@ -33,15 +34,25 @@ runtime/build-*/
 runtime/build-*.exe
 test_msvc/
 
-# Recompiler output (derivative of copyrighted Sony BIOS, regenerate locally)
-generated/
+# Recompiler output. The two BIOS backends every release links are COMMITTED
+# (decision 2026-09-30: the recompiled BIOS carries the same risk as the
+# recompiled game, which titles already commit); CI builds them and the
+# runtime.cmake fingerprint check fails a release whose stamp predates the
+# emitter. Everything else under generated/ (scratch stems, skipped-function
+# reports, per-dump work) stays local. Regenerate with:
+#   tools/regen_bios.sh --config bios/OpenBIOS.toml
+#   tools/regen_bios.sh --config bios/SCPH1001.toml   (needs your own dump)
+generated/*
+!generated/OpenBIOS_full.c
+!generated/OpenBIOS_dispatch.c
+!generated/OpenBIOS.emitter.sha
 
 # Release packaging artifacts
 release-stage/
 *.zip
 
 # Vendored upstream sources (cloned locally, not checked in)
-beetle-psx/
+beetle-psx
 
 # Explicit-fallback SDL2 / dep zips (large, regenerable)
 sdl2-dev.zip
@@ -70,7 +81,8 @@ psx_out.txt
 
 # Probe / scratch artifacts
 # All ad-hoc diagnostic dumps land under probes/ so the repo root stays clean.
-# Runtime data (memcards) is intentionally NOT covered: card*.mcd, dummy.*.mcr.
+# Runtime memcards are not covered here either — see the *.mcr / /*.mcd rules
+# below; the tracked fixtures live in runtime/tests/fixtures/memcards/.
 probes/
 
 # Ad-hoc scratch tools (underscore prefix convention).
@@ -101,9 +113,14 @@ games/*/*
 !games/*/game.toml
 !games/*/seeds.txt
 
-# Per-game memcards created at runtime
+# Memcards. Cards a run creates are scratch: *.mcr anywhere, and any .mcd
+# dropped at the repo root (the runtime writes card1.mcd/card2.mcd next to the
+# project root when no explicit path is configured). The only tracked cards are
+# test fixtures: runtime/tests/fixtures/memcards/ (see the README there) plus
+# the runtime/tests/test_* fixtures re-included further down.
 *.mcr
-!dummy.*.mcr
+/*.mcd
+!runtime/tests/fixtures/memcards/*
 
 # macOS .app bundle (contains recompiled BIOS-derived binary — not distributable)
 /dist/
@@ -132,3 +149,6 @@ recompiler/build-*/
 # Project Studio GUI venv (customtkinter)
 tools/new_project_layout/.venv/
 tools/new_project_layout/project_studio_repos.json
+
+# Recreated local compiler extraction; tool identity stays in its manifest.
+.cache/

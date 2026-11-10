@@ -45,6 +45,18 @@
  *        masked, aliased, read-only, precision-sensitive, flag/IR, and derived
  *        GTE regs; GTE-heavy overlays failed to LINK without shims (undefined
  *        gte_read_ctrl), silently blocking new coverage. */
+/* v22: game_text_native_ok callback - the emitter emits a direct
+ *      psx_game_text_native_ok() stale-static guard (code_generator.cpp, at
+ *      block entry and before every direct jal). The function is DEFINED IN THE
+ *      GENERATED DISPATCH SHARD, which lives in the executable, so an overlay
+ *      DLL cannot see it: 107 of 109 shard failures on the 2026-09-02 Tomba 2
+ *      framework bump were `undefined reference to psx_game_text_native_ok`.
+ *      Exactly the rfe / gte_read_ctrl / gte_precision_store_word class again -
+ *      an emitter gained a runtime call without the overlay ABI gaining the
+ *      shim, and the only symptom is shards that silently fail to build so the
+ *      code runs interpreted forever. NULL-guarded: a host predating v22 makes
+ *      the shim return 0, which routes the guest through the dispatcher instead
+ *      of native code - slower, never wrong. */
 /* v11 batches per-instruction cycle charges inside overlay DLLs and flushes at
  * block/device/store boundaries, removing a cross-DLL callback per instruction
  * without changing the shared guest-cycle timeline. */
@@ -93,7 +105,34 @@
  *      host/DLL flavor mix — base-flavour DLLs and hosts are untouched, so
  *      the version stays. The emit-content change (PGXP_*() macros in all
  *      generated C) is covered by the codegen hash + CODEGEN_VER below. */
-#define PSX_OVERLAY_ABI_VERSION 21
+/* v23: native overlay forwarding for signed screen bounds and mod entry hooks. */
+/* v24: last_store_pc pointer. The emitter writes g_debug_last_store_pc before
+ *      every guest store, and the runtime reads it in every build: memory.c's
+ *      store filters key on it, and debug tooling attributes writes with it.
+ *      DLLs used to keep a private copy, so an overlay store left the host's
+ *      value naming an older store. The DLL now writes through this pointer
+ *      (cpu_state.h maps the name in PSX_OVERLAY_DLL_BUILD). */
+/* v25: function-entry callbacks may return an opt-in filter result while
+ *      retaining the v24 last_store_pc pointer. */
+/* Master line:
+ * v26: guarded packed-coordinate rejection callback, preserving the selected
+ *      rejection axes while the native-wide renderer clips horizontal margins.
+ * v27: full-word-bound native-wide winding branch callback.
+ * v28: guarded instruction callbacks and scoped guest-function completion.
+ * release/native-rendering-20261003 line (independently numbered v26..v29):
+ *      ws_cull_scale and gte_nclip_exact_sign forwarders, completion-returning
+ *      entry hooks, guarded pre-instruction callback.
+ * v30: the two lines merged. OverlayCallbacks keeps the master layout, which
+ *      already holds every release-line callback; shards built against either
+ *      v28 or v29 are rejected and recompiled.
+ * v31/v32: reserved for the experimental selector/adapter stack.
+ * v33: guarded load/store effective-address adapter on the master layout.
+ * v34: frozen, activation-only immediate selectors on the v33 layout.
+ * v35: append native replacement forwarding to v34; old X6 v31 and
+ *      experimental v32 caches remain incompatible. */
+/* v36: append live instruction-observer forwarding after modern hooks.
+ * v37: append compiled game BREAK and generated branch-decision callbacks. */
+#define PSX_OVERLAY_ABI_VERSION 37
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -125,10 +164,18 @@
  *   2 — PGXP precision shadowing (-DPSX_PGXP=1 objects; pgxp_hooks.h) */
 #define PSX_OVERLAY_FLAVOR_WIDESCREEN 1
 #define PSX_OVERLAY_FLAVOR_PGXP       2
+/* Optional source bus has a different callback tail. Its flavor discriminates
+ * that layout without changing the ordinary v35 callback ABI or defaults. */
+#define PSX_OVERLAY_FLAVOR_SOURCE_BUS 4
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+#define PSX_OVERLAY_EFFECTIVE_FLAVOR (PSX_OVERLAY_FLAVOR | PSX_OVERLAY_FLAVOR_SOURCE_BUS)
+#else
+#define PSX_OVERLAY_EFFECTIVE_FLAVOR PSX_OVERLAY_FLAVOR
+#endif
 
 /* Combined tag exported by overlay_abi() and checked by the loader. */
 #define PSX_OVERLAY_ABI_TAG \
-    ((int)((PSX_OVERLAY_ABI_VERSION & 0xFFFF) | ((PSX_OVERLAY_FLAVOR & 0xFFFF) << 16)))
+    ((int)((PSX_OVERLAY_ABI_VERSION & 0xFFFF) | ((PSX_OVERLAY_EFFECTIVE_FLAVOR & 0xFFFF) << 16)))
 
 /* Codegen version — bumped whenever the recompiler emits DIFFERENT bytes for the
  * same guest overlay WITHOUT an ABI change (the load-time overlay_abi() gate only
@@ -156,7 +203,20 @@
  *  10: + PGXP dataflow-shadowing PGXP_*() macro emission at loads/stores/
  *      COP2 transfers/precision-carrying ALU ops (pgxp_hooks.h; no-ops in
  *      base-flavour objects, real hooks under -DPSX_PGXP=1). */
-#define PSX_OVERLAY_CODEGEN_VER 10
+/* 11: ABI v23 screen-bound and mod-entry forwarders; use a fresh cache path
+ *     so packaged pairs cannot be hidden by an older user cache on first boot. */
+/* 13: merge adaptive backdrop v12: independent quotient consumers, proven
+ *     copied/biased camera inputs, and two biased bounds for terrain strips. */
+/* 14 (master): guarded saturation-aware NCLIP branch consumers and ABI v27
+ *     forwarding. 15 (master): see history.
+ * 14-16 (release/native-rendering-20261003): [[widescreen.cull.scale]]
+ *     register-register frustum-edge emit; exact/keep NCLIP sites for every
+ *     sign-branch shape.
+ * 17: the two lines merged (master exact-NCLIP emission, release keep-site
+ *     shapes and cull-scale sites).
+ * 18: + PGXP_COP2 hooks on CFC2 / CTC2 (GTE-as-multiplier scalar tier). */
+/* 19: compiled game BREAK dispatch and pre-slot BLTZ decision handoff. */
+#define PSX_OVERLAY_CODEGEN_VER 19
 
 /* Auto codegen hash (generated by hash_codegen.cmake from the recompiler codegen
  * sources). Folded into the cache PATH next to cg<N> (gcc/<arch-abi>/cg<N>_<hash>/)
@@ -166,16 +226,19 @@
  * dir; a fresh checkout without it falls back to 0 (== old single-cgN behaviour)
  * until the first build. compile_overlays.py reads the same value, so the loader
  * and the compiler always agree on the path. */
-#if defined(__has_include)
-#  if __has_include("overlay_codegen_hash.h")
-#    include "overlay_codegen_hash.h"
+#if !defined(PSX_OVERLAY_CODEGEN_HASH) && defined(__has_include)
+#  if __has_include(<overlay_codegen_hash.h>)
+#    include <overlay_codegen_hash.h>
 #  endif
 #endif
 #ifndef PSX_OVERLAY_CODEGEN_HASH
 #  define PSX_OVERLAY_CODEGEN_HASH 0u
 #endif
 
-typedef struct {
+/* Named so consumers that only forward the table (overlay_loader.h,
+ * psx_bios_module.h) can declare `struct OverlayCallbacks` without pulling
+ * this header in. Layout unchanged. */
+typedef struct OverlayCallbacks {
     /* Core dispatch: routes call_by_address() and out-of-overlay jal */
     void (*dispatch_call)(CPUState *cpu, uint32_t addr, uint32_t ra);
     /* Interrupt check: called after every function return in overlay */
@@ -183,11 +246,14 @@ typedef struct {
     /* Interrupt check with the guest PC that should resume if a game-installed
      * handler later RFEs to the sentinel outside the synchronous host window. */
     void (*check_interrupts_at)(CPUState *cpu, uint32_t resume_pc);
-    /* Guest-cycle accounting (ABI v7): block-cycle charge. Overlay code built
+    /* Guest-cycle accounting (ABI v7): the CPU charge. Overlay code built
      * with PSX_ENABLE_BLOCK_CYCLES must charge the SAME shared host cycle/timer
      * timeline as the dirty-RAM interpreter and the BIOS, or timer-sensitive
-     * code reads different values per backend (Tomba2 logo Timer1 fork). */
-    void (*advance_cycles)(uint32_t cycles);
+     * code reads different values per backend (Tomba2 logo Timer1 fork). The
+     * host binds its psx_cpu_charge (psx_cycles.h), so [timing]
+     * guest_cycle_scale applies to overlay code exactly as to native code.
+     * (Named advance_cycles before; same slot, same arguments.) */
+    void (*cpu_charge)(uint32_t cycles);
     /* GTE coprocessor 2 execution */
     void (*gte_execute)(CPUState *cpu, uint32_t cmd);
     /* MIPS syscall (break/syscall instructions). Returns 1 if control
@@ -309,14 +375,49 @@ typedef struct {
     /* Aspect-scaled terrain-frustum angle helper (ABI v21). */
     uint32_t (*ws_angle_widen)(uint32_t vanilla);
 
+    /* Stale-static guard (ABI v22; see the version-history note above).
+     * Defined by the generated dispatch shard in the executable, so overlay
+     * DLLs must forward. Appended last; may be NULL on a host that predates
+     * it - the shim then returns 0 and the guest takes the dispatcher path. */
+    int      (*game_text_native_ok)(uint32_t addr);
+
     /* PGXP dataflow-shadowing hook table (pgxp_hooks.h). Only pgxp-flavour
      * shards (PSX_OVERLAY_FLAVOR pgxp bit, compiled with -DPSX_PGXP=1) emit
      * calls to psx_pgxp_*; their preamble forwards through this table. Base-
      * flavour shards never reference it. Appended LAST; NULL on an older host
      * no-ops every hook — precision shadowing is visual-only, never
      * load-bearing. The ABI version bump that arms this ships with the
-     * emitter change (Phase 2 of ENHANCEMENTS.md G1 value propagation). */
+     * emitter change (Phase 2 of docs/ENHANCEMENTS.md G1 value propagation). */
     const PGXPHooks *pgxp;
+    int32_t (*ws_screen_x_bound)(int32_t vanilla);
+    int (*mod_function_entry)(CPUState *cpu, uint32_t address);
+    /* The host's g_debug_last_store_pc (ABI v24; see the version-history note
+     * above). Overlay stores write it exactly as static and interpreted stores
+     * do. NULL leaves the DLL writing a private copy nothing reads. */
+    uint32_t *last_store_pc;
+    int (*ws_masked_reject)(uint32_t flags, uint32_t mask);
+    int (*ws_nclip_branch)(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla);
+    /* Frustum-edge bound scale helper (ABI v24). */
+    int32_t (*ws_cull_scale)(int32_t bound, int32_t half_extent);
+    /* Exact-NCLIP branch sign (ABI v25). */
+    int32_t (*nclip_exact_sign)(int32_t native_mac0, uint32_t pc);
+    /* Guarded pre-instruction mod callback (ABI v27). */
+    void (*mod_instruction)(CPUState*, uint32_t, uint32_t);
+    /* Guarded load/store effective-address adapters (ABI v33). */
+    uint32_t (*mod_memory_address)(const CPUState*, uint32_t, uint32_t, uint32_t);
+    /* [[mod_immediate.sites]] selector of a group (ABI v34); NULL = stock. */
+    uint32_t (*mod_immediate_select)(uint32_t group);
+    /* Native function replacements (ABI v35). */
+    int (*mod_try_function_replacement)(CPUState *cpu, uint32_t address);
+    int (*cpu_step_boundary_enabled)(int include_replay);
+    void (*cpu_step_boundary)(CPUState *cpu, uint32_t address);
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+    /* Present only in source-flavor builds. Existing callbacks keep offsets. */
+    void (*source_bus_boundary)(CPUState *cpu,uint32_t pc);
+#endif
+    /* Compiled game BREAK exception dispatch (ABI v37). */
+    void (*psx_game_break)(CPUState*, uint32_t, uint32_t, int);
+    void (*source_latch_bltz)(uint32_t, int);
 } OverlayCallbacks;
 
 #ifdef __cplusplus
