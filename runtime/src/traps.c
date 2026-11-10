@@ -1095,6 +1095,12 @@ static int enter_guest_syscall_exception(CPUState *cpu) {
 }
 
 int psx_syscall(CPUState* cpu, uint32_t code) {
+    /* A pending deferred load is an observation boundary: the syscall must see
+     * the register the guest's previous instruction loaded, and its own return
+     * value must not be overwritten when that write lands afterwards. WipEout
+     * (Europe) read a stale zero divisor at 0x80077228 and Nightmare Creatures
+     * (USA) parked in a BIOS wait without this (PS1B-529). */
+    psx_load_value_commit(cpu);
     /*
      * PS1 BIOS SYSCALL convention:
      *   $a0 = 1: EnterCriticalSection — disable interrupts, return old SR

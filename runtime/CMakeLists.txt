@@ -444,6 +444,9 @@ if(BUILD_TESTING)
             add_test(NAME syscall_closed_thread_context COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_closed_thread_context.py"
                 --cc "${CMAKE_C_COMPILER}")
+            add_test(NAME syscall_load_value_commit COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_load_value_commit.py"
+                --cc "${CMAKE_C_COMPILER}")
         endif()
         if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
             add_test(NAME dma_mdec_jobs_test COMMAND "${Python3_EXECUTABLE}"
