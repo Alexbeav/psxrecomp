@@ -242,7 +242,9 @@ if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
   done
   bios_args+=(--omit-openbios)
 fi
-"${SDK_PYTHON}" "${SCRIPT_DIR}/check_setup_bios_assets.py" "${STAGE}" "${bios_args[@]}"
+# bash 3.2 (macOS) treats an empty array as unset under `set -u`.
+"${SDK_PYTHON}" "${SCRIPT_DIR}/check_setup_bios_assets.py" "${STAGE}" \
+  ${bios_args[@]+"${bios_args[@]}"}
 
 if [[ "${REQUIRE_CLI}" -eq 1 && ! -f "${STAGE}/psxrecomp/psxrecomp_cli.py" ]]; then
   echo "error: missing psxrecomp/psxrecomp_cli.py in staged tree" >&2
