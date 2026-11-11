@@ -139,8 +139,8 @@ int main() {
         struct Kit { const char* disc; const char* other; const char* copy; const char* renamed; bool native; };
         const Kit kits[] = {
             // as game.toml has them on Windows
-            {"Z:\\Emulators\\PS1 Games\\Diablo (Europe) (En,Fr,De,Sv).chd",
-             "Z:\\Emulators\\PS1 Games\\Alien Resurrection (Europe) (En,Fr,De,Es,It).chd",
+            {"E:\\PS1 Games\\Diablo (Europe) (En,Fr,De,Sv).chd",
+             "E:\\PS1 Games\\Alien Resurrection (Europe) (En,Fr,De,Es,It).chd",
              "D:\\My discs\\diablo-pal.chd",
              "D:\\My discs\\Diablo (Europe) (En,Fr,De,Sv).cue",
 #if defined(_WIN32)

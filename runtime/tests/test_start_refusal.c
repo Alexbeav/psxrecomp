@@ -83,10 +83,10 @@ int main(void)
                  "Selected path:\nDiablo (Europe).cue") == 0);
     CHECK(strcmp(cut("could not be read.\n\nD:/test dir/recomps/game.toml\n\nbad key"),
                  "could not be read.\n\ngame.toml\n\nbad key") == 0);
-    CHECK(strcmp(cut("Supply the file at /home/alex/PS1 Games/Game.sbi, then retry."),
+    CHECK(strcmp(cut("Supply the file at /home/player/PS1 Games/Game.sbi, then retry."),
                  "Supply the file at Game.sbi, then retry.") == 0);
     CHECK(strcmp(cut("\\\\nas\\share\\bios\\SCPH-5552.BIN"), "SCPH-5552.BIN") == 0);
-    CHECK(strcmp(cut("Mounted as:\nZ:\\Emulators\\"), "Mounted as:\n") == 0);
+    CHECK(strcmp(cut("Mounted as:\nE:\\PS1 Games\\"), "Mounted as:\n") == 0);
     /* What is not a full path stays: a relative path, a web address, a lone
      * slash, a drive letter with no separator, a ratio. */
     CHECK(strcmp(cut("Expected next to the executable:\nbios/SCPH5552.BIN"),

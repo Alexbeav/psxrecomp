@@ -4,7 +4,7 @@
   "base": "a38c2c1efc89d5adfff01738a106bf93d060ba50",
   "sources": [
     {
-      "path": "I:\\Projects\\PSX-References\\research-and-documentation\\psx-spx\\docs\\cdromdrive.md",
+      "path": "PSX-References/research-and-documentation/psx-spx/docs/cdromdrive.md",
       "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
       "sha256": "b37a3d10752919788ca1cf2495fb199ca9ec9b3894ffd0c2c7b5ab5a4707cdbf",
       "lines_read": [
