@@ -112,6 +112,7 @@ def make_product(folder: Path, who: str, serial: str, boot: str, exe: str, *, le
     write(folder / "mods" / "bundled" / "psx.x" / "manifest.toml", "m")
     write(folder / "mods" / "state.toml", "this machine's mod state")
     write(folder / "overlay_toolchain" / "psxrecomp-game.exe", "emitter built for " + who)
+    write(folder / "overlay_toolchain" / "psxrecomp-bios.exe", "bios emitter built for " + who)
     write(folder / "overlay_toolchain" / "tcc" / "examples" / "ex1.c", "int main;")
     write(folder / "overlay_toolchain" / "include" / "x.h", "h")
     write(folder / "saves" / "disc_digests.tsv", serial + "\tdigest\n")
@@ -372,7 +373,12 @@ class Join(unittest.TestCase):
             # known per-build files: the first program's copy, every hash recorded
             self.assertEqual((out / "mods" / "README.md").read_text(), "mods of leon")
             self.assertEqual(sorted(record["known_variants"]),
-                             ["mods/README.md", "overlay_toolchain/psxrecomp-game.exe"])
+                             ["mods/README.md", "overlay_toolchain/psxrecomp-bios.exe",
+                              "overlay_toolchain/psxrecomp-game.exe"])
+            self.assertEqual(set(record["known_variants"]["overlay_toolchain/psxrecomp-bios.exe"]["sha256"]),
+                             {"leon", "claire"})
+            self.assertEqual((out / "overlay_toolchain" / "psxrecomp-bios.exe").read_text(),
+                             "bios emitter built for leon")
             self.assertEqual(set(record["known_variants"]["mods/README.md"]["sha256"]), {"leon", "claire"})
             self.assertEqual((out / "saves" / "disc_digests.tsv").read_text().splitlines(),
                              ["SLUS-00748\tdigest", "SLUS-00756\tdigest"])
@@ -491,7 +497,7 @@ class Join(unittest.TestCase):
                                 "--set-disc", f"1={discs[0]}", "--set-disc", f"2={discs[1]}",
                                 "--out", str(Path(tmp) / "out"), "--record", str(record)])
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(record.read_text())["shared_files"], 11)
+            self.assertEqual(json.loads(record.read_text())["shared_files"], 12)
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 code = ps.main(["join", "--set", str(root / "set.toml"), "--program", "leon",

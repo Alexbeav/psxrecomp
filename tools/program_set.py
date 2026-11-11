@@ -71,8 +71,10 @@ LEFT_OUT = ("mods/state.toml", "mods/state.toml.tmp", "mods/installed", "overlay
 # Same path in every program's folder, different bytes for a known, harmless
 # reason. The first program's copy is kept and every hash is recorded.
 #   overlay_toolchain/psxrecomp-game*   link timestamps differ per build
+#   overlay_toolchain/psxrecomp-bios*   the same
 #   mods/README.md                      names the program
 KNOWN_VARIANTS = ("overlay_toolchain/psxrecomp-game.exe", "overlay_toolchain/psxrecomp-game",
+                  "overlay_toolchain/psxrecomp-bios.exe", "overlay_toolchain/psxrecomp-bios",
                   "mods/README.md")
 # Each program's folder carries these for itself. They are never copied across:
 # the join writes the per-program config, and Studio writes its own provenance.
