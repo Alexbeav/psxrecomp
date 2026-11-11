@@ -2731,7 +2731,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--bios",
         default="",
-        help="optional retail BIOS dump (staged as bios/SCPH1001.BIN + regen)",
+        help="optional retail BIOS dump (staged where bios/<stem>.toml loads it + regen)",
+    )
+    g.add_argument(
+        "--bios-stem",
+        default="",
+        help="retail BIOS profile stem to stage and regenerate (bios/<STEM>.toml); "
+        "defaults to the stem of [recompiler] bios_config, then SCPH1001",
     )
     g.add_argument(
         "--force-bios",
