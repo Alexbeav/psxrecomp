@@ -804,7 +804,20 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
                         os.path.join(toolchain, 'tcc'), dirs_exist_ok=True)
         stage_tcc_notice(os.path.join(toolchain, 'tcc'), pins)
     elif pins.get('tcc_source_url'):
-        stage_linux_tcc(toolchain, dl_cache, pins, log=log)
+        # tcc is the fallback compiler. A host that cannot build it (no make:
+        # Steam Deck, a minimal Ubuntu or Fedora) still gets the interpreter,
+        # the recompiler, compile_overlays.py and the headers below, so shards
+        # compile with the compiler named in compiler.txt. Abandoning the whole
+        # toolchain here left every overlay interpreted on such a host.
+        try:
+            if shutil.which('make') is None:
+                _die('the program make is not installed')
+            stage_linux_tcc(toolchain, dl_cache, pins, log=log)
+        except (StageError, OSError) as exc:
+            shutil.rmtree(os.path.join(toolchain, 'tcc'), ignore_errors=True)
+            log('TinyCC was not built: %s. The rest of the overlay toolchain is staged; '
+                'overlays compile with the compiler the build already uses.'
+                % str(exc).splitlines()[0])
 
     recompiler = TOOLCHAIN_RECOMPILER[platform_tag]
     src_recompiler = os.path.join(recomp_dir, recompiler)
@@ -901,7 +914,7 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
             total += st.st_size
     log('Bundled overlay toolchain (pinned python%s + recompiler + BIOS emitter + headers): '
         '~%d MB in %d file(s) + %d symlink(s)'
-        % (' + tcc' if (pins['tcc_url'] or pins.get('tcc_source_url')) else '',
+        % (' + tcc' if os.path.isdir(os.path.join(toolchain, 'tcc')) else '',
            total // (1 << 20),
            sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))
     if os.path.isdir(os.path.join(toolchain, 'tcc')):

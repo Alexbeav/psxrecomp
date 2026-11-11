@@ -187,6 +187,49 @@ class ToolchainNoticeTest(unittest.TestCase):
         self.assertEqual(rs.bundled_notice_gaps(self.stage), [])
         self.assertEqual(self.warnings(), [])
 
+    def _stage_linux_with_source_tcc(self, build, make):
+        """Linux pins as shipped (tcc built from source), with the build step and `make` replaced."""
+        rs.TOOLCHAIN_PINS['linux'] = dict(rs.TOOLCHAIN_PINS['linux'],
+                                          tcc_source_url='https://example.invalid/tcc.tar.bz2')
+        real_build, real_which = rs.stage_linux_tcc, shutil.which
+        rs.stage_linux_tcc = build
+        shutil.which = lambda name, *a, **k: (make if name == 'make' else real_which(name, *a, **k))
+        try:
+            return self.stage_it('linux')
+        finally:
+            rs.stage_linux_tcc, shutil.which = real_build, real_which
+
+    def _said_once_and_staged_without_tcc(self, toolchain):
+        for kept in ('compile_overlays.py', 'bios_module_build.py', 'psxrecomp-game',
+                     os.path.join('include', 'overlay_dispatch_preamble.c.inc'),
+                     os.path.join('python', 'bin', 'python3')):
+            self.assertTrue(os.path.isfile(os.path.join(toolchain, kept)), kept)
+        self.assertFalse(os.path.exists(os.path.join(toolchain, 'tcc')))
+        self.assertFalse(os.path.exists(os.path.join(self.stage, 'licenses')))
+        self.assertEqual(rs.bundled_notice_gaps(self.stage), [])
+        self.assertNotIn('+ tcc', ' '.join(str(line) for line in self.lines))
+        said = [str(line) for line in self.lines if 'TinyCC was not built' in str(line)]
+        self.assertEqual(len(said), 1, self.lines)
+        return said[0]
+
+    def test_a_linux_host_without_make_keeps_the_rest_of_the_toolchain(self):
+        # Steam Deck, 2026-11-11: no make, so tcc could not be built, staging stopped there and
+        # the game could not open overlay_toolchain/compile_overlays.py: every overlay ran
+        # interpreted although gcc was on PATH. The tcc build is not even tried.
+        called = []
+        toolchain = self._stage_linux_with_source_tcc(lambda *_a, **_k: called.append(1), make=None)
+        self.assertEqual(called, [])
+        self.assertIn('make is not installed', self._said_once_and_staged_without_tcc(toolchain))
+
+    def test_a_failed_tcc_build_keeps_the_rest_of_the_toolchain(self):
+        def build(toolchain, *_a, **_k):
+            touch(os.path.join(toolchain, 'tcc', 'tcc'))   # a half-staged tcc must not stay
+            rs._die('tcc build failed (exit 2): make\nlib/bcheck.c:738: error')
+        toolchain = self._stage_linux_with_source_tcc(build, make='/usr/bin/make')
+        said = self._said_once_and_staged_without_tcc(toolchain)
+        self.assertIn('tcc build failed (exit 2): make', said)
+        self.assertNotIn('bcheck', said)
+
     def test_a_damaged_tree_is_said_in_plain_words_and_the_toolchain_is_still_staged(self):
         # The carried text is missing: on the player's machine that means a damaged package.
         # Staging must finish, so the product still gets its compiler, and must say which file.

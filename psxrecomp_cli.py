@@ -2505,8 +2505,10 @@ def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progr
         if compiler:
             (tk / "compiler.txt").write_text(str(compiler) + "\n", encoding="utf-8")
             progress.log(f"overlay toolchain staged at {tk}; shard compiler: {compiler}")
-        else:
+        elif (tk / "tcc").is_dir():
             progress.log(f"overlay toolchain staged at {tk}; no optimising compiler found (tcc tier)")
+        else:
+            progress.log(f"WARNING: overlay toolchain staged at {tk} without a compiler; overlays will run interpreted")
         return tk
     except Exception as exc:  # noqa: BLE001
         progress.log(f"WARNING: overlay toolchain staging failed; overlays will run interpreted: {exc}")
