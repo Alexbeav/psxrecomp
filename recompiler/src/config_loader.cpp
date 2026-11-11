@@ -872,7 +872,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[video] depth24_trailing_margin out of range (0..64): {}", n));
             }
             rt.video_depth24_trailing_margin = static_cast<int>(n);
+            rt.video_depth24_trailing_margin_set = true;
         }
+        if (video.contains("fmv_crop_to_picture"))
+            rt.video_fmv_crop_to_picture = toml::find<bool>(video, "fmv_crop_to_picture");
         if (video.contains("internal_resolution")) {
             const toml::value& ir = toml::find(video, "internal_resolution");
             int value = 0;

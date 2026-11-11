@@ -1788,6 +1788,12 @@ extern "C" void debug_get_fmv_config(int *auto_skip, uint32_t *total_table,
  * widescreen hack: GTE X-squash + stretched present (see [video] aspect_ratio
  * in config_loader.h). */
 static int           g_video_depth24_trailing_margin = 8;
+/* [video] depth24_trailing_margin written in the title's configuration: the
+ * title owns its margin even when movies are cropped to the picture. */
+static int           g_video_depth24_trailing_margin_set = 0;
+/* [video] fmv_crop_to_picture / PSX_FMV_CROP: 24-bit (movie) frames fill the
+ * window like 15-bit frames instead of sitting in the TV active-video canvas. */
+static int           g_video_fmv_crop = 1;
 static int           g_video_aspect_num = 4;
 static int           g_video_aspect_den = 3;
 /* [video] fov_scale — VR perspective multiplier on the GTE projection distance
@@ -8775,8 +8781,12 @@ static void depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
         return;
     /* gpu.c stages the visible rows and black-fills the uncovered trailing
      * columns (the same code depth24_present_hold_exec_test renders). */
-    const uint32_t rows = gpu_depth24_stage_scanout(
-        di, buf, w, (uint32_t)g_video_depth24_trailing_margin);
+    /* Cropped to the picture, the fixed margin applies only where the title
+     * set one; otherwise only an uncovered upload span is blanked. */
+    const uint32_t margin =
+        (g_video_fmv_crop && !g_video_depth24_trailing_margin_set)
+            ? 0u : (uint32_t)g_video_depth24_trailing_margin;
+    const uint32_t rows = gpu_depth24_stage_scanout(di, buf, w, margin);
     if (rows == 0u || w < 8u || s_d24_cutover_blank <= 0)
         return;
     s_d24_cutover_blank--;
@@ -19355,6 +19365,9 @@ int main(int argc, char** argv) {
             g_video_scale      = gc.runtime.video_supersampling;
             g_video_depth24_trailing_margin =
                 gc.runtime.video_depth24_trailing_margin;
+            g_video_depth24_trailing_margin_set =
+                gc.runtime.video_depth24_trailing_margin_set ? 1 : 0;
+            g_video_fmv_crop = gc.runtime.video_fmv_crop_to_picture ? 1 : 0;
             g_video_internal_res = gc.runtime.video_internal_resolution;
             g_video_ref_lines    = gc.runtime.video_resolution_reference_lines;
             g_video_match_max_lines = gc.runtime.video_match_display_max_lines;
@@ -22035,6 +22048,8 @@ session_reboot:
     gl_renderer_set_pgxp_depth(g_video_pgxp_depth_buffer);
     if (const char* e = std::getenv("PSX_FMV_CHROMA")) g_video_fmv_chroma = (*e && *e != '0');
     gl_renderer_set_fmv_chroma_smoothing(g_video_fmv_chroma);
+    if (const char* e = std::getenv("PSX_FMV_CROP")) g_video_fmv_crop = (*e && *e != '0');
+    gpu_set_depth24_crop_to_picture(g_video_fmv_crop);
     if (const char* e = std::getenv("PSX_TEXTURE_LOD")) g_video_texture_lod = std::atoi(e);
     if (const char* e = std::getenv("PSX_ANISO")) g_video_aniso = std::atoi(e);
     gl_renderer_set_texture_lod(g_video_texture_lod, g_video_aniso);

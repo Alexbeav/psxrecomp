@@ -6064,6 +6064,8 @@ static void handle_gpu_state(int id, const char *json)
              "\"display_x\":%d,\"display_y\":%d,"
              "\"width\":%d,\"height\":%d,"
              "\"screen_offset_y\":%d,"
+             "\"screen_height\":%u,\"screen_origin_y\":%u,"
+             "\"d24_crop\":%d,\"d24_rgb_limit\":%u,"
              "\"depth\":%d,\"depth24\":%d,"
              "\"disabled\":%d,"
              "\"h_display\":[%u,%u],\"v_display\":[%u,%u],"
@@ -6100,6 +6102,9 @@ static void handle_gpu_state(int id, const char *json)
              id, di.display_x, di.display_y,
              di.width, di.height,
              di.screen_offset_y,
+             di.screen_height, di.screen_origin_y,
+             gpu_depth24_crop_to_picture(),
+             gpu_depth24_rgb_limit(di.display_x, di.width),
              di.depth24 ? 24 : 15, di.depth24,
              di.disabled,
              hx1, hx2, hy1, hy2, hr1, hr2,

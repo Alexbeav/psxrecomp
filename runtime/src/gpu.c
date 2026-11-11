@@ -3772,6 +3772,11 @@ static int      s_d24_present_hold = 0; /* vblanks to skip Swap after GP1(07h) *
  * present-ticked hold stuck at 3 in headless live play and was zeroed by a
  * rollback load, so replay != live). */
 static int      s_d24_present_skip = 0;
+/* [video] fmv_crop_to_picture: present a depth24 frame at its visible source
+ * height instead of inside the PAL/NTSC active-video canvas, and blank only
+ * the trailing columns an upload span leaves uncovered. Host presentation
+ * choice: never reset with the GPU, never in a snapshot. */
+static int      s_d24_crop = 0;
 static uint32_t s_d24_prev_disp_h = 0;  /* last GP1(07h) band height */
 static uint8_t s_d24_rows[512];
 static int s_d24_streaming;
@@ -4843,7 +4848,11 @@ uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
     for (uint32_t y = 0; y < rows; y++)
         gpu_depth24_present_row(di, di->screen_source_skip_y + y,
                                 source + (size_t)y * w, w);
-    if (rows == 0u || w < 8u || margin == 0u || margin >= w)
+    if (rows == 0u || w < 8u || margin >= w)
+        return rows;
+    /* A zero margin keeps every column on the canvas. Cropped to the picture
+     * it still blanks what a known upload span leaves uncovered. */
+    if (margin == 0u && !s_d24_crop)
         return rows;
     uint32_t start = w - margin;
     uint32_t lim = gpu_depth24_rgb_limit(di->display_x, w);
@@ -4857,6 +4866,14 @@ uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
 
 int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
+}
+
+void gpu_set_depth24_crop_to_picture(int on) {
+    s_d24_crop = on ? 1 : 0;
+}
+
+int gpu_depth24_crop_to_picture(void) {
+    return s_d24_crop;
 }
 
 /* Visible horizontal pixel width (GP1(08h) mode + GP1(06h) range). Shared by
@@ -4932,6 +4949,13 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
             screen_origin_y = screen_h;
         h = psx_display_clip_source_height(
             1, h, screen_h, screen_origin_y);
+        /* Cropped to the picture: the visible source rows are the whole
+         * frame, as for 15-bit. Rows clipped above active video stay skipped.
+         * A range with no visible row keeps the black canvas. */
+        if (s_d24_crop && h != 0u) {
+            screen_h = h;
+            screen_origin_y = 0u;
+        }
     } else {
         /* The active canvas is a depth24 staging contract. Keep direct 15-bit
          * source rectangles independent from its origin and 576-row limit. */

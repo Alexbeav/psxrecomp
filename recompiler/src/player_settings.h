@@ -27,6 +27,7 @@ inline const PlayerSettingSpec kExtraPlayerSettings[] = {
     {"video","pgxp_preserve_projection","Preserve PGXP projection","Display",PlayerSettingKind::Boolean,0,1,""},
     {"video","pgxp_depth_buffer","PGXP depth buffer","Display",PlayerSettingKind::Boolean,0,1,""},
     {"video","fmv_chroma_smoothing","FMV chroma smoothing","Display",PlayerSettingKind::Boolean,0,1,""},
+    {"video","fmv_crop_to_picture","Crop movies to the picture","Display",PlayerSettingKind::Boolean,0,1,""},
     {"video","texture_lod","Texture mipmaps","Display",PlayerSettingKind::Choice,0,0,"off,mipmap"},
     {"video","anisotropic_filtering","Anisotropic filtering (1-16)","Display",PlayerSettingKind::Integer,1,16,""},
     {"video","accurate_blending","Accurate blending","Display",PlayerSettingKind::Boolean,0,1,""},

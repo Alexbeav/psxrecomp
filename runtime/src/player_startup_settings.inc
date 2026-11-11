@@ -18,6 +18,7 @@ static void apply_extra_player_settings(const PSXRecompV4::UserSettings& prefs,
         if (id=="video.pgxp_preserve_projection") { g_video_pgxp_preserve_projection=value=="true"; }
         if (id=="video.pgxp_depth_buffer") { g_video_pgxp_depth_buffer=value=="true"; }
         if (id=="video.fmv_chroma_smoothing") { g_video_fmv_chroma=value=="true"; }
+        if (id=="video.fmv_crop_to_picture") { g_video_fmv_crop=value=="true"; }
         if (id=="video.texture_lod") { g_video_texture_lod=value=="off" ? 0 : 1; }
         if (id=="video.anisotropic_filtering") { g_video_aniso=std::stoi(value); }
         if (id=="video.accurate_blending") { g_video_accurate_blending=value=="true"; }
@@ -52,6 +53,7 @@ static std::map<std::string,std::string> player_settings_baseline(bool fast_boot
     values["video.pgxp_preserve_projection"]=player_setting_flag(g_video_pgxp_preserve_projection!=0);
     values["video.pgxp_depth_buffer"]=player_setting_flag(g_video_pgxp_depth_buffer!=0);
     values["video.fmv_chroma_smoothing"]=player_setting_flag(g_video_fmv_chroma!=0);
+    values["video.fmv_crop_to_picture"]=player_setting_flag(g_video_fmv_crop!=0);
     values["video.texture_lod"]=g_video_texture_lod==0 ? "off" : "mipmap";
     values["video.anisotropic_filtering"]=player_setting_text(g_video_aniso);
     values["video.accurate_blending"]=player_setting_flag(g_video_accurate_blending!=0);

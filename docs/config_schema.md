@@ -964,6 +964,25 @@ are never affected. It pairs with the existing `fmv_filter` upscale choice
 `PSX_FMV_CHROMA=0|1` overrides it for one run and the `fmv_chroma` TCP
 command switches it live.
 
+### Crop movies to the picture (`fmv_crop_to_picture`)
+
+```toml
+[video]
+fmv_crop_to_picture = true   # default
+```
+
+A 24-bit (movie) frame is staged into the PAL (288-line) or NTSC (240-line)
+active-video canvas. A movie whose GP1(07h) range is shorter than the canvas
+then shows black bars above and below it, and the last
+`depth24_trailing_margin` columns (8 by default) are blanked. With
+`fmv_crop_to_picture = true` the visible source rows are the whole presented
+frame, as for 15-bit frames, and the fixed margin is dropped: only columns
+that a known upload span leaves uncovered are blanked. A title that writes
+`depth24_trailing_margin` itself keeps that margin. `false` restores the
+canvas. The player setting "Crop movies to the picture" (Display) overrides
+the title, and `PSX_FMV_CROP=0|1` overrides both for one run. `gpu_state`
+reports `screen_height`, `screen_origin_y`, `d24_crop` and `d24_rgb_limit`.
+
 ### Texture LOD and anisotropic filtering (`texture_lod`, `anisotropic_filtering`)
 
 ```toml

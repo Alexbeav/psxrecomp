@@ -471,6 +471,16 @@ struct RuntimeConfig {
     // 8 is the historical default; a title whose MDEC uploads the full width
     // can set 0 and keep those columns.
     int                   video_depth24_trailing_margin = 8;
+    // True when the title wrote depth24_trailing_margin: its value then
+    // stands even with fmv_crop_to_picture on.
+    bool                  video_depth24_trailing_margin_set = false;
+
+    // fmv_crop_to_picture: present a 24-bit (FMV) frame at its own visible
+    // height, filling the window like a 15-bit frame, and blank at the right
+    // only the columns the movie did not upload. false keeps the frame at
+    // its television position inside the PAL/NTSC active-video area (black
+    // rows above and below a movie shorter than that area).
+    bool                  video_fmv_crop_to_picture = true;
 
     // internal_resolution: the "Internal resolution" preset (Settings ->
     // Display), which supersedes supersampling when set. Encoding as in

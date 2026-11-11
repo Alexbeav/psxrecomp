@@ -92,6 +92,14 @@ void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out
  * source rows staged. */
 uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo* di, uint32_t* buf,
                                    uint32_t w, uint32_t margin);
+/* [video] fmv_crop_to_picture. On: gpu_get_display_info reports a depth24
+ * frame with screen_height == height and screen_origin_y == 0 (no black
+ * canvas rows above or below the picture), and a zero staging margin still
+ * blanks columns a known upload span leaves uncovered. Off (the default
+ * here): the PAL/NTSC active-video canvas. Presentation only, not guest
+ * state. */
+void gpu_set_depth24_crop_to_picture(int on);
+int  gpu_depth24_crop_to_picture(void);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
  * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
  * else the covered RGB width. Present black-fills [limit, crtc_w) without

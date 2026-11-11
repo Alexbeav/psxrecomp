@@ -152,11 +152,11 @@ insert=r'''
     assert(renderer_arguments.at("dithering")=="2" && renderer_arguments.at("pgxp_color_perspective")=="1");
     assert(renderer_arguments.at("pgxp_seam")=="2" && renderer_arguments.at("pgxp_depth_threshold")=="2048.5");
     assert(renderer_arguments.at("frame_generation_method")=="1");
-    puts("PASS:41 functional controls composed through real startup/clamps/env/session reset/rematch;PGXP plugin/netplay/env precedence;no renderer-output claim");
+    puts("PASS:42 functional controls composed through real startup/clamps/env/session reset/rematch;PGXP plugin/netplay/env precedence;no renderer-output claim");
 '''
 if env_declaration:
  insert=insert.replace('reset_mod_owned_presentation();check_35();','reset_mod_owned_presentation();apply_player_presentation_environment();check_35();')
-fixture=fixture.replace('    puts("PASS:35 actual provider edits',insert+'\n    puts("PASS:35 actual provider edits')
+fixture=fixture.replace('    puts("PASS:36 actual provider edits',insert+'\n    puts("PASS:36 actual provider edits')
 fixture=fixture.replace('#include "../src/', '#include "'+(root/'runtime/src').as_posix()+'/')
 a.work.mkdir(parents=True,exist_ok=True);cpp=a.work/'composition.cpp';cpp.write_text(fixture,encoding='utf-8');exe=a.work/'composition.exe'
 command=[a.compiler,'-std=c++17','-O0','-UNDEBUG','-DRECOMP_LAUNCHER','-DFMT_HEADER_ONLY=1']

@@ -18,6 +18,7 @@ static std::string g_video_post_shader;
 static int g_video_pgxp_tolerance_set, g_video_pgxp_position_fallback_set;
 static int g_video_pgxp_position_fallback=1,g_video_pgxp_preserve_projection;
 static int g_video_pgxp_depth_buffer,g_video_fmv_chroma,g_video_texture_lod,g_video_aniso=1;
+static int g_video_fmv_crop=1;
 static int g_video_accurate_blending,g_video_dithering=1,g_video_pgxp_color_correction,g_video_pgxp_seam;
 static int g_frame_generation_method,g_video_dynres_min=720,g_video_match_max_lines,g_video_ss_disable_at_lines;
 static int g_video_geometry_correction,g_video_perspective_texturing,controller_anti_deadzone;
@@ -58,6 +59,7 @@ int main() {
         {"video.pgxp_tolerance","-1"},{"video.pgxp_position_fallback","false"},
         {"video.pgxp_preserve_projection","true"},{"video.pgxp_depth_buffer","true"},
         {"video.fmv_chroma_smoothing","true"},{"video.texture_lod","mipmap"},
+        {"video.fmv_crop_to_picture","false"},
         {"video.anisotropic_filtering","8"},{"video.accurate_blending","true"},
         {"video.dithering","fine"},{"video.pgxp_color_correction","true"},
         {"video.pgxp_seam","wide"},{"video.pgxp_depth_threshold","2048.5"},
@@ -79,12 +81,12 @@ int main() {
             ++controls;
         }
     }
-    assert(controls==35);
+    assert(controls==36);
     assert(!provider->feature_set_option(nullptr,kPlayerSettingsPackage,"general","audio.buffer_ms","2147483648"));
     assert(!provider->feature_set_option(nullptr,kPlayerSettingsPackage,"display","video.pgxp_tolerance","nan"));
     assert(!provider->feature_set_option(nullptr,kPlayerSettingsPackage,"display","video.match_display_max_lines","1"));
     auto prefs=PSXRecompV4::load_user_settings(path);
-    assert(!prefs.parse_error && prefs.extra_player_settings.size()==28);
+    assert(!prefs.parse_error && prefs.extra_player_settings.size()==29);
     assert(prefs.has_fast_boot && prefs.fast_boot && prefs.has_bios_hle && prefs.bios_hle);
     assert(prefs.fov_scale==1.5 && !prefs.low_latency_input && prefs.mouse_sensitivity==2.5 && prefs.mouse_capture);
     assert(prefs.memcard_dir=="cards/test");
@@ -95,6 +97,7 @@ int main() {
     assert(g_video_ss_milli==1500 && g_title_ss_milli==1500);
     assert(g_video_pgxp_tolerance==-1 && g_video_pgxp_tolerance_set && !g_video_pgxp_position_fallback && g_video_pgxp_position_fallback_set);
     assert(g_video_pgxp_preserve_projection && g_video_pgxp_depth_buffer && g_video_fmv_chroma);
+    assert(!g_video_fmv_crop);
     assert(g_video_texture_lod==1 && g_video_aniso==8 && g_video_accurate_blending && g_video_dithering==2);
     assert(g_video_pgxp_color_correction && g_video_pgxp_seam==2 && g_video_pgxp_depth_threshold==2048.5f);
     assert(!texture_batching && g_frame_generation_method==1 && g_video_dynres_min==PSX_IR_SCALE(2));
@@ -108,5 +111,5 @@ int main() {
     assert(PSXRecompV4::save_user_settings(path,old_snapshot));
     const auto again=PSXRecompV4::load_user_settings(path);
     assert(again.extra_player_settings==prefs.extra_player_settings && again.adaptive_view);
-    puts("PASS:35 actual provider edits -> TOML load -> startup owners; bounds/old snapshot/stub preservation");
+    puts("PASS:36 actual provider edits -> TOML load -> startup owners; bounds/old snapshot/stub preservation");
 }

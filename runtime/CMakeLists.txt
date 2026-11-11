@@ -1908,6 +1908,25 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     endif()
     add_test(NAME depth24_present_hold_exec_test COMMAND depth24_present_hold_exec_test)
 
+    # [video] fmv_crop_to_picture: 24-bit frames present at their visible
+    # height and full known width; off keeps the active-video canvas.
+    add_executable(depth24_crop_exec_test
+        tests/test_depth24_crop_exec.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(depth24_crop_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(depth24_crop_exec_test PRIVATE -flto)
+        target_link_options(depth24_crop_exec_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(depth24_crop_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(depth24_crop_exec_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME depth24_crop_exec_test COMMAND depth24_crop_exec_test)
+
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     target_sources(ws_view_anchor_test PRIVATE tests/source_gpu_raster_stub.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
