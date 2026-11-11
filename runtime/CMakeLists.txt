@@ -978,6 +978,10 @@ if(BUILD_TESTING)
     add_executable(cdrom_implicit_seek_test tests/test_cdrom_implicit_seek.c src/psx_sha256.c)
     target_include_directories(cdrom_implicit_seek_test PRIVATE include)
     add_test(NAME cdrom_implicit_seek_test COMMAND cdrom_implicit_seek_test)
+    # A response that comes due inside an exception handler waits for its return.
+    add_executable(cdrom_exception_hold_test tests/test_cdrom_exception_hold.c src/psx_sha256.c)
+    target_include_directories(cdrom_exception_hold_test PRIVATE include)
+    add_test(NAME cdrom_exception_hold_test COMMAND cdrom_exception_hold_test)
     # PS1B-189: CD status bit 7 (BUSYSTS), cited to PSX-SPX.
     add_executable(cdrom_busysts_test tests/test_cdrom_busysts.c src/psx_sha256.c)
     target_include_directories(cdrom_busysts_test PRIVATE include src)

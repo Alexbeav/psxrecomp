@@ -8,6 +8,9 @@ extern "C" {
 #endif
 
 void cdrom_init(const char* cue_path);
+/* Tells the drive whether the CPU is inside its exception handler; a response
+ * is not presented to the interrupt controller while it is. NULL = no hold. */
+void cdrom_set_exception_probe(int (*probe)(void));
 
 /* Replace the mounted image without resetting the emulated machine.
  *
