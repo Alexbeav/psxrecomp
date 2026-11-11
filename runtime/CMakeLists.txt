@@ -3334,6 +3334,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             add_test(NAME overlay_retry_c11_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_retry_c11.py --compiler ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
+        add_test(NAME release_host_compilers_test
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_host_compilers.py)
         add_test(NAME codegen_host_posix_toolchain_test
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_posix_toolchain.py)
