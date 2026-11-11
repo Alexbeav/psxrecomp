@@ -150,8 +150,8 @@ int main() {
 #endif
             {"/games/ps1/Diablo (Europe) (En,Fr,De,Sv).chd",
              "/games/ps1/Alien Resurrection (Europe) (En,Fr,De,Es,It).chd",
-             "/home/player/diablo-pal.chd",
-             "/home/player/Diablo (Europe) (En,Fr,De,Sv).cue", true},
+             "/media/usb/diablo-pal.chd",
+             "/media/usb/Diablo (Europe) (En,Fr,De,Sv).cue", true},
         };
         const std::vector<std::string> one_serial_list = {"SLES-01156"};
         const std::vector<int> no_programs;
