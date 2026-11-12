@@ -4899,6 +4899,8 @@ static void gpu_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int sem
 /* Shared PS1 uv-sampling model (limits + mirrored-2D compensation) — one
  * implementation for GL/VK/SW, see gpu_uv.h. */
 #include "gpu_uv.h"
+/* One-pixel strips sent as half-quads (PS1G-161), see gpu_thin_tri.h. */
+#include "gpu_thin_tri.h"
 
 /* Textured triangle. Always two passes split by the per-texel STP bit so the
  * stencil (mask) write value is constant within each pass; the semi pass is
@@ -5562,6 +5564,10 @@ static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1
         float mr=s_mod_r/255.0f, mg=s_mod_g/255.0f, mb=s_mod_b/255.0f;
         float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
         gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
+        /* Above 1x, fill the rest of a one-pixel strip the PS1 fills at 1x. */
+        int fx[3], fy[3], fu[3], fv[3];
+        if (s_out_scale > 1 && psx_thin_tri_complement(xs, ys, us, vs, NULL, fx, fy, fu, fv, NULL))
+            gpu_textured_triangle(fx,fy,fu,fv,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
     }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();
@@ -5579,6 +5585,12 @@ static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32
         uint32_t cc[3]={c0,c1,c2}; float col[9];
         for (int i=0;i<3;i++){ col[i*3+0]=(cc[i]&0xFF)/255.0f; col[i*3+1]=((cc[i]>>8)&0xFF)/255.0f; col[i*3+2]=((cc[i]>>16)&0xFF)/255.0f; }
         gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
+        /* Above 1x, fill the rest of a one-pixel strip the PS1 fills at 1x. */
+        int fx[3], fy[3], fu[3], fv[3]; uint32_t fc[3]; float fcol[9];
+        if (s_out_scale > 1 && psx_thin_tri_complement(xs, ys, us, vs, cc, fx, fy, fu, fv, fc)) {
+            for (int i=0;i<3;i++){ fcol[i*3+0]=(fc[i]&0xFF)/255.0f; fcol[i*3+1]=((fc[i]>>8)&0xFF)/255.0f; fcol[i*3+2]=((fc[i]>>16)&0xFF)/255.0f; }
+            gpu_textured_triangle(fx,fy,fu,fv,fcol,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
+        }
     }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();

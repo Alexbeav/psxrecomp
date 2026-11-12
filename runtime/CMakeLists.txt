@@ -2987,6 +2987,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(gpu_uv_test PRIVATE src)
     add_test(NAME gpu_uv_test COMMAND gpu_uv_test)
 
+    # One-pixel strips sent as half-quads fill their strip above 1x (PS1G-161).
+    add_executable(gpu_thin_tri_test tests/test_gpu_thin_tri.c)
+    target_include_directories(gpu_thin_tri_test PRIVATE src)
+    add_test(NAME gpu_thin_tri_test COMMAND gpu_thin_tri_test)
+
     # Netplay CPU-authoritative VRAM ignores PGXP overrides and texture
     # filtering (sw_set_faithful_authority).
     add_executable(sw_faithful_authority_test tests/test_sw_faithful_authority.c)
