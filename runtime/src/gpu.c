@@ -3793,6 +3793,22 @@ static int depth24_update_stream(void) {
     return active;
 }
 
+/* A GP0(80h) VRAM-to-VRAM copy carries coverage with its pixels: a row it
+ * writes holds this session's movie pixels when its source row did. Titles
+ * that decode into an off-screen strip and copy it into the displayed buffer
+ * (The X-Files: CPU uploads at y 256..383, copies to y 40..167 and
+ * 296..423) otherwise present the copied movie rows as black (PS1G-163). */
+static void depth24_note_copy(uint32_t src_y, uint32_t dst_y, uint32_t h) {
+    if (!gpu_display_is_depth24() || !depth24_update_stream())
+        return;
+    uint8_t src[512];
+    for (uint32_t row = 0; row < h && row < 512u; row++)
+        src[row] = s_d24_rows[(src_y + row) & 511u];
+    for (uint32_t row = 0; row < h && row < 512u; row++)
+        if (src[row])
+            s_d24_rows[(dst_y + row) & 511u] = 1;
+}
+
 static void depth24_note_upload(uint32_t x, uint32_t w);
 
 static void gp0_commit_cpu_to_vram(void) {
@@ -7894,6 +7910,7 @@ static void gp0_dispatch_command(uint8_t opcode) {
             if (w == 0) w = 0x400;
             if (h == 0) h = 0x200;
             gr_copy_rect(src_x, src_y, dst_x, dst_y, w, h);
+            depth24_note_copy((uint32_t)src_y, (uint32_t)dst_y, (uint32_t)h);
             break;
         }
 

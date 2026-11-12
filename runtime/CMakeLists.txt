@@ -1927,6 +1927,25 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     endif()
     add_test(NAME depth24_crop_exec_test COMMAND depth24_crop_exec_test)
 
+    # Depth24 row coverage follows GP0(80h) VRAM-to-VRAM copies (PS1G-163):
+    # a movie decoded off-screen and copied into the displayed buffer shows.
+    add_executable(depth24_copy_exec_test
+        tests/test_depth24_copy_exec.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(depth24_copy_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(depth24_copy_exec_test PRIVATE -flto)
+        target_link_options(depth24_copy_exec_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(depth24_copy_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(depth24_copy_exec_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME depth24_copy_exec_test COMMAND depth24_copy_exec_test)
+
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     target_sources(ws_view_anchor_test PRIVATE tests/source_gpu_raster_stub.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
