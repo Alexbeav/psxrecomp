@@ -161,12 +161,51 @@ void gpu_queue_service(void) {
 }
 
 uint32_t gpu_queue_cycles_to_event(void) {
-    if(!source_gpu_queue_enabled || source_gpu_runtime_active() || (!gpu_queue.count && gpu_queue.credit>=0) || vram_read_active)
+    if(!source_gpu_queue_enabled && !source_gpu_runtime_active()) {
+        uint64_t now=psx_get_cycle_count();
+        if(now >= gpu_dma_resume_at) return UINT32_MAX;
+        uint64_t d=gpu_dma_resume_at-now;
+        return d > 0xFFFFFFF0u ? 0xFFFFFFF0u : (uint32_t)d;
+    }
+    if(source_gpu_runtime_active() || (!gpu_queue.count && gpu_queue.credit>=0) || vram_read_active)
         return UINT32_MAX;
     return gpu_queue.credit<0 ? (uint32_t)(-gpu_queue.credit+1)/2u : 1u;
 }
 
-int gpu_queue_has_space(void) { return gpu_queue.count < 16u; }
+/* Ordinary renderer: run a GP0 word now and, when it completes a command,
+ * charge that command's drawing time. The command starts once the credit is
+ * back at zero (SOURCE_GPU_T_ADMIT_AT); until then it occupies the FIFO. */
+static void gpu_draw_timed_gp0(uint32_t val) {
+    Gp0State before = gp0_state;
+    gpu_write_gp0_body(val);
+    if (!((before == GP0_IDLE || before == GP0_COLLECTING) &&
+          (gp0_state == GP0_IDLE || gp0_state == GP0_VRAM_WRITE)))
+        return;
+    int cost = gpu_queue_command_cost();
+    gpu_queue_quad_second = 0;
+    uint64_t now = psx_get_cycle_count();
+    uint64_t start = gpu_draw_cycle > now ? gpu_draw_cycle : now;
+    int32_t credit = source_gpu_t_credit(gpu_draw_credit, start - gpu_draw_cycle);
+    if (credit < 0) {
+        uint64_t wait = ((uint64_t)(-(int64_t)credit) + 1u) / 2u;
+        credit = source_gpu_t_credit(credit, wait);
+        start += wait;
+    }
+    gpu_dma_resume_at = start;
+    gpu_draw_credit = credit - cost;
+    gpu_draw_cycle = start;
+}
+
+/* GPU DMA request (GPUSTAT.25 for CPU-to-GP0). Off with the FIFO full. In the
+ * ordinary renderer, off while the GPU is still drawing and the FIFO already
+ * holds the whole next command: a list transfer then waits on drawing time
+ * instead of always finishing at once. Team Buddies (PS1G-160) reads CHCR2
+ * right after its progress-bar list and relies on the transfer still running. */
+int gpu_queue_has_space(void) {
+    if (source_gpu_queue_enabled || source_gpu_runtime_active())
+        return gpu_queue.count < 16u;
+    return psx_get_cycle_count() >= gpu_dma_resume_at;
+}
 
 /* The list walk's readiness before a header: GPUSTAT bit 28 (no queued word,
  * no command partly received), and not inside the first triangle of a quad.

@@ -106,7 +106,19 @@ static struct {
 static int gpu_walk_quad_pending;
 static int32_t gpu_walk_quad_floor;
 static int32_t gpu_queue_quad_second;
+/* Ordinary renderer drawing time (PS1G-160). Commands still execute when their
+ * last word arrives; this only times when the GPU would start each one, so the
+ * GPU DMA request can drop while it draws. Credit is in half CPU clocks, as in
+ * source_gpu_command_timing.h. Not in the snapshot: a restore starts idle. */
+static int32_t  gpu_draw_credit;
+static uint64_t gpu_draw_cycle;       /* credit is valid from this cycle on */
+static uint64_t gpu_dma_resume_at;    /* last command waits in the FIFO until here */
+static void gpu_draw_time_reset(void) {
+    gpu_draw_credit = 0;
+    gpu_draw_cycle = gpu_dma_resume_at = psx_get_cycle_count();
+}
 static void gpu_queue_reset(void) {
+    gpu_draw_time_reset();
     gpu_walk_quad_pending = 0;
     gpu_walk_quad_floor = 0;
     gpu_queue_quad_second = 0;
@@ -8191,7 +8203,7 @@ void gpu_write_gp0(uint32_t val) {
     else if(source_gpu_queue_enabled){
         gpu_queue_service();if(!gpu_queue_has_space())psx_fatal_halt("source GPU FIFO overflow");
         unsigned at=gpu_queue.count++;gpu_queue.words[at]=val;gpu_queue.sources[at]=gp0_next_source_addr;gpu_queue.ranks[at]=gp0_ot_rank;gpu_queue_consume();psx_next_service_cycle=0;
-    }else gpu_write_gp0_body(val);
+    }else gpu_draw_timed_gp0(val);
     g_exec_phase = prev_phase;
 }
 
@@ -8212,6 +8224,7 @@ static void gp1_reset_command_buffer(void) {
     gp0_words_needed = 0;
     vram_write_remaining = 0;
     if (source_gpu_queue_enabled) gpu_queue_reset();
+    else gpu_draw_time_reset();
 }
 
 static void gp1_ack_irq1(void) {
@@ -8618,6 +8631,7 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
     if (!gpu_source_tail_read(p+gpu_snapshot_base_bytes(),len-gpu_snapshot_base_bytes(),1)) return 0;
+    gpu_draw_time_reset();
     (void)psx_video_timing_set_pal((int)video_mode);
     ws_reset_scene_history();
     ws_scene_hold_reset(&s_ws_scene_hold);

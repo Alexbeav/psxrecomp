@@ -131,6 +131,38 @@ int main(int argc,char **argv) {
         assert(!gpu_linked_list.active && texpage_x==5 && (dicr&(1u<<26)));
         puts("PASS a list kick holds the CPU until the walk needs the GPU"); return 0;
     }
+    if(argc>1 && !strcmp(argv[1],"draw-time")) {
+        /* Ordinary renderer (no source model). Team Buddies' boot progress
+         * bar (PS1G-160): environment words, two 5x16 shaded quads, a 2x1
+         * VRAM copy and NOPs, as its frame 4403 command dump shows. libgpu
+         * reads CHCR2 a few dozen instructions after the kick and relies on
+         * the transfer still running while the GPU draws: the FIFO holds the
+         * second quad until the first is drawn. Before the fix the whole
+         * walk finished inside the kicking store. */
+        source_gpu_queue_enabled=0; gp1_reset_command_buffer();
+        static const uint32_t env[6]={0xe3000000,0xe407fe7f,0xe5000000,0xe1000200,0xe2000000,0xe6000000};
+        static const uint32_t q1[8]={0x3800008c,0x01d000d5,0x008c4a00,0x01d000d5,0x0000008c,0x01e000d5,0x008c4a00,0x01e000d5};
+        static const uint32_t q2[8]={0x3800738c,0x01d000d0,0x0000008c,0x01d000d5,0x0000738c,0x01e000d0,0x0000008c,0x01e000d5};
+        static const uint32_t cp[4]={0x80000000,0x00000000,0x00000000,0x00010002};
+        psx_write_word(0x7000,0x06007100); for(unsigned i=0;i<6;i++) psx_write_word(0x7004+4*i,env[i]);
+        psx_write_word(0x7100,0x08007200); for(unsigned i=0;i<8;i++) psx_write_word(0x7104+4*i,q1[i]);
+        psx_write_word(0x7200,0x08007300); for(unsigned i=0;i<8;i++) psx_write_word(0x7204+4*i,q2[i]);
+        psx_write_word(0x7300,0x04007400); for(unsigned i=0;i<4;i++) psx_write_word(0x7304+4*i,cp[i]);
+        psx_write_word(0x7400,0x04ffffff); for(unsigned i=0;i<4;i++) psx_write_word(0x7404+4*i,0);
+        uint64_t kicked=psx_cycle_count;
+        dma_write(0x1f8010a0,0x7000); dma_write(0x1f8010a8,0x01000401);
+        uint64_t held=psx_cycle_count-kicked;
+        psx_advance_cycles(20); psx_devices_service_to_now();
+        if(!(channels[2].chcr&(1u<<24)) || !gpu_linked_list.active) {
+            printf("FAIL list finished %llu cycles after the kick (held %llu): no drawing time\n",
+                   (unsigned long long)(psx_cycle_count-kicked),(unsigned long long)held);
+            return 1;
+        }
+        psx_advance_cycles(25000); psx_devices_service_to_now();
+        assert(!gpu_linked_list.active && !(channels[2].chcr&(1u<<24)) && (dicr&(1u<<26)));
+        assert(gpu_queue_has_space());
+        puts("PASS a list waits on the GPU's drawing time, then completes"); return 0;
+    }
     if(argc>1 && !strcmp(argv[1],"kick-cycle")) {
         /* A header-only node that links to itself never ends. The kick
          * releases the CPU after more headers than RAM has words. */
