@@ -474,7 +474,7 @@ enum {
     RTH_WIDE_DISABLE, RTH_WIDE_CLEAR, RTH_WIDE_CLEAR_MARGINS, RTH_PROJ_TRI,
     RTH_WIDE_RECOVERY, RTH_INTERP_SUSPENDED, RTH_PRESENT_VRAM,
     RTH_PRESENT_WIDE, RTH_STATE, RTH_PEEK, RTH_RING_CAPTURE, RTH_DYN_STEP,
-    RTH_FRAME, RTH_FG_SRC, RTH_DEPTH, RTH_HD_NOTE, RTH_DITHER, RTH_WIDE_FEEDBACK
+    RTH_FRAME, RTH_FG_SRC, RTH_DEPTH, RTH_HD_NOTE, RTH_DITHER, RTH_WIDE_FEEDBACK, RTH_FIELD
 };
 /* GP0(A0) whose payload gpu.c is still streaming into its array (the
  * facade's vram_upload_open, emulation thread), tracked whatever the HD
@@ -1856,6 +1856,15 @@ static const char *GEO_VS =
     "    if (xb < l) xb = l + (xb-l)*s; else if (xb > r) xb = r + (xb-r)*s;\n"
     "  } else xb = (xb - u_xcenter)*u_xscale + u_xcenter;\n"
     "  gl_Position = vec4(((xb+u_shift+u_xoff)/u_xhalf - 1.0) * w, ((a_pos.y+u_shift)/256.0 - 1.0) * w, zn * w, w); }\n";
+/* 480i with drawing to the displayed field prohibited (GPUSTAT bit 10 = 0):
+ * GP0 primitives leave the native VRAM rows of one parity unchanged. npos is
+ * the native position, so the test holds at every internal resolution.
+ * u_skip_field -1 = progressive drawing. */
+#define PSX_FIELD_GLSL \
+    "uniform int u_skip_field;\n" \
+    "void psx_field_skip(vec2 npos){\n" \
+    "  if (u_skip_field >= 0 && (int(floor(npos.y)) & 1) == u_skip_field) discard;\n" \
+    "}\n"
 static const char *GEO_FS =
     "#version 330\n"
     "noperspective in vec4 v_col; smooth in vec3 v_col_p; flat in int v_cp; out vec4 frag;\n"
@@ -1864,7 +1873,9 @@ static const char *GEO_FS =
     "uniform int u_badd;   /* this batch blends additively */\n"
     "noperspective in vec2 v_npos; flat in int v_dith;\n"
     PSX_DITHER_GLSL
+    PSX_FIELD_GLSL
     "void main(){\n"
+    "  psx_field_skip(v_npos);\n"
     "  if (u_bcls != 0) { if (u_bcls == 1 && !(v_b3d > 0.999 || u_badd != 0)) discard; frag = vec4(0.0); return; }\n"
     "  frag = v_cp != 0 ? vec4(v_col_p, v_col.a) : v_col;\n"
     "  frag.rgb = psx_dither(frag.rgb, v_npos, v_dith); }\n";
@@ -1957,6 +1968,7 @@ static const char *TEX_FS =
     "smooth in vec3 v_col_p; flat in int v_cp;\n"
     "noperspective in vec2 v_npos;\n"
     PSX_DITHER_GLSL
+    PSX_FIELD_GLSL
     "out vec4 frag; out vec4 blend_factor;\n"
     "noperspective in float v_b3d;\n"
     "uniform int u_bcls;      /* bloom source pass (gl_postfx.inc): 0 off, 2 clear, 1 mark */\n"
@@ -2132,6 +2144,7 @@ static const char *TEX_FS =
     "  return mix(xbr_c(E), xbr_c(px), a);\n"
     "}\n"
     "void main(){\n"
+    "  psx_field_skip(v_npos);\n"
     "  int stp; vec3 rgb;\n"
     "  int fmode = v_filter & 15;\n"
     "  /* v_persp is 0 for every prim unless [video] perspective_texturing is on\n"
@@ -5358,6 +5371,26 @@ static void dither_apply_uniforms(void) {
 }
 /* GP0(E1h) bit 9: recorded; it is read when each primitive is queued. */
 static void glb_set_dither(int on) { s_dither_bit = on ? 1 : 0; }
+/* Skipped 480i field rows (gr_sync_skip_field). Queued draws were made under
+ * the previous value, so they are drawn before it changes. */
+static int s_skip_field = -1;
+static GLint s_geo_uSkipField = -1, s_tex_uSkipField = -1;
+static void skip_field_apply_uniforms(void) {
+    if (!s_geo_prog || !s_tex_prog) return;
+    GLint prev = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &prev);
+    if (s_geo_uSkipField < 0) s_geo_uSkipField = p_glGetUniformLocation(s_geo_prog, "u_skip_field");
+    if (s_tex_uSkipField < 0) s_tex_uSkipField = p_glGetUniformLocation(s_tex_prog, "u_skip_field");
+    p_glUseProgram(s_geo_prog); p_glUniform1i(s_geo_uSkipField, s_skip_field);
+    p_glUseProgram(s_tex_prog); p_glUniform1i(s_tex_uSkipField, s_skip_field);
+    p_glUseProgram((GLuint)prev);
+}
+static void glb_set_skip_field(int row_parity) {
+    row_parity = row_parity < 0 ? -1 : (row_parity & 1);
+    if (row_parity == s_skip_field) return;
+    if (s_ctx) { flush_flat_batch(); flush_tex_batch(); hiw_flush_queue(); }
+    s_skip_field = row_parity;
+    if (s_ctx) skip_field_apply_uniforms();
+}
 void gl_renderer_set_dithering(int mode) {
     GL_RT_SYNC("dithering");
     mode = (mode == 1 || mode == 2) ? mode : 0;
@@ -6310,6 +6343,8 @@ static int init_gpu_raster(void) {
         s_geo_uShift = p_glGetUniformLocation(s_geo_prog, "u_shift");
         s_geo_uDither = s_tex_uDither = -1;
         dither_apply_uniforms();
+        s_geo_uSkipField = s_tex_uSkipField = -1;
+        skip_field_apply_uniforms();
         s_tex_uShift = p_glGetUniformLocation(s_tex_prog, "u_shift");
         s_geo_uZbias = p_glGetUniformLocation(s_geo_prog, "u_zbias");
         s_tex_uZbias = p_glGetUniformLocation(s_tex_prog, "u_zbias");
@@ -11620,6 +11655,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .set_precise_triangle = glb_set_precise_triangle,
     .set_perspective_triangle = glb_set_perspective_triangle,
     .set_dither = glb_set_dither,
+    .set_skip_field = glb_set_skip_field,
     .fill_rect = glb_fill_rect, .copy_rect = glb_copy_rect,
     .draw_flat_triangle = glb_draw_flat_triangle, .draw_gouraud_triangle = glb_draw_gouraud_triangle,
     .draw_textured_triangle = glb_draw_textured_triangle,
@@ -12279,7 +12315,7 @@ static int fg_raw_add(const FgRaw *r) {
 static int fg_op_kept(uint16_t op) {
     switch (op) {
     case RTH_SEMI: case RTH_MASK: case RTH_TWIN: case RTH_MOD: case RTH_PRECISE:
-    case RTH_PERSP: case RTH_DEPTH: case RTH_DITHER: case RTH_FILL: case RTH_FLAT_TRI: case RTH_GOURAUD_TRI:
+    case RTH_PERSP: case RTH_DEPTH: case RTH_DITHER: case RTH_FIELD: case RTH_FILL: case RTH_FLAT_TRI: case RTH_GOURAUD_TRI:
     case RTH_TEX_TRI: case RTH_SHADED_TEX_TRI: case RTH_FLAT_RECT: case RTH_TEX_RECT:
     case RTH_TEX_RECT_SCALED: case RTH_LINE: case RTH_SHADED_LINE: case RTH_AREA:
     case RTH_OFFSET: case RTH_WIDE_VIEW: case RTH_WIDE_TARGET: case RTH_WIDE_DISABLE:
@@ -12761,6 +12797,7 @@ static void fg_replay(const FgList *a, const FgList *b, double t, GLuint gen_wid
         switch (h.op) {
         case RTH_SEMI:    glb_set_semi_transparency(v[0], v[1]); break;
         case RTH_DITHER:  glb_set_dither(v[0]); break;
+        case RTH_FIELD:   glb_set_skip_field(v[0]); break;
         case RTH_MASK:    glb_set_mask_bits(v[0], v[1]); break;
         case RTH_TWIN:    glb_set_texture_window((uint32_t)v[0]); break;
         case RTH_MOD:     glb_set_color_modulation(v[0], v[1], v[2], v[3]); break;
@@ -14609,6 +14646,8 @@ static void rtb_set_texture_filter(int b) { GL_RT_SYNC("texture_filter"); glb_se
 static int  rtb_texture_filter(void) { return s_tex_filter; }
 static void rtb_set_dither(int on) {
     RTH_DIRECT_OR(RTH_REC(RTH_DITHER, 0, on ? 1 : 0)); glb_set_dither(on); }
+static void rtb_set_skip_field(int f) {
+    RTH_DIRECT_OR(RTH_REC(RTH_FIELD, 0, f)); glb_set_skip_field(f); }
 static void rtb_set_semi_transparency(int e, int m) {
     RTH_DIRECT_OR(RTH_REC(RTH_SEMI, 0, e, m)); glb_set_semi_transparency(e, m); }
 static void rtb_set_mask_bits(int sb, int cb) {
@@ -14834,6 +14873,7 @@ static const GpuRenderBackend GL_RT_BACKEND = {
     .set_precise_triangle = rtb_set_precise_triangle,
     .set_perspective_triangle = rtb_set_perspective_triangle,
     .set_dither = rtb_set_dither,
+    .set_skip_field = rtb_set_skip_field,
     .fill_rect = rtb_fill_rect, .copy_rect = rtb_copy_rect,
     .draw_flat_triangle = rtb_draw_flat_triangle, .draw_gouraud_triangle = rtb_draw_gouraud_triangle,
     .draw_textured_triangle = rtb_draw_textured_triangle,
@@ -14874,6 +14914,7 @@ static void gl_rth_exec(void *user, const RtCmd *c, const void *payload) {
     switch (c->op) {
     case RTH_SEMI:      glb_set_semi_transparency(v[0], v[1]); break;
     case RTH_DITHER:    glb_set_dither(v[0]); break;
+    case RTH_FIELD:     glb_set_skip_field(v[0]); break;
     case RTH_MASK:      glb_set_mask_bits(v[0], v[1]); break;
     case RTH_TWIN:      glb_set_texture_window((uint32_t)v[0]); break;
     case RTH_MOD:       glb_set_color_modulation(v[0], v[1], v[2], v[3]); break;

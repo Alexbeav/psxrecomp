@@ -183,6 +183,9 @@ typedef struct GpuRenderBackend {
                                  int32_t x2, int32_t y2);
     void (*set_perspective_triangle)(int enabled, float q0, float q1, float q2);
     void (*set_dither)(int enabled);   /* optional: GP0(E1h) bit 9 */
+    /* optional: native VRAM row parity GP0 primitives must leave unchanged
+     * (480i, drawing to the displayed field prohibited), -1 = none. */
+    void (*set_skip_field)(int row_parity);
     void (*fill_rect)(int x, int y, int w, int h, uint16_t color);
     void (*copy_rect)(int src_x, int src_y, int dst_x, int dst_y, int w, int h);
     void (*draw_flat_triangle)(int x0, int y0, int x1, int y1, int x2, int y2,

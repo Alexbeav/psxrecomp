@@ -121,7 +121,21 @@ static void hd_invalidate_triangle(int x0, int y0, int x1, int y1, int x2, int y
     hd_invalidate_draw(xmin, ymin, xmax, ymax);
 }
 
+/* 480i with drawing to the displayed field prohibited: the row parity GP0
+ * primitives leave unchanged (-1 none). Backends that raster on the GPU take
+ * it through set_skip_field before each primitive; the software rasteriser
+ * reads gpu_raster_skipped_row itself. -2 = not yet sent to this backend. */
+static int g_skip_field_sent = -2;
+static void gr_sync_skip_field(void) {
+    if (!g_b->set_skip_field) return;
+    const int skip = gpu_raster_skipped_row();
+    if (skip == g_skip_field_sent) return;
+    g_skip_field_sent = skip;
+    g_b->set_skip_field(skip);
+}
+
 void gr_set_backend(GrBackend backend) {
+    g_skip_field_sent = -2;
     if (backend == GR_BACKEND_OPENGL) {
         const GpuRenderBackend *gl = gl_backend_get();
         if (gl) {
@@ -153,6 +167,7 @@ GrBackend gr_backend(void) { return g_effective; }
  * (gl_backend_get then returns the recording table, or the direct one). The
  * effective backend does not change. */
 void gr_refresh_backend(void) {
+    g_skip_field_sent = -2;
     if (g_effective == GR_BACKEND_OPENGL) {
         const GpuRenderBackend *gl = gl_backend_get();
         if (gl) g_b = gl;
@@ -160,7 +175,7 @@ void gr_refresh_backend(void) {
 }
 
 /* ---- Dispatch wrappers (one line each; forward to the active backend) ---- */
-void gr_init(uint16_t *vram)                         { gpu_hd_textures_set_vram(vram); g_b->init(vram); g_hd_offset_x = g_hd_offset_y = 0; g_hd_texture_window = 0; g_hd_semi = g_hd_perspective = 0; }
+void gr_init(uint16_t *vram)                         { g_skip_field_sent = -2; gpu_hd_textures_set_vram(vram); g_b->init(vram); g_hd_offset_x = g_hd_offset_y = 0; g_hd_texture_window = 0; g_hd_semi = g_hd_perspective = 0; }
 void gr_set_scale(int scale)                         { g_b->set_scale(scale); }
 int  gr_scale(void)                                  { return g_b->scale(); }
 void gr_set_texture_filter(int bilinear)             { g_b->set_texture_filter(bilinear); }
@@ -209,13 +224,13 @@ void gr_copy_rect(int sx, int sy, int dx, int dy, int w, int h) {
     gpu_hd_textures_end_copy();
 }
 void gr_draw_flat_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t c) {
-    g_b->draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);
+    gr_sync_skip_field(); g_b->draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);
     hd_invalidate_triangle(x0, y0, x1, y1, x2, y2);
     g_hd_perspective = 0;
 }
 void gr_draw_gouraud_triangle(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1,
                               int x2, int y2, uint16_t c2) {
-    g_b->draw_gouraud_triangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
+    gr_sync_skip_field(); g_b->draw_gouraud_triangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
     hd_invalidate_triangle(x0, y0, x1, y1, x2, y2);
     g_hd_perspective = 0;
 }
@@ -223,7 +238,7 @@ void gr_draw_textured_triangle(int x0, int y0, int u0, int v0, int x1, int y1, i
                                int x2, int y2, int u2, int v2,
                                uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
     hd_observe_triangle(x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,clut_x,clut_y,texpage);
-    g_b->draw_textured_triangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2,
+    gr_sync_skip_field(); g_b->draw_textured_triangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2,
                                 clut_x, clut_y, texpage);
     hd_invalidate_triangle(x0, y0, x1, y1, x2, y2);
     g_hd_perspective = 0;
@@ -234,27 +249,27 @@ void gr_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0, uint32_t c
                                       uint16_t clut_x, uint16_t clut_y,
                                       uint16_t texpage, int raw) {
     hd_observe_triangle(x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,clut_x,clut_y,texpage);
-    g_b->draw_shaded_textured_triangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1,
+    gr_sync_skip_field(); g_b->draw_shaded_textured_triangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1,
                                        x2, y2, u2, v2, c2, clut_x, clut_y, texpage, raw);
     hd_invalidate_triangle(x0, y0, x1, y1, x2, y2);
     g_hd_perspective = 0;
 }
-void gr_draw_flat_rect(int x, int y, int w, int h, uint16_t c) { g_b->draw_flat_rect(x, y, w, h, c); if (w > 0 && h > 0) hd_invalidate_draw(x,y,x+w-1,y+h-1); }
+void gr_draw_flat_rect(int x, int y, int w, int h, uint16_t c) { gr_sync_skip_field(); g_b->draw_flat_rect(x, y, w, h, c); if (w > 0 && h > 0) hd_invalidate_draw(x,y,x+w-1,y+h-1); }
 void gr_draw_textured_rect(int x, int y, int w, int h, int u, int v,
                            uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
     hd_observe_rect(u,v,u+w,v+h,clut_x,clut_y,texpage);
-    g_b->draw_textured_rect(x, y, w, h, u, v, clut_x, clut_y, texpage);
+    gr_sync_skip_field(); g_b->draw_textured_rect(x, y, w, h, u, v, clut_x, clut_y, texpage);
     if (w > 0 && h > 0) hd_invalidate_draw(x,y,x+w-1,y+h-1);
 }
 void gr_draw_textured_rect_scaled(int x, int y, int w, int h, int u0, int v0, int u1, int v1,
                                   uint16_t clut_x, uint16_t clut_y, uint16_t texpage) {
     hd_observe_rect(u0,v0,u1,v1,clut_x,clut_y,texpage);
-    g_b->draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, clut_x, clut_y, texpage);
+    gr_sync_skip_field(); g_b->draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, clut_x, clut_y, texpage);
     if (w > 0 && h > 0) hd_invalidate_draw(x,y,x+w-1,y+h-1);
 }
-void gr_draw_line(int x0, int y0, int x1, int y1, uint16_t c) { g_b->draw_line(x0, y0, x1, y1, c); hd_invalidate_triangle(x0,y0,x1,y1,x1,y1); }
+void gr_draw_line(int x0, int y0, int x1, int y1, uint16_t c) { gr_sync_skip_field(); g_b->draw_line(x0, y0, x1, y1, c); hd_invalidate_triangle(x0,y0,x1,y1,x1,y1); }
 void gr_draw_shaded_line(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
-    g_b->draw_shaded_line(x0, y0, c0, x1, y1, c1);
+    gr_sync_skip_field(); g_b->draw_shaded_line(x0, y0, c0, x1, y1, c1);
     hd_invalidate_triangle(x0,y0,x1,y1,x1,y1);
 }
 int gr_render_display(uint32_t *o, int p, int dx, int dy, int dw, int dh) {
