@@ -776,6 +776,15 @@ static GLint  s_uBhSrcOff = -1, s_uBhShift = -1, s_uBhXoff = -1, s_uBhXhalf = -1
 /* Sample-grid shift per surface scale (see GEO_VS): the hr surface at
  * s_hr_scale, the hi window and the wide surfaces at s_out_scale. */
 static float  s_shift_hr = 0.0f, s_shift_hi = 0.0f;
+/* u_shift = 0.5/S - PSX_GL_TEXEL_BIAS. The geometry shaders add the bias back,
+ * so coverage is sampled at the PS1's integer points exactly and GL's tie rule
+ * decides an edge through a sample as the PS1 does. Moving the sample point by
+ * the bias instead dropped or added a pixel wherever a long edge passes within
+ * 1/64 px of a PS1 sample: the last row of a one-pixel wall column, the last
+ * pixel of a long one-row floor span (Duke Nukem's red seams at 1x, PS1G-161).
+ * The bias keeps only its texel role: uv and the dither position are read at
+ * PS1 point + bias, so floor() lands on the PS1 texel at exact-integer uv. */
+#define PSX_GL_TEXEL_BIAS_GLSL "0.015625"
 static GLint  s_geo_uShift = -1, s_tex_uShift = -1;
 static GLuint s_pack_prog = 0, s_stencil_prog = 0, s_empty_vao = 0;
 
@@ -1833,7 +1842,7 @@ static const char *GEO_VS =
     "noperspective out vec2 v_npos;  /* native VRAM position (dithering) */\n"
     "flat out int v_dith;            /* this primitive is dither-eligible */\n"
     "void main(){\n"
-    "  v_npos = a_pos;\n"
+    "  v_npos = a_pos + vec2(" PSX_GL_TEXEL_BIAS_GLSL ");\n"
     "  /* a_col.a carries the mask bit (0/1) and, for a PGXP 3D vertex, its\n"
     "   * GTE SZ: a = mask + 2*(sz + 65536*cp), cp = perspective colour. A\n"
     "   * negative a is a depth-clear vertex (beyond every SZ, inside the far plane). */\n"
@@ -1855,7 +1864,8 @@ static const char *GEO_VS =
     "    float l = u_xcenter - h, r = u_xcenter + h;\n"
     "    if (xb < l) xb = l + (xb-l)*s; else if (xb > r) xb = r + (xb-r)*s;\n"
     "  } else xb = (xb - u_xcenter)*u_xscale + u_xcenter;\n"
-    "  gl_Position = vec4(((xb+u_shift+u_xoff)/u_xhalf - 1.0) * w, ((a_pos.y+u_shift)/256.0 - 1.0) * w, zn * w, w); }\n";
+    "  float ps = u_shift + " PSX_GL_TEXEL_BIAS_GLSL ";  /* exact 0.5/S: coverage at the PS1 points */\n"
+    "  gl_Position = vec4(((xb+ps+u_xoff)/u_xhalf - 1.0) * w, ((a_pos.y+ps)/256.0 - 1.0) * w, zn * w, w); }\n";
 /* 480i with drawing to the displayed field prohibited (GPUSTAT bit 10 = 0):
  * GP0 primitives leave the native VRAM rows of one parity unchanged. npos is
  * the native position, so the test holds at every internal resolution.
@@ -1928,7 +1938,7 @@ static const char *TEX_VS =
     "noperspective out float v_b3d;   /* bloom source: 1 on a PGXP 3D vertex */\n"
     "noperspective out vec2 v_npos;  /* native VRAM position (dithering) */\n"
     "void main(){ v_uv = a_uv; v_uv_p = a_uv; v_col = a_col; v_col_p = a_col.rgb;\n"
-    "  v_npos = a_pos;\n"
+    "  v_npos = a_pos + vec2(" PSX_GL_TEXEL_BIAS_GLSL ");\n"
     "  v_persp = (a_q > 0.0) ? 1 : 0;\n"
     "  v_tpage = ivec2(a_tpage + 0.5); v_clut = ivec2(a_clut + 0.5);\n"
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
@@ -1959,7 +1969,8 @@ static const char *TEX_VS =
     "  if (a_col.a > 1.5) { uint bits = floatBitsToUint(a_col.a); cp = float((bits >> 1u) & 1u); sz = uintBitsToFloat(bits & 0xfffffff8u) - 2.0; }\n"
     "  if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (a_q <= 0.0 && cp > 0.5) w = sz / 1024.0; }\n"
     "  v_cp = int(cp); v_b3d = sz > 0.5 ? 1.0 : 0.0;\n"
-    "  vec2 ndc = vec2((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0);\n"
+    "  float ps = u_shift + " PSX_GL_TEXEL_BIAS_GLSL ";  /* exact 0.5/S: coverage at the PS1 points */\n"
+    "  vec2 ndc = vec2((xb+ps+u_xoff)/u_xhalf - 1.0, (a_pos.y+ps)/256.0 - 1.0);\n"
     "  gl_Position = vec4(ndc * w, zn * w, w); }\n";
 static const char *TEX_FS =
     "#version 330\n"
@@ -2152,6 +2163,9 @@ static const char *TEX_FS =
     "   * default is the PS1's affine (noperspective) mapping. */\n"
     "  vec2 uv = (v_persp != 0) ? v_uv_p : v_uv;\n"
     "  vec2 dx=dFdx(uv), dy=dFdy(uv);\n"
+    "  /* uv at the PS1 point + the texel bias (native px; S HR px per px). */\n"
+    "  float hr_per_px = 0.5 / (u_shift + " PSX_GL_TEXEL_BIAS_GLSL ");\n"
+    "  uv += (dx + dy) * (hr_per_px * " PSX_GL_TEXEL_BIAS_GLSL ");\n"
     "  vec2 uv0=uv, dx0=dx, dy0=dy;   /* the PS1 sample point (texture_lod) */\n"
     "  if (v_hd_mode == 5) {\n"
     "    /* Indexed replacement: red = CLUT index (alpha 0 = transparent),\n"

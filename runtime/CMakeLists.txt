@@ -892,6 +892,15 @@ if(BUILD_TESTING)
                 --sdl-library "$<TARGET_FILE:${_gl_filter_sdl_target}>"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-filter-results")
         set_tests_properties(gl_texture_filter_test PROPERTIES LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_ps1_coverage_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_ps1_coverage.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:${_gl_filter_sdl_target}>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-ps1-coverage-results")
+        set_tests_properties(gl_ps1_coverage_test PROPERTIES LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         add_test(NAME gl_post_aa_test
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
