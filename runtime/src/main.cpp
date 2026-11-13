@@ -1792,8 +1792,9 @@ static int           g_video_depth24_trailing_margin = 8;
  * title owns its margin even when movies are cropped to the picture. */
 static int           g_video_depth24_trailing_margin_set = 0;
 /* [video] fmv_crop_to_picture / PSX_FMV_CROP: 24-bit (movie) frames fill the
- * window like 15-bit frames instead of sitting in the TV active-video canvas. */
-static int           g_video_fmv_crop = 1;
+ * window like 15-bit frames instead of sitting in the TV active-video canvas.
+ * Off unless the title, the player or PSX_FMV_CROP turns it on. */
+static int           g_video_fmv_crop = 0;
 static int           g_video_aspect_num = 4;
 static int           g_video_aspect_den = 3;
 /* [video] fov_scale — VR perspective multiplier on the GTE projection distance

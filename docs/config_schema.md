@@ -968,7 +968,7 @@ command switches it live.
 
 ```toml
 [video]
-fmv_crop_to_picture = true   # default
+fmv_crop_to_picture = false   # default
 ```
 
 A 24-bit (movie) frame is staged into the PAL (288-line) or NTSC (240-line)
@@ -978,8 +978,8 @@ then shows black bars above and below it, and the last
 `fmv_crop_to_picture = true` the visible source rows are the whole presented
 frame, as for 15-bit frames, and the fixed margin is dropped: only columns
 that a known upload span leaves uncovered are blanked. A title that writes
-`depth24_trailing_margin` itself keeps that margin. `false` restores the
-canvas. The player setting "Crop movies to the picture" (Display) overrides
+`depth24_trailing_margin` itself keeps that margin. `false`, the default,
+keeps the canvas. The player setting "Crop movies to the picture" (Display) overrides
 the title, and `PSX_FMV_CROP=0|1` overrides both for one run. `gpu_state`
 reports `screen_height`, `screen_origin_y`, `d24_crop` and `d24_rgb_limit`.
 

@@ -18,7 +18,7 @@ static std::string g_video_post_shader;
 static int g_video_pgxp_tolerance_set, g_video_pgxp_position_fallback_set;
 static int g_video_pgxp_position_fallback=1,g_video_pgxp_preserve_projection;
 static int g_video_pgxp_depth_buffer,g_video_fmv_chroma,g_video_texture_lod,g_video_aniso=1;
-static int g_video_fmv_crop=1;
+static int g_video_fmv_crop;
 static int g_video_accurate_blending,g_video_dithering=1,g_video_pgxp_color_correction,g_video_pgxp_seam;
 static int g_frame_generation_method,g_video_dynres_min=720,g_video_match_max_lines,g_video_ss_disable_at_lines;
 static int g_video_geometry_correction,g_video_perspective_texturing,controller_anti_deadzone;
@@ -59,7 +59,7 @@ int main() {
         {"video.pgxp_tolerance","-1"},{"video.pgxp_position_fallback","false"},
         {"video.pgxp_preserve_projection","true"},{"video.pgxp_depth_buffer","true"},
         {"video.fmv_chroma_smoothing","true"},{"video.texture_lod","mipmap"},
-        {"video.fmv_crop_to_picture","false"},
+        {"video.fmv_crop_to_picture","true"},
         {"video.anisotropic_filtering","8"},{"video.accurate_blending","true"},
         {"video.dithering","fine"},{"video.pgxp_color_correction","true"},
         {"video.pgxp_seam","wide"},{"video.pgxp_depth_threshold","2048.5"},
@@ -97,7 +97,7 @@ int main() {
     assert(g_video_ss_milli==1500 && g_title_ss_milli==1500);
     assert(g_video_pgxp_tolerance==-1 && g_video_pgxp_tolerance_set && !g_video_pgxp_position_fallback && g_video_pgxp_position_fallback_set);
     assert(g_video_pgxp_preserve_projection && g_video_pgxp_depth_buffer && g_video_fmv_chroma);
-    assert(!g_video_fmv_crop);
+    assert(g_video_fmv_crop);
     assert(g_video_texture_lod==1 && g_video_aniso==8 && g_video_accurate_blending && g_video_dithering==2);
     assert(g_video_pgxp_color_correction && g_video_pgxp_seam==2 && g_video_pgxp_depth_threshold==2048.5f);
     assert(!texture_batching && g_frame_generation_method==1 && g_video_dynres_min==PSX_IR_SCALE(2));

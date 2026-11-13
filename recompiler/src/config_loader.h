@@ -477,10 +477,10 @@ struct RuntimeConfig {
 
     // fmv_crop_to_picture: present a 24-bit (FMV) frame at its own visible
     // height, filling the window like a 15-bit frame, and blank at the right
-    // only the columns the movie did not upload. false keeps the frame at
-    // its television position inside the PAL/NTSC active-video area (black
-    // rows above and below a movie shorter than that area).
-    bool                  video_fmv_crop_to_picture = true;
+    // only the columns the movie did not upload. false (the default) keeps
+    // the frame at its television position inside the PAL/NTSC active-video
+    // area (black rows above and below a movie shorter than that area).
+    bool                  video_fmv_crop_to_picture = false;
 
     // internal_resolution: the "Internal resolution" preset (Settings ->
     // Display), which supersedes supersampling when set. Encoding as in
