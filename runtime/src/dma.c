@@ -814,6 +814,17 @@ static void start_async_gpu_linked_list(void) {
         gpu_ot_stats.starts_dropped++;
         return;
     }
+    /* [EMU] bus error (spec 3.2, as dsm_bus_error): a header due at an address
+     * with bit 23 set stops the channel with no word moved and no channel flag;
+     * DICR bit 15 sets and the IRQ line is re-evaluated. A list kicked at the
+     * 00FFFFFFh terminator never reads the top of RAM. */
+    if (channels[2].madr & 0x00800000u) {
+        uint32_t before = dicr;
+        channels[2].chcr &= ~((1u << 24) | (1u << 28));
+        dicr |= 1u << 15;
+        raise_dma_irq_on_master_edge(before);
+        return;
+    }
     uint32_t start_addr = psx_mod_gpu_dma_resolve_address(channels[2].madr);
     gpu_ws_begin_linked_list();
     /* This scan only prepares optional widescreen grouping. It does not send

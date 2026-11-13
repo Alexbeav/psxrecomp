@@ -91,7 +91,18 @@ int main(void) {
     }
     dma_write(0x1F8010A0, 0x80001000u);
     assert(channels[2].madr == 0x001000u && dma_read(0x1F8010A0) == 0x001000u);
-    puts("PASS MADR bits 24-31 read zero on ch0-6");
+    /* [EMU] spec 3.2: a list kicked at the 00FFFFFFh terminator is a bus error.
+     * No header is read (the top of RAM holds a cyclic empty node here), busy
+     * clears, DICR bit 15 sets. */
+    fresh(); ram[0x1FFFFC / 4] = 0x001FFFFCu;
+    uint32_t words = gp0_words;
+    kick(0x1F8010A0, 0x00FFFFFFu, 0, 0x01000401);
+    for (int i = 0; i < 4096; i++) { psx_cycle_count++; dma_advance(1); }
+    assert(!gpu_linked_list.active);
+    assert(!((channels[2].chcr >> 24) & 1u));
+    assert((dicr >> 15) & 1u);
+    assert(gp0_words == words);
+    puts("PASS MADR bits 24-31 read zero on ch0-6; list kicked at the terminator is a bus error");
     return 0;
 }
 
