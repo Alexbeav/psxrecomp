@@ -109,21 +109,25 @@ bool player_settings_own(const char* package) { return package && !std::strcmp(p
 const char* player_settings_page(const char* feature) {
     if (feature && !std::strcmp(feature,"general")) return "General";
     if (feature && !std::strcmp(feature,"display")) return "Display";
+    if (feature && !std::strcmp(feature,"advanced")) return "Advanced";
     return "";
 }
 int player_settings_count(void* context) {
-    return s_player_settings_original->feature_count(context)+2;
+    return s_player_settings_original->feature_count(context)+3;
 }
 int player_settings_feature(void* context,int index,RecompLauncherCModFeature* out) {
     const int base=s_player_settings_original->feature_count(context);
     if (index<base) return s_player_settings_original->feature_get(context,index,out);
-    if (!out || index<base || index>=base+2) return 0;
+    if (!out || index<base || index>=base+3) return 0;
     *out={};
-    const char* page=index==base?"General":"Display";
+    static const char* const kPages[3]={"General","Display","Advanced"};
+    static const char* const kIds[3]={"general","display","advanced"};
+    static const char* const kNames[3]={"Startup and input preferences","Advanced graphics","Advanced"};
+    const char* page=kPages[index-base];
     std::snprintf(out->package_id,sizeof out->package_id,"%s",kPlayerSettingsPackage);
-    std::snprintf(out->id,sizeof out->id,"%s",index==base?"general":"display");
+    std::snprintf(out->id,sizeof out->id,"%s",kIds[index-base]);
     std::snprintf(out->group,sizeof out->group,"%s",page);
-    std::snprintf(out->name,sizeof out->name,"%s",index==base?"Startup and input preferences":"Advanced graphics");
+    std::snprintf(out->name,sizeof out->name,"%s",kNames[index-base]);
     std::snprintf(out->status,sizeof out->status,"Saved immediately. Applies on the next game launch; command-line and environment overrides still win.");
     out->enabled=1;
     each_player_setting([&](const PlayerSpec& spec) { out->option_count+=!std::strcmp(page,spec.page); });

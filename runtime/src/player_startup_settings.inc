@@ -34,6 +34,7 @@ static void apply_extra_player_settings(const PSXRecompV4::UserSettings& prefs,
         if (id=="video.geometry_correction") { g_video_geometry_correction=value=="true"; g_player_geometry_set=1; }
         if (id=="video.perspective_texturing") { g_video_perspective_texturing=value=="true"; g_player_texture_set=1; }
         if (id=="runtime.bios_hle_keep_intro") { keep_intro=value=="true"; }
+        if (id=="runtime.gpu_draw_timing") { gpu_set_draw_timing(value=="true"); }
         if (id=="audio.buffer_ms") { audio_buffer=std::stoi(value); }
         if (id=="controller.anti_deadzone") { controller_anti_deadzone=std::stoi(value); }
         if (id=="controller.experimental_jogcon_force_feedback_invert") { g_jogcon_ffb_invert=value=="true"; }
@@ -69,6 +70,7 @@ static std::map<std::string,std::string> player_settings_baseline(bool fast_boot
     values["video.geometry_correction"]=player_setting_flag(g_video_geometry_correction!=0);
     values["video.perspective_texturing"]=player_setting_flag(g_video_perspective_texturing!=0);
     values["runtime.bios_hle_keep_intro"]=player_setting_flag(keep_intro!=0);
+    values["runtime.gpu_draw_timing"]=player_setting_flag(gpu_draw_timing()!=0);
     values["audio.buffer_ms"]=player_setting_text(audio_buffer);
     values["controller.anti_deadzone"]=player_setting_text(controller_anti_deadzone);
     values["controller.experimental_jogcon_force_feedback_invert"]=player_setting_flag(g_jogcon_ffb_invert!=0);

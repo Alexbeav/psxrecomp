@@ -47,6 +47,7 @@ inline const PlayerSettingSpec kExtraPlayerSettings[] = {
     {"controller","anti_deadzone","Analog anti-deadzone (0-32767)","General",PlayerSettingKind::Integer,0,32767,""},
     {"controller","experimental_jogcon_force_feedback_invert","Invert JogCon force feedback","General",PlayerSettingKind::Boolean,0,1,""},
     {"controller","select_shortcuts","Enable fallback Select shortcuts","General",PlayerSettingKind::Boolean,0,1,""},
+    {"runtime","gpu_draw_timing","GPU drawing time (some games need it to load)","Advanced",PlayerSettingKind::Boolean,0,1,""},
 };
 
 inline std::string player_setting_id(const PlayerSettingSpec& spec) {

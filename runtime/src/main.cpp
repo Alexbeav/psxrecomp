@@ -22368,6 +22368,7 @@ session_reboot:
     gl_renderer_set_fmv_chroma_smoothing(g_video_fmv_chroma);
     if (const char* e = std::getenv("PSX_FMV_CROP")) g_video_fmv_crop = (*e && *e != '0');
     gpu_set_depth24_crop_to_picture(g_video_fmv_crop);
+    if (const char* e = std::getenv("PSX_GPU_DRAW_TIMING")) gpu_set_draw_timing(*e && *e != '0');
     if (const char* e = std::getenv("PSX_TEXTURE_LOD")) g_video_texture_lod = std::atoi(e);
     if (const char* e = std::getenv("PSX_ANISO")) g_video_aniso = std::atoi(e);
     gl_renderer_set_texture_lod(g_video_texture_lod, g_video_aniso);

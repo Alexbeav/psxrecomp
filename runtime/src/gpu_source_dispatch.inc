@@ -162,6 +162,7 @@ void gpu_queue_service(void) {
 
 uint32_t gpu_queue_cycles_to_event(void) {
     if(!source_gpu_queue_enabled && !source_gpu_runtime_active()) {
+        if(!gpu_draw_timing_on) return UINT32_MAX;
         uint64_t now=psx_get_cycle_count();
         if(now >= gpu_dma_resume_at) return UINT32_MAX;
         uint64_t d=gpu_dma_resume_at-now;
@@ -204,7 +205,7 @@ static void gpu_draw_timed_gp0(uint32_t val) {
 int gpu_queue_has_space(void) {
     if (source_gpu_queue_enabled || source_gpu_runtime_active())
         return gpu_queue.count < 16u;
-    return psx_get_cycle_count() >= gpu_dma_resume_at;
+    return !gpu_draw_timing_on || psx_get_cycle_count() >= gpu_dma_resume_at;
 }
 
 /* The list walk's readiness before a header: GPUSTAT bit 28 (no queued word,

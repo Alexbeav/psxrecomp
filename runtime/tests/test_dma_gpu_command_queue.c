@@ -131,7 +131,8 @@ int main(int argc,char **argv) {
         assert(!gpu_linked_list.active && texpage_x==5 && (dicr&(1u<<26)));
         puts("PASS a list kick holds the CPU until the walk needs the GPU"); return 0;
     }
-    if(argc>1 && !strcmp(argv[1],"draw-time")) {
+    if(argc>1 && (!strcmp(argv[1],"draw-time") || !strcmp(argv[1],"draw-time-off"))) {
+        const int timed=!strcmp(argv[1],"draw-time");
         /* Ordinary renderer (no source model). Team Buddies' boot progress
          * bar (PS1G-160): environment words, two 5x16 shaded quads, a 2x1
          * VRAM copy and NOPs, as its frame 4403 command dump shows. libgpu
@@ -139,7 +140,7 @@ int main(int argc,char **argv) {
          * the transfer still running while the GPU draws: the FIFO holds the
          * second quad until the first is drawn. Before the fix the whole
          * walk finished inside the kicking store. */
-        source_gpu_queue_enabled=0; gp1_reset_command_buffer();
+        source_gpu_queue_enabled=0; gpu_set_draw_timing(timed); gp1_reset_command_buffer();
         static const uint32_t env[6]={0xe3000000,0xe407fe7f,0xe5000000,0xe1000200,0xe2000000,0xe6000000};
         static const uint32_t q1[8]={0x3800008c,0x01d000d5,0x008c4a00,0x01d000d5,0x0000008c,0x01e000d5,0x008c4a00,0x01e000d5};
         static const uint32_t q2[8]={0x3800738c,0x01d000d0,0x0000008c,0x01d000d5,0x0000738c,0x01e000d0,0x0000008c,0x01e000d5};
@@ -153,6 +154,11 @@ int main(int argc,char **argv) {
         dma_write(0x1f8010a0,0x7000); dma_write(0x1f8010a8,0x01000401);
         uint64_t held=psx_cycle_count-kicked;
         psx_advance_cycles(20); psx_devices_service_to_now();
+        if(!timed) {
+            /* Setting off (the default): the walk ends inside the kick, as before. */
+            assert(!gpu_linked_list.active && !(channels[2].chcr&(1u<<24)) && gpu_queue_has_space());
+            puts("PASS with gpu_draw_timing off a list completes inside its kick"); return 0;
+        }
         if(!(channels[2].chcr&(1u<<24)) || !gpu_linked_list.active) {
             printf("FAIL list finished %llu cycles after the kick (held %llu): no drawing time\n",
                    (unsigned long long)(psx_cycle_count-kicked),(unsigned long long)held);

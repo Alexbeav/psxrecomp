@@ -110,6 +110,9 @@ static int32_t gpu_queue_quad_second;
  * last word arrives; this only times when the GPU would start each one, so the
  * GPU DMA request can drop while it draws. Credit is in half CPU clocks, as in
  * source_gpu_command_timing.h. Not in the snapshot: a restore starts idle. */
+static int      gpu_draw_timing_on;  /* player setting; host preference, not guest state */
+void gpu_set_draw_timing(int on) { gpu_draw_timing_on = on != 0; }
+int  gpu_draw_timing(void) { return gpu_draw_timing_on; }
 static int32_t  gpu_draw_credit;
 static uint64_t gpu_draw_cycle;       /* credit is valid from this cycle on */
 static uint64_t gpu_dma_resume_at;    /* last command waits in the FIFO until here */
@@ -8203,7 +8206,8 @@ void gpu_write_gp0(uint32_t val) {
     else if(source_gpu_queue_enabled){
         gpu_queue_service();if(!gpu_queue_has_space())psx_fatal_halt("source GPU FIFO overflow");
         unsigned at=gpu_queue.count++;gpu_queue.words[at]=val;gpu_queue.sources[at]=gp0_next_source_addr;gpu_queue.ranks[at]=gp0_ot_rank;gpu_queue_consume();psx_next_service_cycle=0;
-    }else gpu_draw_timed_gp0(val);
+    }else if(gpu_draw_timing_on) gpu_draw_timed_gp0(val);
+    else gpu_write_gp0_body(val);
     g_exec_phase = prev_phase;
 }
 

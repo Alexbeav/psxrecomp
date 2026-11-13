@@ -99,6 +99,15 @@ uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo* di, uint32_t* buf,
  * here): the PAL/NTSC active-video canvas. Presentation only, not guest
  * state. */
 void gpu_set_depth24_crop_to_picture(int on);
+/* [runtime] gpu_draw_timing (player setting, PSX_GPU_DRAW_TIMING; default
+ * off). On: the ordinary renderer charges each GP0 command its drawing time
+ * and drops the GPU DMA request while the FIFO holds a whole command, so a
+ * linked-list transfer lasts as long as the list takes to draw. Team Buddies
+ * needs it to finish loading (PS1G-160). Off: commands and transfers finish
+ * at once, as before. Changes guest timing, so recorded replays made with it
+ * off may not play the same with it on. */
+void gpu_set_draw_timing(int on);
+int  gpu_draw_timing(void);
 int  gpu_depth24_crop_to_picture(void);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
  * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,

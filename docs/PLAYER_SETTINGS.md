@@ -26,6 +26,13 @@ preserves the intro with that service tier. These settings reach ordinary
 startup, including launches that skip the GUI. They do not restore Studio's
 retired build-time FastBoot option and do not repair BIOS execution speed.
 
+The **Advanced** page holds `runtime.gpu_draw_timing` ("GPU drawing time",
+default off; environment override `PSX_GPU_DRAW_TIMING`). On, the ordinary
+renderer charges each GPU command its drawing time and holds GPU DMA while the
+command FIFO is full, so a display-list transfer lasts as long as drawing it.
+Team Buddies needs it to finish loading (PS1G-160). It changes guest timing, so
+replays recorded with it off may not play the same with it on.
+
 Hotkeys accept up to4 alternatives, individual removal, explicit unbind and
 Reset defaults. Current defaults remain: F1 menu,F3 analog,F5 quick-save,
 Shift+F5 quick-load,F6 scanlines,F7 states,F11 fullscreen,F12 record.
