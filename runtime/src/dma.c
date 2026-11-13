@@ -1525,7 +1525,9 @@ static void dma_write_register(uint32_t addr, uint32_t val, uint32_t mask) {
         if (ch > 6) goto bad;
         switch (reg) {
             case 0x00:
-                channels[ch].madr = (channels[ch].madr & ~mask) | (val & mask);
+                /* D#_MADR keeps bits 0-23; bits 24-31 read zero (as on the
+                 * source bus). A list start keeps its 24-bit cursor identity. */
+                channels[ch].madr = ((channels[ch].madr & ~mask) | (val & mask)) & 0x00FFFFFFu;
                 return;
             case 0x04:
                 channels[ch].bcr = (channels[ch].bcr & ~mask) | (val & mask);
