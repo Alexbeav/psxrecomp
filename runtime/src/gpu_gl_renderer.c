@@ -5563,11 +5563,15 @@ static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1
         int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
         float mr=s_mod_r/255.0f, mg=s_mod_g/255.0f, mb=s_mod_b/255.0f;
         float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
-        gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
-        /* Above 1x, fill the rest of a one-pixel strip the PS1 fills at 1x. */
-        int fx[3], fy[3], fu[3], fv[3];
-        if (s_out_scale > 1 && psx_thin_tri_complement(xs, ys, us, vs, NULL, fx, fy, fu, fv, NULL))
+        /* Above 1x, draw a one-pixel strip whole, with the texels the PS1
+         * shows at 1x (gpu_thin_tri.h). */
+        int su[3], sv[3], fx[3], fy[3], fu[3], fv[3];
+        if (s_out_scale > 1 && psx_thin_tri_strip(xs, ys, us, vs, NULL, su, sv, NULL, fx, fy, fu, fv, NULL)) {
+            gpu_textured_triangle(xs,ys,su,sv,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
             gpu_textured_triangle(fx,fy,fu,fv,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
+        } else {
+            gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
+        }
     }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();
@@ -5584,12 +5588,16 @@ static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32
         int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
         uint32_t cc[3]={c0,c1,c2}; float col[9];
         for (int i=0;i<3;i++){ col[i*3+0]=(cc[i]&0xFF)/255.0f; col[i*3+1]=((cc[i]>>8)&0xFF)/255.0f; col[i*3+2]=((cc[i]>>16)&0xFF)/255.0f; }
-        gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
-        /* Above 1x, fill the rest of a one-pixel strip the PS1 fills at 1x. */
-        int fx[3], fy[3], fu[3], fv[3]; uint32_t fc[3]; float fcol[9];
-        if (s_out_scale > 1 && psx_thin_tri_complement(xs, ys, us, vs, cc, fx, fy, fu, fv, fc)) {
+        /* Above 1x, draw a one-pixel strip whole, with the texels and colours
+         * the PS1 shows at 1x (gpu_thin_tri.h). */
+        int su[3], sv[3], fx[3], fy[3], fu[3], fv[3]; uint32_t sc[3], fc[3]; float scol[9], fcol[9];
+        if (s_out_scale > 1 && psx_thin_tri_strip(xs, ys, us, vs, cc, su, sv, sc, fx, fy, fu, fv, fc)) {
+            for (int i=0;i<3;i++){ scol[i*3+0]=(sc[i]&0xFF)/255.0f; scol[i*3+1]=((sc[i]>>8)&0xFF)/255.0f; scol[i*3+2]=((sc[i]>>16)&0xFF)/255.0f; }
             for (int i=0;i<3;i++){ fcol[i*3+0]=(fc[i]&0xFF)/255.0f; fcol[i*3+1]=((fc[i]>>8)&0xFF)/255.0f; fcol[i*3+2]=((fc[i]>>16)&0xFF)/255.0f; }
+            gpu_textured_triangle(xs,ys,su,sv,scol,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
             gpu_textured_triangle(fx,fy,fu,fv,fcol,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
+        } else {
+            gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
         }
     }
     if (native_required && s_hd_native_authority) {
