@@ -861,6 +861,16 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-dithering-results")
         set_tests_properties(gl_dithering_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_interlace_field_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_interlace_field.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-interlace-field-results")
+        set_tests_properties(gl_interlace_field_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         unset(_gl_scale_sdl_inc)
     else()
         message(STATUS "gl_scale_invariance_test: not registered (needs macOS, Linux or MinGW, Python 3 and SDL3)")

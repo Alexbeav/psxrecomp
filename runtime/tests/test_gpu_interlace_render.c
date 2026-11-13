@@ -10,6 +10,8 @@ static uint16_t reference_vram[32*32];
 static int skipped_row = -1;
 static int failures;
 static int mock_enabled, mock_pc, mock_pq, mock_submissions, mock_bad;
+static int mock_field = -2, mock_field_calls, mock_field_at_draw = -2;
+static void mock_skip_field(int f) { mock_field = f; ++mock_field_calls; }
 static void mock_precise(int e,int32_t x0,int32_t y0,int32_t x1,int32_t y1,int32_t x2,int32_t y2) {
     (void)x0;(void)y0;(void)x1;(void)y1;(void)x2;(void)y2;mock_pc=e;
 }
@@ -20,11 +22,12 @@ static void mock_triangle(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t c) 
     (void)x0;(void)y0;(void)x1;(void)y1;(void)x2;(void)y2;(void)c;
     ++mock_submissions;if(!mock_pc || !mock_pq)++mock_bad;
     mock_pc=mock_pq=0; /* GPU backends consume these per submission. */
+    mock_field_at_draw=mock_field;
 }
 static const GpuRenderBackend mock_backend={
     .name="metadata fixture",.get_draw_area=sw_get_draw_area,.set_draw_area=sw_set_draw_area,
     .set_precise_triangle=mock_precise,.set_perspective_triangle=mock_perspective,
-    .draw_flat_triangle=mock_triangle
+    .draw_flat_triangle=mock_triangle,.set_skip_field=mock_skip_field
 };
 /* This fixture keeps optional widescreen presentation disabled. */
 int g_ws_bd_stretch_pct, g_ws_bd_stretch_on;
@@ -171,9 +174,26 @@ int main(void) {
     gr_set_perspective_triangle(1,1.0f,1.0f,1.0f);
     gr_draw_flat_triangle(0,8,1,8,0,9,0x7FFF);
     CHECK(mock_submissions==1 && mock_bad==0 && !mock_pc && !mock_pq);
+    /* A GPU backend holds the skipped field row when each primitive reaches
+     * it, and is told only when the value changes (Big Race reads back a
+     * dot drawn on the displayed 480i field and must see it undrawn). */
+    mock_field_calls=0;
+    static const int seq[] = {-1, 1, 1, 0, -1, -1, 1};
+    int expect_calls=0, last=mock_field;
+    for (unsigned k=0;k<sizeof seq/sizeof seq[0];++k) {
+        skipped_row=seq[k]; mock_field_at_draw=-2;
+        gr_draw_flat_triangle(0,0,10,0,0,10,0x7FFF);
+        if (seq[k]!=last) { ++expect_calls; last=seq[k]; }
+        CHECK(mock_field_at_draw==seq[k]);
+    }
+    CHECK(mock_field_calls==expect_calls);
+    /* A backend switch sends the value again. */
+    gr_set_backend(GR_BACKEND_OPENGL); mock_field=-2;
+    gr_draw_flat_triangle(0,0,10,0,0,10,0x7FFF);
+    CHECK(mock_field_at_draw==skipped_row);
     gr_set_backend(GR_BACKEND_SOFTWARE);
     if (failures) return 1;
-    puts("PASS: field predicate, all raster primitives, clipping, transfers, mode switch, scales 1/4");
+    puts("PASS: field predicate, all raster primitives, clipping, transfers, mode switch, scales 1/4, GPU backend field hook");
     return 0;
 }
 

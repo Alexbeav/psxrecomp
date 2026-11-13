@@ -11,4 +11,6 @@
  */
 #include "gpu_interlace.h"
 
-int gpu_raster_skipped_row(void) { return -1; }
+/* A fixture that tests the 480i rule sets this; the rest leave it at -1. */
+int g_source_raster_skipped_row = -1;
+int gpu_raster_skipped_row(void) { return g_source_raster_skipped_row; }
