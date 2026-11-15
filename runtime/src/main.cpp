@@ -5476,6 +5476,9 @@ static void runtime_perf_diag_tick() {
     (void)target_ms;
     uint64_t up[6] = {0};
     gl_renderer_runtime_diag(up);
+    static uint64_t last_rb[2] = {0};
+    uint64_t rb[2] = {0};
+    gl_renderer_readback_diag(rb);
     uint64_t overlay_load_us = 0, overlay_load_max_us = 0, overlay_load_last_us = 0;
     overlay_loader_get_load_timing(&overlay_load_us, &overlay_load_max_us,
                                    &overlay_load_last_us);
@@ -5486,6 +5489,7 @@ static void runtime_perf_diag_tick() {
         last_overflows = overflows;
         last_overlay_load_us = overlay_load_us;
         for (int i = 0; i < 6; i++) last_up[i] = up[i];
+        last_rb[0] = rb[0]; last_rb[1] = rb[1];
         have_last = true;
         return;
     }
@@ -5539,6 +5543,11 @@ static void runtime_perf_diag_tick() {
         current.capture_triggers - last.capture_triggers,
         current.capture_overlays - last.capture_overlays,
         (unsigned long long)current.capture_last_dispatch_delta);
+    /* PS1G-162: synchronous GL readbacks a CPU read of VRAM forced, and the
+     * small primitives mirrored into CPU VRAM instead. */
+    std::fprintf(stdout, "psxrecomp: GL readback=%.1f/s cpu_mirrored_prims=%.1f/s\n",
+                 (double)(rb[0] - last_rb[0]) / dt, (double)(rb[1] - last_rb[1]) / dt);
+    last_rb[0] = rb[0]; last_rb[1] = rb[1];
     PSXOpenXRStats xr{};
     psx_openxr_stats(&xr);
     if (xr.enabled) {

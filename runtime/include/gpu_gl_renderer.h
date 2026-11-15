@@ -172,6 +172,11 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 /* Cumulative CPU-upload diagnostics: calls, rects, pixels, conversion ticks,
  * texture-upload ticks, FBO-draw ticks. Active only with PSX_RUNTIME_PERF_DIAG. */
 void gl_renderer_runtime_diag(uint64_t out[6]);
+/* Cumulative guest-visible VRAM readback counters: [0] synchronous FBO
+ * readbacks into CPU VRAM (ensure_cpu), [1] small untextured primitives also
+ * rasterised into CPU VRAM so a later CPU read needs no readback. Always
+ * counted; callers take deltas. */
+void gl_renderer_readback_diag(uint64_t out[2]);
 /* Cumulative scene primitive counters (pre double-draw): all submitted, and of
  * those textured. Callers take deltas; the counters are never reset here. */
 void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured);

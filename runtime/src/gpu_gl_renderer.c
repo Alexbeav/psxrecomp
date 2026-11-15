@@ -919,6 +919,12 @@ void gl_renderer_runtime_diag(uint64_t out[6]) {
     for (int i = 0; i < 6; i++) out[i] = s_rt_up_diag[i];
 }
 
+static uint64_t s_readback_diag[2];   /* see gl_renderer_readback_diag */
+void gl_renderer_readback_diag(uint64_t out[2]) {
+    out[0] = s_readback_diag[0];
+    out[1] = s_readback_diag[1];
+}
+
 /* Draw state mirrored from the vtable set_* calls. */
 static int s_off_x = 0, s_off_y = 0;
 static int s_area_x1 = 0, s_area_y1 = 0, s_area_x2 = VRAM_W - 1, s_area_y2 = VRAM_H - 1;
@@ -3301,6 +3307,7 @@ static void ensure_cpu(void) {
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     s_gpu_dirty = 0;
     rect_clear(&s_cpu_dirty);
+    s_readback_diag[0]++;
     coh_record(GL_COH_ENSURE, rx, ry, rx + rw - 1, ry + rh - 1);
 
 }
