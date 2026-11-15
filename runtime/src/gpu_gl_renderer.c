@@ -3316,6 +3316,10 @@ static void ensure_cpu(void) {
 
 static uint64_t s_scene_prims = 0;     /* frame_perf: scene primitives submitted (pre double-draw) */
 static uint64_t s_scene_prims_tex = 0; /* frame_perf: of which textured (vs flat geometry)         */
+/* Set while a primitive is also rasterised into CPU VRAM by
+ * glb_draw_flat_rect's tiny-rect mirror: the CPU words are already current, so
+ * the draw adds nothing to s_cpu_dirty and does not mark the GPU ahead. */
+static int s_prim_cpu_mirrored;
 static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
     s_scene_prims++;
     int x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
@@ -3340,9 +3344,9 @@ static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
     if (y1 > s_area_y2) y1 = s_area_y2;
     rect_add(&s_pack_dirty, x0, y0, x1, y1);
     if (s_out_scale > 1) rect_add(&s_stencil_stale, x0, y0, x1, y1);
-    if (!cpu_vram_authoritative()) rect_add(&s_cpu_dirty, x0, y0, x1, y1);
+    if (!cpu_vram_authoritative() && !s_prim_cpu_mirrored) rect_add(&s_cpu_dirty, x0, y0, x1, y1);
     /* Dual-raster keeps CPU current via SW writes — do not mark GPU-ahead. */
-    if (!cpu_vram_authoritative())
+    if (!cpu_vram_authoritative() && !s_prim_cpu_mirrored)
         s_gpu_dirty = 1;
     coh_record(GL_COH_DRAW, x0, y0, x1, y1);
 }
@@ -5668,7 +5672,28 @@ static void glb_draw_flat_rect(int x,int y,int w,int h,uint16_t c){
         native_draw_end(faithful);
     }
     if (!s_raster_ok) return;
+    /* PS1G-162: a tiny untextured rect is also rasterised into CPU VRAM, so a
+     * GP0(C0) read of the pixel just drawn needs no synchronous FBO readback
+     * (Pro Pinball's field-detect loop draws and reads one pixel ~240x per
+     * frame). The software rasteriser applies the same draw area, skipped
+     * interlace row, mask and semi-transparency state; mask check and blending
+     * read the destination, so the mirror runs only where CPU VRAM is current
+     * (outside s_cpu_dirty). The GPU draws first so its pending-upload flush
+     * sends the pre-draw CPU words, never the mirrored result. */
+    int mirror = 0;
+    if (!cpu_raster_required() && !cpu_vram_authoritative() && !s_rth_on &&
+        !s_pass_active && !s_fg_drawing && w > 0 && h > 0 && w * h <= 256) {
+        int cx0 = x > s_area_x1 ? x : s_area_x1;
+        int cy0 = y > s_area_y1 ? y : s_area_y1;
+        int cx1 = x + w - 1 < s_area_x2 ? x + w - 1 : s_area_x2;
+        int cy1 = y + h - 1 < s_area_y2 ? y + h - 1 : s_area_y2;
+        mirror = cx0 <= cx1 && cy0 <= cy1 &&
+                 !rect_intersects(&s_cpu_dirty, cx0, cy0, cx1, cy1);
+    }
+    s_prim_cpu_mirrored = mirror;
     gpu_flat_rect(x,y,w,h,c, s_semi_en?s_semi_mode:-1);
+    s_prim_cpu_mirrored = 0;
+    if (mirror) { sw_draw_flat_rect(x,y,w,h,c); s_readback_diag[1]++; }
 }
 static void glb_draw_textured_rect(int x,int y,int w,int h,int u,int v,uint16_t cx,uint16_t cy,uint16_t tp){
     const int native_required = cpu_raster_required();
@@ -5875,7 +5900,19 @@ static void glb_vram_write(int x,int y,uint16_t px){
     /* Point pokes are never MDEC frames — always stage to FBO. */
     up_add(x & (VRAM_W-1), y & (VRAM_H-1), x & (VRAM_W-1), y & (VRAM_H-1));
 }
-static uint16_t glb_vram_read(int x,int y){ depth24_upload_policy(); ensure_cpu(); return sw_vram_read(x,y); }
+/* A guest read of pixels outside s_cpu_dirty needs no readback: every GPU
+ * write (prim, fill, copy) adds its area there, so CPU VRAM is current outside
+ * it. With the tiny-rect mirror this keeps Pro Pinball's field-detect read
+ * (PS1G-162) from reading back the frame drawn elsewhere. An unset rect with
+ * the GPU ahead means the whole surface; wrapped reads take the full path. */
+static void ensure_cpu_for(int x, int y, int w, int h) {
+    if (s_gpu_dirty && s_cpu_dirty.set && w > 0 && h > 0 &&
+        x >= 0 && y >= 0 && x + w <= VRAM_W && y + h <= VRAM_H &&
+        !rect_intersects(&s_cpu_dirty, x, y, x + w - 1, y + h - 1))
+        return;
+    ensure_cpu();
+}
+static uint16_t glb_vram_read(int x,int y){ depth24_upload_policy(); ensure_cpu_for(x,y,1,1); return sw_vram_read(x,y); }
 static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
     if (pass_refuse_write("upload", x, y, w, h)) return;
     depth24_upload_policy();
@@ -5900,7 +5937,7 @@ static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
     up_add_transfer(x, y, w, h);   /* exact touched rects, incl. per-pixel wrap */
     coh_record(GL_COH_UPLOAD, x, y, x+w-1, y+h-1);
 }
-static void glb_vram_transfer_out(int x,int y,int w,int h,uint16_t *d){ depth24_upload_policy(); ensure_cpu(); sw_vram_transfer_out(x,y,w,h,d); }
+static void glb_vram_transfer_out(int x,int y,int w,int h,uint16_t *d){ depth24_upload_policy(); ensure_cpu_for(x,y,w,h); sw_vram_transfer_out(x,y,w,h,d); }
 
 /* ---- context init / present -------------------------------------------- */
 static void upload_present_tex(const uint32_t *pixels, int w, int h, int linear) {
