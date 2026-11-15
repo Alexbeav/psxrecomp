@@ -5680,15 +5680,30 @@ static void glb_draw_flat_rect(int x,int y,int w,int h,uint16_t c){
      * read the destination, so the mirror runs only where CPU VRAM is current
      * (outside s_cpu_dirty). The GPU draws first so its pending-upload flush
      * sends the pre-draw CPU words, never the mirrored result. */
-    int mirror = 0;
+    int mirror = 0, cx0 = 0, cy0 = 0, cx1 = -1, cy1 = -1;
     if (!cpu_raster_required() && !cpu_vram_authoritative() && !s_rth_on &&
         !s_pass_active && !s_fg_drawing && w > 0 && h > 0 && w * h <= 256) {
-        int cx0 = x > s_area_x1 ? x : s_area_x1;
-        int cy0 = y > s_area_y1 ? y : s_area_y1;
-        int cx1 = x + w - 1 < s_area_x2 ? x + w - 1 : s_area_x2;
-        int cy1 = y + h - 1 < s_area_y2 ? y + h - 1 : s_area_y2;
+        cx0 = x > s_area_x1 ? x : s_area_x1;
+        cy0 = y > s_area_y1 ? y : s_area_y1;
+        cx1 = x + w - 1 < s_area_x2 ? x + w - 1 : s_area_x2;
+        cy1 = y + h - 1 < s_area_y2 ? y + h - 1 : s_area_y2;
         mirror = cx0 <= cx1 && cy0 <= cy1 &&
                  !rect_intersects(&s_cpu_dirty, cx0, cy0, cx1, cy1);
+    }
+    /* An opaque mirrored rect outside native-wide needs no GPU draw at all:
+     * CPU VRAM now holds the exact words, so they join the pending upload,
+     * which lands in command order before the next GPU draw. The field loop's
+     * 240 per-frame write/draw pairs then cost one upload instead of 240
+     * uploads and 240 draws. Semi-transparent rects keep the GPU draw so the
+     * blend uses the internal-resolution destination. */
+    if (mirror && !s_semi_en && !g_wide_cur) {
+        s_scene_prims++;
+        sw_draw_flat_rect(x,y,w,h,c);
+        /* Only the clipped rect: pixels outside the draw area may be GPU-ahead. */
+        up_add_transfer(cx0, cy0, cx1 - cx0 + 1, cy1 - cy0 + 1);
+        coh_record(GL_COH_UPLOAD, cx0, cy0, cx1, cy1);
+        s_readback_diag[1]++;
+        return;
     }
     s_prim_cpu_mirrored = mirror;
     gpu_flat_rect(x,y,w,h,c, s_semi_en?s_semi_mode:-1);
