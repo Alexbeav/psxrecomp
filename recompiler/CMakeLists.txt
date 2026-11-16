@@ -1760,10 +1760,10 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_test_registration.cmake)
 psxrecomp_check_all_tests_registered()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)
-    foreach(_report IN ITEMS interp_report_wiring bios_phase_report_wiring)
-        add_test(NAME ${_report}_test COMMAND ${Python3_EXECUTABLE} -I
-            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_report}.py")
-    endforeach()
+    add_test(NAME interp_report_wiring_test COMMAND ${Python3_EXECUTABLE} -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_report_wiring.py")
+    add_test(NAME bios_phase_report_wiring_test COMMAND ${Python3_EXECUTABLE} -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_bios_phase_report_wiring.py")
 endif()
 
 # ---- output-name collision guard (must stay LAST) ---------------------------
