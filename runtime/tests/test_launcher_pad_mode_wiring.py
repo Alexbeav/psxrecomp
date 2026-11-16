@@ -45,23 +45,37 @@ for arm in (
 
 # Precedence is positional in the helper body: override, then lock, then the
 # launcher's own value. Reordering these silently changes which source of truth
-# wins, and both wrong orders are plausible-looking.
+# wins, and both wrong orders are plausible-looking. Other helpers in the header
+# also return launcher_mode, so read the order inside this helper's body only.
+RESOLVE_BODY = LAUNCHER_DEVICE.split("inline int resolve_player_mode_after_launcher(", 1)[1]
 assert (
-    LAUNCHER_DEVICE.index("if (mod_override_mode >= 0) return mod_override_mode;")
-    < LAUNCHER_DEVICE.index("if (lock_mode) return locked_mode;")
-    < LAUNCHER_DEVICE.index("return launcher_mode;")
+    RESOLVE_BODY.index("if (mod_override_mode >= 0) return mod_override_mode;")
+    < RESOLVE_BODY.index("if (lock_mode) return locked_mode;")
+    < RESOLVE_BODY.index("return launcher_mode;")
 ), "resolution precedence must be override > lock > launcher"
 
 # The C++ unit test hard-codes 1/2 rather than dragging config_loader.h's
 # dependency chain into a header-only test. Pin the enum so it cannot drift.
+# Values after DIGITAL (PAD_MODE_NEGCON = 3) are not hard-coded there.
 assert (
-    "enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };"
+    "enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2"
     in CONFIG_LOADER
 ), "PadMode values changed; test_launcher_pad_mode_resolve.cpp hard-codes them"
 
 # ---- both launcher-exit readback loops go through it ----------------------
 CALL = "PSXRecompV4::resolve_player_mode_after_launcher("
-calls = [i for i in range(len(MAIN)) if MAIN.startswith(CALL, i)]
+all_calls = [i for i in range(len(MAIN)) if MAIN.startswith(CALL, i)]
+MAIN_START = MAIN.index("\nint main(int argc, char** argv) {")
+# The in-game menu's settings apply (host_pause_service, before main()) is a
+# third launcher readback; it resolves the mode before it writes p_mode.
+MENU = MAIN[MAIN.index("static void host_pause_service(void) {"):MAIN_START]
+assert len(all_calls) - sum(i > MAIN_START for i in all_calls) == MENU.count(CALL) == 1, (
+    "the in-game menu's launcher readback must call resolve_player_mode_after_launcher()"
+)
+assert MENU.index(CALL) < MENU.index("settings.p_mode[i] = p.mode;"), (
+    "the in-game menu must resolve the mode before it persists it"
+)
+calls = [i for i in all_calls if i > MAIN_START]
 assert len(calls) == 2, (
     "expected exactly 2 launcher-exit readback sites calling "
     f"resolve_player_mode_after_launcher(), found {len(calls)}. A third "
@@ -81,7 +95,11 @@ assert "player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;" not in MAIN, (
     "a launcher-exit path is overwriting a seat's configured mode with "
     "DIGITAL again"
 )
-assert MAIN.count("ls.pad_mode[i] = player_mode[i];") == 2, (
+# launcher_pad_mode_to_launcher() passes the mode through unchanged except a
+# neGcon seat on a launcher without that choice, which the readback restores
+# (launcher_pad_mode_from_launcher).
+assert MAIN.count("ls.pad_mode[i] = PSXRecompV4::launcher_pad_mode_to_launcher("
+                  "player_mode[i],kLauncherNegconMode);") == 2, (
     "the host must seed the launcher with the seat's configured mode "
     "verbatim, at both launcher-entry sites"
 )
@@ -142,15 +160,19 @@ assert MAIN.index("\nsession_reboot:") > MAIN.index(APPLY), (
     "the soft-return re-assert in the readback loop may be redundant -- "
     "re-derive before deleting it"
 )
-assert MAIN.count("g_mod_controller_mode_override[i])") == 2, (
+MAIN_BODY = MAIN[MAIN_START:]
+assert MAIN_BODY.count("g_mod_controller_mode_override[i])") == 2, (
     "both launcher-exit resolutions must be passed the live override; found "
-    f"{MAIN.count('g_mod_controller_mode_override[i])')} such argument(s)"
+    f"{MAIN_BODY.count('g_mod_controller_mode_override[i])')} such argument(s)"
 )
 # The direct apply block reads it twice (the >= 0 test and the assignment).
-assert MAIN.count("g_mod_controller_mode_override[i]") == 4, (
+assert MAIN_BODY.count("g_mod_controller_mode_override[i]") == 4, (
     "expected 4 g_mod_controller_mode_override[i] reads: the apply block's "
     "guard + assignment, plus one argument per launcher-exit resolution; "
-    f"found {MAIN.count('g_mod_controller_mode_override[i]')}"
+    f"found {MAIN_BODY.count('g_mod_controller_mode_override[i]')}"
+)
+assert MENU.count("g_mod_controller_mode_override[i])") == 1, (
+    "the in-game menu's resolution must be passed the live override"
 )
 
 print("launcher pad-mode wiring guard passed")
