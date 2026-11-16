@@ -2176,6 +2176,12 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
     target_include_directories(cdrom_resident_sector_test PRIVATE include src)
     add_test(NAME cdrom_resident_sector_test COMMAND cdrom_resident_sector_test)
 
+    # Read streams that end before their first sector are counted for the
+    # run report (docs/RUN_REPORT_CDROM.md).
+    add_executable(cdrom_silent_read_counter_test tests/test_cdrom_silent_read_counter.c)
+    target_include_directories(cdrom_silent_read_counter_test PRIVATE include src)
+    add_test(NAME cdrom_silent_read_counter_test COMMAND cdrom_silent_read_counter_test)
+
     add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
     target_include_directories(cdrom_lid_state_test PRIVATE src)
     add_test(NAME cdrom_lid_state_test COMMAND cdrom_lid_state_test)
