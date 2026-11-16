@@ -2300,7 +2300,8 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
     endif()
     foreach(_scenario IN ITEMS
             spin-ends-only spin-wait-ends spin-real spin-video
-            spin-pause-restarts)
+            spin-pause-restarts budget-after-startup dump-at-frame
+            dump-at-frame-bad-value)
         file(MAKE_DIRECTORY
             ${CMAKE_CURRENT_BINARY_DIR}/freeze_heartbeat_wedge_scratch/${_scenario})
         add_test(NAME freeze_heartbeat_wedge_${_scenario}
