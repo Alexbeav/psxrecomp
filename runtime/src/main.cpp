@@ -434,6 +434,9 @@ struct PlayerInput {
     bool    rumble_known = false;
     bool    rumble_warned = false;
     bool    steering_wheel = false;
+    /* Keyboard seat temporarily driving an adopted pad (kind 1 -> 2);
+     * reverts to keyboard when that pad goes away. Never persisted. */
+    bool    adopted_pad = false;
     /* EXPERIMENTAL JogCon force feedback on this pad's SDL haptics
      * ([controller] experimental_jogcon_force_feedback; psx_jogcon_ffb.h). */
     PsxJogconHaptic    ffb_haptic = {nullptr, -1, -1};
@@ -5775,7 +5778,7 @@ static int device_claimed_by_other(int self_slot, SDL_JoystickID inst) {
 static void open_player(PlayerInput& p, int self_slot) {
     if (p.kind != 2 || p.handle) return;
 
-    int chosen = -1, fallback = -1;
+    int chosen = -1, fallback = -1, valve_fallback = -1;
     const int joysticks = SDL_NumJoysticks();
     for (int i = 0; i < joysticks; i++) {
         if (!SDL_IsGameController(i)) continue;
@@ -5805,8 +5808,20 @@ static void open_player(PlayerInput& p, int self_slot) {
             break;
         }
         if (chosen < 0 && p.guid[0] && std::strcmp(buf, p.guid) == 0) chosen = i;
-        if (fallback < 0) fallback = i;
+        /* A physical Valve pad (Steam Controller, Deck) read through HIDAPI
+         * while the Steam client owns it delivers no input; Steam Input's
+         * virtual pad (or any other pad) carries the player's input then.
+         * Take the physical one only when nothing else is connected. */
+        /* SDL GUIDs carry the USB vendor/product little-endian at 4 and 8. */
+        const unsigned vid = (unsigned)g.data[4] | ((unsigned)g.data[5] << 8);
+        const unsigned pid = (unsigned)g.data[8] | ((unsigned)g.data[9] << 8);
+        if (psx_controller_is_physical_valve_pad(vid, pid)) {
+            if (valve_fallback < 0) valve_fallback = i;
+        } else if (fallback < 0) {
+            fallback = i;
+        }
     }
+    if (fallback < 0) fallback = valve_fallback;
     if (chosen < 0) chosen = fallback;
     if (chosen < 0) return;
 
@@ -6042,7 +6057,32 @@ static void refresh_player_devices(void) {
                 p.kind == 2, p.handle != nullptr, attached,
                 p.guid, active_guid))
             close_player(p);
+        if (p.adopted_pad && !p.handle) {
+            p.kind = 1;              /* adopted pad unplugged: back to keyboard */
+            p.adopted_pad = false;
+            p.guid[0] = '\0';
+        }
         if (p.kind == 2) open_player(p, s);
+        {
+            bool other_pad = false;
+            for (int o = 0; o < PSX_MAX_PLAYERS; ++o)
+                if (o != s && g_players[o].kind == 2) other_pad = true;
+            if (psx_keyboard_seat_should_adopt_pad(s, p.kind, other_pad,
+                                                   netplay != 0)) {
+                p.kind = 2;
+                p.guid[0] = '\0';
+                p.preferred_instance = -1;
+                open_player(p, s);
+                if (p.handle) {
+                    p.adopted_pad = true;
+                    std::fprintf(stdout, "psxrecomp runtime: keyboard seat %d "
+                                 "adopted controller (instance %d); keyboard "
+                                 "binds stay live\n", s + 1, (int)p.instance);
+                } else {
+                    p.kind = 1;
+                }
+            }
+        }
         if (netplay || psx_selfcheck_input_locked()) continue;
         const bool automatic = live_pad_mode(s);
         const int device = p.steering_wheel ? SIO_PAD_JOGCON : SIO_PAD_DUALSHOCK;
@@ -6067,6 +6107,7 @@ static void refresh_player_devices(void) {
 static void set_player_device(PlayerInput& p, const std::string& dev, int mode) {
     p.mode = mode;
     p.guid[0] = '\0';
+    p.adopted_pad = false;
     std::string d = lower_copy(trim_copy(dev));
     if (d.empty() || d == "none") { p.kind = 0; }
     else if (d == "keyboard")     { p.kind = 1; }
@@ -6339,6 +6380,49 @@ struct PadSources {
     bool all_pads;  /* every connected controller (dev-any-input)              */
 };
 
+/* Steam Desktop Configuration echo guard. Started outside Steam, a physical
+ * Valve pad (Steam Controller, Deck) reaches SDL through HIDAPI as a normal
+ * gamepad, while the Steam client keeps applying its Desktop layout to the
+ * same press: B = Escape (menu), Back = Tab (turbo), A = Enter (Start),
+ * D-pad = arrows, triggers = mouse clicks. While P1's own Valve pad has input
+ * held (plus a short trailing window for the key-up), keyboard and mouse
+ * input is that echo and is dropped. A keyboard-only player, any other pad
+ * and Steam Input's virtual pad (a Steam launch) are unaffected. */
+static uint64_t g_valve_echo_last_held_ms = 0;
+static constexpr uint64_t kValveEchoWindowMs = 150;
+static bool p1_valve_pad_input_held(SDL_GameController* h, int deadzone) {
+    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; ++b)
+        if (SDL_GameControllerGetButton(h, (SDL_GameControllerButton)b))
+            return true;
+    for (int a = 0; a < SDL_CONTROLLER_AXIS_MAX; ++a) {
+        const int v = SDL_GameControllerGetAxis(h, (SDL_GameControllerAxis)a);
+        const bool trig = a == SDL_CONTROLLER_AXIS_TRIGGERLEFT ||
+                          a == SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+        if (trig ? v > 4096 : (v > deadzone || v < -deadzone)) return true;
+    }
+    return false;
+}
+static bool steam_desktop_echo_guard(void) {
+    const PlayerInput& p = g_players[0];
+    const bool valve = p.kind == 2 && p.handle &&
+        psx_controller_is_physical_valve_pad(
+            SDL_GameControllerGetVendor(p.handle),
+            SDL_GameControllerGetProduct(p.handle));
+    const uint64_t now = (uint64_t)SDL_GetTicks();
+    const bool held = valve && p1_valve_pad_input_held(p.handle, p.deadzone);
+    if (held) g_valve_echo_last_held_ms = now ? now : 1;
+    return psx_steam_desktop_echo_active(valve, held, now,
+                                         g_valve_echo_last_held_ms,
+                                         kValveEchoWindowMs);
+}
+/* Event-level half of the guard: key and mouse-button presses that Steam
+ * synthesizes never reach the in-game menu (Escape) or the overlay. Releases
+ * pass so no consumer is left with a stuck key. */
+static bool steam_desktop_echo_event(const SDL_Event& ev) {
+    if (ev.type != SDL_KEYDOWN && ev.type != SDL_MOUSEBUTTONDOWN) return false;
+    return steam_desktop_echo_guard();
+}
+
 static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
     PadSources s;
     s.device   = (p.kind != 0);
@@ -6360,7 +6444,8 @@ static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
      * consumes the binds through pad_buttons_for/pad_sticks_for, and applying
      * them twice is idempotent. */
     (void)dev_here;
-    s.keybinds = true;
+    /* ...except Steam's desktop-layout echo of P1's own Valve pad. */
+    s.keybinds = !(&p == &g_players[0] && steam_desktop_echo_guard());
     s.all_pads = dev_here;
     return s;
 }
@@ -7615,6 +7700,7 @@ static void netplay_barrier_admit(int override) {
                 /* The in-game overlay sees events first here too: the netplay
                  * admit wait polls every frame, and an Esc meant for the menu
                  * must not end the match. */
+                if (steam_desktop_echo_event(ev)) continue;
                 if (psx_host_input_sink_dispatch(&ev)) continue;
                 if (ev.type == SDL_QUIT) {
                     netplay_soft_exit("sdl_window_close");
@@ -9011,6 +9097,7 @@ static void rewind_host_pause_loop(void) {
 static void host_pause_service(void);  /* in-game overlay glue (P6), below */
 static bool host_pause_event(const SDL_Event& ev);  /* P3: input sink */
 static bool host_pause_event(const SDL_Event& ev) {
+    if (steam_desktop_echo_event(ev)) return true;
     return psx_host_input_sink_dispatch(&ev) != 0;
 }
 
@@ -9314,6 +9401,7 @@ static void toggle_live_pad_mode(int s) {
 static bool drain_host_events() {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        if (steam_desktop_echo_event(ev)) continue;
         if (psx_local_mouse_event(ev)) continue;
         /* In-game overlay provider sees events first (host_overlay.h P3). */
         if (psx_host_input_sink_dispatch(&ev)) continue;
@@ -9961,7 +10049,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         uint8_t host_keys[SDL_NUM_SCANCODES];
         psx_keybinds_host_keys(keys, host_keys);
         const bool kb_turbo = host_hotkey_input_focused() &&
-            host_keymap_down(HOST_KEYMAP_TURBO, host_keys, (int)SDL_GetModState());
+            host_keymap_down(HOST_KEYMAP_TURBO, host_keys, (int)SDL_GetModState()) &&
+            !steam_desktop_echo_guard();
         manual_turbo_requested = g_manual_turbo_latched || (!g_fast_forward_toggle_mode &&
             (kb_turbo || hotkey_shortcut_down(PSX_ASSIST_BIND_FAST_FORWARD,
                                              g_hotkey_pad_fast_forward)));
@@ -17670,7 +17759,9 @@ void mh_launcher_settings_get(RecompLauncherCSettings* out) {
     ls.jogcon_force_feedback = psx_jogcon_ffb_player_enabled();
 #endif
     for (int i = 0; i < PSX_MAX_PLAYERS && i < RECOMP_LAUNCHER_MAX_PLAYERS; ++i) {
-        ls.player_src[i] = g_players[i].kind;
+        /* An adopted pad is not the seat's configured device: the launcher
+         * keeps showing (and saving) Keyboard. */
+        ls.player_src[i] = g_players[i].adopted_pad ? 1 : g_players[i].kind;
         ls.pad_mode[i] = g_players[i].mode;
         ls.deadzone[i] = (g_players[i].deadzone * 100 + 16383) / 32767;
         std::snprintf(ls.player_gamepad_guid[i], sizeof ls.player_gamepad_guid[i],
@@ -21627,6 +21718,8 @@ session_reboot:
      * -> zero input (PS5 DualSense works regardless: its HIDAPI driver is on by
      * default). Enable the HIDAPI Xbox driver so HIDAPI handles Xbox pads too. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "1");
+    /* Direct launches also need SDL's opt-in Steam Controller driver. */
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
     if (!SDL_WasInit(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER)) {
     /* Per-monitor DPI awareness, BEFORE any SDL_Init.
      *
@@ -22663,8 +22756,7 @@ soft_return_lobby:
         ls.widescreen_hud = ls.widescreen;
         ls.enable_audio = 1;
         ls.audio_freq = g_audio_freq;  /* fixed; the Sample rate row is hidden */
-        ls.volume = host_volume_get();
-        ls.window_width = g_video_win_w;
+            ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
         if (ls.renderer < 0 || ls.renderer > (vulkan_offered ? 2 : 1))
             ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
