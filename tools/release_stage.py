@@ -894,6 +894,14 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     for h in os.listdir(recomp_include):
         if h.endswith(('.h', '.c.inc')):
             shutil.copy2(os.path.join(recomp_include, h), tool_inc)
+    # The runtime build writes the codegen hash header into its own
+    # psxrecomp_codegen_include folder beside the product, not into the source
+    # include tree. Take it from there when the source tree has none, so the
+    # check below sees the header the build produced.
+    built_hash = os.path.join(stage, 'psxrecomp_codegen_include', 'overlay_codegen_hash.h')
+    if (not os.path.isfile(os.path.join(tool_inc, 'overlay_codegen_hash.h'))
+            and os.path.isfile(built_hash)):
+        shutil.copy2(built_hash, tool_inc)
     recomp_root = os.path.abspath(os.path.join(recomp_include, '..', '..'))
     bios_src = os.path.join(recomp_root, 'bios')
     bios_dest = _mkdirs(os.path.join(toolchain, 'bios'))

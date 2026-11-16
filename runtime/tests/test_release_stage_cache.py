@@ -454,6 +454,19 @@ class ToolchainStagingTest(unittest.TestCase):
         self.assertIn('overlay_codegen_hash.h', msg)
         self.assertIn('runtime BUILD', msg)
 
+    def test_takes_the_codegen_hash_header_from_the_build_folder(self):
+        """The runtime build writes the header into psxrecomp_codegen_include
+        beside the product, not into the source include tree."""
+        os.remove(os.path.join(self.include, 'overlay_codegen_hash.h'))
+        touch(os.path.join(self.stage, 'psxrecomp_codegen_include',
+                           'overlay_codegen_hash.h'),
+              '#define PSX_OVERLAY_CODEGEN_HASH 0x1234abcdu\n')
+        rs.stage_toolchain(self.stage, self.recomp, self.tools, self.include,
+                           self.cache, platform_tag='win',
+                           mingw_bin=self.mingw, log=lambda *_a: None)
+        staged = os.path.join(self.stage, 'overlay_toolchain', 'include')
+        self.assertEqual(rs.co.codegen_hash(staged), 0x1234abcd)
+
 
 class TinyccNoticeTest(unittest.TestCase):
     """The bundled TinyCC (LGPL-2.1) ships with its notice (issue #474)."""
