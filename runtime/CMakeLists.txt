@@ -679,6 +679,13 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
                 --compiler "${CMAKE_C_COMPILER}"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/depth24-upload-span")
         endif()
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME depth24_transition_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_transition.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/.."
+                --compiler "${CMAKE_C_COMPILER}"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/depth24-transition")
+        endif()
     endif()
     if(MINGW AND PSX_GL_READBACK_SDL_ROOT
             AND EXISTS "${PSX_GL_READBACK_COMPILER_BIN}/gcc.exe"
