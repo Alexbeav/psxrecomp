@@ -489,6 +489,22 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
 
+    /* A BREAK that entered the guest's own exception vector ran the guest's
+     * handler where the run used to end. The count, and the PC and code of
+     * the first one, show that it happened. */
+    {
+        extern void psx_break_guest_vector_stats(uint32_t out[3]);
+        uint32_t bg[3] = {0};
+        psx_break_guest_vector_stats(bg);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"break_guest_vector\": {\n"
+            "    \"count\": %u,\n"
+            "    \"first_pc\": \"0x%08X\",\n"
+            "    \"first_code\": \"0x%05X\"\n"
+            "  },\n",
+            bg[0], bg[1], bg[2]);
+    }
+
     /* What the overlay compile runs of this start did. A unit the
      * compiler rejects runs interpreted and is not "degraded"; until this
      * object existed the report could not show it, and a product has no debug
