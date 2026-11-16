@@ -109,6 +109,13 @@ void check_segment(const char* name, uint32_t segment,
     const uint32_t base = segment | kEntryPhys;
     std::vector<uint32_t> want;
     for (uint32_t off : want_offsets) want.push_back(base + off);
+    std::vector<uint32_t> boundaries;
+    const std::string needle = "psx_source_bus_boundary(cpu, 0x";
+    for(size_t pos=code.find(needle);pos!=std::string::npos;pos=code.find(needle,pos+1))
+        boundaries.push_back(static_cast<uint32_t>(std::strtoul(code.c_str()+pos+needle.size(),nullptr,16)));
+    std::vector<uint32_t> all;
+    for(uint32_t i=0;i<kCount;++i)all.push_back(base+i*4u);
+    check(boundaries==all,std::string(name)+" optional source CPU boundaries must include every instruction and delay slot");
     const std::vector<uint32_t> got = fetch_tags(code);
     const char* native_charge = segment == 0xA0000000u
         ? "psx_native_span_charge(17u)" : "psx_native_span_charge(5u)";

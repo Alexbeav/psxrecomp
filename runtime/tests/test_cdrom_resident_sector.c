@@ -10,9 +10,12 @@ static void setup_resident(uint8_t mode) {
     setup();
     mode_reg = mode;
     reading = 0;
+    uint8_t admitted_status = stat_reg | CDSTAT_MOTOR;
     exec_command(0x06);
     CHECK(reading && irq_flag == CDIRQ_ACK);
-    CHECK(cdrom_read(0x1F801801) == stat_reg);
+    CHECK(cdrom_read(0x1F801801) == admitted_status);
+    CHECK((stat_reg & (CDSTAT_MOTOR | CDSTAT_SEEK | CDSTAT_READ)) ==
+          (CDSTAT_MOTOR | (read_delay > initial_read_delay_cycles() ? CDSTAT_SEEK : CDSTAT_READ)));
     ack();
     memset(resident_data, 100, sizeof resident_data);
 }

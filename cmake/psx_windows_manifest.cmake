@@ -106,6 +106,32 @@ function(psxrecomp_windows_manifest target)
         # quoted pipe-separated BIOS names through its shell preprocessor.
         add_library(${target}_manifest OBJECT "${_rc}")
         target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_manifest>)
+        # Some MinGW GCC distributions append default-manifest.o after the
+        # explicit resource, replacing its UTF-8 policy. Keep every other
+        # endfile rule intact and suppress only that fallback for this target.
+        foreach(_lang C CXX)
+            if("${CMAKE_${_lang}_COMPILER_ID}" STREQUAL "GNU")
+                execute_process(COMMAND "${CMAKE_${_lang}_COMPILER}" -dumpspecs
+                    OUTPUT_VARIABLE _specs RESULT_VARIABLE _spec_status)
+                if(NOT _spec_status EQUAL 0)
+                    message(FATAL_ERROR "Could not query GNU manifest fallback rules")
+                endif()
+                string(REPLACE "\r\n" "\n" _specs "${_specs}")
+                string(REGEX MATCH "(^|\n)\\*endfile:\n([^\n]+)" _end_match "${_specs}")
+                if(_end_match)
+                    set(_endfile "${CMAKE_MATCH_2}")
+                    string(REPLACE "%{!shared:%:if-exists(default-manifest.o%s)}" ""
+                        _custom_endfile "${_endfile}")
+                    if(NOT _custom_endfile STREQUAL _endfile)
+                        set(_spec_file "${CMAKE_CURRENT_BINARY_DIR}/${target}_${_lang}_manifest.specs")
+                        file(CONFIGURE OUTPUT "${_spec_file}" CONTENT
+                            "*endfile:\n@_custom_endfile@\n\n" @ONLY)
+                        target_link_options(${target} PRIVATE
+                            "$<$<LINK_LANGUAGE:${_lang}>:-specs=${_spec_file}>")
+                    endif()
+                endif()
+            endif()
+        endforeach()
         set_property(SOURCE "${_rc}" APPEND PROPERTY
             OBJECT_DEPENDS "${PSXRECOMP_WINDOWS_MANIFEST}")
     endif()

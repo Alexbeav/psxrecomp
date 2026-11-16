@@ -213,16 +213,28 @@ endif()
 set(PSXRECOMP_CODEGEN_HASH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/codegen_hash_sources.cmake)
 set(_baked_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_baked_codegen_hash.h)
+# Build-owned, never written into the source tree: runtime.cmake generates the
+# same header into its own build dir, and both derive the hash from the shared
+# PSXRECOMP_CODEGEN_HASH_SRCS list, so the two copies cannot drift.
+set(_runtime_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/runtime/include/overlay_codegen_hash.h)
 add_custom_command(
-    OUTPUT  ${_baked_hash_hdr}
+    OUTPUT  ${_baked_hash_hdr} ${_runtime_hash_hdr}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_CURRENT_BINARY_DIR}/runtime/include
     COMMAND ${CMAKE_COMMAND} -DOUT=${_baked_hash_hdr}
+            "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
+    COMMAND ${CMAKE_COMMAND} -DOUT=${_runtime_hash_hdr}
             "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     DEPENDS ${PSXRECOMP_CODEGEN_HASH_SRCS}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
-    COMMENT "Hashing codegen sources -> psxrecomp_baked_codegen_hash.h"
+    COMMENT "Hashing codegen sources -> baked and runtime hash headers"
     VERBATIM)
-add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr})
+# Overlay generation is usable immediately after a tools-only build, before
+# configuring any runtime. Both consumers must have the same cache identity.
+add_custom_target(psxrecomp_baked_codegen_hash
+    DEPENDS ${_baked_hash_hdr} ${_runtime_hash_hdr})
 add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 # Force main_psx.cpp to recompile whenever the hash header content changes
 # (same OBJECT_DEPENDS hardening as runtime.cmake — __has_include depfile gap).
@@ -393,6 +405,264 @@ if(BUILD_TESTING)
     target_include_directories(host_path_test PRIVATE include)
     add_test(NAME host_path_test COMMAND host_path_test)
 
+    # PSXRTI3 route format and the record -> release replay round trip (T101).
+    # BIOS-free, so they also run here where CI configures this tree.
+    add_executable(input_route_v3_file_test ../runtime/tests/test_input_route_v3_file.c)
+    target_include_directories(input_route_v3_file_test PRIVATE ../runtime/include)
+    add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME public_commit_guard COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_public_commits.py)
+        foreach(_product IN ITEMS diagnostic release)
+            set(_target input_route_session_${_product})
+            add_executable(${_target} ../runtime/tests/test_input_route_session.c
+                ../runtime/src/input_route_session.c ../runtime/src/disc_digest_cache.c
+            ../runtime/src/psx_sha256.c)
+            target_include_directories(${_target} PRIVATE ../runtime/include)
+            target_compile_definitions(${_target} PRIVATE
+                "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
+                $<$<STREQUAL:${_product},release>:PSX_NO_DEBUG_TOOLS=1>)
+        endforeach()
+        # PS1B-404: the release replay drives the route observer for pictures.
+        target_sources(input_route_session_release PRIVATE
+            ../runtime/src/input_route_observer.c)
+        add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_session.py
+            $<TARGET_FILE:input_route_session_diagnostic>
+            $<TARGET_FILE:input_route_session_release>)
+    endif()
+
+    # The source GPU/SPU headers must stay valid C++ (main.cpp includes them).
+    # Compiling succeeds or the build fails; the test only runs the result.
+    foreach(_std IN ITEMS 17 20)
+        add_executable(source_gpu_headers_cxx${_std}_test
+            ../runtime/tests/test_source_gpu_headers_cxx.cpp)
+        target_include_directories(source_gpu_headers_cxx${_std}_test PRIVATE ../runtime/include)
+        set_target_properties(source_gpu_headers_cxx${_std}_test PROPERTIES
+            CXX_STANDARD ${_std} CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        # GCC rejects C-only constructs outright; Clang accepts them as extensions.
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(source_gpu_headers_cxx${_std}_test PRIVATE -Werror=c11-extensions)
+        endif()
+        add_test(NAME source_gpu_headers_cxx${_std}_test COMMAND source_gpu_headers_cxx${_std}_test)
+    endforeach()
+
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        foreach(_mode IN ITEMS O0 O2)
+            add_executable(tas_cdrom_subq_position_${_mode}
+                ../runtime/tests/test_cdrom_subq_position.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_cdrom_subq_position_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_cdrom_subq_position_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_cdrom_subq_position_${_mode} PRIVATE m)
+            add_test(NAME tas_cdrom_subq_position_${_mode} COMMAND tas_cdrom_subq_position_${_mode})
+            add_executable(tas_cdrom_paused_subq_cycle_${_mode}
+                ../runtime/tests/test_cdrom_paused_subq_cycle.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_cdrom_paused_subq_cycle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_cdrom_paused_subq_cycle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_cdrom_paused_subq_cycle_${_mode} PRIVATE m)
+            add_test(NAME tas_cdrom_paused_subq_cycle_${_mode} COMMAND tas_cdrom_paused_subq_cycle_${_mode})
+            if(PSXRECOMP_ENABLE_CHD)
+                foreach(_disc_test IN ITEMS source_subq sbi)
+                    if(_disc_test STREQUAL "source_subq")
+                        set(_disc_source ../runtime/tests/test_iso_reader_source_subq.cpp)
+                    else()
+                        set(_disc_source ../runtime/tests/test_iso_reader_sbi.cpp)
+                    endif()
+                    add_executable(tas_iso_${_disc_test}_${_mode}
+                        ${_disc_source}
+                        ../runtime/src/iso_reader.cpp ../runtime/src/cue_sheet.cpp)
+                    target_include_directories(tas_iso_${_disc_test}_${_mode} PRIVATE ../runtime/include include)
+                    target_compile_options(tas_iso_${_disc_test}_${_mode} PRIVATE -${_mode} -UNDEBUG)
+                    target_link_libraries(tas_iso_${_disc_test}_${_mode} PRIVATE chdr-static)
+                endforeach()
+                add_test(NAME tas_iso_source_subq_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_iso_reader_source_subq_contracts.py
+                    $<TARGET_FILE:tas_iso_source_subq_${_mode}>)
+                file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sbi-${_mode})
+                add_test(NAME tas_iso_sbi_${_mode} COMMAND tas_iso_sbi_${_mode})
+                set_tests_properties(tas_iso_sbi_${_mode} PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sbi-${_mode})
+            endif()
+            add_executable(tas_gpu_sprite_blend_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_blend.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_sprite_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_sprite_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
+            add_executable(tas_gpu_sprite_fixed_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_fixed.c)
+            target_include_directories(tas_gpu_sprite_fixed_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_fixed_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_sprite_fixed_${_mode} COMMAND tas_gpu_sprite_fixed_${_mode})
+            add_executable(tas_gpu_textured_triangle_${_mode}
+                ../runtime/tests/test_source_gpu_textured_triangle.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_textured_triangle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_textured_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_textured_triangle_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_textured_triangle_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_textured_triangle_contracts.py
+                $<TARGET_FILE:tas_gpu_textured_triangle_${_mode}>)
+            add_executable(tas_gpu_polygon_order_${_mode}
+                ../runtime/tests/test_source_gpu_polygon_order.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_polygon_order_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_polygon_order_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_polygon_order_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_polygon_order_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_polygon_order_contracts.py
+                $<TARGET_FILE:tas_gpu_polygon_order_${_mode}>)
+            add_executable(tas_gpu_shaded_texture_family_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_texture_family.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_texture_family_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_texture_family_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_texture_family_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_texture_family_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_texture_family_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_texture_family_${_mode}>)
+            add_executable(tas_gpu_shaded_triangle_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_triangle.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_triangle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_triangle_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_triangle_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_triangle_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_triangle_${_mode}>)
+            add_executable(tas_gpu_shaded_quad_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_quad.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_quad_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_quad_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_quad_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_quad_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_quad_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_quad_${_mode}>)
+            add_executable(tas_gpu_polygon_wrap_${_mode}
+                ../runtime/tests/test_source_gpu_polygon_wrap.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_polygon_wrap_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_polygon_wrap_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_polygon_wrap_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_polygon_wrap_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_polygon_wrap_contracts.py
+                $<TARGET_FILE:tas_gpu_polygon_wrap_${_mode}>)
+            # Disabled (PS1B-167): the harness expects the pre-T172 out-of-range reject;
+            # hardware truncates vertex+offset to signed 11-bit (nocash GP0(E5h) note).
+            # Rewrite harness + fixtures to the documented rule: follow-up PS1B-171.
+            set_tests_properties(tas_gpu_polygon_wrap_${_mode} PROPERTIES DISABLED TRUE)
+            add_executable(tas_gpu_flat_blend_${_mode}
+                ../runtime/tests/test_source_gpu_flat_blend.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_flat_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_flat_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_flat_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_flat_blend_${_mode} COMMAND tas_gpu_flat_blend_${_mode})
+            # PS1B-180: the SCPH550x 480i logo quad draws with field skipping.
+            add_executable(tas_gpu_interlace_draw_${_mode}
+                ../runtime/tests/test_source_gpu_interlace_draw.c)
+            target_include_directories(tas_gpu_interlace_draw_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_interlace_draw_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_interlace_draw_${_mode} COMMAND tas_gpu_interlace_draw_${_mode})
+            # PS1B-180 (c)/(d): GPUSTAT.28 is "write FIFO empty" during A0h/C0h.
+            add_executable(tas_gpu_ready_transfer_${_mode}
+                ../runtime/tests/test_source_gpu_ready_transfer.c)
+            target_include_directories(tas_gpu_ready_transfer_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_ready_transfer_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_ready_transfer_${_mode} COMMAND tas_gpu_ready_transfer_${_mode})
+            # PS1B-182: oracle GPU logs replayed through the timing table. Skips
+            # (77) when the logs (lab share, not committed) are absent.
+            add_executable(tas_gpu_oracle_replay_${_mode}
+                ../runtime/tests/test_source_gpu_oracle_replay.c)
+            target_include_directories(tas_gpu_oracle_replay_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_oracle_replay_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_oracle_replay_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
+                $<TARGET_FILE:tas_gpu_oracle_replay_${_mode}>)
+            # Both oracle drivers outgrew CTest's 1500 s default once the log set
+            # gained megamanx4-route03. Measured on Eagle 2026-09-26: replay O2
+            # 1477 s, timing O2 2736 s under concurrent builds. 5400 s covers O0
+            # and a loaded host.
+            set_tests_properties(tas_gpu_oracle_replay_${_mode} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 5400)
+            # PS1B-182: scheduling (when queued commands start), replayed from the
+            # same share logs; skips (77) without them.
+            add_executable(tas_gpu_oracle_timing_${_mode}
+                ../runtime/tests/test_source_gpu_oracle_timing.c)
+            target_include_directories(tas_gpu_oracle_timing_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_oracle_timing_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_oracle_timing_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
+                $<TARGET_FILE:tas_gpu_oracle_timing_${_mode}>)
+            set_tests_properties(tas_gpu_oracle_timing_${_mode} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 5400)
+            add_executable(tas_gpu_service_start_${_mode}
+                ../runtime/tests/test_source_gpu_service_start.c)
+            target_include_directories(tas_gpu_service_start_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_service_start_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_service_start_${_mode} COMMAND tas_gpu_service_start_${_mode})
+            # PS1B-182: authored oracle micro-fixtures (no retail data), committed.
+            add_executable(tas_gpu_oracle_fixtures_${_mode}
+                ../runtime/tests/test_source_gpu_oracle_fixtures.c)
+            target_include_directories(tas_gpu_oracle_fixtures_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_oracle_fixtures_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_oracle_fixtures_${_mode} COMMAND tas_gpu_oracle_fixtures_${_mode}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/source_gpu_oracle_micro_fixtures.tsv
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/source_gpu_oracle_micro_fixtures_gp1.tsv)
+            add_executable(tas_gpu_line_${_mode}
+                ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_line_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_line_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_line_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_line_${_mode} COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
+                $<TARGET_FILE:tas_gpu_line_${_mode}>)
+            # PS1B-423: the rows of the source-profile raster spec (triangle, line,
+            # copy, sprite) against a model in other terms; whole VRAM after every draw.
+            add_executable(tas_gpu_raster_rows_${_mode}
+                ../runtime/tests/test_source_gpu_raster_rows.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/tests/source_gpu_raster_stub.c ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_raster_rows_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_raster_rows_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_raster_rows_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_raster_rows_${_mode} COMMAND tas_gpu_raster_rows_${_mode})
+        endforeach()
+    endif()
+
+    # TAS checkpoint state I/O and the v7 identity dimensions. Both drivers compile their own
+    # C at O0 and O2 with -Werror, so they take no CMake target.
+    if(Python3_EXECUTABLE AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME tas_stateio_manifest COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_tas_stateio.py
+            --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_stateio_identity COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_stateio_identity.py
+            --cc ${CMAKE_C_COMPILER})
+    endif()
+
+    add_executable(mdec_source_fifo_rows_test ../runtime/tests/test_mdec_source_fifo_rows.c)
+    target_include_directories(mdec_source_fifo_rows_test PRIVATE ../runtime/include)
+    add_test(NAME mdec_source_fifo_rows_test COMMAND mdec_source_fifo_rows_test)
+
+    add_executable(source_cpu_block_bound_test
+        ../runtime/tests/test_source_cpu_block_bound.c
+        ../runtime/src/psx_icache.c)
+    target_include_directories(source_cpu_block_bound_test PRIVATE ../runtime/include)
+    target_compile_definitions(source_cpu_block_bound_test PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+    if(MSVC)
+        target_compile_options(source_cpu_block_bound_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(source_cpu_block_bound_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME source_cpu_block_bound_test COMMAND source_cpu_block_bound_test)
     add_test(NAME emitter_directive_line_test
              COMMAND emitter_directive_line_test)
     add_executable(guest_tty_test
@@ -440,6 +710,14 @@ if(BUILD_TESTING)
     )
     target_include_directories(cli_boot_path_test PRIVATE src)
     add_test(NAME cli_boot_path_test COMMAND cli_boot_path_test)
+
+    add_executable(ps1_exe_padding_test
+        tests/ps1_exe_padding_test.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(ps1_exe_padding_test PRIVATE src include)
+    target_link_libraries(ps1_exe_padding_test PRIVATE fmt)
+    add_test(NAME ps1_exe_padding_test COMMAND ps1_exe_padding_test)
 
     add_executable(recompiler_patch_test
         tests/recompiler_patch_test.cpp
@@ -657,6 +935,8 @@ if(BUILD_TESTING)
     if(NOT MSVC)
         add_executable(ws_cull_edge_interp_test
             ../runtime/tests/test_ws_cull_edge_interp.c
+            ../runtime/tests/interpreter_opcode_fixture_support.c
+            ../runtime/src/psx_icache.c
             ../runtime/src/ws_aspect_cone_math.c)
         target_include_directories(ws_cull_edge_interp_test PRIVATE
             ../runtime/include
@@ -684,6 +964,8 @@ if(BUILD_TESTING)
     if(NOT MSVC)
         add_executable(draw_distance_interp_test
             ../runtime/tests/test_draw_distance_interp.c
+            ../runtime/tests/interpreter_opcode_fixture_support.c
+            ../runtime/src/psx_icache.c
             ../runtime/src/ws_aspect_cone_math.c)
         target_include_directories(draw_distance_interp_test PRIVATE
             ../runtime/include
@@ -704,6 +986,9 @@ if(BUILD_TESTING)
                  COMMAND draw_distance_interp_test
                          ${CMAKE_CURRENT_BINARY_DIR}/draw_distance_interp_stderr.txt)
     endif()
+
+    # interp_load_delay_test (PR load-delay model) is not registered: pin J
+    # keeps pin I's interpreter load-delay model (PS1B-685).
 
     # [[mod_immediate.sites]] runtime store, selectors and word substitution
     # (mod_immediate.c). The interpreter call site is pinned by
@@ -745,6 +1030,7 @@ if(BUILD_TESTING)
     target_link_libraries(uncached_fetch_codegen_test PRIVATE fmt rabbitizer)
     add_test(NAME uncached_fetch_codegen_test
              COMMAND uncached_fetch_codegen_test)
+
 
     # Every guest-visible PC the game/overlay emitter and the BIOS translator
     # bake goes through runtime_pc() (docs/SEGMENT_AWARE_CODE.md §5.2): links,
@@ -854,6 +1140,12 @@ if(BUILD_TESTING)
     )
     target_link_libraries(rewind_settings_test PRIVATE fmt)
     add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+    add_executable(set_config_loader_test
+        tests/set_config_loader_test.cpp src/config_loader.cpp src/ps1_exe_parser.cpp)
+    target_include_directories(set_config_loader_test PRIVATE
+        include src lib/fmt/include lib/toml11)
+    target_link_libraries(set_config_loader_test PRIVATE fmt)
+    add_test(NAME set_config_loader_test COMMAND set_config_loader_test)
     add_executable(jogcon_ffb_settings_test
         tests/jogcon_ffb_settings_test.cpp
         src/config_loader.cpp
@@ -874,6 +1166,16 @@ if(BUILD_TESTING)
         include src lib/fmt/include lib/toml11)
     target_link_libraries(select_shortcuts_config_test PRIVATE fmt)
     add_test(NAME select_shortcuts_config_test COMMAND select_shortcuts_config_test)
+    add_executable(negcon_settings_test tests/negcon_settings_test.cpp src/config_loader.cpp src/ps1_exe_parser.cpp)
+    target_include_directories(negcon_settings_test PRIVATE include src lib/fmt/include lib/toml11)
+    target_link_libraries(negcon_settings_test PRIVATE fmt)
+    add_test(NAME negcon_settings_test COMMAND negcon_settings_test)
+    add_executable(fmv_crop_config_test
+        tests/fmv_crop_config_test.cpp src/config_loader.cpp src/ps1_exe_parser.cpp)
+    target_include_directories(fmv_crop_config_test PRIVATE
+        include src lib/fmt/include lib/toml11)
+    target_link_libraries(fmv_crop_config_test PRIVATE fmt)
+    add_test(NAME fmv_crop_config_test COMMAND fmv_crop_config_test)
     add_executable(required_disc_config_test
         tests/required_disc_config_test.cpp src/config_loader.cpp src/ps1_exe_parser.cpp)
     target_include_directories(required_disc_config_test PRIVATE
@@ -896,6 +1198,59 @@ if(BUILD_TESTING)
     target_link_libraries(portable_settings_paths_test PRIVATE fmt)
     add_test(NAME portable_settings_paths_test COMMAND portable_settings_paths_test)
 
+    add_executable(boot_keys_settings_test
+        tests/boot_keys_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(boot_keys_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(boot_keys_settings_test PRIVATE fmt)
+    add_test(NAME boot_keys_settings_test COMMAND boot_keys_settings_test)
+
+    # The TAS runner writes a settings.toml of its own; its two boot keys must
+    # survive the loader (PS1B-394). The TAS tooling is stripped from shipped
+    # setup packages, so the probe and the test exist only where it does.
+    if(Python3_Interpreter_FOUND AND EXISTS
+       "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_run_native_settings.py")
+        add_executable(settings_boot_keys_probe
+            tests/settings_boot_keys_probe.cpp
+            src/config_loader.cpp
+            src/ps1_exe_parser.cpp
+        )
+        target_include_directories(settings_boot_keys_probe PRIVATE
+            include
+            src
+            lib/fmt/include
+            lib/toml11
+        )
+        target_link_libraries(settings_boot_keys_probe PRIVATE fmt)
+        add_test(NAME tas_runner_settings_format
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_run_native_settings.py"
+                --probe $<TARGET_FILE:settings_boot_keys_probe>)
+    endif()
+
+
+    # PS1 Mouse settings.toml keys (PS1B-279).
+    add_executable(mouse_settings_test
+        tests/mouse_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(mouse_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(mouse_settings_test PRIVATE fmt)
+    add_test(NAME mouse_settings_test COMMAND mouse_settings_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test
@@ -907,9 +1262,15 @@ if(BUILD_TESTING)
     add_test(NAME reachable_discovery_test COMMAND reachable_discovery_test)
 
     find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME source_bus_generated_cpu_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/source_bus_codegen_probe.py
+            --recompiler $<TARGET_FILE:psxrecomp-game> --cc ${CMAKE_C_COMPILER})
+        set_tests_properties(source_bus_generated_cpu_test PROPERTIES TIMEOUT 180)
+    endif()
     if(Python3_Interpreter_FOUND AND CMAKE_GENERATOR STREQUAL "Ninja")
         add_test(NAME runtime_ipo_configuration
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_ipo.py
                 --cmake ${CMAKE_COMMAND} --cc ${CMAKE_C_COMPILER}
                 --cxx ${CMAKE_CXX_COMPILER} --ninja ${CMAKE_MAKE_PROGRAM})
@@ -923,7 +1284,7 @@ if(BUILD_TESTING)
         endif()
         if(_psx_hot_pgo_ninja)
             set(PSX_RUNTIME_HOT_PGO_TEST_SCRATCH_ROOT
-                "${CMAKE_CURRENT_BINARY_DIR}/hot-pgo-fixture" CACHE PATH
+                "${CMAKE_CURRENT_BINARY_DIR}/pgo" CACHE PATH
                 "Retained PGO fixture runs; use a short path on Windows")
             set(_psx_hot_pgo_tool_cmake "${CMAKE_COMMAND}")
             set(_psx_hot_pgo_tool_gcc "${CMAKE_C_COMPILER}")
@@ -958,7 +1319,7 @@ if(BUILD_TESTING)
     endif()
     if(Python3_Interpreter_FOUND)
         add_test(NAME optional_netplay_auth
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_optional_netplay_auth.py
                 --cxx ${CMAKE_CXX_COMPILER})
         add_test(NAME bios_emitter_stamps
@@ -966,11 +1327,11 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_stamps.py
                 --cmake ${CMAKE_COMMAND})
         add_test(NAME pgo_rebuild_flow
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgo_rebuild_flow.py)
         add_test(
             NAME cli_project_packaging
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
@@ -1010,7 +1371,7 @@ if(BUILD_TESTING)
         # under tests/ puts it inside that guard's glob.
         add_test(
             NAME coverage_vault
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_coverage_vault.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
@@ -1044,7 +1405,7 @@ if(BUILD_TESTING)
         # The runtime exe name must come from CMake, not be re-derived.
         add_test(
             NAME runtime_exe_name
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_exe_name.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
@@ -1066,7 +1427,7 @@ if(BUILD_TESTING)
         # root so the shipped profiles are found.
         add_test(
             NAME overlay_cross_page_delay_codegen
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_cross_page_delay_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1082,7 +1443,7 @@ if(BUILD_TESTING)
         # Bead beads-eio.3.100.
         add_test(
             NAME overlay_guard_word_analysis_bound
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_guard_word_analysis_bound.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1101,7 +1462,7 @@ if(BUILD_TESTING)
         # recompiler reads.
         add_test(
             NAME overlay_guard_bytes_declaration
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_guard_bytes_declaration.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # The pipeline reads mod manifests with tomllib (Python 3.11+). An
@@ -1162,7 +1523,7 @@ if(BUILD_TESTING)
         # and failed every static run after its output was written.
         add_test(
             NAME compile_overlays_static_tail
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_compile_overlays_static_tail.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1176,13 +1537,13 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME fmv_cycle_batch_codegen
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmv_cycle_batch_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME kuseg_dispatch_lookup
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kuseg_dispatch_lookup.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
@@ -1190,23 +1551,34 @@ if(BUILD_TESTING)
         # Gap ledger for docs/SEGMENT_AWARE_CODE.md: a synthetic KUSEG-linked
         # EXE, checked against a Beetle fetch-model transcription.
         add_test(
-            NAME segment_aware_codegen
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_aware_codegen.py
+            NAME source_page_crc_table
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_page_crc_table.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
-                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
-                    --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # Overlay shards keyed by segment (docs/SEGMENT_AWARE_CODE.md §5.7):
         # capture views, per-segment cache directories and manifests, the real
         # compile_overlays.py driver and the real overlay loader.
         add_test(
-            NAME overlay_segment_keys
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_segment_keys.py
+            NAME split_piece_handoff_guards
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_split_piece_handoff_guards.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A shard compiled from resident text patched only at a control-flow
+        # word (the 17e9bbaa0 fixture) is published, and the real loader plus
+        # memory.c's exact-range text guard still never run stale native code
+        # for it. The harness is built with GCC-style flags.
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(
+                NAME overlay_resident_patch_runtime
+                COMMAND ${Python3_EXECUTABLE} -B
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_resident_patch_runtime.py
+                        --recompiler $<TARGET_FILE:psxrecomp-game>
+                        --compiler ${CMAKE_C_COMPILER}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endif()
         # BIOS segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): OpenBIOS
         # with segment-qualified seeds, and SCPH-1001's KSEG1 kernel entry.
         add_test(
@@ -1218,28 +1590,56 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME overlay_shim_compile_contract
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_shim_compile.py)
         add_test(
             NAME lwlr_load_delay_forward
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lwlr_load_delay_forward.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Emitted DIV: divide-by-zero and -80000000h/-1 results (PSX-SPX),
+        # compiled and run at -O0/-O2.
+        add_test(
+            NAME div_edge_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_div_edge_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME branch_link_condition_order
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_branch_link_condition_order.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # cop2_delay_slot_load (PR CFG-emitter load delay) is not registered:
+        # pin J keeps pin I's emitter (PS1B-685).
+        add_test(
+            NAME zero_run_compaction
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_zero_run_compaction.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME dirty_text_continuation_guards
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
         add_test(
             NAME dirty_text_admission_guards
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_admission_guards.py)
         add_test(
             NAME bios_backend_constant_codegen
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-bios>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # tools/bios_emitter_fingerprint.sh takes its file list from the
+        # psxrecomp-bios target above. CMake hands the test its own list of
+        # that target's sources, so the script's reading of this file is held
+        # to the authority in both directions; the test also checks the
+        # verdicts of runtime/bios_stale_check.cmake (PS1B-131).
         add_test(
             NAME bios_vector_stub_shapes
             COMMAND ${Python3_EXECUTABLE}
@@ -1249,85 +1649,196 @@ if(BUILD_TESTING)
         # Compiled BIOS fetch charges == the interpreter's (psx_icache.c) ==
         # Beetle, per instruction, on OpenBIOS: KSEG1 ROM code pays every fetch.
         add_test(
-            NAME uncached_fetch_charge
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_uncached_fetch_charge.py
-                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
-                    --compiler ${CMAKE_C_COMPILER}
+            NAME bios_emitter_fingerprint
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_fingerprint.py
+                    # MinGW's generated application-manifest resource object
+                    # is linked metadata, not a BIOS emitter source file.
+                    --target-sources "$<JOIN:$<FILTER:$<TARGET_PROPERTY:psxrecomp-bios,SOURCES>,EXCLUDE,[.]rc[.]obj$>,$<COMMA>>"
+                    --cmake ${CMAKE_COMMAND}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME stall_report
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_stall_report.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
-
-        # ---- offline tool unit tests (tools/tests, tools/, tests/) -----------
-        # Pure-Python unit tests of the offline tools: no built target and no
-        # generated BIOS, so they belong in this BIOS-free tree. They had no
-        # add_test() entry and were only run by whoever remembered to invoke
-        # pytest by hand. check_test_registration.cmake now globs these
-        # directories too, so a new one fails configure until it is listed.
-        # test_psx_chd skips its decode cases unless a shared libchdr is found
-        # (PSXRECOMP_LIBCHDR); its container/selection cases always run.
-        # test_bundled_release_layout pins the bundled-release contract (CI
-        # template, scaffold, check_generated.sh, Project Studio audit/ops).
-        foreach(_t IN ITEMS
-                aligned_lzss_banks
-                bpe_container
-                audit_playtest_diagnostics_package
-                package_title_release
-                bundled_release_layout
-                collect_game_misses
-                cursor_writers
-                disc_companion
-                duckstation_oracle
-                fp_identity
-                gpu_frame
-                menu_scan
-                migrate_probe_refresh
-                mips_tagged_relocations
-                overlay_widescreen_callbacks
-                pad_delivery
-                pad_trace
-                psx_chd
-                sbi_registry
-                static_fragment_variant_keys)
-            add_test(
-                NAME ${_t}
-                COMMAND ${Python3_EXECUTABLE}
-                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_${_t}.py
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
-        endforeach()
-        # Drives runtime/psx_playtest_diagnostics_defaults.cmake (a cmake -P
-        # script), so it needs this configure's cmake.
         add_test(
-            NAME playtest_diagnostics_defaults
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_playtest_diagnostics_defaults.py
-                    --cmake ${CMAKE_COMMAND}
+            NAME prepare_disc_boot_case
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_prepare_disc_boot_case.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_bios_hint
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_bios_hint.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_cmake_comments
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_cmake_comments.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A set whose discs boot different programs, set up as one folder
+        # (PS1B-333): the set file, the disc check, the join, the start
+        # scripts, the host project, and the unchanged single-program path.
+        add_test(
+            NAME program_set
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_program_set.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_program_set
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The packager's zip step as its own entry. The run above accepts a
+        # shell without zip, so a host without one passed with the zip never
+        # made. This one checks the zip (its name, its members against the
+        # staged files) where a zip tool exists, and is reported as skipped,
+        # by name, where none does (PS1B-397).
+        add_test(
+            NAME package_setup_program_set_zip
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
+                    --zip-part
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(package_setup_program_set_zip PROPERTIES SKIP_RETURN_CODE 77)
+        # The check the packager runs on a staged setup program: start it as a
+        # double-click does and require that it reaches its launcher (PS1B-365).
+        add_test(
+            NAME setup_host_plain_start
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_setup_host_plain_start.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME setup_package_payload_filter
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_package_payload_filter.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The bash the two gate tests below run a script with must not be a
+        # WSL launcher. On a host whose PATH puts System32 before Git it was,
+        # and both failed with exit 127 for no fault of the tree (PS1B-271).
+        add_test(
+            NAME host_bash
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_host_bash.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME setup_private_path_gate
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_private_path_gate.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The same gate over the framework tree the setup packager stages, so
+        # a private path in a shipped file fails here and not in a release
+        # build (PS1B-216).
+        add_test(
+            NAME setup_staged_tree_private_paths
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_staged_tree_private_paths.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The DuckStation oracle patch must hold added lines only: a context
+        # line or a removed line is a line of upstream's source (PS1B-216).
+        # Keep this focused gate beside the complete oracle suite below.
+        add_test(
+            NAME duckstation_oracle_patch_form
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_duckstation_oracle.py
+                    TestOraclePatch
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-476/375: these source-owned tool checks must execute in the
+        # recompiler gate. A missing compiler or CHD reader must not turn a
+        # skipped case into a green gate.
+        set(_psx_tools_tests "")
+        foreach(_t IN ITEMS
+                menu_scan cursor_writers gpu_frame pad_trace pad_delivery
+                aligned_lzss_banks static_fragment_variant_keys
+                mips_tagged_relocations overlay_widescreen_callbacks
+                duckstation_oracle)
+            add_test(NAME tools_${_t}
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_${_t}.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            list(APPEND _psx_tools_tests tools_${_t})
+        endforeach()
+        if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
+            add_test(NAME tools_psx_chd
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_psx_chd.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(tools_psx_chd PROPERTIES
+                ENVIRONMENT "PSXRECOMP_LIBCHDR=$<TARGET_FILE:chdr>")
+            list(APPEND _psx_tools_tests tools_psx_chd)
+            set(_psx_tools_registration_args "")
+        else()
+            set(_psx_tools_registration_args --without-chd)
+        endif()
+        set_tests_properties(${_psx_tools_tests} PROPERTIES
+            FAIL_REGULAR_EXPRESSION "skipped;Ran 0 tests")
+        # Clean gate hosts need not install optional image tools. Decode and
+        # diff checks still run; only NumPy/Pillow rendering cases may skip.
+        set_tests_properties(tools_gpu_frame PROPERTIES
+            FAIL_REGULAR_EXPRESSION "Ran 0 tests")
+        add_test(NAME tools_ctest_registration
+            COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_ctest_tools_registration.py
+                --build-tree ${CMAKE_BINARY_DIR} --ctest ${CMAKE_CTEST_COMMAND}
+                ${_psx_tools_registration_args})
+        set_tests_properties(tools_ctest_registration PROPERTIES
+            SKIP_RETURN_CODE 77)
+        add_test(
+            NAME app_icon_rc_spaces
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_app_icon_rc_spaces.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME cli_diagnostics
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_diagnostics.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Pruning build intermediates after setup deleted tcc's own library from
+        # the staged overlay toolchain (PS1B-333).
+        add_test(
+            NAME cli_prune_keeps_product
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_prune_keeps_product.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A product that setup builds ends with the licenses/ folder a build
+        # host's product has, and the step that writes it never reads its own
+        # output, wherever the product folder is (PS1B-333).
+        add_test(
+            NAME setup_product_notices
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_product_notices.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The tool behind source_tree_snapshot and source_tree_unchanged (see
+        # runtime/source_tree_check.cmake) must itself fail on a dirty tree.
+        add_test(
+            NAME source_tree_clean_tool
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_source_tree_clean.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # Configures throwaway projects against runtime/psx_release_channel.cmake:
         # a release-package build must name its channel.
         add_test(
-            NAME release_channel_cmake
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_release_channel_cmake.py
-                    --cmake ${CMAKE_COMMAND}
+            NAME cli_diagnostic_only
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_diagnostic_only.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
-            NAME compile_overlays_static_split
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_compile_overlays_static_split.py
+            NAME cli_python_floor
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_python_floor.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
-            NAME aot_overlay_spike_coverage_report
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/aot_overlay_spike/test_coverage_report.py
+            NAME codegen_hash_build_tree
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_codegen_hash_build_tree.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
-            NAME disc_inventory
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_disc_inventory.py
+            NAME bundle_mingw_dll_preference
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_bundle_mingw_dll_preference.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # ---- codegen tests that were written but never registered -----------
@@ -1341,12 +1852,13 @@ if(BUILD_TESTING)
                 bios_resident_shard
                 computed_stride_jump_codegen
                 msvc_cps_codegen
+                no_overlapping_bodies
                 overlay_guard_codegen
                 overlay_store_barrier_codegen
                 reachable_discovery_codegen)
             add_test(
                 NAME ${_t}
-                COMMAND ${Python3_EXECUTABLE}
+                COMMAND ${Python3_EXECUTABLE} -B
                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_t}.py
                         --recompiler $<TARGET_FILE:psxrecomp-game>
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1378,6 +1890,7 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_overlay_discovery.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # Original-disc extraction's normal-mode discovery resolves its BIOS
         # profile from --project-root, not the cwd, and a failed recompiler run
@@ -1405,11 +1918,20 @@ if(BUILD_TESTING)
                 default_renderer_guards
                 mod_owned_display_controls
                 fmv_quiet_guards
+                netplay_early_input_idle_wiring
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
                 frame_interpolation_flip_source
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
+                launcher_serial_status_wiring
+                negcon_twist_wiring
+                replay_disc_identity_wiring
+                netplay_chd_disc_rule_wiring
+                run_report_cdrom_counters
+                start_refusal_wiring
+                netplay_lan_identity_wiring
+                netplay_overlay_pin_wiring
                 netplay_start_failure_wiring
                 jalr_link_register_guards
                 gl_internal_scale_guards
@@ -1420,6 +1942,9 @@ if(BUILD_TESTING)
                 overlay_candidate_capacity
                 release_zip
                 overlay_decodable_fallback
+                overlay_export_declarations
+                interp_report_wiring
+                bios_phase_report_wiring
                 overlay_init_guard
                 overlay_segment_gate
                 recomp_ui_root_override
@@ -1438,13 +1963,17 @@ if(BUILD_TESTING)
                 wide_overlay_band_scissor)
             add_test(
                 NAME ${_t}
-                COMMAND ${Python3_EXECUTABLE}
+                COMMAND ${Python3_EXECUTABLE} -B
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
-        # These three were previously left out of the list above with a comment
+        # (overlay_pair_dedup_runtime was the third of these. It failed to link:
+        # its harness had no psx_cpu_step_boundary_* definitions after the
+        # loader began to hand them to shards. The harness has them now, the
+        # overlay ABI gate test shares it, and the test is in the list above.)
+        # These were previously left out of the list above with a comment
         # explaining that they FAIL and that wiring a red check would recreate
         # the problem that took CI off PRs. That reasoning is right; the remedy
         # was not. De-registering is precisely how a test stops being counted,
@@ -1461,15 +1990,12 @@ if(BUILD_TESTING)
         #                              s_next_service_cycle
         #   runtime_perf_diag_guards   asserts a substring no longer present in
         #                              the runtime source
-        #   overlay_pair_dedup_runtime needs its companion harness built; not a
-        #                              source-only guard
         foreach(_t IN ITEMS
                 interpreter_perf_guards
-                runtime_perf_diag_guards
-                overlay_pair_dedup_runtime)
+                runtime_perf_diag_guards)
             add_test(
                 NAME ${_t}
-                COMMAND ${Python3_EXECUTABLE}
+                COMMAND ${Python3_EXECUTABLE} -B
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
             set_tests_properties(${_t} PROPERTIES DISABLED TRUE)
@@ -1501,6 +2027,12 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL 
             --cc ${CMAKE_C_COMPILER})
 endif()
 
+# A checkpoint state's IRQ timing and pending load survive the load resyncs
+# once; a plain load still resets them (production interrupts.c,
+# dirty_ram_interp.c and psx_cycles.c in a fixture_link.py fixture).
+# Not registered in pin J: it covers PR #923's checkpoint sections, and pin J
+# keeps pin I's sections on those tags (PS1B-685).
+
 # GTE deadline ownership includes pending CPU charges from both host sinks.
 if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     foreach(_mode IN ITEMS O0 O2)
@@ -1514,20 +2046,21 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_options(${_target} PRIVATE -Wl,--gc-sections)
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
-endif()
-
-# The store that kicks a GPU linked-list DMA holds the CPU until the walk
-# ends: the production dma.c and dma_gpu_ll.c linked into a fixture, other
-# seams stubbed to abort() (runtime/tests/fixture_link.py needs nm and GNU ld).
-if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    add_test(NAME dma_gpu_list_cpu_hold
-        COMMAND ${Python3_EXECUTABLE}
-            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dma_gpu_list_cpu_hold.py"
-            --cc ${CMAKE_C_COMPILER})
-endif()
-
-# Mult/div deadline ownership: the same rule for MULT/DIV and MFLO/MFHI.
-if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    # PS1B-185: MULT/DIV/GTE latencies against oracle fixture F1-F3, and the
+    # recompilers' inline DIV literal against PSX_DIV_LATENCY.
+    add_executable(muldiv_latency_fixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_latency_fixture.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+    target_include_directories(muldiv_latency_fixture PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+    target_compile_definitions(muldiv_latency_fixture PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+    target_compile_options(muldiv_latency_fixture PRIVATE -O2 -UNDEBUG -ffunction-sections -fdata-sections)
+    target_link_options(muldiv_latency_fixture PRIVATE -Wl,--gc-sections)
+    add_test(NAME muldiv_latency_fixture COMMAND muldiv_latency_fixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/code_generator.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/strict_translator.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/dirty_ram_interp.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include/source_cpu_block_bound.h")
+    # PS1B-185: MFHI/MFLO deadline wait, load give-back and second read against oracle fixtures F5 and F6.
     foreach(_mode IN ITEMS O0 O2)
         set(_target "muldiv_deferred_${_mode}")
         add_executable(${_target}
@@ -1548,6 +2081,16 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL 
     add_test(NAME syscall_change_thread_self
         COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_syscall_change_thread_self.py"
+            --cc ${CMAKE_C_COMPILER})
+    # A ChangeThread called inside an interrupt handler switches at the call.
+    add_test(NAME changethread_in_handler_test
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_changethread_in_handler.py"
+            --cc ${CMAKE_C_COMPILER})
+    # A deferred thread switch is taken while an interpreted thread spins.
+    add_test(NAME deferred_switch_interp_spin_test
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_deferred_switch_interp_spin.py"
             --cc ${CMAKE_C_COMPILER})
     # CloseTh(current); ChangeTh(other) still saves the outgoing registers.
     add_test(NAME syscall_closed_thread_context
@@ -1579,16 +2122,85 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME fast_forward_policy_test COMMAND fast_forward_policy_test)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME overlay_export_declarations
+        # The runtime regression above and this tools-only unit use different
+        # authored fixtures; keep both, with unique CTest names.
+        add_test(NAME overlay_export_declarations_tools
             COMMAND ${Python3_EXECUTABLE} -I
                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_export_declarations.py)
     endif()
 endif()
 if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
     add_test(NAME gpu_upload_history
-        COMMAND ${Python3_EXECUTABLE}
+        COMMAND ${Python3_EXECUTABLE} -B
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
             --cc ${CMAKE_C_COMPILER})
+endif()
+# The TAS replay tooling is developer infrastructure and is stripped from
+# shipped setup packages, so a source tree may legitimately not have it.
+if(BUILD_TESTING AND EXISTS
+   "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests/CMakeLists.txt")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
+                     "${CMAKE_CURRENT_BINARY_DIR}/tas-models")
+    if(Python3_Interpreter_FOUND)
+        # The Python driver compiles test_scheduler_precise_escape.c and
+        # test_source_gpu_pending_deadline.c at O0/O2.
+        add_test(NAME tas_scheduler_precise_escape
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_scheduler_precise_escape.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_bk2_intake
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_bk2_intake.py")
+        add_test(NAME tas_replay_recipe
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_tekken3.py")
+        add_test(NAME tas_pepsiman_admission
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_pepsiman.py")
+        # The Python driver compiles test_source_ram_page_probe.c at O0/O2.
+        add_test(NAME tas_ram_long_route
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_ram_page_probe.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_cpu_long_route
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_cpu_return_probe.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The probes and the checkpoint manifest create their files through
+        # psx_file_create_new.h, which needs no exclusive-create flag from the C
+        # runtime, so these tests run on msvcrt (MSYS2 MINGW64) too (PS1B-206).
+        # The driver compiles test_file_create_new.c at O0/O2 and fails when a
+        # source file opens a stream with that flag again.
+        add_test(NAME file_create_new
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_file_create_new.py"
+                --cc ${CMAKE_C_COMPILER})
+        # tas_stateio_manifest and tas_stateio_identity are registered with the
+        # foundation above. The Python driver compiles test_input_route_raster_wire.c at O0/O2.
+        add_test(NAME tas_raster_wire
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_raster_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The Python driver links the four comparison-profile section codecs with
+        # auto-derived link stubs and round-trips per-field sentinels (O0/O2).
+        add_test(NAME tas_section_wire_sentinels
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_section_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_cpu_state_wire
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_state_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_gpu_service_path
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_service_path.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The Python driver compiles test_boot_state_replace.c with its own TU.
+        add_test(NAME tas_state_replace
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_replace.py"
+                --cc ${CMAKE_C_COMPILER})
+    endif()
 endif()
 
 # UTF-8 process code page on Windows for every shipped tool (issue #371): they
@@ -1604,11 +2216,315 @@ endforeach()
 # project from whichever one is being configured. Placed before the collision
 # guard, which must stay last because it needs every target declared; this one
 # inspects files on disk and has no such ordering requirement.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/restored_authored_tests.cmake")
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    # The authored helper is registered by the restored module, above.
+    set_tests_properties(windows_rebuild_helper PROPERTIES
+        SKIP_REGULAR_EXPRESSION "^SKIP:"
+        TIMEOUT 90)
+endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_test_registration.cmake)
 psxrecomp_check_all_tests_registered()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    foreach(_t IN ITEMS interp_report_wiring bios_phase_report_wiring)
+        add_test(NAME ${_t}_test COMMAND ${Python3_EXECUTABLE} -I
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py")
+    endforeach()
+endif()
 
 # ---- output-name collision guard (must stay LAST) ---------------------------
 # Fails configure if any two targets here would write the same file on a
 # case-insensitive filesystem. See the module header for the shipped-bug story.
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_target_name_collisions.cmake)
 psxrecomp_check_output_name_collisions()
+
+if(BUILD_TESTING)
+    add_test(NAME load_delay_l1 COMMAND ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1.py
+        --cc ${CMAKE_C_COMPILER} --recompiler $<TARGET_FILE:psxrecomp-game>
+        --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
+    add_test(NAME mfc0_event_sample COMMAND ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_mfc0_event_sample.py
+        --cc ${CMAKE_C_COMPILER})
+    # PS1B-324 exception-return fixtures. Also registered in runtime/, so the
+    # tree that TAS setup builds runs them too. GCC only, as there: the driver
+    # compiles with -Wall -Wextra -Werror.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_rfe_irq_context.py
+            --cc ${CMAKE_C_COMPILER})
+        add_test(NAME rfe_syscall_depth_test COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_rfe_syscall_depth.py
+            --cc ${CMAKE_C_COMPILER})
+        # PS1B-417: the same guest fixture with a handler that calls ChangeThread.
+
+    endif()
+endif()
+
+if(Python3_EXECUTABLE)
+    add_test(NAME load_delay_l1_clean_matrix COMMAND ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1_matrix.py)
+endif()
+if(BUILD_TESTING)
+    add_test(NAME load_delay_overlay_transport COMMAND ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_overlay.py
+        --recompiler $<TARGET_FILE:psxrecomp-game>)
+    add_test(NAME load_delay_l1_precise_matrix COMMAND ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1_matrix.py --precise)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
+    add_test(NAME orphan_jump_target_codegen
+        COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_orphan_jump_target_codegen.py"
+            --cc ${CMAKE_C_COMPILER}
+            --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME cpu_return_load_view COMMAND ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_return_load_view.py --cc ${CMAKE_C_COMPILER})
+endif()
+
+# ---- source tree unchanged by the suite (after the last add_test) -----------
+# Adds source_tree_snapshot and source_tree_unchanged around every test above.
+# See the module header for the stray folder this exists to catch. OPTIONAL:
+# a tree staged without the module still configures.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/source_tree_check.cmake OPTIONAL)
+if(COMMAND psxrecomp_add_source_tree_check)
+    psxrecomp_add_source_tree_check()
+endif()
+
+# Accepted modern regressions beside the retained replay regressions.
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+            NAME segment_aware_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_aware_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME overlay_segment_keys
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_segment_keys.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME uncached_fetch_charge
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_uncached_fetch_charge.py
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME playtest_diagnostics_defaults
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_playtest_diagnostics_defaults.py
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME release_channel_cmake
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_release_channel_cmake.py
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME compile_overlays_static_split
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_compile_overlays_static_split.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME aot_overlay_spike_coverage_report
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/aot_overlay_spike/test_coverage_report.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(
+            NAME disc_inventory
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_disc_inventory.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+add_test(NAME dma_gpu_list_cpu_hold
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dma_gpu_list_cpu_hold.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME aligned_lzss_banks
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_aligned_lzss_banks.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME bpe_container
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_bpe_container.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME audit_playtest_diagnostics_package
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_audit_playtest_diagnostics_package.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME package_title_release
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_title_release.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME bundled_release_layout
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_bundled_release_layout.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME collect_game_misses
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_collect_game_misses.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME cursor_writers
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cursor_writers.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME disc_companion
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_disc_companion.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME duckstation_oracle
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_duckstation_oracle.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME fp_identity
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_fp_identity.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME gpu_frame
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_gpu_frame.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME menu_scan
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_menu_scan.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME migrate_probe_refresh
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_migrate_probe_refresh.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME mips_tagged_relocations
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_mips_tagged_relocations.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME overlay_widescreen_callbacks
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_widescreen_callbacks.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME pad_delivery
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_pad_delivery.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME pad_trace
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_pad_trace.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME psx_chd
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_psx_chd.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME sbi_registry
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_sbi_registry.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME static_fragment_variant_keys
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_static_fragment_variant_keys.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+add_test(
+                NAME overlay_pair_dedup_runtime
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()

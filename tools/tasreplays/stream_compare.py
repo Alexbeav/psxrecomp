@@ -1,6 +1,6 @@
 """Follow a running native ram-pages.tsv and compare it against a reference.
 
-The watcher is additive evidence: it can request a stop at the first
+The watcher is additive evidence: it can stop the native process at the first
 divergence and records what it saw, but it never decides a pass. The post-run
 comparison in each title module remains the verdict authority.
 """

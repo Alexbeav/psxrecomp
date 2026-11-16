@@ -147,6 +147,8 @@ public:
      * those sectors so the CD controller can retain its last valid Q packet.
      */
     bool ReadSubChannelQ(uint32_t lba, uint8_t* buffer, bool* valid) const;
+    /* Optional source-clock wire: INDEX00 pregaps, reserved byte and big-endian CRC. */
+    bool ReadSourceSubChannelQ(uint32_t lba,uint8_t* buffer,bool* valid) const;
     bool HasSubChannelReplacements() const { return !subq_replacements_.empty(); }
 
     /**

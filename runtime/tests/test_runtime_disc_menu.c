@@ -107,7 +107,14 @@ int main(void) {
     }
     count = 1;
     psx_runtime_menu_init();
-    assert(!psx_runtime_menu_open());
+    assert(psx_runtime_menu_open());
+    assert(psx_runtime_menu_select_disc(1));
+    assert(psx_runtime_menu_insert());
+    count = 0;
+    psx_runtime_menu_init();
+    assert(psx_runtime_menu_open());
+    assert(!psx_runtime_menu_select_disc(1));
+    assert(!psx_runtime_menu_insert());
     assert(psx_disc_tray_cycle(1, PSX_DISC_TRAY_ORIGIN_MENU) == PSX_DISC_TRAY_ERR_NO_ROSTER);
     puts("runtime disc menu and tray: passed");
     return 0;

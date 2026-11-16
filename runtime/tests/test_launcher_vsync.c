@@ -14,5 +14,8 @@ int main(void) {
     assert(psx_vsync_from_launcher(1, 0) == 1);
     assert(psx_vsync_from_launcher(3, 1) == -1);
     assert(psx_vsync_from_launcher(2, 2) == 0);
+    assert(psx_vsync_to_launcher(2) == 4);
+    assert(psx_vsync_from_launcher(4, 1) == 2);
+    assert(psx_vsync_from_launcher(1, 2) == 1);
     return 0;
 }

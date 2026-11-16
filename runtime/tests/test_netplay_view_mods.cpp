@@ -49,6 +49,7 @@ int psx_get_in_exception(void) { return 0; }
 uint64_t psx_get_cycle_count(void) { static uint64_t t; return t += 64; }
 uint32_t memory_get_sr(void) { return 0; }
 void debug_server_poll(void) {}
+uint16_t debug_server_update_poll(int, uint16_t buttons, int) { return buttons; }
 void debug_server_log_sio_write(uint32_t, uint32_t, uint8_t) {}
 void starvation_ring_record(uint8_t, uint8_t, uint8_t, uint16_t, uint16_t,
                             uint8_t, uint8_t, uint16_t, uint8_t, uint16_t,

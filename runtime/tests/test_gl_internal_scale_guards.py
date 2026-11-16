@@ -96,15 +96,15 @@ class GlScaleGuards(unittest.TestCase):
         # The window and the wide surface draw only the batch's nverts
         # vertices (triangles and line quads). (A GL_LINES batch at 1x, where
         # one exists, draws with its own mode in both places.)
-        flush = body(GL, "static void flush_flat_batch(void)")
+        flush = body(GL, "static void flush_flat_batch_impl(void)")
         self.assertIn("s_fbl_n = 0;", flush)
         self.assertIn("memcpy(&s_fb[nverts * 6], s_fbl,", flush)
         self.assertIn("(nverts + 2 * nl) * 6 * sizeof(float)", flush)
         self.assertRegex(flush, r"if \(nl\) flat_batch_draw_hr_lines\(nverts, nl\);\n"
-                                r"\s*else glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\);")
+                                r"\s*else glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\)\);")
         self.assertIn("hiw_enqueue_geo(s_fb, nverts, semi, mask, mirror, s_fb_gate)", flush)
         wide = flush[flush.index("wide_target_begin("):]
-        self.assertRegex(wide, r"glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\);")
+        self.assertRegex(wide, r"glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\)\);")
         hr = body(GL, "static void flat_batch_draw_hr_lines(int nverts, int nl)")
         self.assertIn("glDrawArrays(GL_LINES, nverts + 2 * i, 2 * (j - i));", hr)
         # Room for the copy: every line takes six batch vertices.
@@ -134,7 +134,7 @@ class HiresWindowGuards(unittest.TestCase):
             self.assertIn("hiw_flush_queue();", body(GL, fn))
         # Queued when the window is on, or (full-VRAM surface) when a native-wide
         # mirror can ride the queue (wide_queue_live).
-        for site in ("flush_tex_batch(void)", "flush_flat_batch(void)"):
+        for site in ("flush_tex_batch_impl(void)", "flush_flat_batch_impl(void)"):
             self.assertRegex(body(GL, "static void " + site),
                              r"if \(\(hiw_on\(\) \|\| \(mirror[^)]*wide_queue_live\(\)\)\) &&\s*hiw_enqueue_")
 
@@ -143,9 +143,9 @@ class HiresWindowGuards(unittest.TestCase):
         # entry and is replayed in the queue's flush (one pass per wide
         # surface), not as a surface switch per batch. The immediate mirror
         # runs only when the entry did not take it.
-        for site, call in (("static void flush_tex_batch(void)",
+        for site, call in (("static void flush_tex_batch_impl(void)",
                             "hiw_enqueue_tex(nverts, semi, mirror, s_tb_gate)) mirror = 0;"),
-                           ("static void flush_flat_batch(void)",
+                           ("static void flush_flat_batch_impl(void)",
                             "hiw_enqueue_geo(s_fb, nverts, semi, mask, mirror, s_fb_gate)) mirror = 0;"),
                            ("static void gpu_geometry(", "mirror = 0;")):
             fn = body(GL, site)
@@ -171,7 +171,7 @@ class HiresWindowGuards(unittest.TestCase):
                      "glScissor(c->wsx * S, c->wsy * S, c->wsw * S, c->wsh * S);",
                      "p_glUniform1f(s_tex_uXoff, (float)c->wdx);",
                      "p_glUniform1f(s_geo_uXoff, (float)c->wdx);",
-                     "tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);",
+                     "tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0, -1);",
                      "mask_stencil_ex(c->mask, c->check);"):
             self.assertIn(need, replay)
         # Every other write to a wide surface, and every read of one, lands
@@ -277,9 +277,16 @@ class ScaleContractGuards(unittest.TestCase):
         for name, fn in functions(code):
             if not re.search(r"FRAMEBUFFER,\s*s_hr_fbo\b", fn):
                 continue
-            if "s_out_scale" in fn:
+            # Presentation telemetry reports output scale independently of
+            # the framebuffer probe, which must still sample at hr scale.
+            accesses = re.sub(r"psx_video_telemetry_compose\([^;]*;", "", fn)
+            if "s_out_scale" in accesses:
                 self.assertTrue("s_hiw" in fn or "hiw_on()" in fn,
                                 name + " binds s_hr_fbo at s_out_scale without handling the window")
+        probe = body(GL, "static void pres_record(")
+        self.assertIn("(dx + w / 2) * s_hr_scale", probe)
+        self.assertIn("(dy + h / 2) * s_hr_scale", probe)
+        self.assertNotRegex(probe, r"glReadPixels\([^;]*s_out_scale")
 
 
 class RenderPassGuards(unittest.TestCase):
@@ -338,13 +345,13 @@ class InternalResolutionGuards(unittest.TestCase):
         fn = body(MAIN, "static void session_internal_resolution(void)")
         self.assertIn("psx_host_enh_resolve_resolution(&g_title_resolution, &req)", fn)
         self.assertIn("g_video_scale = g_title_scale;", fn)
-        self.assertIn("g_video_ss_milli = g_title_ss_milli;", fn)
+        self.assertIn("g_video_ss_milli = r.supersample_milli;", fn)  # upstream 3df46c4e5: resolved over the title
         call = MAIN.index("    session_internal_resolution();")
         self.assertLess(call, MAIN.index('std::getenv("PSX_INTERNAL_RESOLUTION")'))
         self.assertLess(call, MAIN.index("    apply_internal_resolution(match_display_px_h(nullptr));"))
 
     def test_unset_preset_leaves_supersampling(self):
-        self.assertIn("if (preset == PSX_IR_UNSET) return;",
+        self.assertIn("if (preset == PSX_IR_UNSET && !g_video_mod_supersample_chosen) return;",  # a mod's explicit supersample still applies
                       body(MAIN, "static void apply_internal_resolution(int display_px_h)"))
 
     def test_env_override_is_never_persisted(self):

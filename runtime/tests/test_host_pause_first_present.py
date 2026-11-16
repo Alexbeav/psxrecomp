@@ -12,7 +12,7 @@ PRELUDE = r"""
 int g_gl_active, g_vk_active, s_sw_hold_valid;
 void *sdl_renderer, *sdl_texture;
 int s_sw_hold_src, s_sw_hold_dst;
-static int held, holds, blanks, vk_blanks, ticks, suspended;
+static int held, holds, blanks, vk_blanks, ticks, suspended, sw_presents;
 uint32_t SDL_GetTicks() { return 7; }
 void psx_rewind_present_tick(uint32_t t) { ticks += t == 7; }
 void gl_renderer_set_interpolation_suspended(int x) { suspended = x; }
@@ -24,6 +24,7 @@ void SDL_RenderClear(void*) {}
 void SDL_RenderCopy(void*,void*,void*,void*) {}
 void host_osd_draw_sdl(void*) {}
 void SDL_RenderPresent(void*) {}
+void software_present_with_telemetry(void*) { ++sw_presents; }
 """
 CHECKS = r"""
 int main() {
@@ -36,6 +37,8 @@ int main() {
     if (holds != 2 || blanks != 1 || ticks != 2) return 2;
     g_gl_active = 0; g_vk_active = 1; rewind_pause_present();
     if (holds != 2 || blanks != 1 || vk_blanks != 1) return 3;
+    g_vk_active = 0; sdl_renderer = (void*)1; rewind_pause_present();
+    if (sw_presents != 1 || ticks != 4) return 4;
     puts("host pause: first-frame fallback and existing held-frame path PASS");
     return 0;
 }
@@ -55,7 +58,8 @@ def main():
             cpp=p/(label+'.cpp');exe=p/(label+'.exe')
             cpp.write_text(PRELUDE+code+CHECKS,encoding='utf-8')
             subprocess.run([args.cxx,'-std=c++17',str(cpp),'-o',str(exe)],check=True)
-            r=subprocess.run([str(exe)],capture_output=True,text=True)
+            r=subprocess.run([str(exe)],capture_output=True,text=True,
+                             encoding='utf-8',errors='replace')
             if label=='fixed':
                 assert r.returncode==0,r.stdout+r.stderr
                 print(r.stdout.strip())

@@ -1,3 +1,4 @@
+option(PSX_SOURCE_BUS_BOUNDARY "Enable diagnostic per-instruction source bus ownership" OFF)
 # Shared psxrecomp runtime CMake helpers.
 #
 # Include this from either the framework runtime build or a sibling game
@@ -26,6 +27,7 @@ include("${PSXRECOMP_ROOT}/cmake/psx_openbios_read_job.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_media_jobs.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_sha256_file.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_build_revision.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_dispatch_crc.cmake")
 
 include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_windows_manifest.cmake")
@@ -387,9 +389,11 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/local_mouse_sdl.cpp
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_ram_geometry.c
+    ${PSXRECOMP_ROOT}/runtime/src/program_set_lock.c
     ${PSXRECOMP_ROOT}/runtime/src/kernel_patch_ranges.c
     ${PSXRECOMP_ROOT}/runtime/src/guest_tty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu.c
+    ${PSXRECOMP_ROOT}/runtime/src/source_gpu_runtime.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_ui_group.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_aspect_cone_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c
@@ -451,6 +455,12 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/parity_trace.c
     ${PSXRECOMP_ROOT}/runtime/src/device_trace.c
     ${PSXRECOMP_ROOT}/runtime/src/boot_state.c
+    ${PSXRECOMP_ROOT}/runtime/src/boot_state_replace.c
+    ${PSXRECOMP_ROOT}/runtime/src/dispatch_publish.c
+    ${PSXRECOMP_ROOT}/runtime/src/source_stateio_identity.c
+    ${PSXRECOMP_ROOT}/runtime/src/text_source_guard.c
+    ${PSXRECOMP_ROOT}/runtime/src/input_route_session.c
+    ${PSXRECOMP_ROOT}/runtime/src/input_route_observer.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_snap_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_state_digest.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_input_hist.c
@@ -459,6 +469,9 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_selfcheck.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
+    ${PSXRECOMP_ROOT}/runtime/src/replay_session.c
+    ${PSXRECOMP_ROOT}/runtime/src/replay_identity.c
+    ${PSXRECOMP_ROOT}/runtime/src/disc_digest_cache.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
     ${PSXRECOMP_ROOT}/runtime/src/video_telemetry.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_savestate_menu.c
@@ -472,6 +485,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
     ${PSXRECOMP_ROOT}/runtime/src/traps.c
     ${PSXRECOMP_ROOT}/runtime/src/crash_trace.c
+    ${PSXRECOMP_ROOT}/runtime/src/interp_report.c
+    ${PSXRECOMP_ROOT}/runtime/src/bios_phase_report.c
     ${PSXRECOMP_ROOT}/runtime/src/freeze_dump_policy.c
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
@@ -481,10 +496,13 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/nd_intro_ot.c
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_sha256.c
+    ${PSXRECOMP_ROOT}/runtime/src/source_stateio_identity.c
+    ${PSXRECOMP_ROOT}/runtime/src/tas_checkpoint.c
     ${PSXRECOMP_ROOT}/runtime/src/disc_identity.cpp
     ${PSXRECOMP_ROOT}/runtime/src/cue_sheet.cpp
     ${PSXRECOMP_ROOT}/runtime/src/disc_path.cpp
     ${PSXRECOMP_ROOT}/runtime/src/cdrom.c
+    ${PSXRECOMP_ROOT}/runtime/src/turbo_loads_gate.c
     ${PSXRECOMP_ROOT}/runtime/src/spu.c
     ${PSXRECOMP_ROOT}/runtime/src/spu_shadow.c
     ${PSXRECOMP_ROOT}/runtime/src/audio_shadow.c
@@ -492,6 +510,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/color_lut.c
     ${PSXRECOMP_ROOT}/runtime/src/iso_reader.cpp
     ${PSXRECOMP_ROOT}/runtime/src/iso_reader_c.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/disc_boot_image.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_cycles.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_icache.c
     ${PSXRECOMP_ROOT}/runtime/src/starvation_ring.c
@@ -550,7 +569,12 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_exit_reason.c
+    ${PSXRECOMP_ROOT}/runtime/src/start_refusal.c
+    ${PSXRECOMP_ROOT}/runtime/src/program_set_lock.c
+    ${PSXRECOMP_ROOT}/runtime/src/turbo_loads_gate.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_lan_version.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_ice_hub.c
+    ${PSXRECOMP_ROOT}/runtime/src/start_refusal.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp
     ${PSXRECOMP_ROOT}/recompiler/src/ps1_exe_parser.cpp
     # (sljit Tier-2 in-process JIT backend removed 2026-07-15 — was disabled by
@@ -740,7 +764,10 @@ else()
     set(PSXRECOMP_LOBBY_INCLUDE_DIR "")
 endif()
 
+set(PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_codegen_include")
 set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
+    ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}
     ${PSXRECOMP_ROOT}/runtime/include
     ${PSXRECOMP_ROOT}/recompiler/src
     ${PSXRECOMP_ROOT}/recompiler/include
@@ -1905,6 +1932,8 @@ function(psxrecomp_add_runtime_target target)
                 # a shell, which cannot round-trip the executable's quoted
                 # string definitions (notably the pipe-separated BIOS stems).
                 add_library(${target}_app_icon OBJECT "${_psxrt_rc}")
+                set_target_properties(${target}_app_icon PROPERTIES
+                    INCLUDE_DIRECTORIES "" COMPILE_DEFINITIONS "" COMPILE_OPTIONS "")
                 target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_app_icon>)
                 message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
             else()
@@ -1938,7 +1967,7 @@ function(psxrecomp_add_runtime_target target)
     # v0.3.0 black-screen). The loader (via overlay_api.h) and compile_overlays.py both
     # read the same generated PSX_OVERLAY_CODEGEN_HASH, so they never drift. Defined
     # once (shared across psx-runtime/psx-beetle); idempotent write avoids rebuilds.
-    set(_codegen_hash_hdr ${PSXRECOMP_ROOT}/runtime/include/overlay_codegen_hash.h)
+    set(_codegen_hash_hdr ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}/overlay_codegen_hash.h)
     if(NOT TARGET psxrecomp_codegen_hash)
         # Canonical source list shared with recompiler/CMakeLists.txt (which bakes
         # the SAME hash into psxrecomp-game for the --codegen-hash staleness guard).
@@ -1947,6 +1976,7 @@ function(psxrecomp_add_runtime_target target)
         set(_codegen_srcs ${PSXRECOMP_CODEGEN_HASH_SRCS})
         add_custom_command(
             OUTPUT  ${_codegen_hash_hdr}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}
             COMMAND ${CMAKE_COMMAND} -DOUT=${_codegen_hash_hdr} "-DSRCS=${_codegen_srcs}"
                     -P ${PSXRECOMP_ROOT}/runtime/hash_codegen.cmake
             DEPENDS ${_codegen_srcs} ${PSXRECOMP_ROOT}/runtime/hash_codegen.cmake
@@ -2028,6 +2058,7 @@ function(psxrecomp_add_runtime_target target)
         ${PSXRECOMP_ROOT}/runtime/src/boot_state.c
         PROPERTIES OBJECT_DEPENDS ${_codegen_hash_hdr})
 
+    target_include_directories(${target} BEFORE PRIVATE ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR})
     target_include_directories(${target} PRIVATE
         ${PSXRECOMP_RUNTIME_INCLUDE_DIRS}
         ${PSX_SDL_INCLUDE_DIRS}
@@ -2061,6 +2092,17 @@ function(psxrecomp_add_runtime_target target)
     # Computed at configure time from the psxrecomp repo (this file's dir); empty
     # on failure (no git / not a repo) -> crash_trace.c falls back to "unknown".
     psxrecomp_build_revision(PSX_GIT_REV "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
+    # Player replay identity uses the full source revision, not a short display
+    # version. The executable hash still distinguishes local/dirty builds.
+    if(PSX_BUILD_GIT)
+        execute_process(COMMAND "${PSX_BUILD_GIT}" -C "${PSXRECOMP_ROOT}" rev-parse HEAD
+            OUTPUT_VARIABLE _replay_pin OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        string(LENGTH "${_replay_pin}" _replay_pin_length)
+        if(_replay_pin_length EQUAL 40 AND _replay_pin MATCHES "^[0-9a-f]+$")
+            set_property(SOURCE "${PSXRECOMP_ROOT}/runtime/src/replay_identity.c" APPEND PROPERTY
+                COMPILE_DEFINITIONS "PSX_FRAMEWORK_PIN=\"${_replay_pin}\"")
+        endif()
+    endif()
 
     # Release pin for lobby matching (create/join/list). Override via
     # GAME_VERSION arg or -DPSX_GAME_VERSION=...; default "dev".
@@ -2219,6 +2261,28 @@ function(psxrecomp_add_runtime_target target)
     endif()
     endif()
 
+    if(PSX_SOURCE_BUS_BOUNDARY)
+        target_compile_definitions(${target} PRIVATE PSX_SOURCE_BUS_BOUNDARY=1)
+        get_target_property(_source_profile ${target} PSX_EXECUTION_PROFILE)
+        if(PSX_NATIVE_CPU_SPANS AND _source_profile STREQUAL "ENHANCED")
+            message(FATAL_ERROR "source bus boundary requires per-instruction CPU timing")
+        endif()
+        # A stale generated function can retire while source DMA owns the bus.
+        # This is the same source-capability check as native CPU spans, not a
+        # runtime/replay admission rule. Default builds do not inspect it.
+        foreach(_source IN LISTS generated_sources PSXRT_GAME_GENERATED_FULL_C)
+            get_filename_component(_source_name "${_source}" NAME)
+            if(_source_name MATCHES "_full(_[0-9]+)?[.]c$")
+                if(NOT EXISTS "${_source}")
+                    message(FATAL_ERROR "Source bus ownership requires regenerated source: ${_source}")
+                endif()
+                file(STRINGS "${_source}" _source_boundary LIMIT_COUNT 1 REGEX "psx_source_bus_boundary[(]")
+                if(NOT _source_boundary)
+                    message(FATAL_ERROR "Regenerate with source bus boundary support before selecting PSX_SOURCE_BUS_BOUNDARY: ${_source}")
+                endif()
+            endif()
+        endforeach()
+    endif()
     if(PSXRT_ORACLE)
         target_compile_definitions(${target} PRIVATE PSX_ORACLE_BUILD=1)
     else()
@@ -2260,6 +2324,8 @@ function(psxrecomp_add_runtime_target target)
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)
     endif()
+    psxrecomp_dispatch_crc(${target} "${PSXRT_GAME_GENERATED_DISPATCH_C}"
+        "${PSXRECOMP_ROOT}/runtime/src/game_dispatch_compat.c")
     if(has_game_dispatch_native_ok)
         # Only the compatibility translation unit needs to know whether the
         # generated dispatcher supplies the modern exact-range predicate.
@@ -2615,18 +2681,34 @@ function(psxrecomp_add_runtime_target target)
             $<$<COMPILE_LANGUAGE:CXX>:-fzero-initialized-in-bss>)
     endif()
 
-    # Netplay compares guest state bit-for-bit across hosts. Clang contracts
-    # a*b+c into an FMA by default on arm64 (-ffp-contract=on) while x86-64
-    # GCC without -mfma never fuses, so the software rasterizer's float edge /
-    # shading math produced +-1 colour steps on single pixels between a Mac
-    # and a Windows peer (VRAM, hence the av digest, diverged from ~sim 1800
-    # in every cross-machine R4 race; rollback baselines then aborted on
-    # "baseline av mismatch" and the realigns forked the session). Keep IEEE
-    # results identical everywhere: never contract.
-    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    # Same float results on every host of a netplay match (PS1B-490). Clang
+    # (default contract=on) and GCC (default contract=fast) turn a*b+c into one
+    # fused multiply-add wherever the target has the instruction: always on
+    # arm64 (Apple Silicon). x86-64 without -mfma emits no fused instruction,
+    # but Clang still folds constant a*b+c fused; contraction off makes Clang
+    # match GCC there too. A fused result is rounded once instead of twice, so
+    # the software renderer's float UV and shade interpolation picked other
+    # texels on an arm64 Mac than on a PC, and VRAM is part of the compared
+    # netplay state. Contraction off keeps every multiply and add rounded on
+    # its own on all targets. clang-cl ignores the plain spelling with only a
+    # warning, so it gets the /clang: pass-through (fp_contract_flag_test).
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+            set(_psx_fp_off_c "/clang:-ffp-contract=off")
+        else()
+            set(_psx_fp_off_c "-ffp-contract=off")
+        endif()
         target_compile_options(${target} PRIVATE
-            $<$<COMPILE_LANGUAGE:C>:-ffp-contract=off>
-            $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+            "$<$<COMPILE_LANGUAGE:C>:${_psx_fp_off_c}>")
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+            set(_psx_fp_off_cxx "/clang:-ffp-contract=off")
+        else()
+            set(_psx_fp_off_cxx "-ffp-contract=off")
+        endif()
+        target_compile_options(${target} PRIVATE
+            "$<$<COMPILE_LANGUAGE:CXX>:${_psx_fp_off_cxx}>")
     endif()
 
     if(MINGW)

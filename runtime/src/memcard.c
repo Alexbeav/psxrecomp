@@ -45,6 +45,8 @@ typedef struct {
 } MemCard;
 
 static MemCard cards[MAX_CARDS];
+static MemCard replay_saved_cards[MAX_CARDS];
+static int replay_cards_in;
 static MemcardExtensionLoad extension_load;
 static MemcardExtensionSave extension_save;
 
@@ -252,6 +254,7 @@ static void memcard_ensure_dir(const char* dir) {
 }
 
 void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
+    if (replay_cards_in) return;
     for (int i = 0; i < MAX_CARDS; ++i) discard_extension(&cards[i]);
     memset(cards, 0, sizeof(cards));
     memcard_ensure_dir(dir);
@@ -383,6 +386,7 @@ int memcard_write_sector(int card, int sector, const uint8_t* buf) {
 }
 
 void memcard_flush(int card) {
+    if (replay_cards_in) return;
     if (card < 0 || card >= MAX_CARDS) return;
     if (!cards[card].dirty) return;
     if (cards[card].filepath[0] == '\0') return;
@@ -474,7 +478,44 @@ int memcard_import_raw(int card, const uint8_t *src) {
     return cards[card].flush_result;
 }
 
+int memcard_replay_supported(void) {
+    if (memcard_extension_codec_active()) return 0;
+    for (int i = 0; i < MAX_CARDS; ++i)
+        if (cards[i].extension_size || cards[i].extension_read_failed || cards[i].extension_codec_failed)
+            return 0;
+    return 1;
+}
+
+int memcard_replay_begin(const uint8_t *images, unsigned mask) {
+    if (!images || (mask & ~3u) || !memcard_replay_supported()) return -1;
+    if (!replay_cards_in) {
+        memcard_flush_all();
+        for (int i = 0; i < MAX_CARDS; ++i)
+            if (cards[i].dirty && cards[i].filepath[0]) return -1;
+        memcpy(replay_saved_cards,cards,sizeof(cards));
+        memset(cards,0,sizeof(cards));
+        replay_cards_in = 1;
+    } else {
+        for (int i = 0; i < MAX_CARDS; ++i) discard_extension(&cards[i]);
+        memset(cards,0,sizeof(cards));
+    }
+    for (int i = 0; i < MAX_CARDS; ++i) {
+        memcpy(cards[i].data,images + (size_t)i * MEMCARD_SIZE,MEMCARD_SIZE);
+        cards[i].present = (int)((mask >> i) & 1u);
+    }
+    return 0;
+}
+
+void memcard_replay_end(void) {
+    if (!replay_cards_in) return;
+    for (int i = 0; i < MAX_CARDS; ++i) discard_extension(&cards[i]);
+    memcpy(cards,replay_saved_cards,sizeof(cards));
+    memset(replay_saved_cards,0,sizeof(replay_saved_cards));
+    replay_cards_in = 0;
+}
+
 int memcard_rebind_dir(const char *dir) {
+    if (replay_cards_in) return -1;
     int i;
     if (!dir || !dir[0]) return -1;
     memcard_ensure_dir(dir);
@@ -492,6 +533,7 @@ int memcard_rebind_dir(const char *dir) {
 }
 
 int memcard_rebind_paths(const char *path0, const char *path1) {
+    if (replay_cards_in) return -1;
     if (path0 && path0[0]) {
         snprintf(cards[0].filepath, sizeof(cards[0].filepath), "%s", path0);
     }
@@ -502,6 +544,7 @@ int memcard_rebind_paths(const char *path0, const char *path1) {
 }
 
 int memcard_rebind_path(int card, const char *path) {
+    if (replay_cards_in) return -1;
     if (card < 0 || card >= MAX_CARDS) return -1;
     if (path && path[0]) {
         snprintf(cards[card].filepath, sizeof(cards[card].filepath), "%s", path);
@@ -527,6 +570,7 @@ int memcard_rebind_path(int card, const char *path) {
 }
 
 int memcard_reload_bound(void) {
+    if (replay_cards_in) return 0;
     int i;
     for (i = 0; i < MAX_CARDS; i++) {
         FILE *f;

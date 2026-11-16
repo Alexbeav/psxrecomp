@@ -27,8 +27,6 @@ uint32_t interrupts_cycles_to_vblank(void) { return UINT32_MAX; }
 uint32_t timers_cycles_to_irq(uint32_t mask) { (void)mask; return UINT32_MAX; }
 uint32_t cdrom_cycles_to_irq(uint32_t mask) { (void)mask; return UINT32_MAX; }
 uint32_t dma_cycles_to_internal_event(void) { return UINT32_MAX; }
-void source_gpu_runtime_advance(void) {}
-uint32_t source_gpu_runtime_cycles_to_event(void) { return UINT32_MAX; }
 uint32_t dma_cycles_to_deliverable_irq(uint32_t mask) {
     (void)mask;
     return UINT32_MAX;
@@ -107,3 +105,5 @@ int main(void) {
  }
  printf("PASS %u production mult/div pending-charge/deadline checks\n",checks);return 0;
 }
+
+#include "source_bus_inactive_clock.inc"

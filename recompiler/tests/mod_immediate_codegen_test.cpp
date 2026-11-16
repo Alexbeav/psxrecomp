@@ -240,16 +240,18 @@ void emission() {
               out.find("< 32") != std::string::npos,
           "each variant compares against its own immediate");
 
-    // lbu: offsets differ per variant; deferred loads rewrite every copy.
+    // lbu: one selected read feeds the CPU-owned pipeline across every variant.
     const auto load_out = generate({kNop, kLbuV0V1, kUseV0, kNop},
         with_sites({make(kBase + 4u, kLbuV0V1, 3, {0x2E9 + 0x100, 0x2E9 - 0x100})})).full_code;
     check(count_of(load_out, "switch (psx_mod_immediate_select(3u))") == 1, "load site switched");
     check(load_out.find("1001") != std::string::npos,
           "relocated load offset emitted (0x2E9+0x100 = 1001)");
-    check(count_of(load_out, "psx_ldd_80010004") >= 4,
-          "a deferred load writes the temporary in every selector copy");
-    check(load_out.find("cpu->gpr[2] = psx_ldd_80010004;") != std::string::npos,
-          "the deferred load is still written back");
+    check(count_of(load_out, "psx_load_value_arm(cpu, 2u, psx_new_load_value)") == 1,
+          "every selected load value arms the one CPU-owned pending slot");
+    check(load_out.find("cpu->gpr[2] = psx_old_load_value;") != std::string::npos,
+          "the successor initially sees the pre-load register value");
+    check(count_of(load_out, "psx_cyc_load_byte(") == 3,
+          "both variants and the default retain their actual memory read");
 
     // sb store + addiu pointer formation.
     const auto st = generate({kSbA1V1, kAddiuA0V1, kNop},

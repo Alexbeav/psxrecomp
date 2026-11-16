@@ -206,3 +206,5 @@ int main(void) {
     printf("%s (%d failure%s)\n", fails ? "FAILED" : "passed", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }
+
+#include "source_bus_inactive_clock.inc"

@@ -16,6 +16,15 @@ static uint32_t pack_vertex(int16_t x, int16_t y) {
 }
 
 static void reset_gpu_state_for_test(void) {
+#ifdef GPU_QUEUE_HOST_CLOCK
+    /* Select the existing bounded FIFO machinery explicitly. Default GP0
+     * dispatch remains immediate; this unit is not route initialization. */
+    source_gpu_queue_enabled = 1;
+    source_gpu_config = 2;
+    gpu_queue_reset();
+    gp1_reset_command_buffer();
+    texpage_x = 0;
+#endif
     memset(test_ram, 0, sizeof(test_ram));
     memset(&last_textured_rect, 0, sizeof(last_textured_rect));
     memset(ws_hud_anchor_tags, 0, sizeof(ws_hud_anchor_tags));

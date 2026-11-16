@@ -195,7 +195,7 @@ int psx_bios_module_cache_path(const char *exe_dir, const char *stem,
     n = snprintf(out, cap, "%s/cache/bios/%s/bm%d_%08x_f%d/%s_%08X." PSX_BM_EXT,
                  exe_dir, overlay_loader_arch_abi(),
                  PSX_BIOS_MODULE_ABI_VERSION, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
-                 (int)PSX_OVERLAY_FLAVOR, stem, crc32);
+                 (int)PSX_BIOS_MODULE_FLAVOR, stem, crc32);
     return n > 0 && (size_t)n < cap;
 }
 
@@ -208,6 +208,7 @@ void psx_bios_module_fill_callbacks(PsxBiosModuleCallbacks *out) {
     extern uint64_t s_frame_count;
     extern uint32_t g_psx_mod_guest_functions;
     extern int psx_mod_dispatch_guest_function(struct CPUState *cpu, uint32_t address);
+    extern int (*g_psx_func_override_hook)(struct CPUState *cpu, uint32_t phys);
     memset(out, 0, sizeof(*out));
     out->size = (uint32_t)sizeof(*out);
     out->arith_overflow            = psx_arith_overflow;
@@ -233,6 +234,7 @@ void psx_bios_module_fill_callbacks(PsxBiosModuleCallbacks *out) {
     out->frame_count               = &s_frame_count;
     out->mod_guest_functions       = &g_psx_mod_guest_functions;
     out->mod_dispatch_guest_function = psx_mod_dispatch_guest_function;
+    out->func_override_hook        = &g_psx_func_override_hook;
 }
 
 /* ---- Loading -------------------------------------------------------------- */
@@ -458,7 +460,7 @@ static int build_module(const BmToolchain *tk, const char *dump_path,
     char flavor[32];
     int rc;
     const char *compiler = tk->has_gcc ? "gcc" : "tcc";
-    snprintf(flavor, sizeof(flavor), "%d", (int)PSX_OVERLAY_FLAVOR);
+    snprintf(flavor, sizeof(flavor), "%d", (int)PSX_BIOS_MODULE_FLAVOR);
     if (!append_q(cmd, sizeof(cmd), tk->python) ||
         !append_s(cmd, sizeof(cmd), " ") || !append_q(cmd, sizeof(cmd), tk->builder) ||
         !append_s(cmd, sizeof(cmd), " --dump ") || !append_q(cmd, sizeof(cmd), dump_path) ||

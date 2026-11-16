@@ -20,7 +20,7 @@ def main():
     signature = 'static void loader_log(const char *fmt, ...) {'
     start = source.index(signature)
     logger = source[start:source.index('\n}', start) + 2]
-    calls = re.findall(r'loader_log\("ABI/flavor mismatch.*?\);', source, re.S)
+    calls = re.findall(r'loader_log\("ABI/flavor mismatch: dll=.*?\);', source, re.S)
     if len(calls) != 2:
         raise ValueError('expected the Windows and POSIX ABI mismatch calls')
     buffer_size = int(size[1])

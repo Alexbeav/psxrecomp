@@ -135,6 +135,8 @@ def compile_module(sources: list[str], out: str, include_dirs: list[str],
                                 "-DPSX_OVERLAY_CODEGEN_HASH=0x%08xu" % (codegen_hash & 0xFFFFFFFF)]
     if int(flavor) & 2:
         defines.append("-DPSX_PGXP=1")
+    if int(flavor) & 4:
+        defines.append("-DPSX_SOURCE_BUS_BOUNDARY=1")
     if compiler == "tcc":
         # Same treatment compile_overlays gives a shard: strip any BOM, add the
         # __builtin_ctz shim, and hand tcc BOM-free copies of the headers.
@@ -163,7 +165,7 @@ def compile_module(sources: list[str], out: str, include_dirs: list[str],
         if tc_dir is None:
             print("  WARNING: no gcc toolchain dir found; compile may fail to launch")
     print("  compile: " + " ".join(cmd))
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', env=env)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or "").strip() or "(no compiler output)"
         print(f"  COMPILE ERROR (exit {r.returncode}):\n{msg}")
@@ -297,7 +299,7 @@ def main(argv=None) -> int:
         env.setdefault("PSX_CPS", "1")
         cmd = [emitter, "--config", os.path.join("bios", f"{args.stem}.toml"), "--out-dir", gen]
         print("  emit: " + " ".join(cmd))
-        r = subprocess.run(cmd, cwd=work, capture_output=True, text=True, env=env)
+        r = subprocess.run(cmd, cwd=work, capture_output=True, text=True, encoding='utf-8', errors='replace', env=env)
         if r.returncode != 0:
             tail = "\n".join((r.stderr or r.stdout or "").splitlines()[-25:])
             die(f"psxrecomp-bios exited {r.returncode}:\n{tail}")

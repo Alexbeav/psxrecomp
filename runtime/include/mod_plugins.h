@@ -573,6 +573,10 @@ int psx_mod_save_selection(void);
  * the committed plan; psx_mod_save_selection persists it). Main thread.
  * Returns 1 on success. Used by the in-game menu host. */
 int psx_mod_feature_enable(const char* package_id, const char* feature_id, int enabled);
+/* The player's saved choice for a feature (what the next session runs), and
+ * whether this session's committed plan runs it. In-game menu. */
+int psx_mod_feature_selected(const char* package_id, const char* feature_id);
+int psx_mod_feature_active(const char* package_id, const char* feature_id);
 int psx_mod_feature_set_option(const char* package_id, const char* feature_id,
                                const char* option_id, const char* value);
 /*
@@ -877,6 +881,20 @@ int psx_mod_render_local_pair(struct CPUState *cpu, const PSXModStereoFrame *fra
  * its two views; canonical menu, movie and unavailable-pair frames are shown
  * in both 4:3 panes. Does not change the guest's aspect or retain stale views. */
 int psx_mod_set_local_pair_presentation(int enabled);
+/* Three native4:3 views on an 8:6 canvas: top left, top right, and bottom
+ * center with black side pillars. All three callbacks must succeed before
+ * publication. Shared menus/movies use the same three-pane arrangement. */
+int psx_mod_render_local_triple(struct CPUState *cpu, const PSXModStereoFrame *frame,
+                                PSXModStereoFn fn, void *user);
+int psx_mod_set_local_triple_presentation(int enabled);
+/* Four draw-only views from one checkpoint, atomically published in a 2x2
+ * grid (8:6 canvas). Callback indices are top left, top right, bottom left,
+ * bottom right. A producer may use two adjacent views for one wide camera.
+ * Shared menus/movies fill the same grid without retaining stale gameplay.
+ * Offline only; the same backend and sandbox rules as local pairs apply. */
+int psx_mod_render_local_grid(struct CPUState *cpu, const PSXModStereoFrame *frame,
+                              PSXModStereoFn fn, void *user);
+int psx_mod_set_local_grid_presentation(int enabled);
 uint32_t psx_mod_render_stereo_status(void);
 /* Annotate the current frame's trace record with a short tag (scene transition,
  * state change). Only meaningful while PSX_FRAME_TRACE is on and a traced frame

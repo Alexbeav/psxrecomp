@@ -37,6 +37,7 @@
 extern uint8_t  g_test_ram[0x200000];
 extern uint64_t psx_cycle_count;
 extern uint32_t i_stat, i_mask;
+extern int g_precise_mode;
 extern uint32_t g_dirty_safe_resume_pc;
 extern int (*g_test_recover_null_pc)(CPUState *, uint32_t *);
 extern uint32_t psx_read_word(uint32_t addr);
@@ -202,6 +203,7 @@ static void restore_snapshot_and_resume(CPUState *cpu)
     g_first_replay_entry = 1;
     interrupts_resync_after_restore();
     cpu->pc = g_snap->resume_pc;
+    g_precise_mode = 1; /* The resume abandons a precise-interpreter native frame. */
     psx_scheduler_resume_at(g_snap->resume_pc);   /* never returns */
 }
 
@@ -375,6 +377,9 @@ static int live_vs_replay(const char *name, const Program *p, int expect_irq_at_
     g_replay.n = 0; g_log = &g_replay;
     cpu.pc = LOADER_PC;
     psx_scheduler_run(&cpu);
+    if (g_precise_mode != 0) {
+        fprintf(stderr, "%s: scheduler resume leaked precise mode\n", name); return 1;
+    }
     capture_final(&rf, &cpu);
     if (compare_runs(name, &lf, &rf)) return 1;
     printf("  %-34s OK  (%d events, %d IRQs, edge pc=%08X cyc=%llu)\n", name,

@@ -5,9 +5,19 @@
  * Draw calls that tests observe are recorded below. */
 
 uint64_t s_frame_count;
+#ifndef GPU_QUEUE_REAL_CLOCK
 uint64_t psx_cycle_count;          /* gpu_timeline.c stamps notes with it */
+uint64_t psx_next_service_cycle;
+uint64_t psx_get_cycle_count(void){return psx_cycle_count;}
+uint64_t g_psx_cycle_fast_limit;
+#endif
 int g_exec_phase;
 int g_psx_render_pass_active;
+/* No presenter or VBlank service runs in this packet fixture. */
+void gr_display_mode_changed(void) {}
+#ifndef GPU_QUEUE_HOST_CLOCK
+uint32_t interrupts_get_cycles_since_vblank(void) { return 0; }
+#endif
 void psx_mod_counter_add(const char *name, uint32_t delta) { (void)name; (void)delta; }
 static int fixture_pgxp_enabled;
 int pgxp_enabled(void) { return fixture_pgxp_enabled; }
@@ -157,9 +167,11 @@ void psx_host_write_half(uint32_t addr, uint16_t val) {
     psx_write_half(addr, val);
 }
 
+/* Tests that need a streaming movie set this; every other test sees none. */
+static int fixture_mdec_streaming;
 int mdec_recently_active(uint32_t within_frames) {
     (void)within_frames;
-    return 0;
+    return fixture_mdec_streaming;
 }
 
 void psx_fatal_halt(const char *reason) {
@@ -481,3 +493,27 @@ void gl_renderer_fg_source(const uint32_t id[3], const int32_t pc[9], const int3
 void gte_fg_source_set(int enabled) { (void)enabled; }
 int gte_fg_source_enabled(void) { return 0; }
 int gte_fg_source_lookup(uint32_t packed, GteFgSrc out[2]) { (void)packed; (void)out; return 0; }
+
+/* Optional source owners stay inactive in default GPU execution fixtures. */
+int source_gpu_runtime_active(void){return 0;}
+int source_gpu_runtime_ready(void){return -2;}
+void source_gpu_runtime_set_dispatch_sink(SourceGPUDispatchSink sink){(void)sink;}
+uint32_t source_gpu_runtime_status_bits(void){return 0;}
+void source_gpu_runtime_gp0(uint32_t value){(void)value;fputs("unexpected source GP0 owner\n",stderr);exit(1);}
+void source_gpu_runtime_gp1(uint32_t value){(void)value;}
+void source_gpu_runtime_read(void){}
+void source_gpu_runtime_copy(SourceGPUServiceClock *clock,SourceGPUCommandProjection *command){(void)clock;(void)command;fputs("unexpected source GPU view\n",stderr);exit(1);}
+uint32_t source_gpu_runtime_snapshot_bytes(void){return 0;}
+void source_gpu_runtime_snapshot_write(uint8_t *p){(void)p;}
+int source_gpu_runtime_snapshot_read(const uint8_t *p,uint32_t n,int apply){(void)p;(void)apply;return !n;}
+void interrupts_raster_gp1(uint32_t word){(void)word;}
+int interrupts_raster_gpu_status(uint32_t *bits){(void)bits;return 0;}
+uint32_t interrupts_source_snapshot_bytes(void){return 0;}
+void interrupts_source_snapshot_write(uint8_t *p){(void)p;}
+int interrupts_source_snapshot_read(const uint8_t *p,uint32_t n,int apply){(void)p;(void)apply;return !n;}
+uint32_t sw_source_texture_snapshot_bytes(void){return 0;}
+void sw_source_texture_snapshot_write(uint8_t *p){(void)p;}
+int sw_source_texture_snapshot_read(const uint8_t *p,uint32_t n,int apply){(void)p;(void)apply;return !n;}
+void gr_source_texture_control(unsigned action,uint32_t page){(void)action;(void)page;}
+int gr_draw_source_triangle(const int *x,const int *y,const uint32_t *colors,int shaded,int dither,int interlace,unsigned field,const SourceGPUTexture *texture,int *extra){(void)x;(void)y;(void)colors;(void)shaded;(void)dither;(void)interlace;(void)field;(void)texture;(void)extra;fputs("unexpected source raster\n",stderr);exit(1);}
+int gr_draw_source_block(const SourceGPUBlock *block,int *extra){(void)block;(void)extra;fputs("unexpected source raster\n",stderr);exit(1);}

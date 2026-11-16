@@ -130,7 +130,8 @@ int main(void)
     /* Idle invent ignores prior hold (MotK menu path). */
     CHECK(netplay_ih_invent_idle(&h, 1, 13, &got), "invent idle");
     CHECK(got.is_predicted && got.buttons == 0xFFFFu, "idle buttons");
-    CHECK(got.stick_x == 0 && got.stick_y == 0 && got.analog == 0u, "idle sticks");
+    CHECK(got.stick_x == 0 && got.stick_y == 0, "idle sticks");
+    CHECK(got.analog == 1u, "idle preserves the previous controller type");
     CHECK(h.invent_count == 3u, "invent count after idle");
 
     /* Promote replaces predicted (tick 13 idle row). */

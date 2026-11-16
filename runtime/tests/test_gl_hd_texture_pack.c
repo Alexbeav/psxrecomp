@@ -25,6 +25,7 @@ void psx_host_sleep_micros(unsigned us) { SDL_Delay((us + 999u) / 1000u); }
 int present_shot_take(char* out,int n) { (void)out; (void)n; return 0; }
 int host_osd_image(const uint32_t** p,int* w,int* h) { (void)p; (void)w; (void)h; return 0; }
 int host_osd_volume_image(const uint32_t** p,int* w,int* h) { return host_osd_image(p,w,h); }
+int host_osd_rec_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
 void host_osd_present_done(void) {}
 int psx_rewind_overlay_image(const uint32_t** p,int* w,int* h) { return host_osd_image(p,w,h); }
 float psx_rewind_slide(void) { return 0; }
@@ -583,17 +584,29 @@ int main(int argc,char** argv) {
     pack_png(argv[1],0); pack_png(argv[1],1);pack_parts(argv[1]);pack_config(argv[1],0);
     gr_set_backend(GR_BACKEND_SOFTWARE); gr_init(reference);
     sw_set_faithful_authority(1); native_scene(); sw_set_faithful_authority(0);
-    if(SDL_Init(SDL_INIT_VIDEO)!=0) return 2;
+    if(SDL_Init(SDL_INIT_VIDEO)!=0) { fprintf(stderr,"SKIP no video (%s)\n",SDL_GetError()); return 77; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_Window* win=SDL_CreateWindow("HD pack regression",0,0,128,128,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN);
-    if(!win) return 2;
+    if(!win) { fprintf(stderr,"SKIP no window (%s)\n",SDL_GetError()); return 77; }
+    /* Match the shared fixture: unavailable host context is a skip;
+     * renderer initialization and all rendering assertions remain failures. */
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    SDL_GLContext probe = SDL_GL_CreateContext(win);
+    if (!probe) {
+        fprintf(stderr, "SKIP no GL 3.3 core context (%s)\n", SDL_GetError());
+        return 77;
+    }
+    SDL_GL_MakeCurrent(win, NULL);
+    SDL_GL_DeleteContext(probe);
+
     gr_set_backend(GR_BACKEND_OPENGL); gr_init(vram); gr_set_scale(4);
     char error[512]={0};
     check(gpu_hd_textures_configure(argv[1],1,1,error,sizeof(error)),error);
     gl_renderer_set_swap_interval(0);
-    if(!gl_renderer_init_context(win)) return 2;
+    if(!gl_renderer_init_context(win)) { fprintf(stderr,"FAIL renderer context (%s)\n",SDL_GetError()); return 2; }
     if(s_hiw) check(hiw_ensure(0,64)!=NULL,"high-resolution window allocated before draws");
     state(); gr_vram_transfer_in(512,0,4,4,source_words);
     wait_ready(0); wait_ready(1);
@@ -686,8 +699,8 @@ int main(int argc,char** argv) {
     check(gl_renderer_stereo_unavailable()!=PSX_MOD_RENDER_PASS_READY,"stereo refuses HD authority");
     GpuHdTextureDiag diag; gpu_hd_textures_get_diag(&diag);
     check(diag.applied_draws>0,"replacement diagnostics record actual GL submissions");
-    /* Preserve the established Beetle numeric-key path with source origin
-     * offset, native cutout and native STP authority. */
+    /* Beetle numeric keys retain upload-relative UVs and native STP, but
+     * replacement alpha owns coverage, including over native zero texels. */
     char beetle_root[2048],beetle_png[2304],hashes[2304];
     snprintf(beetle_root,sizeof(beetle_root),"%s/beetle",argv[1]);
     snprintf(hashes,sizeof(hashes),"%s/Hashes.ini",beetle_root);
@@ -698,6 +711,7 @@ int main(int argc,char** argv) {
     for(int y=0;y<16;++y) for(int x=0;x<16;++x) {
         uint8_t* at=beetle_rgba+(y*16+x)*4;
         at[0]=x<4?255:0; at[1]=x>=8?255:0; at[2]=x>=4&&x<8?255:0; at[3]=255;
+        if(y>=12 && x<4) at[3]=0;
     }
     FILE* bf=fopen(beetle_png,"wb"); check(bf!=NULL,"Beetle PNG open");
     if(bf){check(png_write_rgba(bf,beetle_rgba,16,16),"Beetle PNG fixture");fclose(bf);}
@@ -710,8 +724,15 @@ int main(int argc,char** argv) {
     check(sample(16,16)[2]>200 && sample(16,16)[0]<20,"Beetle partial draw keeps upload-relative UV origin");
     check(vram[4*1024+4]==0x83e0 && vram[517]==0x83e0,
           "Beetle image preserves native draw RGB and source STP");
+    gr_fill_rect(0,0,16,16,0x4210);
     gr_draw_textured_rect(8,4,4,4,4,0,0,0,texture_page); capture();
-    check(sample(44,16)[1]>200,"Beetle native transparent zero still cuts out replacement");
+    check(sample(44,16)[1]>200 && sample(44,16)[0]<20,
+          "Beetle opaque replacement fills native transparent holes");
+    check(sample(32,28)[0]>100 && sample(32,28)[0]<160 &&
+          sample(32,28)[1]>100 && sample(32,28)[1]<160,
+          "Beetle replacement alpha cuts out over occupied native texels");
+    check(vram[4*1024+11]==0x4210 && vram[7*1024+8]==0x03e0,
+          "Beetle replacement coverage never changes native VRAM");
     /* Render thread: residency follows the recorded command stream and the
      * render thread's VRAM copy. The emulation thread writes its array and
      * records the overwrite before the first draw has been replayed; that

@@ -5,12 +5,14 @@
 // which is what real .bin/.cue and .iso dumps use respectively).
 
 #include "disc_identity.h"
+#include "disc_roster.h"
 #include "disc_toc_fingerprint.h"
 
 #include "crc32.h"
 #include "disc_path.h"
 #include "iso_reader.h"
 #include "psx_sha256.h"
+#include "sbi_setup.h"
 
 #include <algorithm>
 #include <cctype>
@@ -57,16 +59,16 @@ std::string region_from_serial(const std::string& serial) {
 // "SCUS-94236". Pass-through for things already in game-id form. Returns ""
 // if the token doesn't look like a serial.
 std::string normalize_serial(const std::string& raw) {
+    // Some boot filenames insert a fifth letter after the territory prefix
+    // (SLUSP012.06). Keep the canonical four-letter id, but do not
+    // reinterpret unknown prefixes.
     std::string s;
-    for (char c : raw) {
+    for (char c : raw)
         if (std::isalnum((unsigned char)c)) s += (char)std::toupper((unsigned char)c);
-        // drop separators ('_', '.', '-')
-    }
-    // Expect 4 letters + 5 digits.
-    if (s.size() < 9) return std::string();
-    for (int i = 0; i < 4; i++) if (!std::isalpha((unsigned char)s[i])) return std::string();
-    for (int i = 4; i < 9; i++) if (!std::isdigit((unsigned char)s[i])) return std::string();
-    return s.substr(0, 4) + "-" + s.substr(4, 5);
+    if (s.size() == 10 && std::isalpha((unsigned char)s[4]) &&
+        !region_from_serial(s).empty()) s.erase(4, 1);
+    const auto key = disc_roster_serial_key(s.size() == 9 ? s : raw);
+    return key.size() == 10 && key[4] == '-' ? key : std::string();
 }
 
 // Scan the SYSTEM.CNF text region for the BOOT serial. PSX SYSTEM.CNF holds a
@@ -131,6 +133,7 @@ void fill_toc_from_mount(DiscIdentity& v, const DiscPathResolution& resolved) {
         return;
     }
     v.toc_opened = true;
+    v.sbi_loaded = reader.HasSubChannelReplacements();
     // SYSTEM.CNF can lie beyond the bounded early-image scan. Read the actual
     // directory entry first; unrelated executable strings must not select a region.
     uint8_t pvd[2048];
@@ -175,7 +178,10 @@ void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect
         id.netplay_detail = "Disc TOC could not be opened for netplay.";
         return;
     }
-    if (expect.require_cue) {
+    // require_cue keeps a bare .bin of a multi-track disc out. A .chd holds
+    // every track in one file, so it meets the rule; its tracks and its TOC
+    // fingerprint are checked below like a cue's (PS1B-294).
+    if (expect.require_cue && !id.from_chd) {
         if (id.cue_fallback || !id.from_cue) {
             id.netplay_ok = false;
             id.netplay_detail =
@@ -226,12 +232,23 @@ DiscIdentity identify_disc(const fs::path& path,
     // the .cue and its .bin must produce the same verdict, serial and CRC32.
     const DiscPathResolution resolved = resolve_disc_path(path);
     fill_toc_from_mount(v, resolved);
+    v.from_chd = is_chd_path(resolved.mount);
 
     const fs::path data_path = resolved.data;
     PS1::ISOReader disc;
-    if (is_chd_path(resolved.mount)) {
+    if (v.from_chd) {
+        // The title's netplay rule applies to a .chd as it does to a cue, at
+        // every way out of this branch. It was skipped here before, so a wrong
+        // or damaged .chd started a match that then fell apart (PS1B-294).
+        const auto netplay_verdict = [&]() {
+            if (netplay_expect)
+                apply_netplay_disc_expect(v, *netplay_expect);
+            else if (!v.toc_opened)
+                v.netplay_ok = false;
+        };
         if (!disc.Open(resolved.mount.string())) {
             v.detail = "Could not open or decode the CHD disc image.";
+            netplay_verdict();
             return v;
         }
         v.opened = true;
@@ -244,6 +261,7 @@ DiscIdentity identify_disc(const fs::path& path,
             v.detail =
                 "No ISO9660 CD001 header was found in the CHD data track.";
             v.region = region_from_serial(expected_serial);
+            netplay_verdict();
             return v;
         }
 
@@ -293,6 +311,9 @@ DiscIdentity identify_disc(const fs::path& path,
                 v.crc_matches = v.crc == expected_crc;
             }
         }
+        netplay_verdict();
+        v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
+                                            v.sbi_loaded);
         return v;
     }
 
@@ -378,6 +399,11 @@ DiscIdentity identify_disc(const fs::path& path,
     if (netplay_expect)
         apply_netplay_disc_expect(v, *netplay_expect);
 
+    // sbi_loaded is set only by a TOC mount that also loaded the .sbi, so an
+    // image whose TOC did not mount (a damaged .sbi beside it, say) has no SBI
+    // loaded: the warning agrees with the launcher's SBI File row.
+    v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
+                                        v.sbi_loaded);
     return v;
 }
 

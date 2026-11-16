@@ -61,18 +61,21 @@ def nm_symbols(objs):
 
 
 def write_stubs(path, symbols):
-    lines = ["#include <stdlib.h>", "/* Unrelated link seams must not execute. */"]
-    lines += ["void %s(void) { abort(); }" % s for s in sorted(symbols)]
+    lines = ["#include <stdlib.h>", "#include <stdio.h>", "/* Unrelated link seams must not execute. */"]
+    lines += ['void %s(void) { fprintf(stderr, "unexpected fixture seam: %s\\n"); abort(); }' % (s, s)
+              for s in sorted(symbols)]
     path.write_text("\n".join(lines) + "\n")
 
 
-def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=()):
+def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=(), extra_compile_flags=()):
+    if any(name in modules for name in ("memory.c", "dirty_ram_interp.c")) and "psx_ram_geometry.c" not in modules:
+        modules = [*modules, "psx_ram_geometry.c"]
     tag = opt.replace("-", "")
     include = str(src_root / "include")
     objs = []
     for src in modules:
         obj = work / (Path(src).stem + tag + ".o")
-        subprocess.run([cc, "-std=c++17" if Path(src).suffix == ".cpp" else "-std=c11", opt, "-w", "-I", include,
+        subprocess.run([cc, "-std=c++17" if Path(src).suffix == ".cpp" else "-std=c11", opt, *extra_compile_flags, "-w", "-I", include,
                         *["-D" + d for d in defines],
                         "-c", str(src_root / "src" / src), "-o", str(obj)],
                        check=True)
@@ -86,7 +89,7 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
 
     test_c = here / test_name
     test_o = work / ("sectionwire" + tag + ".o")
-    subprocess.run([cc, "-std=c11", opt, "-Wall", "-Wextra", "-Werror",
+    subprocess.run([cc, "-std=c11", opt, *extra_compile_flags, "-Wall", "-Wextra", "-Werror",
                     "-I", include, "-c", str(test_c), "-o", str(test_o)],
                    check=True)
     exe = work / ("sectionwire" + tag + (".exe" if os.name == "nt" else ""))

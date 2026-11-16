@@ -31,6 +31,8 @@ static uint64_t s_frame_count,s_input_route_start_frame;
 static int s_input_override=-1,s_input_frames,s_axis_override,s_host_layer;
 static bool s_digital_pad_injected_frame;
 static int g_offline_pad_count=1;
+static int s_input_route_file_mode; /* pin I: route-file delivery off here */
+static int input_file_next(){return -1;}
 static struct {int callback;} g_mod_controller_policy[1];
 static int g_mod_controller_mode_override[1]={-1};
 static bool local_mouse_live(int){return true;}

@@ -71,3 +71,13 @@ void psx_stick_to_dualshock(int16_t x, int16_t y,
     *out_x = signed_axis_to_byte(scaled_x);
     *out_y = signed_axis_to_byte(scaled_y);
 }
+
+uint8_t psx_stick_axis_to_byte(int16_t value, int deadzone, int anti_deadzone)
+{
+    uint8_t out;
+    uint8_t centre;
+
+    psx_stick_to_dualshock(value, 0, deadzone, anti_deadzone, &out, &centre);
+    (void)centre;
+    return out;
+}

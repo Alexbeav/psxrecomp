@@ -1,0 +1,71 @@
+"""Compile the production ReadN/ReadS cases against a synthetic drive.
+
+No retail media required. Pass C compiler and a private output directory.
+
+Expectation: a data read on a disc with no SYSTEM.CNF disc id (an audio CD) answers INT5
+with status|error and error byte 40h, before any mode-dependent path. So the rejection must
+hold for EVERY Setmode byte, the CDDA bit included. [NOT OBSERVED: no C fixture covers an
+audio-only disc; see the comment on reject_audio_disc_data_read in cdrom.c.]
+"""
+from pathlib import Path
+import subprocess, sys
+
+source = (Path(__file__).parents[1] / 'src/cdrom.c').read_text(encoding='utf-8')
+source = source.replace('#include "cdrom_source_profile.inc"', (Path(__file__).parents[1] / 'src/cdrom_source_profile.inc').read_text(encoding='utf-8'))
+start = source.index('static int reject_audio_disc_data_read(void) {')
+end = source.index('\n}', start) + 2
+helper = source[start:end]
+assert 'mode_reg' not in helper, 'audio-disc rejection must not depend on the transfer mode'
+commands = source[source.index("static void exec_command(uint8_t cmd) {"):]
+cases = []
+for marker in ['    case 0x06: /* ReadN */', '    case 0x1B: /* ReadS */']:
+    start = commands.index(marker)
+    cases.append(commands[start:commands.index('\n    case ', start + len(marker))])
+
+harness = r'''
+#include <stdint.h>
+#include <assert.h>
+#include <stdio.h>
+#define CDSTAT_ERROR 1
+#define CDSTAT_MOTOR 2
+#define CDIRQ_ERROR 5
+#define CDIRQ_ACK 3
+static void *iso_handle = (void*)1;
+static uint8_t mode_reg, stat_reg = 2;
+static int track_count, data_track, present, bytes[8], count, irq, reads;
+static int iso_cdda_track_count(void *p) { (void)p; return track_count; }
+static int iso_cdda_track_is_audio(void *p, int t) { (void)p; return t != data_track; }
+static int has_disc(void) { return present; }
+static void response_push(int v) { bytes[count++] = v; }
+static void set_irq(int v) { irq = v; }
+static int read_continues_current_stream(void) { return 0; }
+static void start_read_stream(int cmd) { (void)cmd; reads++; }
+'''+helper+'\nstatic void execute(uint8_t cmd) { switch(cmd) {\n'+''.join(cases)+r'''
+} }
+int main(void) {
+  const int commands[] = {6, 27};
+  for (unsigned i=0; i<2; ++i) {
+    /* 1-track and album audio-only media: every mode byte errors, CDDA included. */
+    for (int n=1; n<=12; n+=11) for (int mode=0; mode<256; ++mode) {
+      track_count=n; data_track=0; present=1; mode_reg=(uint8_t)mode;
+      count=irq=reads=0; execute(commands[i]);
+      assert(reads==0 && irq==5 && count==2 && bytes[0]==3 && bytes[1]==0x40);
+    }
+    /* Every data-track position keeps the mixed-mode data path, in every mode. */
+    for (int t=1; t<=8; ++t) for (int mode=0; mode<256; ++mode) {
+      track_count=8; data_track=t; present=1; mode_reg=(uint8_t)mode;
+      count=irq=reads=0; execute(commands[i]);
+      assert(reads==1 && irq==3 && count==1 && bytes[0]==2);
+    }
+    present=0; count=irq=reads=0; execute(commands[i]);
+    assert(reads==0 && irq==5 && count==1);
+  }
+  puts("PASS: production ReadN/ReadS audio-disc errors, all mode bytes, mixed-mode and no-disc controls");
+}
+'''
+out = Path(sys.argv[2]); out.mkdir(parents=True, exist_ok=True)
+fixture = out/'audio_disc_read_fixture.c'
+fixture.write_text(harness, encoding='utf-8')
+exe = out/'audio_disc_read_fixture.exe'
+subprocess.run([sys.argv[1], '-std=c11', '-Wall', '-Wextra', '-Werror', str(fixture), '-o', str(exe)], stdin=subprocess.DEVNULL, check=True)
+subprocess.run([str(exe)], stdin=subprocess.DEVNULL, check=True)

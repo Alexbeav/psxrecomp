@@ -129,6 +129,13 @@ int g_ls_replay_active = 0;
 static unsigned long long cycles;
 void psx_advance_cycles(uint32_t c) { cycles += c; }
 void psx_cpu_charge(uint32_t c) { cycles += c; }
+/* No overlay charge accumulator or instruction observer is installed here.
+ * The real cache owner still accounts every fetch against this same clock. */
+uint64_t psx_get_cycle_count(void) { return cycles; }
+void overlay_flush_cycles(void) {}
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t pc) {
+    psx_cpu_step_boundary_fn(cpu, pc);
+}
 int main(void) {
     CPUState cpu; char line[64];
     memset(&cpu, 0, sizeof cpu);

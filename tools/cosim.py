@@ -56,13 +56,16 @@ def launch(mode, port, stride, start_cycle):
     cwd_b = os.environ.get("COSIM_CWD_B", "")
     if cwd_b and port != 4600 and str(port).endswith("1"):
         cwd = cwd_b
-        exe_b = os.environ.get("COSIM_EXE_B",
-                               os.path.join(cwd_b, os.path.basename(EXE)))
+        explicit_b = os.environ.get("COSIM_EXE_B", "")
+        exe_b = explicit_b or os.path.join(cwd_b, os.path.basename(EXE))
         if not os.path.isfile(exe_b):
             raise RuntimeError(
                 f"instance B exe not found: {exe_b} — copy the freshly built "
                 f"exe into COSIM_CWD_B (its mods/ root is exe-dir-relative)")
-        if os.path.getmtime(exe_b) < os.path.getmtime(EXE) - 1:
+        # The staleness guard is for the default layout, where B is a copy of
+        # A's exe. An explicit COSIM_EXE_B names a different build on purpose
+        # (e.g. before vs after a codegen change), so its age says nothing.
+        if not explicit_b and os.path.getmtime(exe_b) < os.path.getmtime(EXE) - 1:
             raise RuntimeError(
                 f"instance B exe is STALE: {exe_b} is older than {EXE} — "
                 f"copy the freshly built exe into COSIM_CWD_B")
@@ -81,20 +84,50 @@ def launch(mode, port, stride, start_cycle):
         env["PSX_FORCE_INTERP"] = "1"
     log_path = os.path.join(LOGDIR, f"cosim_{mode}_{port}_{os.getpid()}.log")
     log_file = open(log_path, "wb")
+    # CREATE_NEW_PROCESS_GROUP keeps a console Ctrl-C off the guests; it does
+    # not exist off Windows, where start_new_session does the same job.
+    if sys.platform == "win32":
+        spawn_kw = {"creationflags": 0x00000200}
+    else:
+        spawn_kw = {"start_new_session": True}
     p = subprocess.Popen([exe, "--headless", "--no-launcher", "--game", GAME],
                          cwd=cwd, env=env,
                          stdout=log_file, stderr=subprocess.STDOUT,
-                         creationflags=0x00000200)
+                         **spawn_kw)
     p._cosim_log_path = log_path
     p._cosim_log_file = log_file
     if os.environ.get("PSX_COSIM_BELOW_NORMAL") == "1":
         try:
-            import ctypes
-            h = ctypes.windll.kernel32.OpenProcess(0x0400, False, p.pid)
-            ctypes.windll.kernel32.SetPriorityClass(h, 0x00004000)  # BELOW_NORMAL
+            if sys.platform == "win32":
+                import ctypes
+                h = ctypes.windll.kernel32.OpenProcess(0x0400, False, p.pid)
+                ctypes.windll.kernel32.SetPriorityClass(h, 0x00004000)  # BELOW_NORMAL
+            else:
+                os.setpriority(os.PRIO_PROCESS, p.pid, 10)
         except Exception:
             pass
     return p
+
+def require_port_free(port):
+    """A guest left over from an earlier run answers on the same port, and the
+    coordinator would then talk to IT instead of the instance it just launched
+    — comparing a finished guest against a fresh one, which looks exactly like
+    a first divergence at the last checkpoint. Refuse to start instead."""
+    s = socket.socket()
+    s.settimeout(2)
+    try:
+        s.connect(("127.0.0.1", port))
+    except Exception:
+        return
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+    raise RuntimeError(
+        f"cosim port {port} is already in use — a psx-cosim from an earlier run "
+        f"is still alive. Kill it before starting, or this run would compare "
+        f"against that stale guest.")
 
 def connect(port, timeout=40):
     t0 = time.time()
@@ -192,6 +225,7 @@ def main():
         print(f"launch A={args.a}:{args.porta}  B={args.b}:{args.portb}  "
               f"stride={args.stride} start={args.start_cycle} cpudiff={args.cpudiff_at_cp}",
               flush=True)
+        require_port_free(args.porta); require_port_free(args.portb)
         pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
         try:
             sa = connect(args.porta); sb = connect(args.portb)
@@ -247,6 +281,7 @@ def main():
         return
 
     print(f"launch A={args.a}:{args.porta}  B={args.b}:{args.portb}  stride={args.stride} start={args.start_cycle}", flush=True)
+    require_port_free(args.porta); require_port_free(args.portb)
     pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
     try:
         sa = connect(args.porta); sb = connect(args.portb)

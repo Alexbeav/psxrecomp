@@ -1,3 +1,5 @@
+#include "disc_source_subq.h"
+#include <cstdlib>
 /*
  * iso_reader_c.cpp — C wrapper for the C++ ISOReader class
  *
@@ -11,6 +13,11 @@
 #include <cstring>
 
 extern "C" {
+int iso_cdda_track_count(void*);
+uint32_t iso_cdda_track_start_lba(void*,int);
+uint32_t iso_cdda_track_pregap_lba(void*,int);
+int iso_cdda_track_is_audio(void*,int);
+
 
 void* iso_open(const char* path) {
     auto* reader = new PS1::ISOReader();
@@ -19,6 +26,15 @@ void* iso_open(const char* path) {
         return nullptr;
     }
     return reader;
+}
+
+/* Passive source identity from the actual mounted reader, not the requested
+ * route roster. The caller binds this path to its checked local media. */
+int iso_source_bin_path(void* handle,char* out,uint32_t cap) {
+    if(!handle || !out || !cap)return 0;
+    const auto path=static_cast<PS1::ISOReader*>(handle)->GetBinPath();
+    if(path.empty() || path.size()>=cap)return 0;
+    std::snprintf(out,cap,"%s",path.c_str());return 1;
 }
 
 int iso_read_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
@@ -43,10 +59,39 @@ int iso_read_raw_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
     return 1;
 }
 
+/* Source raw-Q encoding with explicit geometry ownership. An audio-only
+ * override cannot change the position of an appended filesystem data track. */
+static int read_source_subq(void* handle,uint32_t lba,uint8_t* buffer,int size,int* valid,bool audio_view) {
+    if(!handle || !buffer || size<12 || !valid)return 0;
+    const auto* reader=static_cast<PS1::ISOReader*>(handle);
+    bool native_valid=false;
+    if(!reader->ReadSourceSubChannelQ(lba,buffer,&native_valid))return 0;
+    if(!native_valid){*valid=0;return 1;}
+    if(audio_view && mod_runtime_cdda_track_count()) {
+        int track=1;
+        for(int candidate=1;candidate<=iso_cdda_track_count(handle);candidate++) {
+            if(iso_cdda_track_pregap_lba(handle,candidate)>lba)break;
+            track=candidate;
+        }
+        psx_source_subq(lba,iso_cdda_track_start_lba(handle,track),static_cast<unsigned>(track),
+                        iso_cdda_track_is_audio(handle,track),buffer);
+    } else {
+        const uint32_t start=mod_runtime_disc_extent_start();
+        if(start && lba>=start && lba<mod_runtime_disc_sector_count(start))
+            psx_source_subq(lba,start,static_cast<unsigned>(reader->TrackCount()+1),0,buffer);
+    }
+    *valid=1;return 1;
+}
+int iso_read_cdda_subq(void* handle,uint32_t lba,uint8_t* buffer,int size,int* valid) {
+    return read_source_subq(handle,lba,buffer,size,valid,true);
+}
+
 int iso_read_subq(void* handle, uint32_t lba, uint8_t* buffer, int size,
                   int* valid) {
     if (!handle || !buffer || size < 12 || !valid) return 0;
     const auto* reader=static_cast<PS1::ISOReader*>(handle);
+    const char* tape=std::getenv("PSX_CD_SOURCE_CLOCK_TAPE");
+    if(tape && *tape)return read_source_subq(handle,lba,buffer,size,valid,false);
     const uint32_t start=mod_runtime_disc_extent_start();
     if (start && lba>=start && lba<mod_runtime_disc_sector_count(start)) {
         const auto bcd=[](uint32_t v) {return uint8_t((v/10)*16+v%10);};
@@ -64,8 +109,7 @@ int iso_read_subq(void* handle, uint32_t lba, uint8_t* buffer, int size,
         *valid=1;return 1;
     }
     bool crc_valid = false;
-    if (!static_cast<PS1::ISOReader*>(handle)->ReadSubChannelQ(
-            lba, buffer, &crc_valid)) return 0;
+    if(!reader->ReadSubChannelQ(lba,buffer,&crc_valid))return 0;
     *valid = crc_valid ? 1 : 0;
     return 1;
 }

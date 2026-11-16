@@ -9,8 +9,11 @@
 #include <string.h>
 
 uint64_t psx_cycle_count, psx_next_service_cycle, s_frame_count;
+uint64_t psx_get_cycle_count(void) { return psx_cycle_count; }
 int psx_in_device_service, g_event_step_conservative, g_ls_replay_active;
 int g_psx_render_pass_active, g_psx_guest_time_frozen;
+/* This fixture exercises the modern MDEC jobs with the source GPU disabled. */
+int source_gpu_runtime_active(void){return 0;}
 uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit;
 uint32_t g_psx_ram_size=0x200000u, g_psx_ram_mask=0x1FFFFFu;
 uint32_t i_stat, g_debug_current_func_addr=0x80012340u;

@@ -67,7 +67,7 @@ assert "s_interp_origin_x = origin_x;" in flip and \
 assert squash("""frame_flip_tracker_vblank(&s_interp_flip, new_frame,
     &s_interp_phase_lo, &s_interp_phase_hi);""") in flat, \
     "the tracker must see every presented VBlank with the decision"
-assert squash("""if (!new_frame) { s_interp_duplicates++; return 1; }""") in flat, \
+assert squash("""if (!new_frame) { s_interp_duplicates++; return INTERP_REUSED; }""") in flat, \
     "a duplicate must return before the history is rotated"
 assert flip.index("frame_flip_is_new_frame(") < \
     flip.index("frame_flip_tracker_vblank(") < flip.index("if (!new_frame) {")

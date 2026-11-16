@@ -8,9 +8,12 @@ that locks the mode prevents a manual toggle and displays a message.
 The left stick supplies D-pad directions while the controller is digital.
 In analog mode, the sticks supply axes and the physical D-pad remains separate.
 Startup Analog/D-Pad preferences no longer force the live mode in ordinary
-local play. The launcher presents **Auto** for the normal controller.
+local play. The launcher presents **Auto** and the separate **NeGcon** device.
 
 Explicit title controller locks and special peripherals retain their declared
-presentation. Self-check input and network sessions retain their synchronized
-input contracts; the local Analog shortcut is disabled while those paths own
-input.
+presentation. Beginning or ending a replay recording preserves the live
+controller mode, including while the recorder prepares its starting state.
+New power-on recordings also use the ordinary digital-start controller.
+Playback, self-check input and network sessions retain their recorded or
+synchronized input contracts. The local Analog shortcut is disabled during
+recording and playback. Existing recordings are not rewritten.

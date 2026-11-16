@@ -10,6 +10,7 @@ bool guest=true, capture_ok=true, active=false, held=false;
 unsigned captures=0, releases=0, notices=0, resets=0;
 unsigned hold_presses=0, hold_releases=0;
 unsigned wheel_events=0;
+double wheel_dx=0, wheel_dy=0;
 psx::MouseControl suppressed=psx::MouseControl::None;
 bool capture(void*,bool on) { if(on) ++captures; else ++releases; return !on || capture_ok; }
 void suppress(void*,psx::MouseControl c) { suppressed=c; }
@@ -18,7 +19,7 @@ int eligible(uint32_t buttons) { return guest && (buttons&9)==9; }
 void event(const PSXModMouseEvent* e) {
     if(e->type==PSX_MOD_MOUSE_RESET || e->type==PSX_MOD_MOUSE_ACQUIRED) { active=held=false; ++resets; }
     if(e->type==PSX_MOD_MOUSE_MOTION) active=true;
-    if(e->type==PSX_MOD_MOUSE_WHEEL) ++wheel_events;
+    if(e->type==PSX_MOD_MOUSE_WHEEL) { ++wheel_events;wheel_dx=e->dx;wheel_dy=e->dy; }
     if(e->type==PSX_MOD_MOUSE_HOLD_PRESS) { ++hold_presses;held=true;active=false; }
     if(e->type==PSX_MOD_MOUSE_HOLD_RELEASE) { ++hold_releases;active=held=false; }
 }
@@ -39,6 +40,10 @@ int main() {
     CHECK(policy.control(6*Ms,6*Ms,psx::MouseControl::Left,false,false));
     CHECK(policy.captured());
     CHECK(policy.wheel(6*Ms,6*Ms,0,1) && wheel_events==1);
+    CHECK(wheel_dx==0 && wheel_dy==1);
+    CHECK(!policy.wheel(6*Ms,6*Ms,0,0) && wheel_events==1);
+    CHECK(!policy.wheel(6*Ms,6*Ms,std::numeric_limits<double>::quiet_NaN(),1) && wheel_events==1);
+    CHECK(!policy.wheel(6*Ms,6*Ms,1e7,1) && wheel_events==1);
     CHECK(!policy.control(7*Ms,7*Ms,psx::MouseControl::Left,true,false));
     CHECK(!policy.control(8*Ms,8*Ms,psx::MouseControl::Left,false,false));
     CHECK(policy.captured());

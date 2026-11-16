@@ -1,9 +1,10 @@
 """Link production runtime modules into a focused C fixture.
 
 build_and_run() compiles the named runtime/src modules and the fixture, then
-links them. Every symbol the modules need but neither they, the fixture nor
-the C library define becomes a stub that calls abort(), so a fixture only
-defines the seams its path really uses and an unexpected call fails loudly.
+links them. Missing function seams become stubs that call abort(). Known
+runtime data requires typed fixture definitions, because nm's undefined
+records do not distinguish variables from functions. Unexpected calls fail
+loudly rather than returning a fabricated value.
 GNU toolchains only (nm, GNU ld diagnostics).
 """
 import os
@@ -14,6 +15,15 @@ from pathlib import Path
 SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MULTIPLE = re.compile(r"multiple definition of [`']([^`']+)[`']")
 UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
+DATA_SEAMS = {
+    'g_psx_gcs_recip_q16', 'g_psx_gcs_frac', 'g_psx_mod_immediate_live',
+    'g_psx_func_override_hook', 'g_psx_mod_instruction_hooks',
+    'g_psx_mod_function_entry_hooks',
+    'g_source_gpu_runtime_enabled', 'g_dma_cpu_read_wait', 'g_psx_cyc_local_acc', 'g_psx_cyc_batch', 'g_psx_cyc_batch_limit',
+    'g_psx_cpu_step_boundary_callback',
+    'g_psx_cycle_fast_limit', 'g_psx_device_gen',
+    'g_psx_guest_time_frozen', 'g_psx_render_pass_active', 'g_psx_savestate_pending',
+}
 
 # A stub would silently override a symbol the C library would otherwise
 # provide from an archive or shared object, so anything libc, the CRT or the
@@ -65,12 +75,19 @@ def nm_symbols(objs):
 
 
 def write_stubs(path, symbols):
-    lines = ["#include <stdlib.h>", "/* Unrelated link seams must not execute. */"]
-    lines += ["void %s(void) { abort(); }" % s for s in sorted(symbols)]
+    # nm's U records do not distinguish data from functions. Known runtime
+    # state needs typed fixture definitions, never executable abort stubs.
+    missing_data = DATA_SEAMS.intersection(symbols)
+    if missing_data:
+        raise SystemExit('fixture must define runtime data explicitly: ' + ', '.join(sorted(missing_data)))
+    lines = ["#include <stdlib.h>", "#include <stdio.h>",
+             "/* Unrelated link seams must not execute. */"]
+    lines += ['void %s(void) { fputs("unexpected fixture seam: %s\\n", stderr); exit(1); }'
+              % (s, s) for s in sorted(symbols)]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=()):
+def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=(), fixture_warnings=()):
     """Compile runtime/src `modules` and `test_name` at `opt`, link, run."""
     tag = opt.replace("-", "")
     include = str(src_root / "include")
@@ -88,7 +105,7 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
 
     test_o = work / ("fixture" + tag + ".o")
     subprocess.run([cc, "-std=c11", opt, "-Wall", "-Wextra", "-Werror",
-                    "-I", include, "-c", str(here / test_name), "-o", str(test_o)],
+                    *fixture_warnings, "-I", include, "-I", str(src_root / "src"), *["-D" + d for d in defines], "-c", str(here / test_name), "-o", str(test_o)],
                    check=True)
     exe = work / ("fixture" + tag + (".exe" if os.name == "nt" else ""))
     # Include fixture seams before synthesizing stubs. Besides avoiding a
@@ -124,3 +141,4 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
     if run.returncode != 0:
         raise SystemExit("%s: fixture failed (rc=%d)\n%s%s"
                          % (opt, run.returncode, run.stdout, run.stderr))
+    return run.stdout

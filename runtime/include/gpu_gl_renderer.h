@@ -149,6 +149,10 @@ int gl_renderer_stereo_publish(uint64_t pair_id, uint64_t guest_cycle,
 void gl_renderer_stereo_reset(void);
 int gl_renderer_stereo_set_presentation(uint32_t mode);
 int gl_renderer_local_pair_set_presentation(int enabled);
+int gl_renderer_local_grid_set_presentation(int enabled);
+int gl_renderer_local_triple_set_presentation(int enabled);
+int gl_renderer_local_grid_publish(uint64_t frame_id, uint64_t guest_cycle,
+                                   const int32_t view[4][3], unsigned views);
 void gl_renderer_stereo_dump_arm(const char *dir, int pairs);
 /* Bounded metadata for explicitly requested PNG evidence, queried over TCP. */
 typedef struct GLRenderStereoCapture {
@@ -172,6 +176,11 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 /* Cumulative CPU-upload diagnostics: calls, rects, pixels, conversion ticks,
  * texture-upload ticks, FBO-draw ticks. Active only with PSX_RUNTIME_PERF_DIAG. */
 void gl_renderer_runtime_diag(uint64_t out[6]);
+/* Cumulative guest-visible VRAM readback counters: [0] synchronous FBO
+ * readbacks into CPU VRAM (ensure_cpu), [1] small untextured primitives also
+ * rasterised into CPU VRAM so a later CPU read needs no readback. Always
+ * counted; callers take deltas. */
+void gl_renderer_readback_diag(uint64_t out[2]);
 /* Cumulative scene primitive counters (pre double-draw): all submitted, and of
  * those textured. Callers take deltas; the counters are never reset here. */
 void gl_renderer_scene_prim_counts(uint64_t *prims, uint64_t *textured);

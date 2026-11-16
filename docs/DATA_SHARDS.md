@@ -102,6 +102,12 @@ optionally record IRQ arrivals to flag suspicious shards.
 3. **Capture executor**: the dirty-RAM interpreter run-to-return with a
    tracing callback. Trace only non-exception context. Abort (poison) on
    purity violations.
+   `memory.c` feeds byte, halfword and word reads and writes to the recorder.
+   Reads exclude exceptions and DMA. Writes exclude exceptions and poison a
+   capture during DMA. Device addresses poison a capture through the same
+   feeds. `runtime/tests/test_data_shard_replay_marks.py` checks byte output
+   replay, changed byte input, device access and these exclusions at O0/O2;
+   it does not qualify a game's data shards (PS1B-474).
 4. **Observability**: TCP `data_shards` — hits, misses, captures, poisons,
    bytes replayed, cycles credited, per-func table. Always-on counters;
    ring of recent events.

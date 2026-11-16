@@ -5,6 +5,7 @@ import ast
 import types
 import os
 import shutil
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -142,6 +143,114 @@ class GateTests(unittest.TestCase):
         for name in ("OpenBIOS.toml", "openbios.bin", "OpenBIOS.LICENSE"):
             self.symlink(self.root / "psxrecomp/bios" / name, target)
         self.assertEqual(len(gate.check(self.root)), 3)
+
+
+SET_TOML = '''[set]
+name = "two-programs"
+title = "Two Programs"
+exe_name = "Two_Programs"
+serials = ["SLUS-00001", "SLUS-00002"]
+programs = ["one", "two"]
+
+[game]
+discs = ["disc/disc-1.cue", "disc/disc-2.cue"]
+disc_serials = ["SLUS-00001", "SLUS-00002"]
+
+[program.one]
+folder = "programs/one"
+exe_name = "Program_One"
+shortcut = "Two Programs - One"
+serials = ["SLUS-00001"]
+positions = [1]
+
+[program.two]
+folder = "programs/two"
+exe_name = "Program_Two"
+shortcut = "Two Programs - Two"
+serials = ["SLUS-00002"]
+positions = [2]
+'''
+RETAIL = '[runtime]\nopenbios=false\n[recompiler]\nbios_config="psxrecomp/bios/SCPH1001.toml"\n'
+
+
+class SetGateTests(unittest.TestCase):
+    """A set of programs has no recipe at the stage root: set.toml is there,
+    and each program's game.toml is in its folder. The packager stopped on
+    exactly that ("missing staged game.toml for BIOS policy", PS1B-333)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        (self.root / "psxrecomp/bios").mkdir(parents=True)
+        (self.root / "set.toml").write_text(SET_TOML)
+        for name in ("one", "two"):
+            (self.root / "programs" / name).mkdir(parents=True)
+
+    def recipe(self, program, text):
+        (self.root / "programs" / program / "game.toml").write_text(text)
+
+    def asset(self, name):
+        (self.root / "psxrecomp/bios" / name).write_text("synthetic fixture")
+
+    def test_every_program_recipe_is_checked_against_the_root(self):
+        self.recipe("one", RETAIL)
+        self.recipe("two", RETAIL)
+        self.asset("SCPH1001.toml")
+        # the profile path is the stage root's, where psxrecomp/ is; listed once
+        self.assertEqual(gate.check(self.root), [str(Path("psxrecomp/bios/SCPH1001.toml"))])
+
+    def test_a_missing_profile_fails(self):
+        self.recipe("one", RETAIL)
+        self.recipe("two", RETAIL)
+        with self.assertRaisesRegex(ValueError, "SCPH1001"):
+            gate.check(self.root)
+
+    def test_the_second_program_is_checked_too(self):
+        self.recipe("one", RETAIL)
+        self.recipe("two", '[runtime]\nopenbios=false\n[recompiler]\nbios_config="psxrecomp/bios/SCPH5552.toml"\n')
+        self.asset("SCPH1001.toml")
+        with self.assertRaisesRegex(ValueError, "SCPH5552"):
+            gate.check(self.root)
+        self.asset("SCPH5552.toml")
+        self.assertEqual(len(gate.check(self.root)), 2)
+
+    def test_a_program_that_allows_openbios_requires_its_assets(self):
+        self.recipe("one", RETAIL)
+        self.recipe("two", '[runtime]\n')
+        self.asset("SCPH1001.toml")
+        with self.assertRaisesRegex(ValueError, "OpenBIOS"):
+            gate.check(self.root)
+        for name in ("OpenBIOS.toml", "openbios.bin", "OpenBIOS.LICENSE"):
+            self.asset(name)
+        self.assertEqual(len(gate.check(self.root)), 4)
+
+    def test_a_program_without_a_recipe_is_named(self):
+        self.recipe("one", RETAIL)
+        self.asset("SCPH1001.toml")
+        with self.assertRaisesRegex(ValueError, "programs/two/game.toml"):
+            gate.check(self.root)
+
+    def test_a_profile_outside_the_stage_fails(self):
+        self.recipe("one", RETAIL)
+        self.recipe("two", '[runtime]\nopenbios=false\n[recompiler]\nbios_config="../external.toml"\n')
+        self.asset("SCPH1001.toml")
+        with self.assertRaisesRegex(ValueError, "inside"):
+            gate.check(self.root)
+
+    def test_a_broken_set_file_names_its_key(self):
+        (self.root / "set.toml").write_text(SET_TOML.replace('exe_name = "Program_Two"\n', ""))
+        self.recipe("one", RETAIL)
+        self.recipe("two", RETAIL)
+        with self.assertRaisesRegex(ValueError, r"\[program\.two\] exe_name"):
+            gate.check(self.root)
+
+    def test_a_root_recipe_still_wins(self):
+        # A single-program stage is checked exactly as before, set file or not.
+        (self.root / "game.toml").write_text(
+            '[runtime]\nopenbios=false\n[recompiler]\nbios_config="psxrecomp/bios/SCPH5552.toml"\n')
+        self.asset("SCPH5552.toml")
+        self.assertEqual(gate.check(self.root), [str(Path("psxrecomp/bios/SCPH5552.toml"))])
 
 
 @unittest.skipIf(os.name == "nt" or not shutil.which("bash"),
@@ -345,18 +454,51 @@ class PlatformCopyTests(unittest.TestCase):
 
 
 class NativeToolchainTests(unittest.TestCase):
-    def test_cli_does_not_activate_cached_packs_on_posix(self):
+    def test_cli_prefers_native_tools_and_checks_posix_pack_fallback(self):
         tree = ast.parse((ROOT / "psxrecomp_cli.py").read_text(encoding="utf-8"))
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                         and node.name == "activate_embedded_toolchain")
         function.returns = None
         for argument in function.args.args:
             argument.annotation = None
-        namespace = {"sys": types.SimpleNamespace(platform="linux"),
-                     "resolve_toolchain_bin": mock.Mock(side_effect=AssertionError("cached pack"))}
-        exec(compile(ast.Module(body=[function], type_ignores=[]), "cli_activation", "exec"), namespace)
-        self.assertFalse(namespace[function.name](Path(".")))
-        namespace["resolve_toolchain_bin"].assert_not_called()
+        for native, pack, pack_runs, ready, activated in (
+                (True, None, True, True, False),
+                (True, Path("fixture-pack"), True, False, False),
+                (False, None, False, False, False),
+                (False, Path("fixture-pack"), False, False, False),
+                (False, Path("fixture-pack"), True, True, True)):
+            with self.subTest(native=native, pack=pack, pack_runs=pack_runs):
+                activate = mock.Mock()
+                namespace = {
+                    "sys": types.SimpleNamespace(platform="linux"),
+                    "shutil": types.SimpleNamespace(which=mock.Mock(
+                        side_effect=lambda name: "/native/" + name if native else None)),
+                    "resolve_toolchain_bin": mock.Mock(side_effect=AssertionError("Windows cache")),
+                    "_host_pack_bin": mock.Mock(return_value=pack),
+                    "toolchain_bin_runs": mock.Mock(return_value=pack_runs),
+                    "_native_toolchain_ready": mock.Mock(return_value=ready),
+                }
+                exec(compile(ast.Module(body=[function], type_ignores=[]),
+                             "cli_activation", "exec"), namespace)
+                # Never touch the actual host PATH/cache while exercising the
+                # unchanged CLI's native-first, validated local-pack fallback.
+                with mock.patch.dict(sys.modules, {
+                        "toolchain_pack": types.SimpleNamespace(activate_toolchain_bin=activate)}):
+                    self.assertEqual(namespace[function.name](Path(".")), ready)
+                namespace["resolve_toolchain_bin"].assert_not_called()
+                namespace["_native_toolchain_ready"].assert_called_once_with(None)
+                if native:
+                    namespace["_host_pack_bin"].assert_not_called()
+                else:
+                    namespace["_host_pack_bin"].assert_called_once_with(Path("."))
+                if not native and pack is not None:
+                    namespace["toolchain_bin_runs"].assert_called_once_with(pack, log=None)
+                else:
+                    namespace["toolchain_bin_runs"].assert_not_called()
+                if activated:
+                    activate.assert_called_once_with(pack, log=None)
+                else:
+                    activate.assert_not_called()
 
     def test_host_native_guards_precede_cache_and_download_paths(self):
         source = (ROOT / "host/psxrecomp_codegen_host.c").read_text(encoding="utf-8")

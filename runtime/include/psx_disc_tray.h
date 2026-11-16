@@ -41,7 +41,7 @@ typedef enum PsxDiscTrayOrigin {
 
 typedef enum PsxDiscTrayResult {
     PSX_DISC_TRAY_OK = 0,
-    PSX_DISC_TRAY_ERR_NO_ROSTER,   /* disc change asked of a single-disc title */
+    PSX_DISC_TRAY_ERR_NO_ROSTER,   /* no selectable disc roster */
     PSX_DISC_TRAY_ERR_RANGE,       /* index outside the roster */
     PSX_DISC_TRAY_ERR_NETPLAY,     /* refused: lid cycles desync peers */
     PSX_DISC_TRAY_ERR_OPEN_FAILED  /* image would not open; lid left open, no media */
@@ -72,7 +72,7 @@ typedef void (*PsxDiscTrayHostHook)(void *ctx, int disc_1based,
                                     const char *path);
 void psx_disc_tray_set_host_hook(PsxDiscTrayHostHook hook, void *ctx);
 
-/* Roster view for UI: count is 0 for a single-disc title. */
+/* Roster view for UI: zero means empty; a single entry can be reinserted. */
 int psx_disc_tray_disc_count(void);
 int psx_disc_tray_mounted_disc(void);         /* 1-based; 0 = none */
 const char *psx_disc_tray_disc_path(int disc_1based);
@@ -87,7 +87,7 @@ typedef struct PsxDiscTrayEvent {
     uint64_t cycle;      /* guest cycle count at the request */
     int      origin;     /* PsxDiscTrayOrigin */
     int      requested;  /* disc_1based argument (0 = reinsert) */
-    int      from_disc;  /* mounted roster entry before (0 = none/single) */
+    int      from_disc;  /* mounted roster entry before (0 = none) */
     int      to_disc;    /* mounted roster entry after */
     int      result;     /* PsxDiscTrayResult */
     int      rewind_dropped;

@@ -83,6 +83,17 @@ static void test_retagged_canonical_packet(void) {
     assert(after.hit >= before.hit + 6); /* Diagnostic activity is not rolled back. */
 }
 
+static void test_pass_only_composite_latch(void) {
+    start_scene();
+    assert(!gpu_ws_background_requires_full_composite());
+    assert(gpu_pass_checkpoint_save());
+    gpu_ws_tag_background_prim(command_addr - 4u);
+    assert(gpu_ws_background_requires_full_composite());
+    gpu_pass_checkpoint_restore();
+    assert(!gpu_ws_background_requires_full_composite());
+    assert(!ws_nw_explicit_background());
+}
+
 static void test_pass_only_tags_and_phase(void) {
     /* No image is consumed: discarded/watchdog-aborted passes use this same
      * GPU restore. render_pass_abort_test covers the watchdog control flow
@@ -91,7 +102,9 @@ static void test_pass_only_tags_and_phase(void) {
     ws_nw_phase_backdrop = 1;
     ws_bg_phase_note(0x28u);
     assert(psx_ws_prim_in_backdrop() == 1);
-    assert(!gpu_ws_background_requires_full_composite());
+    /* The legacy phase opt-in itself requires full mirroring, even before
+     * an explicit packet tag is added. Tag rollback is checked separately. */
+    assert(gpu_ws_background_requires_full_composite());
     assert(gpu_pass_checkpoint_save());
     gpu_ws_tag_background_prim(command_addr - 4u);
     gpu_ws_tag_hud_prim(command_addr - 4u, 1);
@@ -104,7 +117,7 @@ static void test_pass_only_tags_and_phase(void) {
     assert(!ws_nw_explicit_background());
     assert(!ws_nw_explicit_hud_delta(NULL));
     assert(!gpu_ws_background_stretch_active());
-    assert(!gpu_ws_background_requires_full_composite());
+    assert(gpu_ws_background_requires_full_composite());
     assert(!ws_tagged_world_primitive());
     assert(psx_ws_prim_in_backdrop() == 1); /* Original early-backdrop phase. */
 }
@@ -289,6 +302,7 @@ static void test_auto_ui_prepass(void) {
 
 int main(void) {
     test_retagged_canonical_packet();
+    test_pass_only_composite_latch();
     test_pass_only_tags_and_phase();
     test_aperture_hud_anchor();
     test_hud_dot_draw();

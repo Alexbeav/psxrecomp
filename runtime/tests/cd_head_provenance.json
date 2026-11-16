@@ -1,0 +1,20 @@
+{
+  "schema": "t172-cd-head-provenance-v1",
+  "base": "e49a31f6804ff12c72adb1c830a9fd2cfe5550b2",
+  "tested_commit": "e37b39ab6c4286184922ad868a3df9b259bf9d05",
+  "owned_function": "static void source_drive_head_update(void)",
+  "authority": "Sanitized root storage/caller/domain contract and independent opaque probes; pinned primary references in cd-head-preflight-v1.json.",
+  "receipt": "..\\evidence\\validation-receipt-cd-head-v1.json",
+  "receipt_sha256": "28de4e77386cbdc52de09d1733c4242b2fbf607041290a3e35723bd2dfe31f83",
+  "totals": {
+    "cases": 9510,
+    "rows": 9510
+  },
+  "negative_controls": 31,
+  "full_translation_unit_checks": 7,
+  "scope": "Only source_drive_head_update, all nine state fields observed. Unrelated globals checked by surrounding-source preservation only. Bounded signed position and uint64 clock domains, at most4096 updates. Excludes overflow, deadline wrap/nontermination and arbitrary restore; no hardware timing, full drive, caller integration or legal claim.",
+  "exposure": "Initial absent-input traceback exposed only collector line19 m=json.loads(a.matrix.read_text());cases=m['cases']. Root classified input-loader only and allowed continuation. No original helper/harness/model bodies or compiler logs read. Subsequent tools captured.",
+  "fixture_correction": "Initial fresh holdout-v1 had eight negative clocks from zero deadlines; collector rejected it. Corrected bounded holdout-v2 passes, prior artifact retained.",
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "publication": "Pending T77 independent review and publication; no worker push."
+}

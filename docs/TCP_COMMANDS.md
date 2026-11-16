@@ -106,8 +106,8 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `cdrom_sector_history_clear` | ✓ |   | — | Reset the CD-ROM sector history ring |
 | `watch` | ✓ | ✓ | `addr` | Set byte-level memory watchpoint (fires per-frame on change) |
 | `unwatch` | ✓ | ✓ | `addr` | Remove memory watchpoint |
-| `set_input` | ✓ | ✓ | `buttons`, optional `frames`, optional `lx`, `ly`, `rx`, `ry`, `pad_type`, optional `port` | Override pad1 buttons and optional analog axes (PS1 inverted bitmask, 0 = pressed; axes 0-255). Debug builds also accept `pad_type` (0 digital, 1 DualShock, 2 JogCon) to test an emulated device identity. Holds until `clear_input` on both backends; pass `frames=N` (beetle) to auto-release after N frames. Runtime: `layer="host"` instead arms a virtual P1 gamepad (`buttons`, `lx`..`ry`, `lt`/`rt` 0-255) that feeds the normal offline input path (controller source, title pad transform, trigger values) and host shortcut polling, also headless; a plain override still wins while armed; `clear_input` disarms it. `port=2` (psx-runtime) drives pad 2 instead (digital buttons; plugs a digital pad into port 2 while driven) for headless two-player modes; `press` takes `port` too |
-| `clear_input` | ✓ | ✓ | optional `port` | Remove input and analog axis overrides (`port` 1 or 2 clears one port; default both) |
+| `set_input` | ✓ | ✓ | `buttons`, optional `frames`, optional `lx`, `ly`, `rx`, `ry`, `pad_type`, optional `port` | Override pad1 buttons and optional analog axes (PS1 inverted bitmask, 0 = pressed; axes 0-255). Debug builds also accept `pad_type` (0 digital, 1 DualShock, 2 JogCon) to test an emulated device identity. Holds until `clear_input` on both backends; pass `frames=N` (beetle) to auto-release after N frames. Runtime: `layer="host"` instead arms a virtual P1 gamepad (`buttons`, `lx`..`ry`, `lt`/`rt` 0-255) that feeds the normal offline input path (controller source, title pad transform, trigger values) and host shortcut polling, also headless; a plain override still wins while armed; `clear_input` disarms it. `port=2..8` (psx-runtime, bounded by the compiled player capacity) drives that digital pad instead; `press` takes `port` too. Invalid ports reject instead of aliasing P1. The host layer supports P1 only |
+| `clear_input` | ✓ | ✓ | optional `port` | Remove input and analog axis overrides (`port=1..8` clears one port; default/0 clears all ports) |
 | `rewind_status` | ✓ |   | — | Local Rewind: `enabled`, `open`, `title_blocked` (`psx_mod_set_rewind_blocked`) and `snaps` held in the ring |
 | `overlay_status` | ✓ |   | — | Actual host menu state: `save_menu_open`, zero-based `save_slot`, `save_unavailable`, `rewind_open`, and `rewind_blocked`. Available while the F7 menu pauses the guest |
 | `overlay_image` | ✓ |   | `panel`, `path` | Export the open host overlay bitmap as a PNG. `panel` is `save_states` or `rewind`; closed panels return an error. Uses the actual rasterized menu, so hidden tests can inspect labels without desktop focus |
@@ -515,9 +515,9 @@ between Play and TCP availability.
 
 ## Complete command index (generated)
 
-**395 commands registered** — 382 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**396 commands registered** — 382 on the native server (`runtime/src/debug_server.c`), 63 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-87 of 395 have prose above; **308 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+87 of 396 have prose above; **309 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -595,6 +595,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `dirty_ram_stats` | ✓ |  | ✓ |
 | `dirty_ram_unsupported` | ✓ |  |  |
 | `disasm` | ✓ |  |  |
+| `disc_change` |  | ✓ |  |
 | `disc_select` | ✓ |  |  |
 | `disc_tray_log` | ✓ |  |  |
 | `disp_ring` | ✓ |  |  |
@@ -645,7 +646,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `fntrace_dump` | ✓ | ✓ |  |
 | `fntrace_reset` |  | ✓ |  |
 | `fntrace_unfiltered` |  | ✓ |  |
-| `frame` | ✓ |  | ✓ |
+| `frame` | ✓ | ✓ | ✓ |
 | `frame_fingerprint` | ✓ |  | ✓ |
 | `frame_gen` | ✓ |  |  |
 | `frame_perf` | ✓ |  |  |
@@ -687,7 +688,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `history` | ✓ | ✓ | ✓ |
 | `hle_dump` | ✓ |  | ✓ |
 | `host_button` | ✓ |  |  |
-| `host_key` | ✓ |  | `name` (SDL scancode name), `down` (optional; omitted sends press/release), `mod` (optional SDL modifier mask) |
+| `host_key` | ✓ |  |  |
 | `host_launch_timings` | ✓ |  | ✓ |
 | `host_mouse` | ✓ |  |  |
 | `host_osd_shot` | ✓ |  |  |
@@ -800,6 +801,8 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `restore_trace_clear` | ✓ |  |  |
 | `restore_trace_window` | ✓ |  |  |
 | `rewind_status` | ✓ |  | ✓ |
+| `overlay_status` | ✓ |  | ✓ |
+| `overlay_image` | ✓ |  | ✓ |
 | `rtrace_arm` | ✓ | ✓ |  |
 | `rtrace_clear` | ✓ |  |  |
 | `rtrace_disarm` |  | ✓ |  |

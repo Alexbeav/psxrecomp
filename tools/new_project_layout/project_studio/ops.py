@@ -925,18 +925,21 @@ def op_rewrite_cmake_setup_host(root: Path, options: MigrateOptions) -> ApplyRes
 
 def op_emit_packager(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
-    dst = root / "scripts" / PACKAGER_WRAPPER
-    if dst.is_file() and not options.force:
-        return ApplyResult("emit_packager", True, "Packager already present", [])
-    _fill(templates_dir() / (PACKAGER_WRAPPER + ".in"), dst, tokens, options.dry_run)
-    if not options.dry_run:
-        dst.chmod(dst.stat().st_mode | 0o111)
-    msg = f"Wrote scripts/{PACKAGER_WRAPPER} (bundled release: compiled game)"
+    changed = []
+    for name in (PACKAGER_WRAPPER, "package_prebuilt_release.sh"):
+        dst = root / "scripts" / name
+        if dst.is_file() and not options.force:
+            continue
+        _fill(templates_dir() / (name + ".in"), dst, tokens, options.dry_run)
+        if not options.dry_run:
+            dst.chmod(dst.stat().st_mode | 0o111)
+        changed.append(f"scripts/{name}")
+    msg = "Wrote release wrappers" if changed else "Release wrappers already present"
     legacy = root / "scripts" / LEGACY_PACKAGER_WRAPPER
     if legacy.is_file():
         msg += (f"; scripts/{LEGACY_PACKAGER_WRAPPER} is the retired setup-host "
                 "wrapper and can be deleted")
-    return ApplyResult("emit_packager", True, msg, [f"scripts/{PACKAGER_WRAPPER}"])
+    return ApplyResult("emit_packager", True, msg, changed)
 
 
 _PACKAGER_BLURB = {

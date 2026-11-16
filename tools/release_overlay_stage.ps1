@@ -1,4 +1,4 @@
-# release_overlay_stage.ps1 — THE shared overlay-shard release staging surface
+# release_overlay_stage.ps1 - THE shared overlay-shard release staging surface
 # for every psxrecomp title on Windows. Dot-source it from a title's
 # tools/package_release.ps1:
 #
@@ -27,7 +27,7 @@
 # The copies drifted because improvements never flow back between forks AND
 # because nothing fails when a title lacks the feature: the runtime silently
 # falls back to interpretation, so a stripped packager looks perfectly healthy.
-# That is why Add-OverlayCache FAILS by default instead of warning — a missing
+# That is why Add-OverlayCache FAILS by default instead of warning - a missing
 # cache has to stop a release, not scroll past in a log.
 #
 # WHY IT IS NOW A THIN WRAPPER (bead beads-eio.3.102)
@@ -40,7 +40,7 @@
 # hand-patched and two were not, so two titles' packagers staged zero shards
 # from a valid cache and could not produce a Linux release at all.
 #
-# Two implementations, one per platform, have to be kept in step by review —
+# Two implementations, one per platform, have to be kept in step by review -
 # which is exactly the argument that made cache_tag() the fix on the Windows
 # side in the first place, and this bug is the proof that review does not hold.
 # So the staging logic now lives in ONE place, tools/release_stage.py, which

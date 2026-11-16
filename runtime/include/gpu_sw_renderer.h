@@ -2,15 +2,30 @@
 #define PSX_GPU_SW_RENDERER_H
 
 #include <stdint.h>
+#include "source_gpu_texture.h"
+
+#include "source_gpu_texture.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+uint32_t sw_source_texture_snapshot_bytes(void);
+void sw_source_texture_snapshot_write(uint8_t *);
+int sw_source_texture_snapshot_read(const uint8_t *,uint32_t,int);
+int sw_draw_source_triangle(const int *,const int *,const uint32_t *,int,int,int,unsigned,const SourceGPUTexture *,int *);
+int sw_draw_source_block(const SourceGPUBlock *,int *);
+void sw_source_texture_control(unsigned,uint32_t);
+
 
 /* Maximum internal-resolution supersampling factor (linear, per axis). */
 #define SW_MAX_INTERNAL_SCALE 4
 
 /* Initialize software renderer */
+int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work);
+void sw_source_texture_control(unsigned action,uint32_t page);
+int sw_draw_source_triangle(const int *x,const int *y,const uint32_t *colors,
+                            int shaded,int dither,int interlace,unsigned skip_field,
+                            const SourceGPUTexture *texture,int *extra_work);
 void sw_renderer_init(uint16_t* vram);
 /* Rebind the VRAM array only; draw state is kept. */
 void sw_renderer_rebind_vram(uint16_t* vram);

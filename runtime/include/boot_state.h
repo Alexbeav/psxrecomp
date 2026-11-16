@@ -45,17 +45,40 @@ extern "C" {
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
  * v5 = v4 + CD-ROM Sub-Q replacement state;
  * v6 = v5 + per-word GPU DMA2 linked-list progress;
- * v7 = v6 + pending XA DATA_END IRQ state. */
-#define BOOT_STATE_VERSION 12u
-/* v11 adds timer one-shot/reset state; v12 also requires trusted-title host
- * state. Older execution snapshots do not contain the new timer latches. */
-#define BOOT_STATE_VERSION_WITHOUT_HOST 11u
-/* v8 added allocated enhancement memory (vanilla v8-era writers kept v7); older
- * runtimes must not accept enhanced snapshots while ignoring their arenas. */
-/* v9 persists the BIOS-to-game handoff latch. Engine overlays may have
- * replaced the original entry code by the time a gameplay state is loaded. */
-/* Reject older snapshots at the header before changing the live machine. */
-#define BOOT_STATE_VERSION_MIN_READ 11u
+ * v7 = v6 + pending XA DATA_END IRQ state;
+ * v8 = v7 + allocated enhancement memory (optional MODMEM section).
+ * v10 = v8 + the TAS checkpoint state from the resume lineage, where it was
+ *      numbered v6-v9: scheduler continuation, comparison-profile raster clocks,
+ *      source GPU service/timer/DMA state, IRQ timing, CPU timing and instruction
+ *      continuation, SPU sample clock, exact MDEC timestamp, the game-start latch,
+ *      source peripheral pipelines and queued GPU work. The two lineages both
+ *      used v6-v9 for different contents, so this merge takes a number neither
+ *      ever wrote.
+ * v11 = v10 with the GPUREAD data latch (gpuread_data_last) in the GPU
+ *      section (PS1B-211), and the DualShock power-on flag
+ *      (pad_power_on_first) in the octoshock-digital sio tail (PS1B-215).
+ * v12 = v11 with the CPU-owned load-value pipeline; CPU_EXEC load cells are
+ *       reserved (PS1B-220). Test pin test-20260927-a-nodma.
+ * v13 = v12 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: seven
+ *       machines and the source MDEC clock, 296 bytes) (PS1B-186). Test pin
+ *       test-20260927-b-dma.
+ * v14 = v13 with the PS1B-186 spec v2 source-DMA meanings: same 296-byte
+ *       BS_SEC_DMA_SRC layout, but served_until is the last service point and
+ *       link is the SyncMode 1 block start.
+ * v15 = v14 plus the ordinary GPU FIFO and pending default GPU block DMA.
+ * v16 = v15 plus the memory-control/RAM-size/cache-control register bank.
+ *       Older images omit observable registers and cannot restore them. */
+/* Composed layout: v17 carries both replay and modern device sections;
+ * v18 additionally requires trusted-title host provider state. Neither legacy
+ * replay v16 nor modern v9/v10 is wire compatible with this layout. */
+#define BOOT_STATE_VERSION_WITHOUT_HOST 17u
+#define BOOT_STATE_VERSION 18u
+/* The version field is the ONLY guard against a blob written by an older
+ * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
+ * so a runtime-only change (new sections, changed snapshot writers) leaves all
+ * three unchanged. A pin bump without a code regen would otherwise hand an old
+ * runtime's blob to a new loader. v17 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 17u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -66,7 +89,7 @@ extern "C" {
  */
 typedef struct {
     uint32_t magic;          /* BOOT_STATE_MAGIC                                  */
-    uint32_t version;        /* writer v11 without providers, v12 with host state */
+    uint32_t version;        /* writer v17 without providers, v18 with host state */
     /* ---- integrity key (every field must match to accept) ---- */
     uint32_t bios_checksum;  /* sum of all uint32 words in the BIOS ROM           */
     uint32_t entry_pc;       /* game PS-EXE entry PC                              */
@@ -111,7 +134,7 @@ enum {
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
     BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
     BS_SEC_SPUCD  = 0x15,  /* SPU CD-input frames queued (u32 n + n*(l,r) s16) */
-    BS_SEC_CPUTIM = 0x14,  /* [timing] in-flight CPU stall state, relative to
+    BS_SEC_CPUTIM = 0x14,  /* reserved former layout; full CPU section owns [timing] in-flight CPU stall state, relative to
                               the clock: GTE / mul-div cycles left, the load-
                               delay give-back (read_absorb[33], which, fudge,
                               ld_which_t, ld_absorb). Absent => anchored at the
@@ -126,9 +149,49 @@ enum {
                               cache, so fetch-miss cycles differ per peer/retry
                               and IRQ delivery lands a few wait-loop iterations
                               apart (MotK abort@940: fin cyc Δ8, v0 5c83/5c86
-                              from identical baselines). Optional on load for
-                              old blobs (left untouched when absent).          */
+                              from identical baselines). Required in v10.     */
+    BS_SEC_RASTER = 0x1B,  /* comparison raster clocks, 3 instances x 80 B:
+                              [0]   input_route_raster (interrupts.c)
+                              [80]  clock_state.raster  (source_gpu_runtime.c)
+                              [160] draw_raster         (source_gpu_runtime.c)
+                              These `cycle`/`last_rise` values are INTERNAL
+                              counters, not psx_cycle_count's time base — never
+                              rebase them; the fraction cross-check depends on
+                              that time base.                                   */
+    BS_SEC_GPU_SERVICE = 0x1C, /* bounded-quad source GPU service: the service
+                              clock scalars + the command-projection scalar
+                              tail. queue[32] is NOT serialized: save AND load
+                              both require count==0, since a non-zero count
+                              with no queue would restore as a stub.           */
+    BS_SEC_TIMER_SRC = 0x1D, /* source timer state machines (the IRQ-disabled
+                              comparison timers).                               */
+    BS_SEC_DMA_SRC   = 0x1E, /* source-DMA state machines: bounded-quad GPU
+                              upload, GPU linked list, SPU request, OTC (140 B).
+                              Measured live at 98.1%/98.4%/57.7% of frame
+                              boundaries, so they cannot be quiescence-guarded;
+                              every member is a flat scalar, and the address
+                              fields are GUEST physical addresses, never host
+                              pointers. Required exactly when a source DMA model
+                              is active (profile-exact, like RASTER).           */
+    BS_SEC_IRQ_TIMING = 0x1F, /* field clock + VBlank-edge/IRQ-deferral state
+                              (64 B). Found by the step-8 forward sweep: live in
+                              every profile and previously covered by NO section.
+                              Always required. input_route_raster_deadline is
+                              derived and recomputed at load, not serialized.    */
+    BS_SEC_CPU_EXEC = 0x17, /* interpreter pending branch/delay-slot continuation */
+    BS_SEC_SCHED  = 0x18,  /* deterministic scheduler return continuation. The
+                              resume lineage wrote this as 0x11, which upstream
+                              had already given to MODMEM.                     */
+    BS_SEC_BOOTFLOW = 0x19, /* reserved former layout; GAME_START owns u32 flags, bit 0 = game-start transition already
+                              applied. The resume lineage kept this bit in the
+                              header's reserved word, which upstream uses for
+                              the enhancement-memory layout cookie. Always
+                              required.                                        */
+    BS_SEC_MEMCTRL = 0x1A, /* 16 memory-control words, RAM_SIZE and CACHE_CTRL */
 };
+
+/* Section presence uses a32-bit mask; all assigned tags remain below32. */
+#define BOOT_STATE_MAX_SECTION 0x1Fu
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */
 int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
@@ -202,6 +265,13 @@ void boot_state_set_capture(const char* path, uint32_t bios_checksum,
 
 /* Called from fntrace when the game entry PC first dispatches. */
 void boot_state_trigger_capture(const CPUState* cpu);
+
+/* Atomic replace used by state and card writers; failure preserves the old target. */
+int boot_state_replace_file(const char* from, const char* to);
+
+/* Inspect the serialized CPU continuation before any state/media mutation. */
+int boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc);
+int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len, uint32_t* out_pc);
 
 #ifdef __cplusplus
 }

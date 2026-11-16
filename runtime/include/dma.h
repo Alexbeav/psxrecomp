@@ -18,16 +18,49 @@
 #define PSXRECOMP_DMA_H
 
 #include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Source service owner: GPU, CD, SPU and OTC channel work at the supplied actual
+ * runtime cycle, including DMA writes and frame returns between periodic
+ * events. No register/input/state override is performed. */
+void dma_source_gpu_service_at(uint64_t cycle);
+void dma_source_gpu_service_at_exact(uint64_t cycle); /* MDEC contract harness only */
+/* E survey (M2 apparatus): are the three source-DMA state machines holding live
+ * mid-transfer state at this frame boundary? 1 = live. */
+void dma_source_dma_live(int *upload, int *ll, int *spu);
+/* BS_SEC_DMA_SRC: the four source-DMA state machines, field by field (140 B). */
+uint32_t dma_src_wire_bytes(void);
+int dma_src_perturb(const char *field);
+int      dma_src_active(void);
+void     dma_src_wire_write(uint8_t *out);
+int      dma_src_wire_read(const uint8_t *in, uint32_t len);
+
 void     dma_init(void);
+uint32_t dma_cpu_read_penalty(void); /* Optional source upload's bus-read wait. */
+/* Source-profile CPU owner calls after prior-instruction service, before fetch.
+ * Direct device fixtures retain the live wait until this owner is entered. */
+void     dma_cpu_read_wait_boundary(void);
+/* Source-profile CPU owns the halt between instruction fetch attempts. */
+int      dma_cpu_otc_halted(void);
+/* OTC or manual, non-chopped CD DMA in the source profile. */
+int      dma_cpu_source_halted(void);
 uint32_t dma_read(uint32_t addr);
 void     dma_write(uint32_t addr, uint32_t val);
 void     dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask);
 void     dma_advance(uint32_t cycles);
+/* Authored source-MDEC points; no assumed external grid phase. */
+void dma_source_mdec_service_at_exact(uint64_t cycles);
+int dma_snapshot_validate(const uint8_t *,uint32_t);
+int dma_source_transfer_active(void);
+unsigned dma_source_transfer_active_mask(void);
+void dma_source_gpu_service_at(uint64_t cycle);
+void dma_source_gpu_service_at_exact(uint64_t cycle);
+int dma_cpu_source_halted(void);
+uint32_t dma_cpu_read_penalty(void);
+void dma_cpu_read_wait_boundary(void);
+
 /* Cycle-budgeted precise event slicing: guest CPU cycles until a DELIVERABLE
  * DMA IRQ (bit3 unmasked in i_mask). UINT32_MAX if none. */
 uint32_t dma_cycles_to_irq(uint32_t i_mask);
@@ -69,6 +102,7 @@ typedef struct DMADebugState {
 
 typedef struct DMATraceEntry {
     uint64_t seq;
+    uint64_t cycle; /* Passive event timestamp; no device advancement. */
     uint32_t frame;
     uint32_t kind;
     uint32_t channel;

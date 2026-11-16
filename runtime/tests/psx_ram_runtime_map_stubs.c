@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 int g_stub_device_restores;
 
@@ -33,10 +35,8 @@ void pgxp_invalidate_word(uint32_t addr) { (void)addr; }
 #endif
 #ifndef PSX_STUBS_REAL_ICACHE
 /* The I-cache model (psx_icache.c). isc_store_test links the real one. */
-uint32_t g_psx_icache_tv[1024];
-void psx_icache_isc_store(uint32_t biu, uint32_t addr, uint32_t value) {
-    (void)biu; (void)addr; (void)value; __builtin_trap();   /* SR.IsC is never set here */
-}
+#include "../src/psx_icache.c"
+
 #endif
 uint64_t psx_cycle_count;
 uint64_t s_frame_count;
@@ -77,6 +77,12 @@ void psx_guest_cycle_scale_snapshot(uint32_t out[3]) { out[0] = out[1] = out[2] 
 void psx_guest_cycle_scale_restore(const uint32_t in[3]) { (void)in; }
 void psx_devices_mmio_sync(void) {}
 void psx_devices_service_to_now(void) {}
+/* Source devices are disabled in the ordinary geometry/cache fixtures. */
+int source_gpu_runtime_active(void){return 0;}
+int gpu_dma_source_ll_ready(void){fputs("unexpected source GPU\n",stderr);exit(2);}
+uint32_t cdrom_dma_read_padded(void){fputs("unexpected source CD\n",stderr);exit(2);}
+int cdrom_get_setloc_lba(void){return 0;}
+void overlay_capture_on_dma(uint32_t a,uint32_t n,const uint8_t *p){(void)a;(void)n;(void)p;}
 void spu_catch_up(void) {}
 int mod_runtime_snapshot_package_active(const char *id) { (void)id; return 0; }
 int  psx_get_in_exception(void) { return 0; }
@@ -163,8 +169,11 @@ STUB_SECTION(spu, 80u)
 STUB_SECTION(cdrom, 64u)
 STUB_SECTION(sio, 48u)
 STUB_SECTION(mdec, 400u)
-STUB_SECTION(spu_cd, 4u)
+uint32_t spu_cd_snapshot_bytes(void) {return 4;}
+void spu_cd_snapshot_write(uint8_t *p) {memset(p,0,4);}
+int spu_cd_snapshot_read(const uint8_t *p,uint32_t n) {if(!p||n!=4)return 0;g_stub_device_restores++;return 1;}
 int spu_snapshot_len_ok(uint32_t len) { return len == 80u; }
+int gpu_snapshot_validate(const uint8_t *p,uint32_t len){return p && len==96u;}
 /* This fixture's CD writer emits exactly 64 bytes of 0xA5. Validate that
  * wire without counting a restore or mutating any device. */
 int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
@@ -196,3 +205,44 @@ void gr_vram_transfer_in(int x, int y, int w, int h, const uint16_t *d) {
 void gr_vram_upload_begin(int x,int y,int w,int h) { (void)x; (void)y; (void)w; (void)h; }
 void gr_vram_upload_commit(int x,int y,int w,int h,const uint16_t *d) { gr_vram_transfer_in(x,y,w,h,d); }
 void gr_vram_upload_set_open(int open) { (void)open; }
+
+/* These default-controller fixtures deliberately leave the optional MDEC off. */
+int mdec_source_active(void){return 0;}
+void mdec_source_advance(uint32_t clocks){(void)clocks;__builtin_trap();}
+uint32_t mdec_source_dma_read(uint32_t *offset){(void)offset;__builtin_trap();}
+void mdec_dma_write_word(uint32_t v){(void)v;__builtin_trap();} int mdec_dma_write_ready(void){__builtin_trap();} int mdec_dma_read_ready(void){__builtin_trap();}
+
+#include "gpu_queue_test_stubs.h"
+#include "dirty_ram_interp.h"
+#include "psx_scheduler.h"
+uint64_t g_psx_device_gen;
+uint64_t psx_get_cycle_count(void) {return psx_cycle_count;}
+static uint8_t map_exec[DIRTY_RAM_CHECKPOINT_BYTES],map_sched[PSX_SCHEDULER_SNAPSHOT_BYTES],map_irq_timing[64];
+static int map_wire_ok(const uint8_t *p,uint32_t n,const uint8_t *expected,uint32_t size) {return p&&n==size&&!memcmp(p,expected,n);}
+uint32_t dirty_ram_checkpoint_pc(uint32_t fallback) {return fallback;}
+void dirty_ram_checkpoint_write(uint8_t *p) {memcpy(p,map_exec,sizeof map_exec);}
+int dirty_ram_checkpoint_validate(const uint8_t *p,uint32_t n) {return map_wire_ok(p,n,map_exec,sizeof map_exec);}
+int dirty_ram_checkpoint_read(const uint8_t *p,uint32_t n) {if(!dirty_ram_checkpoint_validate(p,n))return 0;g_stub_device_restores++;return 1;}
+void psx_scheduler_snapshot_write(uint8_t *p,uint32_t n) {if(n!=sizeof map_sched)abort();memcpy(p,map_sched,n);}
+int psx_scheduler_snapshot_validate(const uint8_t *p,uint32_t n,const uint8_t *ram) {return ram&&map_wire_ok(p,n,map_sched,sizeof map_sched);}
+int psx_scheduler_snapshot_read(const uint8_t *p,uint32_t n,CPUState *cpu) {if(!cpu||!map_wire_ok(p,n,map_sched,sizeof map_sched))return 0;g_stub_device_restores++;return 1;}
+void interrupts_timing_wire_write(uint8_t *p) {memcpy(p,map_irq_timing,sizeof map_irq_timing);}
+int interrupts_timing_wire_read(const uint8_t *p,uint32_t n) {if(!p||n!=sizeof map_irq_timing)return 0;memcpy(map_irq_timing,p,n);g_stub_device_restores++;return 1;}
+int interrupts_raster_comparison_active(void) {return 0;}
+int timers_source_active(void) {return 0;}
+#define MAP_INACTIVE(name) void name##_write(uint8_t *p){(void)p;abort();}     int name##_read(const uint8_t *p,uint32_t n){(void)p;(void)n;abort();}
+MAP_INACTIVE(interrupts_raster_wire)
+MAP_INACTIVE(source_gpu_raster_wire)
+MAP_INACTIVE(source_gpu_service_wire)
+MAP_INACTIVE(timers_source_wire)
+#undef MAP_INACTIVE
+void source_gpu_runtime_rederive_returns(void) {}
+void interrupts_note_state_load(int present) {(void)present;}
+void gte_precision_timeline_invalidate(void) {}
+int mdec_snapshot_prepare(const uint8_t *p,uint32_t n) {return mdec_snapshot_validate(p,n);}
+int sio_snapshot_shape_ok(uint32_t n) {return n==48;}
+int spu_snapshot_validate(const uint8_t *p,uint32_t n) {return p&&n==80;}
+int spu_cd_snapshot_validate(const uint8_t *p,uint32_t n) {return p&&n==4&&!p[0]&&!p[1]&&!p[2]&&!p[3];}
+
+/* Report-only accounting is outside this fixture's hardware seams. */
+void dirty_ram_pc_table_game_load(void) {}

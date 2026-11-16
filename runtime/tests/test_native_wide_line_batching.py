@@ -61,7 +61,8 @@ tris = geo[geo.index("s_fb_mode = GL_TRIANGLES;") - 400:]
 assert "s_fb_mode != GL_TRIANGLES" in tris, (
     "a triangle after a line batch flushes it first")
 
-flush = definition(GL, "flush_flat_batch")
+assert "#define flush_flat_batch() (batch_site_note(1, __LINE__), flush_flat_batch_impl())" in GL
+flush = definition(GL, "flush_flat_batch_impl")
 assert "GLenum fmode = s_fb_mode;" in flush
 assert "if (fmode == GL_LINES) glLineWidth((float)s_" in flush, (
     "a line batch uses the immediate path's line width")

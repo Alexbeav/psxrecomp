@@ -13,6 +13,7 @@ static uint16_t vram[1024 * 512];
 uint32_t i_stat, i_mask, g_psx_icache_tv[1024];
 uint64_t psx_cycle_count;
 uint8_t* memory_get_ram_ptr(void) { return ram; }
+const uint8_t* memory_low_ram_view(void) { return ram; }
 uint32_t memory_get_ram_bytes(void) { return sizeof(ram); }
 uint8_t* memory_get_scratchpad_ptr(void) { return scratchpad; }
 uint8_t* spu_get_ram_ptr(void) { return spu_ram; }
@@ -38,6 +39,11 @@ EMPTY_SNAPSHOT(spu)
 EMPTY_SNAPSHOT(mdec)
 EMPTY_SNAPSHOT(dma)
 EMPTY_SNAPSHOT(sio)
+/* This policy fixture provides no GPU snapshot, so there are no presenter
+ * bytes to normalize. Refuse an unexpected non-empty provider. */
+void gpu_snapshot_mask_present_helpers(uint8_t *out, uint32_t n) {
+    (void)out; assert(n == 0);
+}
 void sio_snapshot_section_ends(uint32_t out[5]) { memset(out, 0, 5 * sizeof(*out)); }
 
 static uint32_t gameplay_state;

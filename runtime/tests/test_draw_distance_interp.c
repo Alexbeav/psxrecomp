@@ -49,6 +49,8 @@ uint64_t g_psx_bail_first;
 uint64_t g_psx_bail_resolved;
 uint32_t i_stat;
 uint32_t i_mask;
+/* This isolated interpreter fixture installs no function override. */
+int (*g_psx_func_override_hook)(CPUState *, uint32_t);
 uint64_t psx_cycle_count;
 uint32_t g_psx_mod_function_entry_hooks;
 uint32_t g_psx_mod_instruction_hooks;
@@ -324,6 +326,16 @@ static void test_interpreter(void) {
 
 static void write_byte(uint32_t a, uint8_t v) { test_ram[a & 0x1fffffu] = v; }
 static void write_half(uint32_t a, uint16_t v) { memcpy(test_ram + (a & 0x1fffffu), &v, 2); }
+static void finish_load(CPUState *cpu) {
+    if (!cpu->load_value_rt) return;
+    const uint32_t rt = cpu->load_value_rt, old = cpu->gpr[rt];
+    const uint32_t expected = cpu->load_value, pc = cpu->pc;
+    step(cpu, pc + 4u, 0u);
+    CHECK(cpu->gpr[rt] == old, "address-adapted load stays hidden in its delay slot");
+    step(cpu, pc + 8u, 0u);
+    CHECK(cpu->gpr[rt] == expected && !cpu->load_value_rt,
+          "address-adapted load retires at its second successor");
+}
 static void test_memory_addresses(void) {
     const uint32_t ops[] = {0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x28,0x29,0x2a,0x2b,0x2e,0x32,0x3a};
     /* Compare real interpreted instructions on relocated memory against the
@@ -343,9 +355,11 @@ static void test_memory_addresses(void) {
             const uint32_t word = (op << 26) | (5u << 21) | (3u << 16) | (0xfffcu + lane);
             g_psx_mod_instruction_hooks = 0;
             step(&vanilla, TEXT_LO, word);
+            finish_load(&vanilla);
             const uint32_t expected = psx_read_word(0x80008000u);
             address_calls = 0; g_psx_mod_instruction_hooks = 1;
             step(&adapted, TEXT_LO, word);
+            finish_load(&adapted);
             CHECK(adapted.gpr[3] == vanilla.gpr[3] && adapted.gte_data[3] == vanilla.gte_data[3],
                   "adapted load/merge/GTE result op=%x lane=%u", op, lane);
             CHECK(psx_read_word(0x80009000u) == expected && psx_read_word(0x80008000u) == expected,
@@ -357,6 +371,7 @@ static void test_memory_addresses(void) {
     CPUState cpu = {0}; cpu.read_word = psx_read_word;
     cpu.gpr[5] = 0x80008000u; put_word(0x80009000u, 0x12345678u);
     step(&cpu, TEXT_LO, 0x8ca50000u); /* lw a1,0(a1) */
+    finish_load(&cpu);
     CHECK(cpu.gpr[5] == 0x12345678u && shadow_address == 0x80009000u,
           "load destination may alias original base register");
     const uint32_t original = 0x8ca30000u; /* lw v1,0(a1) */
@@ -369,6 +384,7 @@ static void test_memory_addresses(void) {
     memset(&cpu, 0, sizeof cpu); cpu.read_word = psx_read_word;
     cpu.gpr[5] = 0x80008000u; put_word(0x80009004u, 0x76543210u);
     step(&cpu, TEXT_LO, original);
+    finish_load(&cpu);
     CHECK(cpu.gpr[3] == 0x76543210u && address_word == original && shadow_address == 0x80009004u,
           "selected immediate and address adapter share original guard and resolved PGXP address");
     psx_mod_immediate_reset(); psx_mod_immediate_set_sites(NULL, 0);

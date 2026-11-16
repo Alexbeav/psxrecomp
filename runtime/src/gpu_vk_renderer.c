@@ -1593,7 +1593,10 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
     const int have_rw = psx_rewind_overlay_image(&rw_px, &rw, &rh) && rw_px;
     const int have_ssm =
         psx_host_menu_overlay_image(&ssm_px, &sw, &sh) && ssm_px;
-    if (!have_text && !have_vol && !have_rw && !have_ssm) {
+    const uint32_t *rec_px = NULL;
+    int cw = 0, ch = 0;
+    const int have_rec = host_osd_rec_image(&rec_px, &cw, &ch) && rec_px;
+    if (!have_text && !have_vol && !have_rw && !have_ssm && !have_rec) {
         host_osd_present_done();
         return;
     }
@@ -1611,7 +1614,8 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
         have_rw ? (VkDeviceSize)rw * (VkDeviceSize)rh * 4u : 0;
     VkDeviceSize ssm_bytes =
         have_ssm ? (VkDeviceSize)sw * (VkDeviceSize)sh * 4u : 0;
-    VkDeviceSize bytes = text_bytes + vol_bytes + rw_bytes + ssm_bytes;
+    VkDeviceSize rec_bytes = have_rec ? (VkDeviceSize)cw * (VkDeviceSize)ch * 4u : 0;
+    VkDeviceSize bytes = text_bytes + vol_bytes + rw_bytes + ssm_bytes + rec_bytes;
     if (bytes > s_osd_cap) {
         p_vkQueueWaitIdle(s_queue);
         osd_staging_free();
@@ -1654,6 +1658,11 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
                     ? (((int)s_sc_extent.height - sh) / 2)
                     : 0;
         vk_osd_copy_rect(cb, sc, ssm_px, sw, sh, x, y, off);
+        off += ssm_bytes;
+    }
+    if (have_rec) {
+        int x = (int)s_sc_extent.width > cw + margin ? (int)s_sc_extent.width - cw - margin : margin;
+        vk_osd_copy_rect(cb, sc, rec_px, cw, ch, x, margin, off);
     }
     host_osd_present_done();
 }

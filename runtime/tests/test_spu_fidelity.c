@@ -439,13 +439,22 @@ static void test_sweep_rise_and_fall(void) {
     render_n(64);
     int16_t mid = sweep_voice_env[0][0].level;
     CHECK(mid > 0);
-    CHECK((int16_t)rd(vreg(0, 0)) == mid);   /* guest read sees the live level */
+    /* The sweep-mode register reads back as written; the live level is in
+     * the current-volume register [ORACLE FIXTURE S4: v1 volume L (sweep
+     * C07F) reads C07F, 1E04h holds the level]. */
+    CHECK(rd(vreg(0, 0)) == (0x8000 | 0x0020));
+    CHECK((int16_t)rd(0x1F801E00u) == mid);
     render_n(64);
     int16_t late = sweep_voice_env[0][0].level;
     CHECK(late > mid);
 
-    /* Decrease sweep starts from the current (direct-set) level and falls. */
+    /* Decrease sweep starts from the current (direct-set) level and falls.
+     * The direct write reaches the level at the next sample tick [ORACLE
+     * FIXTURE S4: 1E06h reads the old value right after a fixed write], so
+     * the sweep needs that tick first (PSX-SPX: setting the initial level
+     * with Bit15=0 then the sweep "works only if there's a suitable delay"). */
     wr(vreg(0, 1), 0x3FFF);                  /* direct: level 0x7FFE */
+    render_n(1);
     CHECK(sweep_voice_env[0][1].level == 0x7FFE);
     wr(vreg(0, 1), 0x8000 | 0x2000 | 0x0020); /* sweep, decrease, rate 0x20 */
     render_n(64);
@@ -481,12 +490,19 @@ static void test_capture_buffer_contents(void) {
     }
     CHECK(capture_pos == 8);
 
+    /* SPUSTAT bit 11 reports the half of the slot stored on the latest tick:
+     * it sets on the tick that stores slot 256 and clears on the tick that
+     * stores slot 0 [ORACLE FIXTURE E8c, set S-spu/E8c, tsv sha256 f43c38e3...]. */
     render_n(508);                   /* 512 total -> exactly one wrap */
     CHECK(capture_pos == 0);
-    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* first half again */
-    render_n(256);
+    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* slot 511 just stored */
+    render_n(1);
+    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* slot 0 stored: first half */
+    render_n(255);
     CHECK(capture_pos == 0x200);
-    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* second half */
+    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* slot 255 stored */
+    render_n(1);
+    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* slot 256 stored: second half */
 }
 
 /* ==== 5. Savestate round-trip =============================================== */

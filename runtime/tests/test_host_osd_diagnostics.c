@@ -21,5 +21,21 @@ int main(void) {
     char long_row[160];memset(long_row,'X',sizeof long_row-1);long_row[sizeof long_row-1]=0;
     host_osd_set_diagnostics(long_row,"P2 -");
     CHECK(host_osd_image(&pixels,&w,&h) && h==56 && w<=1032);
+    host_osd_set_rec(1);
+    CHECK(host_osd_rec_image(&pixels,&w,&h) && pixels && w==72 && h==16);
+    unsigned red=0;for(int i=0;i<w*h;++i)red+=pixels[i]==0xFFE8262Au;
+    CHECK(red>100 && host_osd_needs_present());
+    host_osd_set_rec(0);
+    CHECK(!host_osd_rec_image(&pixels,&w,&h) && !pixels && !w && !h);
+    CHECK(host_osd_image(&pixels,&w,&h) && h==56); // modern diagnostics survive badge blinking
+    // Without diagnostics a long toast breaks into lines (8x8 font at 2x,
+    // 2 pixels between lines) no wider than 38 columns.
+    host_osd_set_diagnostics(NULL,NULL);
+    host_osd_push("Save state not loaded: it was made by a different build",5000);
+    CHECK(host_osd_image(&pixels,&w,&h) && h==(2*2+2*8+2)*2 && w<=(2*2+38*8)*2);
+    host_osd_push("Save state not loaded: the file was written by another build of this game",5000);
+    CHECK(host_osd_image(&pixels,&w,&h) && h==(2*2+3*8+2*2)*2 && w<=(2*2+38*8)*2);
+    host_osd_push("Game saved",5000);
+    CHECK(host_osd_image(&pixels,&w,&h) && h==24);
     puts("host OSD diagnostic/status/toast coexistence checks passed");return 0;
 }

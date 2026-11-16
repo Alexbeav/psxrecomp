@@ -12,6 +12,7 @@
 #include "cdrom.h"
 #include "crash_trace.h"
 #include "dma.h"
+#include "source_gpu_runtime.h"
 #include "fntrace.h"
 #include "gpu.h"
 #include "mdec.h"
@@ -27,6 +28,7 @@
 #include "psx_cycles.h"
 #include "psx_icache.h"
 #include "psx_memory.h"
+#include "text_source_guard.h"
 #include "pgxp.h"
 #include "render_pass.h"
 #include "render_pass_plan.h"
@@ -200,6 +202,57 @@ static inline uint32_t psx_phys_addr_store(uint32_t addr) {
 uint8_t *memory_get_ram_ptr(void) { return ram; }
 uint8_t *memory_get_scratchpad_ptr(void) { return scratchpad; }
 
+/* ---- RAM 0..15 as an older build held it ----
+ *
+ * RAM 0..15 is guest memory. The kernel leaves a copy of its exception stub
+ * there, and a game can read it through a null pointer (PSX-SPX, "Garbage
+ * Area at Address 00000000h"). Builds before this change zeroed those bytes
+ * at game entry. A player replay recorded by such a build holds state digests
+ * and an end checkpoint of RAM with the zeros in it.
+ *
+ * s_low_ram_old is RAM 0..15 as such a build would hold it. It takes every
+ * write to those bytes, and it is zeroed at game entry, where the old host
+ * cleared RAM. While a replay of such a recording plays, the replay's RAM
+ * digest and its end checkpoint read these 16 bytes in place of the real ones
+ * (memory_low_ram_view). Guest RAM is not changed, and nothing the guest can
+ * observe reads the copy. */
+#define LOW_RAM_BYTES 0x10u
+static uint8_t s_low_ram_old[LOW_RAM_BYTES];
+static uint8_t s_low_ram_at_entry[LOW_RAM_BYTES];
+static int s_low_ram_at_entry_valid;
+static int s_low_ram_view_old;
+
+/* Call after a write of len bytes at phys has landed in ram. */
+static inline void low_ram_old_follow(uint32_t phys, uint32_t len) {
+    if (phys >= LOW_RAM_BYTES) return;
+    if (len > LOW_RAM_BYTES - phys) len = LOW_RAM_BYTES - phys;
+    memcpy(s_low_ram_old + phys, ram + phys, len);
+}
+
+/* Game entry (fntrace_mark_game_started). Keeps the 16 bytes for the run
+ * report, and does to the copy what the old host did to RAM: it clears it,
+ * except in the source profile. */
+void memory_note_game_entry(void) {
+    memcpy(s_low_ram_at_entry, ram, LOW_RAM_BYTES);
+    s_low_ram_at_entry_valid = 1;
+    if (!source_gpu_runtime_active()) memset(s_low_ram_old, 0, LOW_RAM_BYTES);
+}
+
+/* On while a replay plays that a build with the clear recorded. */
+void memory_set_low_ram_view_old(int on) { s_low_ram_view_old = on != 0; }
+
+/* The 16 bytes a replay compares as RAM 0..15: ram itself, or the copy. */
+const uint8_t *memory_low_ram_view(void) {
+    return s_low_ram_view_old ? s_low_ram_old : ram;
+}
+
+/* RAM 0..15 as the game found it at entry; 0 before this process saw one. */
+int memory_low_ram_at_entry(uint8_t out[16]) {
+    if (!s_low_ram_at_entry_valid) return 0;
+    memcpy(out, s_low_ram_at_entry, LOW_RAM_BYTES);
+    return 1;
+}
+
 /* Side-effect-FREE aligned word peek for the debug/observability path ONLY:
  * main RAM (every KUSEG/KSEG0/KSEG1 mirror), scratchpad and BIOS ROM. Never
  * touches MMIO, the lockstep/DS read hooks, read watches, or unmapped_fatal.
@@ -223,6 +276,7 @@ int psx_peek_word(uint32_t addr, uint32_t *out) {
 }
 void memory_clear_low_boot_scratch(void) {
     memset(ram, 0, 0x10u);
+    psx_kernel_bless_note_range(0, 0x10u);
 }
 
 /* ---- Dirty-page tracking for install-at-runtime code (CLAUDE.md Rule 18) ----
@@ -316,20 +370,44 @@ static uint64_t kbless_patch_skips = 0;   /* segments skipped, TCP counter */
 #define KBLESS_UNKNOWN  0u
 #define KBLESS_CLEAN    1u
 #define KBLESS_MISMATCH 2u
-#define KBLESS_MAX_ENTRIES 4096u
+#define KBLESS_MAX_ENTRIES PSX_KBLESS_MAX_ENTRIES   /* psx_bios_image.h */
 static uint8_t  kbless_state[KBLESS_MAX_ENTRIES];   /* parallel to bodies[] */
 static int      kbless_enabled = -1;   /* env PSX_KERNEL_BLESS=0 disables */
+/* Why the latch came out off: "" while on or undecided. Run report and the
+ * one stdout line at the latch. */
+static const char* kbless_off_reason = "";
 /* Always-on counters (TCP kernel_bless). */
 static uint64_t kbless_native_hits   = 0;
 static uint64_t kbless_verifies      = 0;
 static uint64_t kbless_mismatches    = 0;
 static uint64_t kbless_invalidations = 0;
+/* PSX_KERNEL_BLESS_PARANOID=1 (diagnostic): re-compare the body at every
+ * dispatch instead of trusting the row. A row that says CLEAN over bytes
+ * that differ means a RAM write reached the window without telling the
+ * table; that count must stay 0. It costs one body compare per kernel
+ * dispatch, so it is never a default. */
+static int      kbless_paranoid = 0;
+static int      kbless_source_diag = 0;   /* PSX_KERNEL_BLESS_SOURCE_DIAG=1 took effect */
+static uint64_t kbless_paranoid_checks         = 0;
+static uint64_t kbless_paranoid_bytes          = 0;
+static uint64_t kbless_paranoid_stale_clean    = 0;
+static uint64_t kbless_paranoid_stale_mismatch = 0;
 
 static int kbless_on(void) {
     if (kbless_enabled < 0) {
         const char* e = getenv("PSX_KERNEL_BLESS");
         kbless_enabled = (e && e[0] == '0') ? 0 : 1;
-        if (psx_bios_kernel_body_count > KBLESS_MAX_ENTRIES) kbless_enabled = 0;
+        /* A table that does not fit is a build defect. Refuse it; turning
+         * bless off instead ran every kernel routine interpreted, unseen
+         * (PS1B-306). main.cpp stops on the same condition at start-up; this
+         * also covers a backend switched in later. */
+        if (psx_bios_kernel_body_count > KBLESS_MAX_ENTRIES) {
+            fprintf(stderr, "FATAL: kernel-bless table has %u rows; the runtime "
+                    "holds %u (PSX_KBLESS_MAX_ENTRIES)\n",
+                    (unsigned)psx_bios_kernel_body_count,
+                    (unsigned)KBLESS_MAX_ENTRIES);
+            exit(1);
+        }
         s_kb_lo      = psx_bios_image.kbless_ram_lo;
         s_kb_span    = psx_bios_image.kbless_ram_hi - psx_bios_image.kbless_ram_lo;
         s_kb_rom_off = psx_bios_image.kbless_rom_off;
@@ -346,7 +424,37 @@ static int kbless_on(void) {
             const char* pe = getenv("PSX_KERNEL_PATCH_RANGES");
             if (pe && pe[0] == '0') s_kb_pr_n = 0;
         }
-        if (s_kb_span == 0) kbless_enabled = 0;   /* BIOS with no bless window */
+        kbless_off_reason = kbless_enabled ? "" : "PSX_KERNEL_BLESS=0";
+        /* Source (TAS) mode runs the relocated kernel in the dirty-RAM
+         * interpreter, always. The routes are qualified on that path: a
+         * blessed body hands a block to the precise slice owner at its
+         * leader, and that owner takes an interrupt at a different
+         * instruction than the interpreter does (two instructions earlier
+         * in TestEvent, PS1B-348), so every route diverged in the BIOS
+         * boot. PSX_KERNEL_BLESS=1 does not override this. The one way to
+         * run blessed bodies in source mode is the diagnostic
+         * PSX_KERNEL_BLESS_SOURCE_DIAG=1, kept for finding that take-point
+         * difference; a run with it is not a qualified configuration. */
+        if (kbless_enabled && source_gpu_runtime_active()) {
+            const char* de = getenv("PSX_KERNEL_BLESS_SOURCE_DIAG");
+            if (de && de[0] == '1') {
+                kbless_source_diag = 1;
+            } else {
+                kbless_enabled = 0;
+                kbless_off_reason = "source mode";
+            }
+        }
+        if (s_kb_span == 0) {                     /* BIOS with no bless window */
+            kbless_enabled = 0;
+            kbless_off_reason = "image has no bless window";
+        }
+        {
+            const char* pe = getenv("PSX_KERNEL_BLESS_PARANOID");
+            kbless_paranoid = (kbless_enabled && pe && pe[0] == '1') ? 1 : 0;
+            if (kbless_paranoid)
+                fprintf(stderr, "psxrecomp: kernel-bless paranoid mode ON "
+                        "(diagnostic: every kernel dispatch re-compares its body)\n");
+        }
         /* The emitted constants must agree with each other and the ROM
          * array: a window whose ROM source exceeds the image is a build
          * defect, not a runtime condition. */
@@ -357,6 +465,14 @@ static int kbless_on(void) {
                     (unsigned)BIOS_ROM_SIZE);
             exit(1);
         }
+        /* One line where a run without a report (the TAS runner) shows it. */
+        if (kbless_enabled)
+            fprintf(stdout, "psxrecomp: kernel bless: on%s\n", kbless_source_diag
+                    ? " (source mode, PSX_KERNEL_BLESS_SOURCE_DIAG=1: diagnostic,"
+                      " not a qualified configuration)" : "");
+        else
+            fprintf(stdout, "psxrecomp: kernel bless: off (%s)\n", kbless_off_reason);
+        fflush(stdout);
     }
     return kbless_enabled;
 }
@@ -404,9 +520,28 @@ int psx_kernel_bless_dispatchable(uint32_t phys) {
     int i = kbless_find(phys);
     if (i < 0) return 0;
     uint8_t st = kbless_state[i];
+    const PsxKernelBody* b = &psx_bios_kernel_bodies[i];
+    if (kbless_paranoid && st != KBLESS_UNKNOWN) {
+        uint64_t skips = 0;   /* keep the verifier's own counter untouched */
+        int differs = psx_kernel_patch_cmp(s_kb_pr, s_kb_pr_n, ram, bios_rom,
+                                           s_kb_lo, s_kb_rom_off,
+                                           b->body_lo, b->body_hi, &skips) != 0;
+        kbless_paranoid_checks++;
+        kbless_paranoid_bytes += b->body_hi - b->body_lo;
+        if (st == KBLESS_CLEAN && differs) {
+            /* The defect this mode exists to find. Fail safe: interpret. */
+            if (kbless_paranoid_stale_clean++ < 16u)
+                fprintf(stderr, "KBLESS PARANOID: key %08X body [%08X,%08X) is "
+                        "marked clean but differs from the ROM\n",
+                        phys, b->body_lo, b->body_hi);
+            kbless_state[i] = KBLESS_MISMATCH;
+            kbless_mismatches++;
+            return 0;
+        }
+        if (st == KBLESS_MISMATCH && !differs) kbless_paranoid_stale_mismatch++;
+    }
     if (st == KBLESS_CLEAN)    { kbless_native_hits++; return 1; }
     if (st == KBLESS_MISMATCH) return 0;
-    const PsxKernelBody* b = &psx_bios_kernel_bodies[i];
     kbless_verifies++;
     if (psx_kernel_patch_cmp(s_kb_pr, s_kb_pr_n, ram, bios_rom,
                              s_kb_lo, s_kb_rom_off,
@@ -444,9 +579,21 @@ static void kbless_note_write(uint32_t phys) {
     }
 }
 
-/* Range write (DMA / EXE load / savestate restore) overlapping the window:
- * bulk, rare events — reset every entry rather than per-byte scanning. */
+/* Range write (savestate restore, or any other store into guest RAM that
+ * does not go through psx_write_word/half/byte) overlapping the window:
+ * bulk, rare events — reset every entry rather than per-byte scanning.
+ *
+ * The rule (PS1B-306): the row state follows RAM *writes*. A store through
+ * psx_write_word/half/byte reports itself (kbless_note_write). Every other
+ * writer of guest RAM calls this, next to the write.
+ * tests/test_raw_ram_writers.py lists those writers and fails on a new one
+ * that does not. Marking a range executable is not a write and resets
+ * nothing: see dirty_ram_mark_executable_range.
+ *
+ * Because every such writer comes here after its write, this is also where
+ * the older-build copy of RAM 0..15 follows them (low_ram_old_follow). */
 void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
+    low_ram_old_follow(phys, len);
     if (kbless_enabled <= 0) return;   /* also pre-init: nothing verified yet */
     if (len == 0) return;
     uint32_t end = phys + len;
@@ -483,6 +630,41 @@ void psx_kernel_bless_stats(uint64_t out[8]) {
     out[7] = kbless_patch_skips;
 }
 
+/* Paranoid mode for the run report: [0] on, [1] dispatches re-compared,
+ * [2] bytes compared, [3] rows marked clean over bytes that differ (must be
+ * 0), [4] rows marked mismatched over bytes that match (a lost speed-up,
+ * not an error). */
+void psx_kernel_bless_paranoid_stats(uint64_t out[5]) {
+    out[0] = (uint64_t)kbless_paranoid;
+    out[1] = kbless_paranoid_checks;
+    out[2] = kbless_paranoid_bytes;
+    out[3] = kbless_paranoid_stale_clean;
+    out[4] = kbless_paranoid_stale_mismatch;
+}
+
+/* PS1B-306: does the active image's bless table fit kbless_state? A table
+ * that does not is refused: main.cpp stops at start-up and kbless_on() stops
+ * at its latch. This reads the selected backend's constants for those checks
+ * and for the run report; it changes no state. */
+int psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity) {
+    if (entries) *entries = psx_bios_kernel_body_count;
+    if (capacity) *capacity = KBLESS_MAX_ENTRIES;
+    return psx_bios_kernel_body_count <= KBLESS_MAX_ENTRIES;
+}
+
+/* Bless latch for the run report: -1 not decided yet (no kernel-window
+ * dispatch so far), 0 off (PSX_KERNEL_BLESS=0 or an image with no bless
+ * window), 1 on. Reads only. */
+int psx_kernel_bless_state(void) {
+    return kbless_enabled;
+}
+
+/* Why bless is off, for the run report: "" while on or not yet decided,
+ * else "PSX_KERNEL_BLESS=0", "source mode" or "image has no bless window". */
+const char* psx_kernel_bless_off_reason(void) {
+    return kbless_off_reason;
+}
+
 void psx_kernel_bless_resync_after_restore(void) {
     /* kbless_state is host-only. CLEAN/MISMATCH are sticky across guest
      * stores only via kbless_note_write; savestate RAM memcpy never hits
@@ -502,6 +684,9 @@ void psx_kernel_bless_reset_for_boot(void) {
     s_kb_rom_off = 0;
     s_kb_pr = NULL;
     s_kb_pr_n = 0;
+    kbless_paranoid = 0;
+    kbless_source_diag = 0;
+    kbless_off_reason = "";
     memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
 }
 
@@ -571,6 +756,18 @@ static uint32_t g_text_exact_last_mismatch = 0;
 static uint32_t g_text_exact_last_live = 0;
 static uint32_t g_text_exact_last_ref = 0;
 
+/* Pages where the boot executable the console loads differs from the image
+ * the static code was generated from (text_source_guard.h). The reference
+ * image above cannot show this: an installed product reads it from the mounted
+ * disc, so it agrees with RAM. A disc of a multi-disc set that carries the
+ * program with a per-disc code difference would otherwise run the other
+ * disc's compiled instruction. Native code never runs over such a page; the
+ * interpreter runs the loaded bytes. Unlike the modified and diverged bitmaps
+ * this is not RAM state: it is fixed for the loaded executable, so a restore
+ * or a reset does not clear it. Only registering an image does. */
+static uint32_t text_foreign_bitmap[DIRTY_RAM_BITMAP_WORDS];
+static uint32_t g_text_foreign_pages = 0;
+
 void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                    uint32_t len) {
     if (!bytes || len == 0 || phys_lo >= RAM_LIVE) return;
@@ -580,6 +777,8 @@ void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
     text_ref_hi = phys_lo + len;
     memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));
     memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));
+    memset(text_foreign_bitmap, 0, sizeof(text_foreign_bitmap));
+    g_text_foreign_pages = 0;
     g_text_native_blocked = 0;
     g_text_diverged_pages = 0;
     g_text_exact_mismatches = 0;
@@ -592,6 +791,25 @@ void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
 
 int dirty_ram_text_image_registered(void) { return text_ref_image != NULL; }
 
+uint32_t dirty_ram_text_note_source_image(const uint8_t *loaded,
+                                          uint32_t phys_lo, uint32_t len,
+                                          const uint32_t *source_crc32,
+                                          uint32_t source_count,
+                                          uint32_t source_phys_lo,
+                                          uint32_t source_len,
+                                          uint32_t *first_phys) {
+    memset(text_foreign_bitmap, 0, sizeof(text_foreign_bitmap));
+    if (phys_lo >= RAM_LIVE) { g_text_foreign_pages = 0; return 0; }
+    if (len > RAM_LIVE - phys_lo) len = RAM_LIVE - phys_lo;
+    g_text_foreign_pages = psx_text_source_mismatch(
+        loaded, phys_lo, len, source_crc32, source_count, source_phys_lo,
+        source_len, text_foreign_bitmap, DIRTY_RAM_BITMAP_WORDS, first_phys);
+    return g_text_foreign_pages;
+}
+uint32_t dirty_ram_text_foreign_pages(void) { return g_text_foreign_pages; }
+static inline int text_page_foreign(uint32_t page) {
+    return (text_foreign_bitmap[page >> 5] >> (page & 31u)) & 1u;
+}
 static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) {
     if (!text_ref_image) return;
     if (phys < text_ref_lo || phys + (uint32_t)size > text_ref_hi) return;
@@ -617,6 +835,10 @@ int dirty_ram_text_native_ok(uint32_t phys) {
 
     uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;
     uint32_t bit = 1u << (page & 31u);
+    if (g_text_foreign_pages && text_page_foreign(page)) {
+        g_text_native_blocked++;
+        return 0;
+    }
     if (text_diverged_bitmap[page >> 5] & bit) {
         g_text_native_blocked++;
         return 0;
@@ -674,6 +896,21 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             return 0;
         }
         any = 1;
+        /* The loaded executable differs from the generated-from image on a
+         * page this range touches: the static body is not this disc's code.
+         * One compare of a counter when no page differs, which is every disc
+         * the build was generated from. */
+        if (g_text_foreign_pages) {
+            uint32_t fp0 = phys >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t fp1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t fp;
+            for (fp = fp0; fp <= fp1; fp++) {
+                if (text_page_foreign(fp)) {
+                    g_text_native_blocked++;
+                    return 0;
+                }
+            }
+        }
         /* Page-clean fast path: every page this range touches is neither
          * guard-modified nor runtime-dirty, so its bytes still equal the
          * reference image — skip the memcmp. This keeps the emitted
@@ -765,6 +1002,13 @@ void dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len) {
 
 uint64_t dirty_ram_text_native_blocked(void) { return g_text_native_blocked; }
 uint32_t dirty_ram_text_diverged_pages(void) { return g_text_diverged_pages; }
+/* The reference image's physical range, for the run report (PS1B-391).
+ * Returns 0 when the guard is not armed. */
+int dirty_ram_text_image_range(uint32_t *lo, uint32_t *hi) {
+    if (lo) *lo = text_ref_lo;
+    if (hi) *hi = text_ref_hi;
+    return text_ref_image != NULL;
+}
 uint32_t dirty_ram_text_modified_bitmap_word(uint32_t word_index) {
     if (word_index >= DIRTY_RAM_BITMAP_WORDS) return 0;
     return text_modified_bitmap[word_index];
@@ -776,7 +1020,6 @@ uint32_t dirty_ram_text_diverged_bitmap_word(uint32_t word_index) {
 
 void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len) {
     if (len == 0 || phys >= RAM_LIVE) return;
-    psx_kernel_bless_note_range(phys, len);
     uint32_t end = phys + len - 1u;
     if (end >= RAM_LIVE || end < phys) end = RAM_LIVE - 1u;
 
@@ -1025,6 +1268,33 @@ uint64_t g_kseg2_ignored_writes;
 /* Cache control register (KSEG2: 0xFFFE0130). */
 static uint32_t cache_ctrl;
 
+void memory_control_get(uint32_t out[PSX_MEMORY_CONTROL_WORDS]) {
+    memcpy(out, mem_ctrl, sizeof mem_ctrl);
+    out[16] = ram_size_reg;
+    out[17] = cache_ctrl;
+}
+
+void memory_control_set(const uint32_t in[PSX_MEMORY_CONTROL_WORDS]) {
+    memcpy(mem_ctrl, in, sizeof mem_ctrl);
+    ram_size_reg = in[16];
+    cache_ctrl = in[17];
+}
+
+uint32_t memory_control_snapshot_bytes(void) { return 72u; }
+void memory_control_snapshot_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, memory_control_snapshot_bytes());
+    for (unsigned i=0; i<16u; ++i) pst_w_u32(&w, mem_ctrl[i]);
+    pst_w_u32(&w, ram_size_reg); pst_w_u32(&w, cache_ctrl);
+}
+int memory_control_snapshot_read(const uint8_t *in, uint32_t len) {
+    if (!in || len!=memory_control_snapshot_bytes()) return 0;
+    PstR r; pst_r_init(&r, in, len);
+    for (unsigned i=0; i<16u; ++i) pst_r_u32(&r, &mem_ctrl[i]);
+    pst_r_u32(&r, &ram_size_reg); pst_r_u32(&r, &cache_ctrl);
+    return 1;
+}
+
+
 /* Pointer to cpu->cop0[12] (SR).  Set once at init.
  * Used by write functions to check the IsC (Isolate Cache) bit: while it is
  * set, a CPU store goes to the caches and never reaches the bus (isc_store). */
@@ -1222,6 +1492,9 @@ uint32_t memory_get_bios_checksum(void) { return s_bios_checksum; }
 void memory_init(const char* bios_path) {
     psx_ram_apply_size_request();
     memset(ram, 0, sizeof(ram));
+    psx_icache_attach_ram(ram, RAM_LIVE);
+    memset(s_low_ram_old, 0, sizeof(s_low_ram_old));
+    s_low_ram_at_entry_valid = 0;
     memset(scratchpad, 0, sizeof(scratchpad));
     /* Rematch re-enters without process exit — wipe sticky I/O regs that
      * live outside device *_init (I_STAT/I_MASK cleared in interrupts_init). */
@@ -1321,9 +1594,9 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
     if (addr >= 0x1F801100u && addr <= 0x1F80112Fu) {
         return timers_read(addr);
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        return cdrom_read(addr);
+    /* CDROM register block: four mirrors of the four byte registers. */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        return cdrom_read(0x1F801800u | (addr & 3u));
     }
     /* GPU: 0x1F801810 (GPUREAD), 0x1F801814 (GPUSTAT) */
     if (addr == 0x1F801810u) return gpu_read_gpuread();
@@ -1385,9 +1658,9 @@ static void mmio_write32(uint32_t addr, uint32_t val) {
         timers_write(addr, val);
         return;
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        cdrom_write(addr, val);
+    /* CDROM register block: four mirrors of the four byte registers. */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        cdrom_write(0x1F801800u | (addr & 3u), val);
         return;
     }
     /* GPU GP0: 0x1F801810, GP1: 0x1F801814 */
@@ -1576,9 +1849,9 @@ static uint8_t mmio_read8_impl(uint32_t addr) {
         uint32_t val = mdec_read(addr & ~3u);
         return (uint8_t)(val >> (8 * (addr & 3)));
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        return (uint8_t)cdrom_read(addr);
+    /* CDROM register block: four mirrors of the four byte registers. */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        return (uint8_t)cdrom_read(0x1F801800u | (addr & 3u));
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
@@ -1663,9 +1936,9 @@ static void mmio_write8(uint32_t addr, uint8_t val) {
         mdec_write(aligned, cur);
         return;
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        cdrom_write(addr, val);
+    /* CDROM register block: four mirrors of the four byte registers. */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        cdrom_write(0x1F801800u | (addr & 3u), val);
         return;
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
@@ -1765,7 +2038,7 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
         }
     }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) {
-        return 0xFFFFFFFFu;
+        return source_gpu_runtime_active() ? 0u : 0xFFFFFFFFu;
     }
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
@@ -2049,14 +2322,14 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
      * Keys for relocated SCPH-1001 code go through scph1001_relocated_store()
      * (runtime PC, ROM address); Kernel Part 2 runs at 0x500 from ROM
      * 0xBFC10000. */
-    if (fntrace_is_game_started() &&
+    if (!source_gpu_runtime_active() && fntrace_is_game_started() &&
         phys < 0x10u && scph1001_relocated_store(0x00000F00u, 0xBFC10A00u)) return;
 
     /* BIOS helpers use RAM address zero as a tiny delay-loop scratch between
      * device-register polls. Treat these two dummy stores as non-visible; real
      * hardware / Beetle preserve Tomba 2's sector-63 card-management payload
      * when it passes buffer=0 to _card_write. */
-    if (fntrace_is_game_started() && phys == 0u) {
+    if (!source_gpu_runtime_active() && fntrace_is_game_started() && phys == 0u) {
         switch (g_debug_last_store_pc) {
         case 0xBFC04E90u:   /* ROM, runs in place */
         case 0xBFC04EF0u:
@@ -2075,6 +2348,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
             scph1001_relocated_store(0x80059C50u, 0xBFC41C50u))
             return;
     }
+
 
     if (phys < RAM_SIZE) {
         /* Tomba 2 load-game card check: the BIOS card-manager cleanup helper
@@ -2129,6 +2403,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         ram[phys + 1] = (uint8_t)(val >> 8);
         ram[phys + 2] = (uint8_t)(val >> 16);
         ram[phys + 3] = (uint8_t)(val >> 24);
+        low_ram_old_follow(phys, 4u);
         return;
     }
     {
@@ -2207,7 +2482,7 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
             return (uint16_t)mod_memory[off] |
                    ((uint16_t)mod_memory[off + 1u] << 8);
     }
-    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return 0xFFFFu;
+    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return source_gpu_runtime_active() ? 0u : 0xFFFFu;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
         return (uint16_t)scratchpad[off] | ((uint16_t)scratchpad[off + 1] << 8);
@@ -2263,6 +2538,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         pgxp_untracked_store(phys);
         ram[phys]     = (uint8_t)(val);
         ram[phys + 1] = (uint8_t)(val >> 8);
+        low_ram_old_follow(phys, 2u);
         return;
     }
     {
@@ -2333,7 +2609,7 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
         uint32_t off;
         if (mod_memory_offset(phys, 1u, &off)) return mod_memory[off];
     }
-    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return 0xFFu;
+    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return source_gpu_runtime_active() ? 0u : 0xFFu;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         return scratchpad[phys - 0x1F800000u];
     }
@@ -2434,8 +2710,8 @@ static inline uint32_t psx_mmio_read_wait(uint32_t phys, uint32_t size) {
 /* Beetle ReadMemory data-access timing (cpu.cpp:369-448), after §1/deps/DO_LDS.
  * compl_cost = 2 (CPU load) / 1 (LWC2); arm_rt = GPR to arm as pending load, or
  * 0x20 = none (LWC2, dest is a GTE reg). size = access width in bytes (1/2/4). */
-static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
-                                   uint32_t compl_cost, uint32_t arm_rt) {
+static inline uint32_t psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
+                                   uint32_t compl_cost, uint32_t arm_rt, int sampling) {
     /* ReadMemory start (369-370): clear the current give-back slot. */
     cpu->read_absorb[cpu->read_absorb_which] = 0u;
     cpu->read_absorb_which = 0u;
@@ -2443,16 +2719,17 @@ static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         cpu->ld_absorb = 0u;
         cpu->ld_which_t = (uint8_t)arm_rt;
-        return;
+        return 0;
     }
-    /* fudge (424): +2 iff the predecessor committed no load (read_fudge==0x20).
-     * Combined with region+completion into one advance — deadline catch-up
-     * replays exact event boundaries, so splitting the charge is only host cost. */
+    /* A sampled MMIO read occurs after the device wait but before CPU/GTE
+     * completion. Timing-only and RAM paths retain their existing single charge. */
     uint32_t region = psx_mmio_read_wait(phys, size);  /* device-region wait */
-    uint32_t cost = region + compl_cost;               /* LDAbsorb = region + completion */
+    uint32_t cost = region + compl_cost + dma_cpu_read_penalty();               /* LDAbsorb = region + completion */
     uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
     cpu->ld_absorb = cost;
-    psx_cpu_charge(fudge + cost);   /* CPU charge: [timing] guest_cycle_scale */
+    const uint32_t tail = sampling && phys >= 0x1F801000u && phys < 0x1F803000u
+        ? compl_cost : 0u;
+    psx_cpu_charge(fudge + cost - tail); /* preserve guest-cycle scaling */
     cpu->ld_which_t = (uint8_t)arm_rt;
     /* PROOF GATE (PSX_POLL_PROOF=N, default 0/off): a FLAT, non-absorbed extra N
      * cycles per main-RAM data read — replicates the historical "+6 cyc/main-RAM
@@ -2467,6 +2744,7 @@ static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
         if (s_pp < 0) { const char* e = getenv("PSX_POLL_PROOF"); s_pp = (e && e[0]) ? atoi(e) : 0; }
         if (s_pp > 0) psx_load_charge_cycles((uint32_t)s_pp);
     }
+    return tail;
 }
 
 /* Resolve PSX_LOAD_DELAY once (shared with inlined psx_cyc.h helpers). */
@@ -2480,23 +2758,24 @@ int psx_load_delay_enabled(void) {
 
 /* The interlock half of a load (§1+deps+(cancel)+DO_LDS+ReadMemory). Gated on
  * PSX_ENABLE_BLOCK_CYCLES so the Beetle-oracle build (cycles off) does a plain read. */
-static inline void psx_cyc_load_timing(CPUState* cpu, uint32_t addr, uint32_t size,
-                                       uint32_t rt, uint32_t reg_mask) {
+static inline uint32_t psx_cyc_load_timing(CPUState* cpu, uint32_t addr, uint32_t size,
+                                       uint32_t rt, uint32_t reg_mask, int sampling) {
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     /* Bisect gate (PSX_LOAD_DELAY=0): disable the R3000A load-delay interlock
      * timing (the d8c4a8e/fade560/d597797 feature) to test whether it moves the
      * MMX6 cutscene ordering. Read once; default on. */
     if (!psx_load_delay_enabled()) {
         (void)addr; (void)size; (void)rt; (void)reg_mask;
-        return;
+        return 0;
     }
     psx_cyc_base(cpu);
     psx_cyc_deps(cpu, reg_mask);
     if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;   /* cancel pending load to same dest */
     psx_cyc_lds(cpu);
-    psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, size, 2u, rt);
+    return psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, size, 2u, rt, sampling);
 #else
-    (void)cpu; (void)addr; (void)size; (void)rt; (void)reg_mask;
+    (void)cpu; (void)addr; (void)size; (void)rt; (void)reg_mask; (void)sampling;
+    return 0;
 #endif
 }
 
@@ -2531,34 +2810,148 @@ static inline int psx_cyc_main_ram_fast_addr(uint32_t addr, uint32_t width,
 }
 #endif
 
+#ifdef PSX_ENABLE_BLOCK_CYCLES
+static uint32_t t172_memory_wait(uint32_t physical, unsigned width)
+{
+    static int mmio_wait = -1;
+    if (mmio_wait < 0) {
+        const char *value = getenv("PSX_MMIO_WAIT");
+        mmio_wait = value ? atoi(value) != 0 : 1;
+    }
+    if (physical < 0x800000u) return 7;
+    if (physical >= 0x1f800000u && physical < 0x1f800400u) return 0;
+    if (mmio_wait) {
+        if (physical >= 0x1f801800u && physical < 0x1f801810u)
+            return 4 + width * 6;
+        if (physical >= 0x1f801c00u && physical < 0x1f802000u)
+            return width == 4 ? 40 : 20;
+        if ((physical >= 0x1f801000u && physical < 0x1f801024u) ||
+            (physical >= 0x1f801040u && physical < 0x1f801060u) ||
+            (physical >= 0x1f801070u && physical < 0x1f801078u) ||
+            (physical >= 0x1f801080u && physical < 0x1f801140u) ||
+            (physical >= 0x1f801810u && physical < 0x1f801818u) ||
+            (physical >= 0x1f801820u && physical < 0x1f801828u)) return 5;
+    }
+    return 4;
+}
+
+static void t172_memory_poll(uint32_t physical)
+{
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM) && !STARVATION_RING_ENABLED
+    if (g_ls_replay_active) return;
+#endif
+    static int extra = -1;
+    if (extra < 0) {
+        const char *value = getenv("PSX_POLL_PROOF");
+        extra = value ? atoi(value) : 0;
+    }
+    if (physical < 0x800000u && extra > 0) {
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM) && !STARVATION_RING_ENABLED
+        extern uint64_t g_psx_cycle_fast_limit;
+        if (!g_event_step_conservative && psx_cycle_count + (uint32_t)extra <= g_psx_cycle_fast_limit) {
+            psx_cycle_count += (uint32_t)extra;
+            return;
+        }
+#endif
+        psx_advance_cycles((uint32_t)extra);
+    }
+}
+
+static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
+                                   uint32_t rt, uint32_t mask, int coprocessor,
+                                   int sampling)
+{
+    uint32_t physical = addr & 0x1fffffffu;
+    if (!coprocessor) {
+        psx_cyc_base(cpu);
+        psx_cyc_deps(cpu, mask);
+        if (cpu->ld_which_t == rt) cpu->ld_which_t = 0;
+        psx_cyc_lds(cpu);
+    }
+    cpu->read_absorb[cpu->read_absorb_which] = 0;
+    cpu->read_absorb_which = 0;
+    uint32_t base_wait = t172_memory_wait(physical, width);
+    uint32_t wait = base_wait;
+    uint32_t tail = 0;
+    if (wait) {
+        wait += dma_cpu_read_penalty();
+        if (coprocessor) --wait;
+        cpu->ld_absorb = wait - 2;
+        if (!(cpu->read_fudge & 32)) wait -= 2;
+        if (physical >= 0x1f801000u && physical < 0x1f803000u)
+            tail = coprocessor ? 1 : 2;
+        int cd = physical >= 0x1f801800u && physical < 0x1f801810u;
+        int early_register = (physical >= 0x1f801070u && physical < 0x1f801078u) ||
+                             (physical >= 0x1f801080u && physical < 0x1f801100u) ||
+                             (width == 4 && physical >= 0x1f801810u && physical < 0x1f801818u);
+        int sample_early = addr < 0xc0000000u && source_gpu_runtime_active() &&
+            (coprocessor ? cd : sampling && (cd || early_register || 0 /* independent source Timer1 selector is not enabled by this bus profile */));
+        if (sample_early) {
+            tail = physical < 0x800000u ? 3 :
+                physical >= 0x1f801000u && physical < 0x1f803000u ? base_wait - 2 - coprocessor : 0;
+        }
+        uint32_t before = wait - tail;
+        psx_advance_cycles(before);
+        if (sample_early) psx_devices_service_to_now();
+    } else {
+        cpu->ld_absorb = 0;
+    }
+    cpu->ld_which_t = (uint8_t)rt;
+    t172_memory_poll(physical);
+    return tail;
+}
+#endif
+
+static uint32_t source_bus_load(CPUState *cpu,uint32_t addr,uint32_t rt,uint32_t mask,unsigned width,int timing_only,int coprocessor){
+ uint32_t tail=0,value=0;
+#ifdef PSX_ENABLE_BLOCK_CYCLES
+ if(coprocessor || psx_load_delay_enabled())tail=t172_memory_before(cpu,addr,width,rt,mask,coprocessor,!timing_only);
+#else
+ (void)cpu;(void)rt;(void)mask;(void)coprocessor;
+#endif
+ if(!timing_only){if(width==4)value=psx_read_word(addr);else if(width==2)value=psx_read_half(addr);else value=psx_read_byte(addr);}
+ if(tail)psx_advance_cycles(tail);return value;
+}
 /* Slow paths for the inlined helpers in psx_cyc.h (MMIO / lockstep / shards). */
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
-    return psx_read_word(addr);
+    if(source_gpu_runtime_active())return source_bus_load(cpu,addr,rt,reg_mask,4,0,0);
+    uint32_t tail = psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask, 1);
+    uint32_t value = psx_read_word(addr);
+    if (tail) psx_cpu_charge(tail);
+    return value;
 }
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask);
-    return psx_read_half(addr);
+    if(source_gpu_runtime_active())return source_bus_load(cpu,addr,rt,reg_mask,2,0,0);
+    uint32_t tail = psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask, 1);
+    uint16_t value = psx_read_half(addr);
+    if (tail) psx_cpu_charge(tail);
+    return value;
 }
 void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
                                    uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
+    if(source_gpu_runtime_active()){(void)source_bus_load(cpu,addr,rt,reg_mask,4,1,0);return;}
+    (void)psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask, 0);
 }
 uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
+    if(source_gpu_runtime_active())return source_bus_load(cpu,addr,rt,reg_mask,1,0,0);
+    uint32_t tail = psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask, 1);
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
     uint32_t phys;
     if (psx_cyc_main_ram_fast_addr(addr, 1u, &phys)) return ram[phys];
 #endif
-    return psx_read_byte(addr);
+    uint8_t value = psx_read_byte(addr);
+    if (tail) psx_cpu_charge(tail);
+    return value;
 }
 
 /* LWC2 (GTE load): §1/DO_LDS done by psx_cyc_step(cpu,0); the GTE deadline stall by
  * psx_gte_stall — both emitted before this call. 32-bit access, completion +1, no
  * LDWhich arm. */
 uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
+    if(source_gpu_runtime_active())return source_bus_load(cpu,addr,32,0,4,0,1);
+    uint32_t tail = 0;
 #ifdef PSX_ENABLE_BLOCK_CYCLES
-    psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u);
+    tail = psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u, 1);
 #else
     (void)cpu;
 #endif
@@ -2571,7 +2964,9 @@ uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
              | ((uint32_t)ram[phys + 3] << 24);
     }
 #endif
-    return psx_read_word(addr);
+    uint32_t value = psx_read_word(addr);
+    if (tail) psx_cpu_charge(tail);
+    return value;
 }
 
 /* Deprecated uncharged passthroughs (the +4 flat wait-state model is gone; load
@@ -2638,6 +3033,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
 #endif
         pgxp_untracked_store(phys);
         ram[phys] = val;
+        low_ram_old_follow(phys, 1u);
         return;
     }
     {
@@ -2673,3 +3069,17 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     }
     unmapped_fatal(addr, phys, "WRITE");
 }
+
+int memory_peek_instruction_word(uint32_t address, uint32_t *value) {
+    if (!value || (address & 3u) || address >= 0xC0000000u) return 0;
+    uint32_t phys = address & 0x1FFFFFFFu;
+    const uint8_t *bytes;
+    if (phys < memory_get_ram_bytes()) bytes = ram + phys;
+    else if (phys >= 0x1FC00000u && phys < 0x1FC00000u + BIOS_ROM_SIZE)
+        bytes = bios_rom + (phys - 0x1FC00000u);
+    else return 0;
+    *value = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+             ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+    return 1;
+}
+

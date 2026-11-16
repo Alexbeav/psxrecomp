@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <array>
+#include <map>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -33,7 +34,10 @@ namespace PSXRecompV4 {
 //   analog  — always present a DualShock/analog pad (id 0x73). The D-pad is
 //             independent from both sticks, matching real hardware. Default.
 //   digital — always present a digital pad (id 0x41); sticks disabled.
-enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
+//   negcon  — present a Namco neGcon (id 0x23) driven by the seat's pad or
+//             keyboard (PS1B-304). A player choice in settings.toml and the
+//             launcher only; game.toml modes stay analog or digital.
+enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2, PAD_MODE_NEGCON = 3 };
 
 // Renderer IDs shared by game.toml/settings parsing and runtime startup.
 // OpenGL is the default because the Windows software/SDL_Renderer path is slow
@@ -374,6 +378,11 @@ struct RuntimeConfig {
     bool                  turbo_loads = false;
     bool                  has_turbo_loads = false;   // key present in game.toml
 
+    // fast_loading_optout: true keeps the Fast Loading mod from accelerating
+    // this title even when the player enables it, for a game whose in-play
+    // disc reads still look like loads to the engage gate.
+    bool                  fast_loading_optout = false;
+
     // offer_turbo_loads: DEPRECATED AND IGNORED, now that the generic switch
     // it gated no longer exists. Defaults false and is never consulted; the
     // migrated titles that set it false stay correct, and the titles that
@@ -467,6 +476,16 @@ struct RuntimeConfig {
     // 8 is the historical default; a title whose MDEC uploads the full width
     // can set 0 and keep those columns.
     int                   video_depth24_trailing_margin = 8;
+    // True when the title wrote depth24_trailing_margin: its value then
+    // stands even with fmv_crop_to_picture on.
+    bool                  video_depth24_trailing_margin_set = false;
+
+    // fmv_crop_to_picture: present a 24-bit (FMV) frame at its own visible
+    // height, filling the window like a 15-bit frame, and blank at the right
+    // only the columns the movie did not upload. false (the default) keeps
+    // the frame at its television position inside the PAL/NTSC active-video
+    // area (black rows above and below a movie shorter than that area).
+    bool                  video_fmv_crop_to_picture = false;
 
     // internal_resolution: the "Internal resolution" preset (Settings ->
     // Display), which supersedes supersampling when set. Encoding as in
@@ -1061,6 +1080,19 @@ struct GameConfig {
     // that produced disc_set.json.
     std::vector<std::string> disc_serials;
 
+
+    // Optional ([game] program_discs): the 1-based positions in `discs` that
+    // THIS build boots. Absent means every disc, which is every single-disc
+    // title and every set whose discs carry one program. It is set only for a
+    // set whose discs boot different programs (Resident Evil 2: Leon on disc
+    // 1, Claire on disc 2), where each program is its own build and the builds
+    // share one folder, one settings file and one saves folder. `discs` and
+    // `disc_serials` then list the WHOLE set in every program's config, and
+    // this key says which entries are the program's own. The runtime mounts
+    // only those; a remembered disc that belongs to another program is not
+    // mounted, and save states take the disc's position in the set.
+    std::vector<int> program_discs;
+
     // Optional expected disc identity, for the launcher's "Disc verified" badge.
     // disc_crc: full-file CRC32 (IEEE) of the data track. disc_sha1: lowercase
     // hex SHA-1. Either may be absent (has_disc_crc / disc_sha1.empty()).
@@ -1566,6 +1598,15 @@ inline uint32_t ws_cull_clip_edge_width(const GameConfig& c) {
 // Unlike game.toml, paths here are stored verbatim (the user picked them); they
 // are NOT resolved against a project root.
 struct UserSettings {
+    // Validated runtime-only overrides from player_settings.h.
+    std::map<std::string,std::string> extra_player_settings;
+    // Before format2, boot keys were launcher echoes rather than choices.
+    // Preserve that migration independently of modern mod-owned video keys.
+    static constexpr int kFormat = 2;
+    int settings_format = 0;
+    bool boot_keys_were_echoes = false;
+    // Host master volume, independent of the emulated audio hardware.
+    bool has_volume = false; int volume = 100;
     // Set when the file existed but failed to parse as TOML: every field below
     // is defaults and the caller must warn loudly — silently dropping a user's
     // hand-edited settings looks like the settings "don't work", and a later
@@ -1636,6 +1677,8 @@ struct UserSettings {
     bool has_netplay_lobby_url = false; std::string netplay_lobby_url;
     bool has_aspect_ratio   = false; int  aspect_num     = 4; // display aspect W:H
                                      int  aspect_den     = 3; // (4:3 = native)
+    // Preserved legacy field; no ordinary runtime consumer. No GUI checkbox
+    // until an implemented adaptive-view behavior is available.
     bool has_adaptive_view  = false; bool adaptive_view  = false;
     // Local rewind (on/off, buffer depth, interval) is the built-in Rewind
     // mod (psx.feature.rewind); the old [video] rewind keys are ignored. Its
@@ -1676,6 +1719,8 @@ struct UserSettings {
     // device is one of:
     //   "none"     — no pad in this port (port not connected)
     //   "keyboard" — driven by the keyboard map (input.ini)
+    //   "mouse"    — a Sony PS1 Mouse in this port, driven by the host mouse
+    //                (PS1B-279; pN_mode does not apply)
     //   "<GUID>"   — an SDL game-controller GUID (SDL_JoystickGetGUIDString)
     // Modes (see PadMode): analog / digital. Hybrid is mod-only. Defaults: P1 keyboard,
     // P2–P5 none. Deadzone default is 10% (3277/32767). TOML keys:
@@ -1708,10 +1753,21 @@ struct UserSettings {
     // game.toml experimental_jogcon_force_feedback default (off).
     bool has_jogcon_force_feedback = false; bool jogcon_force_feedback = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
+    // PS1 Mouse host mapping (settings.toml [controller], PS1B-279). Used
+    // only when a port's pN_device is "mouse". mouse_sensitivity scales host
+    // pointer motion into mouse counts (0.05..10.0, default 1.0).
+    // mouse_capture: capture the pointer (relative mode, hidden cursor) when
+    // the game starts (default true); the [KeyMap] MouseCapture hotkey
+    // toggles it at run time.
+    bool has_mouse_sensitivity = false; double mouse_sensitivity = 1.0;
+    bool has_mouse_capture = false; bool mouse_capture = true;
+    // Localization:the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
     bool has_language = false; std::string language = "en";
 
+    // Preserved authoring stubs. These three fields have no runtime consumer
+    // and are deliberately not presented as working player controls.
     bool has_parappa_timing_mode = false; std::string parappa_timing_mode = "stock";
     bool has_parappa_timing_extra_early = false; int parappa_timing_extra_early = 0;
     bool has_parappa_timing_extra_late = false; int parappa_timing_extra_late = 0;
@@ -1762,7 +1818,9 @@ bool save_user_settings(const std::filesystem::path& path, const UserSettings& s
 // `p` relative to `folder` when it lies inside it; otherwise `p` unchanged.
 // Keeps portable game folders portable once the launcher saves a path.
 std::filesystem::path relative_to_folder(const std::filesystem::path& p,
-                                         const std::filesystem::path& folder);
+                                         const std::filesystem::path& folder,
+                                         const std::filesystem::path& install_root = {});
+void set_user_settings_install_root(const std::filesystem::path& root);
 
 // Surgical upsert of `key = true|false` under [controller] in game.toml.
 // Preserves comments and unrelated keys. Creates [controller] if missing.
@@ -1789,3 +1847,4 @@ GameConfig load_game_config(const std::filesystem::path& config_path);
 uint32_t overlay_codegen_config_hash(const GameConfig& config);
 
 } // namespace PSXRecompV4
+

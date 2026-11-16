@@ -94,8 +94,7 @@ static int format_entry(char *out, int cap, const EventEntry *e) {
         (unsigned)e->detail, e->aux);
 }
 
-int event_ring_dump_file(const char *path) {
-    FILE *f = fopen(path ? path : "event_ring.json", "w");
+int event_ring_dump_stream(FILE *f) {
     if (!f) return -1;
     uint64_t total = s_seq;
     uint64_t start = (total > EVENT_RING_CAP) ? (total - EVENT_RING_CAP) : 0;
@@ -109,7 +108,14 @@ int event_ring_dump_file(const char *path) {
         first = 0; count++;
     }
     fputs("]\n", f);
-    fclose(f);
+    return ferror(f) ? -1 : count;
+}
+
+int event_ring_dump_file(const char *path) {
+    FILE *f = fopen(path ? path : "event_ring.json", "w");
+    if (!f) return -1;
+    int count = event_ring_dump_stream(f);
+    if (fclose(f)) return -1;
     return count;
 }
 

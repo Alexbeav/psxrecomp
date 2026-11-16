@@ -1,11 +1,11 @@
-# cpu_throttle.ps1 — simulate a weaker host CPU for any psxrecomp title.
+# cpu_throttle.ps1 - simulate a weaker host CPU for any psxrecomp title.
 #
 # WHY THIS EXISTS: "runs fine here, players report slowdown there" is not
 # reproducible on a fast dev box. Rather than guess, throttle the running
 # process until the reported symptom appears, then read the budget off the
 # dial. Uses the Windows Job Object CPU rate control (the same hard cap the
 # scheduler applies to containers), so it needs no launcher/runtime support
-# and works on a LIVE process — never restart a session to arm it.
+# and works on a LIVE process - never restart a session to arm it.
 #
 # The job is NAMED, so the cap can be re-dialed at any time from a fresh shell
 # without re-assigning the process. A job object outlives the handle that made
@@ -112,7 +112,7 @@ if ($Measure) {
 $jobName = "psxrecomp_throttle_$ProcessId"
 
 # Reuse the existing job if this PID was already throttled, so re-dialing does
-# not nest a second job (nested caps only ever ratchet DOWN — you could never
+# not nest a second job (nested caps only ever ratchet DOWN - you could never
 # loosen one). Otherwise create it and assign the live process once.
 # CreateJobObject on an existing NAME returns a handle to that same job and
 # sets ERROR_ALREADY_EXISTS -- it does not make a second one. That is a more

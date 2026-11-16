@@ -1,3 +1,6 @@
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L
+#endif
 /* Real boot_state + host registry; reuse the counted hardware fixture and
  * its no-provider compatibility tests, rather than stub the serializer. */
 #define PSX_TEST_SNAPSHOT_PACKAGE_LOOKUP 1
@@ -71,11 +74,29 @@ int main(void) {
     CPUState cpu={0};
     uint8_t *legacy=NULL;
     size_t legacy_len=0;
-    /* Exercise no-provider raw/compressed snapshots and both handoff phases. */
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PAD_COMMAND_MODEL","" );
+#else
+    unsetenv("PSX_INPUT_ROUTE_PAD_COMMAND_MODEL" );
+#endif
+    /* Exercise current no-provider raw/compressed and both handoff phases first. */
     assert(!boot_state_handoff_tests());
     cpu.pc=0x80050044;
     assert(boot_state_save_buffer_raw(&cpu,123,0x801b0000,&legacy,&legacy_len));
-    assert(test_u32(legacy + 4)==BOOT_STATE_VERSION_WITHOUT_HOST);
+    assert(legacy[4]==BOOT_STATE_VERSION_WITHOUT_HOST);
+    /* Cross-model loads refuse before changing guest/provider state. */
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PAD_COMMAND_MODEL","pin-f");
+#else
+    setenv("PSX_INPUT_ROUTE_PAD_COMMAND_MODEL","pin-f",1);
+#endif
+    assert_refused_untouched(legacy,legacy_len,&cpu);
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PAD_COMMAND_MODEL","");
+#else
+    unsetenv("PSX_INPUT_ROUTE_PAD_COMMAND_MODEL");
+#endif
+
     assert(psx_mod_register_snapshot_guard("test.guard",NULL,1,guard_validate));
     for(unsigned enabled=0;enabled<2;++enabled) {
         guard_active=enabled;
@@ -121,7 +142,7 @@ int main(void) {
         a_value=42; b_value=71;
         assert(compressed ? boot_state_save_buffer(&cpu,123,0x801b0000,&saved,&len)
                           : boot_state_save_buffer_raw(&cpu,123,0x801b0000,&saved,&len));
-        assert(test_u32(saved + 4)==BOOT_STATE_VERSION);
+        assert(saved[4]==BOOT_STATE_VERSION);
         count=test_u32(saved+28);
         host=test_find_section(saved,len,BS_SEC_MOD_HOST,&host_offset,&host_framed);
         assert(host && host_offset+host_framed==len);
@@ -195,7 +216,7 @@ int main(void) {
     size_t capacity=0, captured_len=0;
     cpu.pc=0x80050044; ram[0x100]=0xab; a_value=42; b_value=71;
     assert(boot_state_capture_raw(&cpu,123,0x801b0000,&captured,&capacity,&captured_len));
-    assert(captured && captured_len && capacity>=captured_len && test_u32(captured + 4)==BOOT_STATE_VERSION);
+    assert(captured && captured_len && capacity>=captured_len && captured[4]==BOOT_STATE_VERSION);
     const size_t first_len=captured_len, first_capacity=capacity;
     uint8_t *first=captured, *copy=malloc(first_len); assert(copy);
     memcpy(copy,captured,first_len);

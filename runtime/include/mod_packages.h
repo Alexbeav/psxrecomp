@@ -51,6 +51,8 @@ enum class ModOptionType {
     Binding,
 };
 
+enum class ModOptionDisplayContext { Any, Offline, Online };
+
 struct ModChoice {
     std::string value;
     std::string label;
@@ -76,6 +78,14 @@ struct ModOption {
      * it out and plugins ignore its value. Models "tick Instant and the speed
      * box stops mattering" without inventing a second widget type. */
     std::string disabled_by;
+    /* Presentation only: selections remain part of the committed plan even
+     * when their control is hidden outside its launcher context. */
+    ModOptionDisplayContext display_context = ModOptionDisplayContext::Any;
+    bool visible_in(bool online) const {
+        return display_context == ModOptionDisplayContext::Any ||
+            (online ? display_context == ModOptionDisplayContext::Online
+                    : display_context == ModOptionDisplayContext::Offline);
+    }
 };
 
 struct ModFeature {
@@ -107,6 +117,7 @@ struct ModFeature {
 enum class ModConstraintKind {
     OrderedInteger,
     RequiresFeature,
+    DistinctValues,
 };
 
 enum class ModConstraintDirection {
@@ -336,6 +347,8 @@ struct ModPackage {
     std::vector<ModTarget> targets;
     std::vector<ModRequirement> dependencies;
     std::vector<std::string> conflicts;
+    /* Active package suppresses these packages for the session. */
+    std::vector<std::string> disables;
     std::vector<ModFeature> features;
     std::vector<ModOption> options;
     std::vector<ModConstraint> constraints;
@@ -512,6 +525,10 @@ public:
     bool quick_visible(const std::string& package, const std::string& feature) const;
     bool set_quick_visible(const std::string& package, const std::string& feature,
                            bool visible, std::string* error = nullptr);
+    /* Inspect selected targets before requesting a disc digest. */
+    bool needs_disc_digest(const std::string& game_id,
+                           const std::string& exe_sha256 = {}) const;
+
     bool prepare_resources(const std::string& game_id,
                            const std::filesystem::path& disc_path,
                            const std::filesystem::path& cache_root,

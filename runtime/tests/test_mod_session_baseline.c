@@ -102,6 +102,28 @@ int main(void) {
     first_session_keeps("vsync on", vsync_on);
     first_session_keeps("vsync off", vsync_off);
 
+    /* The real launcher Apply helper replaces a prior preference, then the
+     * next session restores it before any new plugin activation. */
+    {
+        PSXModSessionBaseline base = k_fresh;
+        PSXModSessionScalars live = vsync_on;
+        psx_mod_session_baseline_set_frame_interpolation(&base, 1, 144);
+        check(!base.captured, "launcher edit never fabricates first capture");
+        (void)psx_mod_session_baseline_apply(&base, &live, 0);
+        check(live.frame_interpolation == 0 && live.frame_interpolation_fps == 0,
+              "native defaults remain unchanged on first capture");
+        psx_mod_session_baseline_set_frame_interpolation(&base, 1, 144);
+        plugin_session(&live);
+        (void)psx_mod_session_baseline_apply(&base, &live, 0);
+        check(live.frame_interpolation == 1 && live.frame_interpolation_fps == 144,
+              "updated interpolation preference survives plugin session/rematch");
+        psx_mod_session_baseline_set_frame_interpolation(&base, 0, 0);
+        plugin_session(&live);
+        (void)psx_mod_session_baseline_apply(&base, &live, 0);
+        check(!live.frame_interpolation && !live.frame_interpolation_fps,
+              "explicit disabled preference survives prior enabled plugin");
+    }
+
     if (failures) {
         fprintf(stderr, "mod_session_baseline_test: %d failure(s)\n", failures);
         return 1;

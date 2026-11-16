@@ -87,7 +87,7 @@ For **bulk ops across many titles / platforms**, use the sibling tool
 | `emit_codegen_setup` | Thin `codegen_setup.c/.h` |
 | `rewrite_cmake_setup_host` | `psxrecomp_add_game_runtime` + wizard |
 | `merge_gitignore` | Disc/BIOS/dist rules; **un-ignores** `generated/` |
-| `emit_packager` | `scripts/package_release.sh` (bundled) |
+| `emit_packager` | `scripts/package_release.sh` (optimized release) and `scripts/package_prebuilt_release.sh` (CI build packaging); preserve existing files unless forced |
 | `emit_ci_workflow` | Bundled `release.yml` |
 | `probe_disc_refresh` | TOC / catalog / seeds (needs `--disc`) |
 | `annotate_legacy_packaging` | Mark hand-forked packagers obsolete |

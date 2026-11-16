@@ -20,6 +20,8 @@
 _Static_assert(PSX_OVERLAY_TEST_CANDIDATE_CAP == 4,
                "pair-dedup harness must exercise the exact four-slot cap");
 
+static int s_boundary_on, s_boundary_calls;
+static uint32_t s_boundary_last_address;
 static uint8_t s_ram[RAM_SIZE];
 static uint8_t s_scratch[1024];
 
@@ -28,7 +30,8 @@ uint32_t g_psx_ram_size = RAM_SIZE;
 uint32_t g_psx_ram_mask = RAM_SIZE - 1u;
 
 uint32_t g_debug_current_func_addr;
-uint32_t g_debug_last_store_pc;
+static uint32_t s_host_store_pc;
+uint32_t *g_psx_last_store_pc_p = &s_host_store_pc;
 uint32_t g_overlay_region_floor;
 uint32_t i_stat, i_mask;
 int g_exec_phase;
@@ -53,6 +56,13 @@ void ds_init(const char *cache_dir, const char *game_id) {
 }
 uint32_t dirty_ram_get_bitmap_word(uint32_t word) { (void)word; return 0; }
 int dirty_ram_is_dirty(uint32_t phys) { (void)phys; return 0; }
+/* The loader's lazy-load window asks whether a text page was rewritten by CPU
+ * stores (PS1B-421). Nothing is here. */
+uint32_t dirty_ram_text_modified_bitmap_word(uint32_t word) { (void)word; return 0; }
+/* The loader's shadow-diff rewinds report their raw RAM writes (PS1B-306). */
+void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
+    (void)phys; (void)len;
+}
 int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
     (void)cpu; (void)addr; (void)stop; return 0;
 }
@@ -75,6 +85,15 @@ void psx_restore_state_escape(void) {}
 void psx_rfe_mark_escape(void) {}
 int psx_syscall(CPUState *cpu, uint32_t code) {
     (void)cpu; (void)code; return 0;
+}
+/* Bound by the real loader, but no instruction fixture here executes these
+ * callbacks. Unexpected execution must fail rather than fabricate behavior. */
+void source_gpu_runtime_latch_bltz(uint32_t pc, int taken) {
+    (void)pc; (void)taken; abort();
+}
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc,
+                    int in_delay_slot) {
+    (void)cpu; (void)code; (void)pc; (void)in_delay_slot; abort();
 }
 void psx_unknown_dispatch(CPUState *cpu, uint32_t addr, uint32_t phys) {
     (void)cpu; (void)addr; (void)phys;
@@ -199,6 +218,15 @@ int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
 }
 void psx_mod_instruction(CPUState *cpu, uint32_t address, uint32_t instruction) {
     (void)cpu; (void)address; (void)instruction;
+}
+uint32_t psx_mod_memory_address(const CPUState *cpu, uint32_t pc,
+                               uint32_t instruction, uint32_t address) {
+    (void)cpu; (void)pc; (void)instruction; return address;
+}
+uint32_t psx_mod_immediate_select(uint32_t group) { (void)group; return 0; }
+int psx_mod_function_entry_has_hook(uint32_t address) { (void)address; return 0; }
+int psx_mod_try_function_replacement(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address; return 0;
 }
 int psx_netplay_is_resimulating(void) { return 0; }
 int psx_game_text_native_ok(uint32_t address) { (void)address; return 1; }
@@ -567,6 +595,90 @@ static int segment_run(const char *image_path, const char *phys_text) {
     return 0;
 }
 
+/* ---- ABI gate (test_overlay_abi_gate_runtime.py) ------------------------
+ * `shard` is the one published pair in the cache. Modes:
+ *   accept        a shard of this build's ABI: it loads, runs natively, and
+ *                 reaches the host through the v24, v25 and v26 slots;
+ *   reject        a shard with another ABI tag in this build's cache folder:
+ *                 the loader never calls it, counts it, keeps a line saying
+ *                 so, and the PC stays with the interpreter;
+ *   sibling       the cache holds only another codegen version's folder:
+ *                 nothing loads and the loader says whose cache it is;
+ *   replace:<lib> as reject, then the compiler's replacement (<lib>) takes the
+ *                 shard's place and a rescan loads it.
+ * One summary line goes to stdout for the Python side to judge. */
+#define ABI_GATE_STORE_PC 0x800657FCu
+#define ABI_GATE_HOST_PC  0xBFC04E90u
+
+static int abi_gate_dispatch(int expect_native) {
+    CPUState cpu;
+    int ok = 1;
+    memset(&cpu, 0, sizeof(cpu));
+    g_debug_last_store_pc = ABI_GATE_HOST_PC;
+    s_boundary_calls = 0;
+    s_boundary_last_address = 0;
+    ok &= expect_int("dispatch", overlay_loader_dispatch(&cpu, 0x80010000u),
+                     expect_native);
+    ok &= expect_int("marker", cpu.gpr[2], expect_native ? TEST_MARKER : 0u);
+    /* v24: the shard's store PC lands in the host's word. */
+    ok &= expect_int("host store pc", g_debug_last_store_pc,
+                     expect_native ? ABI_GATE_STORE_PC : ABI_GATE_HOST_PC);
+    /* v25: the host's int result (0 here) comes back through the slot. */
+    ok &= expect_int("mod entry result", cpu.gpr[3],
+                     expect_native ? 0x100u : 0u);
+    /* v26: the step boundary is reached through the fork's slots. */
+    ok &= expect_int("boundary calls", s_boundary_calls, expect_native);
+    ok &= expect_int("boundary address", s_boundary_last_address,
+                     expect_native ? 0x80010000u : 0u);
+    return ok;
+}
+
+static int abi_gate(const char *shard, const char *mode) {
+    int accept = strcmp(mode, "accept") == 0;
+    int sibling = strcmp(mode, "sibling") == 0;
+    const char *replacement =
+        strncmp(mode, "replace:", 8) == 0 ? mode + 8 : NULL;
+    int ok = 1;
+    s_boundary_on = 1;
+
+    ok &= expect_int("registered", overlay_loader_registered_count(),
+                     accept ? 2 : 0);
+    ok &= expect_int("owners", loader_owner_count(), accept ? 1 : 0);
+    ok &= expect_int("abi rejected", overlay_loader_abi_rejected() != 0,
+                     !(accept || sibling));
+    ok &= expect_int("stale line kept",
+                     overlay_loader_stale_cache_msg()[0] != '\0', !accept);
+    ok &= abi_gate_dispatch(accept);
+    if (!sibling)
+        ok &= expect_int("shard retained", module_is_loaded(shard), accept);
+    printf("first: registered=%d abi_rejected=%llu stale=[%s]\n",
+           overlay_loader_registered_count(),
+           (unsigned long long)overlay_loader_abi_rejected(),
+           overlay_loader_stale_cache_msg());
+
+    if (replacement) {
+        /* The compiler owns on-disk replacement; the loader left the stale
+         * file in place and holds no handle to it. */
+        if (remove(shard) != 0 || rename(replacement, shard) != 0) {
+            perror("replace stale shard");
+            return 3;
+        }
+        overlay_loader_rescan();
+        ok &= expect_int("replaced registered",
+                         overlay_loader_registered_count(), 2);
+        ok &= expect_int("replaced owners", loader_owner_count(), 1);
+        ok &= abi_gate_dispatch(1);
+        printf("after replace: registered=%d last=[%s]\n",
+               overlay_loader_registered_count(), overlay_loader_last_msg());
+    }
+    if (!ok) {
+        fprintf(stderr, "loader: %s\n", overlay_loader_last_msg());
+        return 1;
+    }
+    printf("PASS abi-gate %s\n", replacement ? "replace" : mode);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 5) {
         fprintf(stderr, "usage: %s <cache-root> <scenario> <first> <second>\n",
@@ -579,6 +691,7 @@ int main(int argc, char **argv) {
     memset(s_ram, 0, sizeof(s_ram));
     g_psx_last_store_pc_p = &s_host_store_pc;
     overlay_loader_init(argv[1], "PAIR-TEST", 0);
+    if (strcmp(scenario, "abi-gate") == 0) return abi_gate(first, second);
     if (strcmp(scenario, "segment-alias") == 0) return segment_alias(first);
     /* segment-shards: argv[3] names which segments have a shard ("kseg0",
      * "kuseg", "kseg1", comma-separated, or "none"). */
@@ -664,4 +777,10 @@ int main(int argc, char **argv) {
            overlay_loader_registered_count(),
            (unsigned long long)overlay_loader_pair_aliases());
     return 0;
+}
+
+/* Live observer fixture used by the ABI scenario, inactive in other cases. */
+int psx_cpu_step_boundary_enabled(int include_replay) { (void)include_replay; return s_boundary_on; }
+void psx_cpu_step_boundary_fn(CPUState *cpu, uint32_t pc) {
+    (void)cpu; ++s_boundary_calls; s_boundary_last_address=pc;
 }

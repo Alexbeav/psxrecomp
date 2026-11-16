@@ -559,6 +559,10 @@ static int psxrecomp_game_main(int argc, char** argv) {
         return 1;
     }
 
+    // Identity belongs to the original image, before static bounds or patches.
+    const std::vector<uint8_t> source_image = exe->code_data;
+    const uint32_t source_image_load = exe->header.load_address;
+
     // [game].text_size is the title-owned static-analysis bound. It may trim a
     // verified data/padding tail, but it may never widen the parsed payload or
     // exclude the executable entry. Runtime disc loading remains unchanged.
@@ -1878,6 +1882,51 @@ static int psxrecomp_game_main(int argc, char** argv) {
             fmt::print(stderr, "ERROR: {}\n", dispatch_error);
             return 1;
         }
+        // CRC-32 (zlib polynomial) of each 4 KiB RAM page of the image this
+        // code was generated from. Page 0 starts at the load address; later
+        // pages start on RAM page boundaries; the last may be partial. The
+        // runtime compares the executable it loads against this table
+        // (runtime/include/text_source_guard.h). Overlays are captured from
+        // RAM and validated by their own range hashes, so they carry none.
+        if (!overlay_mode) {
+            std::ostringstream source_proof;
+            auto crc32_of = [](const uint8_t* data, size_t len) {
+                uint32_t crc = 0xFFFFFFFFu;
+                for (size_t i = 0; i < len; ++i) {
+                    crc ^= data[i];
+                    for (int bit = 0; bit < 8; ++bit)
+                        crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+                }
+                return crc ^ 0xFFFFFFFFu;
+            };
+            const uint32_t source_lo = source_image_load & 0x1FFFFFFFu;
+            std::vector<uint32_t> page_crcs;
+            for (size_t pos = 0; pos < source_image.size();) {
+                const uint32_t addr = source_lo + (uint32_t)pos;
+                size_t take = 4096u - (addr & 4095u);
+                if (take > source_image.size() - pos) take = source_image.size() - pos;
+                page_crcs.push_back(crc32_of(source_image.data() + pos, take));
+                pos += take;
+            }
+            source_proof << "/* Per-page CRC-32 of the boot executable image this code was generated\n";
+            source_proof << " * from (before [[recompiler.patch]] edits). See text_source_guard.h. */\n";
+            source_proof << "static const uint32_t k_psx_game_source_page_crc32[] = {\n";
+            if (page_crcs.empty()) source_proof << "    0u,\n";
+            for (size_t i = 0; i < page_crcs.size(); ++i) {
+                if ((i & 7u) == 0) source_proof << "    ";
+                source_proof << fmt::format("0x{:08X}u,", page_crcs[i]);
+                source_proof << (((i & 7u) == 7u || i + 1 == page_crcs.size()) ? "\n" : " ");
+            }
+            source_proof << "};\n";
+            source_proof << "const uint32_t* psx_game_source_page_crc32(uint32_t* count, uint32_t* phys_lo, uint32_t* len) {\n";
+            source_proof << fmt::format("    if (count) *count = {}u;\n", page_crcs.size());
+            source_proof << fmt::format("    if (phys_lo) *phys_lo = 0x{:08X}u;\n", source_lo);
+            source_proof << fmt::format("    if (len) *len = 0x{:X}u;\n", source_image.size());
+            source_proof << "    return k_psx_game_source_page_crc32;\n";
+            source_proof << "}\n\n";
+            dispatch_source += source_proof.str();
+        }
+
         // Entries of the home compile, plus those of its segment variants.
         size_t variant_entries = 0;
         for (size_t u = 1; u < dispatch_units.size(); ++u)

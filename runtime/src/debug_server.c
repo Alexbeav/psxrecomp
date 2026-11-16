@@ -318,6 +318,8 @@ static int s_input_frames   = 0;
  * for driving two-player modes headless. */
 static int s_input_override_p2 = -1;
 static int s_input_frames_p2   = 0;
+/* Additional digital test ports. Never alias an unknown port to P1. */
+static int s_extra_buttons[8],s_extra_frames[8],s_extra_active[8];
 /* Optional analog-stick override (set_input lx/ly/rx/ry, 0..255, 0x80 =
  * centre). Lets injected input drive analog-mode movement; consumed by the
  * pad sampler alongside the button word. */
@@ -335,16 +337,185 @@ static int s_pad_connected_override[2] = { -1, -1 };
  * queue in debug_server_get_input_override() avoids host/TCP timing gaps
  * between short presses and remains deterministic while turbo loads are active.
  */
+#include "input_route_file.h"
+#include "input_dualshock_route_file.h"
+#include "input_dualshock_delivery.h"
+#include "input_route_observer.h"
+#include "input_route_session.h"
+static PSX_BSS InputRouteStep s_input_route[INPUT_ROUTE_STORAGE_STEPS];
 #define INPUT_ROUTE_MAX_STEPS 4096
-typedef struct {
-    uint32_t frames;
-    uint16_t buttons;
-} InputRouteStep;
-static PSX_BSS InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
 static uint32_t s_input_route_count = 0;
 static uint32_t s_input_route_index = 0;
 static uint32_t s_input_route_remaining = 0;
 static int      s_input_route_active = 0;
+static int      s_input_route_file_mode = 0;
+static uint32_t s_input_route_consumed = 0;
+static int      s_input_route_delivery_pending = 0;
+static PSX_BSS InputDualShockRouteStep s_dualshock_route[INPUT_ROUTE_STORAGE_STEPS];
+static uint8_t s_dualshock_axes[4] = {128,128,128,128};
+static uint8_t s_dualshock_mode_button;
+static int s_dualshock_route_mode;
+/* PSXRTI3 two-digital-pad route: P1 runs through s_input_route as a digital
+ * route; P2 of each step sits beside it, so both ports advance together. */
+static PSX_BSS uint16_t s_input_route_p2[INPUT_ROUTE_STORAGE_STEPS];
+static int s_two_port_mode;
+static uint16_t s_route_port2 = 0xFFFF;
+#include "input_update_replay.h"
+#include "input_instruction_histogram_impl.h"
+
+/* Called on the emulator thread before guest execution. Fail closed; a bad
+ * file never exposes a partial route. Existing TCP routes remain unchanged. */
+int debug_server_preload_input_route(const char *path)
+{
+    InputRouteStep *staged;
+    uint32_t count = 0, frames = 0;
+    FILE *f;
+    const char *error;
+    if (s_frame_count || s_input_route_active || s_input_route_count) return 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char magic[8];
+    if (fread(magic, 1, sizeof(magic), f) != sizeof(magic) || fseek(f, 0, SEEK_SET)) {
+        fclose(f); return 0;
+    }
+    /* PSXRTI3 was admitted by input_route_session_admit(); its record size
+     * selects the digital or DualShock path below. */
+    const int v3 = !memcmp(magic, "PSXRTI3\0", 8);
+    uint32_t v3_record_size = 0;
+    if (v3) {
+        unsigned char v3_header[16];
+        if (fread(v3_header, 1, sizeof(v3_header), f) != sizeof(v3_header) ||
+            fseek(f, 0, SEEK_SET)) { fclose(f); return 0; }
+        v3_record_size = input_route_le32(v3_header + 12);
+    }
+    /* A two-pad record is also 12 bytes; the admitted port layout, not the
+     * record size, tells it from a DualShock record. */
+    if (v3 && input_route_session_port_count() == 2) {
+        InputTwoDigitalRouteStep *two = (InputTwoDigitalRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS, sizeof(*two));
+        if (!two) { fclose(f); return 0; }
+        error = input_route_session_read_v3_two_digital(f, two, &count, &frames);
+        if (fclose(f) && !error) error = "close error";
+        if (!error && getenv("PSX_INPUT_UPDATE_CLOCK")) error = "two-pad routes do not admit input retiming";
+        if (error) {
+            fprintf(stderr, "input route rejected: %s\n", error);
+            free(two); return 0;
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            s_input_route[i].frames = two[i].frames;
+            s_input_route[i].buttons = two[i].buttons[0];
+            s_input_route_p2[i] = two[i].buttons[1];
+        }
+        free(two);
+        if (!input_route_observer_two_digital_init(frames) || !input_instruction_histogram_configure()) return 0;
+        s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
+        s_input_route_count = count; s_input_route_index = 0;
+        s_input_route_remaining = s_input_route[0].frames;
+        s_input_route_active = s_input_route_file_mode = s_two_port_mode = 1;
+        s_input_route_consumed = 0;
+        s_input_route_delivery_pending = 0;
+        s_route_port2 = 0xFFFF;
+        fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=PSXRTI3 ports=two-digital\n",
+                (unsigned)frames, (unsigned)count);
+        return 1;
+    }
+    if (!memcmp(magic, "PSXRTI2\0", 8) || v3_record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES) {
+        InputDualShockRouteStep *dual = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS, sizeof(*dual));
+        if (!dual) { fclose(f); return 0; }
+        error = v3 ? input_route_session_read_v3_dualshock(f, dual, &count, &frames)
+                   : input_dualshock_route_read(f, dual, &count, &frames);
+        if (fclose(f) && !error) error = "close error";
+        if (getenv("PSX_INPUT_UPDATE_CLOCK")) error = "DualShock does not admit input retiming";
+        const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
+        if (ack_model && !strcmp(ack_model, "octoshock-2.2.2-digital"))
+            error = "digital Octoshock ACK profile cannot qualify a Nymashock DualShock";
+        if (ack_model && !strcmp(ack_model, "nymashock-2.8-gamepad"))
+            error = "2.8 plain-gamepad ACK profile cannot qualify a DualShock route";
+        for (uint32_t i = 0; !error && i < count; ++i)
+            if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
+        if (error) {
+            fprintf(stderr, "input route rejected: %s\n", error);
+            free(dual); return 0;
+        }
+        if (!input_route_observer_dualshock_init(frames) || !input_instruction_histogram_configure()) {
+            free(dual); return 0;
+        }
+        memcpy(s_dualshock_route, dual, count * sizeof(*dual));
+        free(dual);
+        /* This format declares one cold DualShock at P1. Guest protocol mode
+         * is untouched by subsequent samples. Cards are separate inputs. */
+        input_route_admit_cold_p1(1);
+        s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
+        s_input_route_count = count; s_input_route_index = 0;
+        s_input_route_remaining = s_dualshock_route[0].frames;
+        s_input_route_active = s_input_route_file_mode = s_dualshock_route_mode = 1;
+        s_input_route_consumed = 0;
+        s_input_route_delivery_pending = 0;
+        fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=PSXRTI2 physical_analog=neutral_only\n",
+                (unsigned)frames, (unsigned)count);
+        return 1;
+    }
+    staged = (InputRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS, sizeof(*staged));
+    if (!staged) { fclose(f); return 0; }
+    error = v3 ? input_route_session_read_v3_digital(f, staged, &count, &frames)
+               : input_route_read(f, staged, &count, &frames);
+    if (fclose(f) != 0 && !error) error = "close error";
+    if (error) {
+        fprintf(stderr, "input route rejected: %s\n", error);
+        free(staged);
+        return 0;
+    }
+    memcpy(s_input_route, staged, count * sizeof(*staged));
+    free(staged);
+    if (!update_configure(s_input_route,count,frames)) return 0;
+    if (!input_route_observer_init(s_update_enabled ? s_update_config[7] : frames)) return 0;
+    if (!input_instruction_histogram_configure()) return 0;
+    if (s_update_enabled) s_update_log=input_route_observer_output("update-clock.jsonl");
+    s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
+    s_input_route_count = count; s_input_route_index = 0;
+    s_input_route_remaining = s_input_route[0].frames;
+    s_input_route_active = 1;
+    s_input_route_file_mode = 1;
+    s_input_route_consumed = 0;
+    s_input_route_delivery_pending = 0;
+    fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u\n",
+            (unsigned)frames, (unsigned)count);
+    return 1;
+}
+
+/* TAS checkpoint resume: reposition the preloaded file route to a saved return.
+ * Walks the run-length steps so the next applied frame is exactly `frame`
+ * (frames already consumed). Returns 0 if the route cannot be seeked. */
+uint32_t debug_server_input_route_consumed(void) { return s_input_route_consumed; }
+int debug_server_seek_input_route(uint32_t frame)
+{
+    uint32_t i = 0, remaining = frame;
+    if (!s_input_route_active) return 0;
+    if (s_two_port_mode) return 0; /* two-pad resume has no qualified contract */
+    if (s_dualshock_route_mode) {
+        while (i < s_input_route_count && remaining >= s_dualshock_route[i].frames) {
+            remaining -= s_dualshock_route[i].frames;
+            ++i;
+        }
+        s_input_route_index = i;
+        s_input_route_remaining = i < s_input_route_count ? s_dualshock_route[i].frames - remaining : 0;
+        s_input_route_active = i < s_input_route_count;
+        s_input_route_consumed = frame;
+        s_input_route_delivery_pending = 0;
+        input_route_observer_resume(frame);
+        return 1;
+    }
+    while (i < s_input_route_count && remaining >= s_input_route[i].frames) {
+        remaining -= s_input_route[i].frames;
+        ++i;
+    }
+    s_input_route_index = i;
+    s_input_route_remaining = i < s_input_route_count ? s_input_route[i].frames - remaining : 0;
+    s_input_route_active = i < s_input_route_count;
+    s_input_route_consumed = frame;
+    s_input_route_delivery_pending = 0;
+    input_route_observer_resume(frame);
+    return 1;
+}
 static unsigned s_input_route_port = 1;
 static int      s_input_route_wait_load = 0;
 static void input_route_loaded(void);
@@ -4165,12 +4336,13 @@ static const char *thread_kind_name(uint32_t kind)
         case 12: return "fiber_return_restore";
         case 13: return "fiber_dispatch_exit";        /* fiber's psx_dispatch returned, in_exc==0 */
         case 20: return "syscall3_enter";             /* ChangeThread/RFE syscall, in_exc==0 (switch-eligible) */
-        case 24: return "syscall3_enter_in_exc";      /* ChangeThread/RFE syscall, in_exc==1 (forced manual-RFE) */
+        case 24: return "syscall3_enter_in_exc";      /* manual RFE; explicit ChangeThread may move PCB[0] */
         case 26: return "fiber_dispatch_exit_in_exc"; /* fiber's psx_dispatch returned, in_exc==1 */
         case 30: return "inexc_switch_escape";        /* guest moved PCB[0] inside handler -> scheduler escape */
         case 31: return "inexc_switch_defer";
         case 32: return "deferred_switch_escape";
         case 33: return "deferred_switch_stale";
+        case 34: return "syscall3_in_exc_switch";
         default: return "unknown";
     }
 }
@@ -5905,6 +6077,8 @@ static void handle_gpu_state(int id, const char *json)
              "\"display_x\":%d,\"display_y\":%d,"
              "\"width\":%d,\"height\":%d,"
              "\"screen_offset_y\":%d,"
+             "\"screen_height\":%u,\"screen_origin_y\":%u,"
+             "\"d24_crop\":%d,\"d24_rgb_limit\":%u,"
              "\"depth\":%d,\"depth24\":%d,"
              "\"disabled\":%d,"
              "\"h_display\":[%u,%u],\"v_display\":[%u,%u],"
@@ -5941,6 +6115,9 @@ static void handle_gpu_state(int id, const char *json)
              id, di.display_x, di.display_y,
              di.width, di.height,
              di.screen_offset_y,
+             di.screen_height, di.screen_origin_y,
+             gpu_depth24_crop_to_picture(),
+             gpu_depth24_rgb_limit(di.display_x, di.width),
              di.depth24 ? 24 : 15, di.depth24,
              di.disabled,
              hx1, hx2, hy1, hy2, hr1, hr2,
@@ -8237,8 +8414,11 @@ static void handle_set_input(int id, const char *json)
     if (connected < -1 || connected > 1) {
         send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
     }
+    const int port = json_get_int(json, "port", 1);
+    if(port<1 || port>8) {send_err(id,"port must be 1..8");return;}
     if (json_get_str(json, "layer", layer, sizeof(layer)) &&
         strcmp(layer, "host") == 0) {
+        if(port!=1) {send_err(id,"host input layer supports port 1 only");return;}
         s_host_buttons = json_get_str(json, "buttons", val_str, sizeof(val_str))
             ? (uint16_t)hex_to_u32(val_str) : (uint16_t)0xFFFF;
         s_host_axes[0] = clamp_u8_arg(json_get_int(json, "lx", -1), 0x80);
@@ -8256,6 +8436,11 @@ static void handle_set_input(int id, const char *json)
     }
     if (pad_type < -1 || pad_type > 2) {
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
+    }
+    if(port>=3) {
+        s_extra_buttons[port-1]=(int)(hex_to_u32(val_str)&0xFFFFu);
+        s_extra_frames[port-1]=0;s_extra_active[port-1]=1;
+        send_ok(id);return;
     }
     if (json_get_int(json, "port", 1) == 2) {
         s_pad_connected_override[1] = connected;
@@ -8305,9 +8490,16 @@ static void handle_press(int id, const char *json)
     if (connected < -1 || connected > 1) {
         send_err(id, "connected must be -1 (automatic), 0, or 1"); return;
     }
+    const int port = json_get_int(json, "port", 1);
+    if(port<1 || port>8) {send_err(id,"port must be 1..8");return;}
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
     if (pad_type < -1 || pad_type > 2) {
         send_err(id, "pad_type must be -1 (automatic), 0, 1, or 2"); return;
+    }
+    if(port>=3) {
+        s_extra_buttons[port-1]=buttons&0xFFFF;
+        s_extra_frames[port-1]=frames;s_extra_active[port-1]=1;
+        send_ok(id);return;
     }
     if (json_get_int(json, "port", 1) == 2) {
         s_pad_connected_override[1] = connected;
@@ -8345,11 +8537,12 @@ static void handle_rewind_status(int id, const char *json)
 {
     (void)json;
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%s,\"open\":%s,"
-             "\"title_blocked\":%s,\"snaps\":%u}\n",
+             "\"title_blocked\":%s,\"snaps\":%u,\"hd_residency_bytes\":%u}\n",
              id, psx_rewind_enabled() ? "true" : "false",
              psx_rewind_is_open() ? "true" : "false",
              psx_rewind_title_blocked() ? "true" : "false",
-             (unsigned)psx_rewind_snap_count());
+             (unsigned)psx_rewind_snap_count(),
+             (unsigned)psx_rewind_hd_residency_bytes());
 }
 
 static void handle_overlay_status(int id, const char *json)
@@ -8404,7 +8597,12 @@ static void handle_pad_status(int id, const char *json)
 
 static void handle_clear_input(int id, const char *json)
 {
-    const int port = json_get_int(json, "port", 0);   /* 0 = both */
+    const int port = json_get_int(json, "port", 0);   /* 0 = all */
+    if(port<0 || port>8) {send_err(id,"port must be 0..8");return;}
+    for(int i=2;i<8;++i)if(!port || port==i+1) {
+        s_extra_active[i]=s_extra_frames[i]=0;
+    }
+    if(port>=3) {send_ok(id);return;}
     if (port == 0 || port == (int)s_input_route_port) {
         s_input_route_active = 0;
         s_input_route_wait_load = 0;
@@ -10461,16 +10659,17 @@ static uint16_t     *s_disp_ring_px = NULL;   /* one block for all entries */
 
 static void disp_ring_capture(void)
 {
-    /* Full-VRAM GL readback is intentionally expensive and can perturb the
-     * performance issue being measured. Keep the forensic ring default-on, but
-     * allow a controlled acceptance run to disable continuous capture while
-     * retaining the TCP server and one-shot screenshot command. */
+    /* Continuous forensic readback serializes threaded rendering with the
+     * guest. Keep it opt-in there; TCP telemetry and one-shot screenshots do
+     * not require the ring. Follow live render ownership when no override is
+     * supplied, including after a renderer restart. */
     static int enabled = -1;
     if (enabled < 0) {
         const char *e = getenv("PSX_DISPLAY_RING");
-        enabled = (!e || !*e || *e != '0') ? 1 : 0;
+        enabled = (e && *e) ? (*e != '0') : 2;
     }
-    if (!enabled || s_capture_frozen) return;
+    if (!enabled || (enabled == 2 && gl_renderer_render_thread_active()) ||
+        s_capture_frozen) return;
     if (!s_disp_ring_px) {
         size_t vram = (size_t)1024 * 512;
         s_disp_ring_px = (uint16_t *)malloc(DISP_RING_CAP * vram * sizeof(uint16_t));
@@ -17707,7 +17906,7 @@ void debug_server_record_frame(void)
     /* Last function */
     strcpy(r->last_func, "(no tracking)");
 
-    /* Always-on display ring: raw display-area pixels for THIS frame number
+    /* Optional display ring: raw display-area pixels for THIS frame number
      * (pre-increment, matching what the `frame` command reports right now). */
     disp_ring_capture();
 
@@ -17789,6 +17988,105 @@ int debug_server_is_connected(void)
     return s_client != SOCK_INVALID;
 }
 
+static int input_file_next(void)
+{
+    /* The first boundary has no previous sample to validate. Afterwards use
+     * the route's declared pad format, just as the release observer does. */
+    if (s_input_route_file_mode && s_input_route_delivery_pending) {
+        if (s_two_port_mode)
+            input_route_observer_port2_applied(sio_get_pad_buttons_slot(1),
+                                             sio_get_pad_connected(1), sio_get_pad_analog(1));
+        if (s_dualshock_route_mode) {
+            uint8_t sticks[4];
+            sio_get_pad_sticks(0, sticks);
+            input_route_observer_dualshock_applied(sio_get_pad_buttons_slot(0), sticks,
+                input_route_dualshock_ports_match(), sio_get_pad_config_capable(0), sio_get_pad_analog(0));
+        } else {
+            input_route_observer_applied(sio_get_pad_buttons_slot(0),
+                                        sio_get_pad_connected(0), sio_get_pad_analog(0));
+        }
+        s_input_route_delivery_pending = 0;
+    }
+    update_boundary();
+    input_instruction_histogram_boundary(s_frame_count);
+    if (s_input_route_file_mode)
+        input_route_observer_boundary(s_input_route_consumed, s_frame_count);
+    /* The terminal observation must not load or account another input. */
+    if(input_route_observer_terminal_frame())return (int)sio_get_pad_buttons_slot(0);
+    s_input_route_delivery_pending = 1;
+    if (s_dualshock_route_mode) {
+        uint16_t current = 0xFFFF;
+        s_dualshock_mode_button = 0;
+        memset(s_dualshock_axes, 128, sizeof(s_dualshock_axes));
+        if (s_input_route_active && s_input_route_index < s_input_route_count) {
+            const InputDualShockRouteStep *step = &s_dualshock_route[s_input_route_index];
+            current = step->buttons;
+            memcpy(s_dualshock_axes, step->axes_ly_lx_ry_rx, 4);
+            s_dualshock_mode_button = step->analog_button;
+            if (--s_input_route_remaining == 0) {
+                if (++s_input_route_index < s_input_route_count)
+                    s_input_route_remaining = s_dualshock_route[s_input_route_index].frames;
+                else s_input_route_active = 0;
+            }
+        }
+        input_route_observer_source_frame(s_input_route_consumed+1u);
+        input_route_observer_dualshock_input(current, s_dualshock_axes, s_dualshock_mode_button);
+        ++s_input_route_consumed;
+        return current;
+    }
+    if (s_update_enabled) {
+        input_route_observer_input(0xFFFF); ++s_input_route_consumed; return 0xFFFF;
+    }
+    if (s_input_route_active && s_input_route_index < s_input_route_count) {
+        int current = (int)s_input_route[s_input_route_index].buttons;
+        if (s_input_route_file_mode) {
+            input_route_observer_input((uint16_t)current);
+            if (s_two_port_mode) {
+                s_route_port2 = s_input_route_p2[s_input_route_index];
+                input_route_observer_port2_input(s_route_port2);
+            }
+            ++s_input_route_consumed;
+        }
+        if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
+            s_input_route_index++;
+            if (s_input_route_index < s_input_route_count) {
+                s_input_route_remaining =
+                    s_input_route[s_input_route_index].frames;
+            } else {
+                s_input_route_active = 0;
+            }
+        }
+        return current;
+    }
+    /* A file route never releases P1 to physical input at EOF. */
+    if (s_input_route_file_mode) {
+        input_route_observer_input(0xFFFF);
+        if (s_two_port_mode) {
+            s_route_port2 = 0xFFFF;
+            input_route_observer_port2_input(0xFFFF);
+        }
+        ++s_input_route_consumed;
+        return 0xFFFF;
+    }
+    int current = s_input_override;
+    if (s_input_override >= 0 && s_input_frames > 0) {
+        if (--s_input_frames == 0)
+            s_input_override = -1;
+    }
+    return current;
+}
+int debug_server_apply_dualshock_input(int buttons)
+{
+    if (!s_dualshock_route_mode) return 0;
+    input_dualshock_deliver_mode((uint16_t)buttons, s_dualshock_axes, s_dualshock_mode_button);
+    return 1;
+}
+int debug_server_route_port2(uint16_t *buttons)
+{
+    if (!s_two_port_mode || !buttons) return 0;
+    *buttons = s_route_port2;
+    return 1;
+}
 static void input_route_loaded(void)
 {
     if (!s_input_route_active || !s_input_route_wait_load || !s_input_route_count) return;
@@ -17828,6 +18126,7 @@ int debug_server_input_override_active(void)
 
 int debug_server_get_input_override(void)
 {
+    if (s_input_route_file_mode) return input_file_next();
     int current = input_route_next(1);
     if (current >= 0) return current;
     current = s_input_override;
@@ -17840,6 +18139,10 @@ int debug_server_get_input_override(void)
 
 int debug_server_get_input_override_port2(void)
 {
+    /* A file route advances once at P1; P2 reads the paired word. Modern
+     * TCP routes may instead select P2 and keep their independent override. */
+    if (s_input_route_file_mode)
+        return s_two_port_mode ? (int)s_route_port2 : -1;
     int current = input_route_next(2);
     if (current >= 0) return current;
     current = s_input_override_p2;
@@ -17848,6 +18151,12 @@ int debug_server_get_input_override_port2(void)
             s_input_override_p2 = -1;
     }
     return current;
+}
+int debug_server_get_input_override_extra(unsigned slot) {
+    if(slot<2 || slot>=8 || !s_extra_active[slot])return -1;
+    int value=s_extra_buttons[slot];
+    if(s_extra_frames[slot]>0 && !--s_extra_frames[slot])s_extra_active[slot]=0;
+    return value;
 }
 
 int debug_server_get_axis_override(unsigned char st[4])
@@ -17882,4 +18191,81 @@ int debug_server_get_pad_connected_override(int slot)
 int debug_server_turbo_enabled(void)
 {
     return s_turbo_enabled != 0;
+}
+
+void debug_server_freeze_dump_dma_trace_json(FILE *f, uint32_t max_count)
+{
+    const DMATraceEntry *entries = NULL;
+    uint64_t total = dma_debug_get_trace(&entries);
+    uint64_t oldest = (total > DMA_TRACE_CAP) ? total - DMA_TRACE_CAP : 0;
+    if (max_count > DMA_TRACE_CAP) max_count = DMA_TRACE_CAP;
+    uint64_t start = (total > max_count) ? total - max_count : 0;
+    if (start < oldest) start = oldest;
+    fprintf(f, "{\"total\":%llu,\"oldest\":%llu,\"entries\":[",
+            (unsigned long long)total, (unsigned long long)oldest);
+    uint32_t emitted = 0;
+    for (uint64_t seq = start; seq < total; seq++) {
+        const DMATraceEntry *e = &entries[seq % DMA_TRACE_CAP];
+        if (e->seq != seq) continue;
+        fprintf(f, "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\",\"ch\":%u,"
+                   "\"words\":%u,\"addr\":\"0x%08X\",\"val\":\"0x%08X\","
+                   "\"mask\":\"0x%08X\",\"madr\":\"0x%08X\",\"bcr\":\"0x%08X\","
+                   "\"chcr\":\"0x%08X\",\"dpcr\":\"0x%08X\","
+                   "\"dicr_before\":\"0x%08X\",\"dicr_after\":\"0x%08X\","
+                   "\"i_stat_before\":\"0x%08X\",\"i_stat_after\":\"0x%08X\","
+                   "\"func\":\"0x%08X\",\"pc\":\"0x%08X\"}",
+                emitted ? "," : "", (unsigned long long)e->seq, e->frame,
+                dma_trace_kind_name(e->kind), e->channel, e->total_words,
+                e->addr, e->val, e->mask, e->madr, e->bcr, e->chcr, e->dpcr,
+                e->dicr_before, e->dicr_after, e->i_stat_before, e->i_stat_after,
+                e->func, e->pc);
+        emitted++;
+    }
+    fprintf(f, "],\"emitted\":%u}", emitted);
+}
+
+void debug_server_dump_watched_writes(FILE *f, const uint32_t *addresses, uint32_t count)
+{
+    if (!f || !addresses || count > 32) return;
+    uint64_t total = s_wtrace_all_seq;
+    uint32_t avail = total < WRITE_TRACE_ALL_CAP ? (uint32_t)total : WRITE_TRACE_ALL_CAP;
+    uint32_t start = total < WRITE_TRACE_ALL_CAP ? 0 : s_wtrace_all_head;
+    fprintf(f, "{\"kind\":\"coverage\",\"total_writes\":%llu,\"retained_writes\":%u}\n",
+            (unsigned long long)total, s_wtrace_all ? avail : 0);
+    if (s_rec_frame >= 0) {
+        fprintf(f, "{\"kind\":\"recorded_frame_coverage\",\"frame\":%lld,\"count\":%u,\"overflow\":%u}\n",
+                (long long)s_rec_frame,s_rec_count,s_rec_overflow);
+        for (uint32_t i = 0; i < s_rec_count; ++i) {
+            const RecEntry *e = &s_rec_buf[i];
+            if (e->kind == REC_KIND_MMIO_W && e->addr == 0x1F801040u) {
+                fprintf(f, "{\"kind\":\"recorded_sio_write\",\"i\":%u,\"frame\":%lld,\"cycle\":%llu,\"new\":%u,\"pc\":%u,\"ra\":%u}\n",
+                        i,(long long)s_rec_frame,(unsigned long long)e->cyc,e->val,e->pc,e->ra);
+            }
+            if (e->kind == REC_KIND_MMIO_W || e->kind == REC_KIND_MMIO_R) {
+                fprintf(f, "{\"kind\":\"%s\",\"i\":%u,\"frame\":%lld,\"cycle\":%llu,\"addr\":%u,\"new\":%u,\"pc\":%u,\"ra\":%u}\n",
+                        e->kind == REC_KIND_MMIO_R ? "recorded_mmio_read" : "recorded_mmio_write",
+                        i,(long long)s_rec_frame,(unsigned long long)e->cyc,e->addr,e->val,e->pc,e->ra);
+            }
+            if (e->kind != REC_KIND_RAM_W && e->kind != REC_KIND_RAM_R) continue;
+            for (uint32_t j = 0; j < count; ++j) {
+                if (e->addr == addresses[j]) {
+                    fprintf(f, "{\"kind\":\"%s\",\"i\":%u,\"frame\":%lld,\"cycle\":%llu,\"addr\":%u,\"new\":%u,\"pc\":%u,\"ra\":%u}\n",
+                            e->kind == REC_KIND_RAM_R ? "recorded_read" : "recorded_write",
+                            i,(long long)s_rec_frame,(unsigned long long)e->cyc,e->addr,e->val,e->pc,e->ra);
+                    break;
+                }
+            }
+        }
+    }
+    if (!s_wtrace_all) return;
+    for (uint32_t i = 0; i < avail; ++i) {
+        const WriteTraceAllEntry *e = &s_wtrace_all[(start + i) % WRITE_TRACE_ALL_CAP];
+        for (uint32_t j = 0; j < count; ++j) {
+            if (e->addr < addresses[j] + 2 && addresses[j] < e->addr + e->w) {
+                fprintf(f, "{\"seq\":%llu,\"addr\":%u,\"new\":%u,\"pc\":%u,\"ra\":%u,\"frame\":%u,\"width\":%u}\n",
+                        (unsigned long long)e->seq,e->addr,e->new_val,e->pc,e->ra,e->frame,e->w);
+                break;
+            }
+        }
+    }
 }

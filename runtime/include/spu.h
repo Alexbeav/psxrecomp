@@ -201,6 +201,18 @@ const void* spu_shadow_tap_buffer(void);
 int         spu_shadow_tap_count(void);
 
 uint32_t spu_snapshot_bytes(void);
+/* Guest sample clock, shared with the frontend producer and serialized. */
+extern uint64_t spu_sample_last_cycle;
+extern uint64_t spu_sample_cycle_carry;
+/* Guest sample budget shared by the frontend and its production-path control.
+ * The existing serialized last/carry values remain the complete clock state. */
+static inline uint64_t spu_sample_budget_take(uint64_t now,uint64_t *last,uint64_t *carry) {
+    /* Cycle zero is a valid cold epoch, not an uninitialized sentinel. */
+    uint64_t delta=now-*last+*carry;
+    *last=now;*carry=delta%768u;
+    return delta/768u;
+}
+
 int      spu_snapshot_len_ok(uint32_t len);
 /* Optional host-owned implementation, not serialized. The caller owns any
  * mutable playback state and restores it with its guest snapshot. */

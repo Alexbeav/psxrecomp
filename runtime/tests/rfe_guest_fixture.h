@@ -1,4 +1,21 @@
-/* Synthetic guest RAM, TCB and flat-dispatch fixture for exception returns. */
+/* Guest machine shared by the PS1B-324 ReturnFromException fixtures
+ * (test_rfe_irq_context.c, test_rfe_syscall_depth.c).
+ *
+ * Production interrupts.c, traps.c and psx_bios_backend.c run unchanged. This
+ * header supplies the seams they link against and a small guest:
+ *   - a kernel exception vector that saves the interrupted context in the
+ *     current TCB and calls one installed handler,
+ *   - B0(17h) ReturnFromException, which reloads that TCB and returns to its
+ *     saved EPC,
+ *   - a dispatch trampoline with the contract of the generated one (tail
+ *     dispatch, call return address, the exception-return check after every
+ *     function).
+ * Guest functions are C bodies written the way the recompiler emits them: a
+ * continuation switch on entry, a poll at each block leader, and a call as
+ * "set cpu->pc, return".
+ *
+ * Kernel behaviour is from PSX-SPX (BIOS exception handling; TCB layout: +0x08
+ * R0-R31, +0x88 EPC, +0x8C HI, +0x90 LO, +0x94 SR, +0x98 CAUSE). */
 #ifndef RFE_GUEST_FIXTURE_H
 #define RFE_GUEST_FIXTURE_H
 
@@ -30,10 +47,10 @@ static uint32_t fx_read(uint32_t a) { return fx_ram[(a & 0x1FFFFCu) / 4u]; }
 static void fx_write(uint32_t a, uint32_t v) { fx_ram[(a & 0x1FFFFCu) / 4u] = v; }
 uint32_t psx_read_word(uint32_t a) { return fx_read(a); }
 uint8_t *memory_get_ram_ptr(void) { return (uint8_t *)fx_ram; }
-int psx_peek_word(uint32_t addr, uint32_t *out) {
+int psx_peek_word(uint32_t addr,uint32_t *out) {
     uint32_t phys=addr&0x1FFFFFFFu;
-    if (!out || (addr&3u) || phys>=sizeof fx_ram) return 0;
-    *out=fx_ram[phys/4u]; return 1;
+    if (!out || (addr&3u) || phys>=0x800000u) return 0;
+    *out=fx_ram[(phys&0x1FFFFFu)/4u];return 1;
 }
 int memory_peek_instruction_word(uint32_t a, uint32_t *value) {
     *value = fx_read(a);

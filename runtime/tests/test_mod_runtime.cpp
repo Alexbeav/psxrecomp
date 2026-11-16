@@ -404,6 +404,7 @@ void iso_close(void*);
 int iso_read_raw_sector(void*,uint32_t,uint8_t*,int);
 int iso_read_sector(void*,uint32_t,uint8_t*,int);
 int iso_read_subq(void*,uint32_t,uint8_t*,int,int*);
+int iso_read_cdda_subq(void*,uint32_t,uint8_t*,int,int*);
 uint32_t iso_sector_count(void*);
 int iso_track_count(void*);
 uint32_t iso_track_start_lba(void*,int);
@@ -1828,6 +1829,47 @@ int main(int argc, char** argv) {
           !iso_read_cdda_sector(mounted,149,sector.data(),sector.size()) &&
           !iso_read_cdda_sector(mounted,150,sector.data(),2351),"audio end, data placeholder and short buffer rejected");
     std::array<uint8_t,12> subq{};int valid=0;
+    {   // Bridge-only synthetic topology check; no controller/tape loader.
+        const char* prior=std::getenv("PSX_CD_SOURCE_CLOCK_TAPE");
+        const bool had_prior=prior!=nullptr;const std::string saved_tape=prior?prior:"";
+#ifdef _WIN32
+        _putenv_s("PSX_CD_SOURCE_CLOCK_TAPE","");
+#else
+        unsetenv("PSX_CD_SOURCE_CLOCK_TAPE");
+#endif
+        std::array<uint8_t,12> ordinary{},restored{};
+        check(iso_read_subq(mounted,24,ordinary.data(),ordinary.size(),&valid)&&valid,"default Q control captured");
+#ifdef _WIN32
+        _putenv_s("PSX_CD_SOURCE_CLOCK_TAPE","authored-bridge-selector");
+#else
+        setenv("PSX_CD_SOURCE_CLOCK_TAPE","authored-bridge-selector",1);
+#endif
+        // Full wire vectors use the public CRC16 polynomial via independent
+        // stdlib crc_hqx, not the production encoder as the expected value.
+        const std::array<uint8_t,12> data_q={0x41,0x02,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x24,0x61,0x90};
+        const std::array<uint8_t,12> audio_q={0x01,0x02,0x01,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0xdd,0xca};
+        const std::array<uint8_t,12> next_audio_q={0x01,0x03,0x01,0x00,0x00,0x00,0x00,0x00,0x04,0x01,0x26,0xc8};
+        check(iso_read_subq(mounted,24,subq.data(),subq.size(),&valid)&&valid&&subq==data_q,
+              "source Q retains appended data geometry beside an audio override");
+        check(iso_read_cdda_subq(mounted,150,subq.data(),subq.size(),&valid)&&valid&&subq==audio_q,
+              "source CDDA Q uses its independent physical audio geometry");
+        check(iso_read_cdda_subq(mounted,151,subq.data(),subq.size(),&valid)&&valid&&subq==next_audio_q,
+              "source CDDA Q crosses the overridden track boundary");
+#ifdef _WIN32
+        _putenv_s("PSX_CD_SOURCE_CLOCK_TAPE","");
+#else
+        unsetenv("PSX_CD_SOURCE_CLOCK_TAPE");
+#endif
+        check(iso_read_subq(mounted,24,restored.data(),restored.size(),&valid)&&valid&&restored==ordinary,
+              "source bridge selection preserves the original default Q wire");
+#ifdef _WIN32
+        _putenv_s("PSX_CD_SOURCE_CLOCK_TAPE",saved_tape.c_str());
+#else
+        if(had_prior)setenv("PSX_CD_SOURCE_CLOCK_TAPE",saved_tape.c_str(),1);
+        else unsetenv("PSX_CD_SOURCE_CLOCK_TAPE");
+#endif
+        (void)had_prior;
+    }
     check(iso_sector_count(mounted)==26&&iso_track_count(mounted)==2&&
           iso_track_start_lba(mounted,2)==24&&!iso_track_is_audio(mounted,2),"appended extents expose one data track and leadout");
     check(iso_read_raw_sector(mounted,24,sector.data(),sector.size())&&sector[12]==0&&sector[13]==2&&sector[14]==0x24&&sector[15]==2&&
@@ -2513,8 +2555,8 @@ int main(int argc, char** argv) {
         const auto hash_count = startup_counter("startup.disc_hash");
         check(PSXRecompV4::mod_runtime_commit(iso_path, &error) &&
               PSXRecompV4::mod_runtime_commit(iso_path, &error) &&
-              startup_counter("startup.disc_hash") == hash_count + 1,
-              "default runtime preserves hash-only-on-selected-path-change behavior");
+              startup_counter("startup.disc_hash") == hash_count,
+              "default runtime skips hashing for repeated disc-independent launches");
         check(!PSXRecompV4::mod_runtime_try_prepare_cached(iso_path), "default runtime does not opt into cached startup");
     }
 #endif
@@ -2852,6 +2894,37 @@ id = "override.test"
               "changing dropdown replaces the picker instead of exposing both");
     }
 #endif
+    {
+        const auto offline_root = root / "offline-launch";
+        const auto manifest_path = offline_root / "bundled/display/1.0.0/manifest.toml";
+        const std::string display =
+            "format_version = 5\nid = \"display\"\nversion = \"1.0.0\"\nname = \"Display\"\n"
+            "[[target]]\ngame_id = \"READER\"\n"
+            "[[feature]]\nid = \"active\"\nname = \"Active\"\ndefault_enabled = true\n";
+        write_text(manifest_path, display);
+        check(PSXRecompV4::mod_runtime_initialize(offline_root, "READER", 0, {}, &error),
+              "offline launch fixture loads");
+        const auto hashes = startup_counter("startup.disc_hash");
+        const bool offline_ok = PSXRecompV4::mod_runtime_commit(iso_path, &error);
+        if (!offline_ok || startup_counter("startup.disc_hash") != hashes)
+            std::cerr << "offline result=" << offline_ok << " hash_delta="
+                  << (startup_counter("startup.disc_hash")-hashes) << " error=" << error << "\n";
+        check(offline_ok && startup_counter("startup.disc_hash") == hashes,
+              "offline display-only launch skips decoded whole-disc hashing without worker opt-in");
+        (void)PSXRecompV4::mod_runtime_commit(iso_path, &error, false);
+        check(startup_counter("startup.disc_hash") == hashes + 1,
+              "netplay commit still measures the disc for display-only selections");
+        write_text(manifest_path,
+            "format_version = 5\nid = \"display\"\nversion = \"1.0.0\"\nname = \"Display\"\n"
+            "[[target]]\ngame_id = \"READER\"\ndisc_sha256 = \"" + std::string(64, '0') + "\"\n"
+            "[[feature]]\nid = \"active\"\nname = \"Active\"\ndefault_enabled = true\n");
+        check(PSXRecompV4::mod_runtime_initialize(offline_root, "READER", 0, {}, &error),
+              "disc-target fixture reloads on the same path");
+        const auto constrained_hashes = startup_counter("startup.disc_hash");
+        check(!PSXRecompV4::mod_runtime_commit(iso_path, &error) &&
+              startup_counter("startup.disc_hash") == constrained_hashes + 1,
+              "disc-target launch still hashes and refuses a mismatched disc");
+    }
     fs::remove_all(root, ec);
     if (failures) return 1;
     std::cout << "mod runtime tests passed\n";

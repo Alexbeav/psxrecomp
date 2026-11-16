@@ -36,7 +36,7 @@ void psx_disc_tray_set_host_hook(PsxDiscTrayHostHook hook, void *ctx)
 int psx_disc_tray_disc_count(void)
 {
     const int n = cdrom_disc_roster_count();
-    return n > 1 ? n : 0;
+    return n > 0 ? n : 0;
 }
 
 int psx_disc_tray_mounted_disc(void)

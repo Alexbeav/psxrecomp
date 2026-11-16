@@ -39,6 +39,7 @@ int      g_psx_render_pass_active;
 int      g_psx_guest_time_frozen;
 uint32_t g_psx_cyc_batch;
 uint32_t g_psx_cyc_batch_limit;
+uint64_t psx_get_cycle_count(void) { return psx_cycle_count + g_psx_cyc_batch; }
 
 static uint64_t s_serviced_to;
 void psx_devices_service_to_now(void) {
@@ -79,6 +80,7 @@ extern void dma_debug_host_draw(uint64_t*,uint64_t*);
 /* ---- GPU ---------------------------------------------------------------- */
 static uint32_t s_gp0[64];
 static unsigned s_gp0_n;
+int gpu_queue_has_space(void) { return s_gp0_n < 64u; }
 void gpu_write_gp0(uint32_t val) { if (s_gp0_n < 64u) s_gp0[s_gp0_n] = val; ++s_gp0_n; }
 void gpu_set_gp0_source(uint32_t addr) { (void)addr; }
 void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t n) { (void)addr; (void)n; }
@@ -257,3 +259,8 @@ int main(void) {
     puts("PASS: the GPU linked-list kick holds the CPU until the walk ends");
     return 0;
 }
+
+/* These default-controller fixtures deliberately leave the optional MDEC off. */
+int mdec_source_active(void){return 0;}
+void mdec_source_advance(uint32_t clocks){(void)clocks;__builtin_trap();}
+uint32_t mdec_source_dma_read(uint32_t *offset){(void)offset;__builtin_trap();}

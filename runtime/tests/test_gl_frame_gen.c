@@ -98,6 +98,7 @@ uint32_t g_psx_vblank_cycles=564480u;
 /* Frontend hooks of the present path (host overlays, pacing, rings). */
 int host_osd_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
 int host_osd_volume_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
+int host_osd_rec_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
 int host_osd_needs_present(void){return 0;}
 void host_osd_present_done(void){}
 int psx_rewind_overlay_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}

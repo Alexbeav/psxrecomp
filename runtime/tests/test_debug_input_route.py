@@ -22,15 +22,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', required=True)
     args = parser.parse_args()
+    source = (Path(__file__).resolve().parents[1] / 'src/debug_server.c').read_text(encoding='utf-8')
     runtime = Path(__file__).resolve().parents[1]
-    source = (runtime / 'src/debug_server.c').read_text(encoding='utf-8')
     frontend = (runtime / 'src/main.cpp').read_text(encoding='utf-8')
     vblank = frontend[frontend.index('static NetplayVblankEpilogue sdl_vblank_present_body(void) {'):]
     poll_start = vblank.index('#ifndef PSX_NO_DEBUG_TOOLS\n    debug_server_set_fmv_quiet')
     poll_end = vblank.index('    /* Always-on wall-time stamp', poll_start)
     input_poll = vblank[poll_start:poll_end]
-    declarations = source.split('#define INPUT_ROUTE_MAX_STEPS', 1)[1].split(
-        'static uint64_t s_input_route_start_frame = 0;', 1)[0]
+    state = source[source.index('static PSX_BSS InputRouteStep s_input_route['):
+                   source.index('static uint64_t s_input_route_start_frame = 0;')]
+    declarations = '\n'.join(line for line in state.splitlines()
+        if re.match(r'(?:#define INPUT_ROUTE_MAX_STEPS|static .*\bs_input_route_(?:count|index|remaining|active|file_mode|consumed|delivery_pending|port|wait_load)\b)', line))
+    declarations = '#undef INPUT_ROUTE_MAX_STEPS\n' + declarations
+    declarations += 'static int s_two_port_mode; static uint16_t s_route_port2=0xffff;\n'
+    declarations += '\nstatic InputRouteStep s_input_route[INPUT_ROUTE_STORAGE_STEPS];\n'
+    declarations += 'static void input_route_loaded(void);\n'
     preamble = r'''
 #include <assert.h>
 #include <stdint.h>
@@ -38,29 +44,75 @@ def main():
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include "input_route_file.h"
+#include "input_dualshock_route_file.h"
 #define PSX_BSS
 static uint64_t s_frame_count;
+static InputDualShockRouteStep s_dualshock_route[INPUT_ROUTE_STORAGE_STEPS];
+static uint16_t s_input_route_p2[INPUT_ROUTE_STORAGE_STEPS];
+static uint8_t s_dualshock_axes[4],s_dualshock_mode_button;
+static int s_dualshock_route_mode,s_update_enabled;
+static int pending,p2_pending,expect_dual,applied,p2_applied,terminal;
+static uint16_t pending_word,p2_word,held[2];
+uint16_t sio_get_pad_buttons_slot(int slot){return held[slot];}
+int sio_get_pad_connected(int slot){(void)slot;return 1;}
+int sio_get_pad_analog(int slot){(void)slot;return 0;}
+int sio_get_pad_config_capable(int slot){(void)slot;return 1;}
+void sio_get_pad_sticks(int slot,uint8_t *sticks){(void)slot;memset(sticks,128,4);}
+int input_route_dualshock_ports_match(void){return 1;}
+void update_boundary(void){}
+void input_instruction_histogram_boundary(uint64_t frame){(void)frame;}
+void input_route_observer_boundary(uint32_t consumed,uint64_t frame){(void)consumed;(void)frame;}
+int input_route_observer_terminal_frame(void){return terminal;}
+void input_route_observer_source_frame(uint32_t frame){assert(frame>0);}
+void input_route_observer_resume(uint32_t consumed){(void)consumed;pending=p2_pending=0;}
+void input_route_observer_input(uint16_t word){assert(!pending);pending=1;pending_word=word;}
+void input_route_observer_dualshock_input(uint16_t word,const uint8_t *sticks,int mode){
+    (void)sticks;(void)mode;assert(expect_dual);input_route_observer_input(word);
+}
+void input_route_observer_applied(uint16_t word,int connected,int analog){
+    if(!pending)fprintf(stderr,"digital delivery before any input was sampled\n");
+    assert(!expect_dual&&pending&&word==pending_word&&connected&&!analog);pending=0;++applied;
+}
+void input_route_observer_dualshock_applied(uint16_t word,const uint8_t *sticks,int connected,int capable,int analog){
+    (void)sticks;(void)analog;
+    assert(expect_dual&&pending&&word==pending_word&&connected&&capable);pending=0;++applied;
+}
+void input_route_observer_port2_input(uint16_t word){assert(!p2_pending);p2_pending=1;p2_word=word;}
+void input_route_observer_port2_applied(uint16_t word,int connected,int analog){
+    assert(p2_pending&&word==p2_word&&connected&&!analog);p2_pending=0;++p2_applied;
+}
 typedef struct { unsigned unused; } PsxFrameFingerprint;
 #define PSX_FRAME_FINGERPRINT_INIT {0}
 static int s_fp_reset_on_load;
 static PsxFrameFingerprint s_fp;
 static unsigned s_fp_head,s_fp_total;
 static int s_input_override=-1,s_input_override_p2=-1;
-static int s_digital_pad_injected_frame;
 static int s_input_frames,s_input_frames_p2,s_axis_override,s_pad_type_override=-1;
+static int s_pad_connected_override[2] = {-1, -1};
 static unsigned char s_axis_st[4],s_host_axes[4],s_host_lt,s_host_rt;
-static int s_pad_connected_override[2]={-1,-1};
 static int s_host_layer;
+static int s_extra_active[8],s_extra_frames[8];
 static uint16_t s_host_buttons;
 static char response[512];
 static unsigned poll_calls, record_calls, watch_calls;
 static void debug_server_poll(void){++poll_calls;}
+/* Pin I's input-route session recorder, idle in this fixture. */
+static int s_digital_pad_injected_frame;
+void route_session_boundary(void){}
+int input_route_session_recording(void){return 0;}
+int route_record_live_p1_word(void){return -1;}
+void input_route_session_record_input(uint16_t word){(void)word;}
+int input_route_session_release_override(void){return -1;}
 #ifndef PSX_NO_DEBUG_TOOLS
 static int mdec_recently_active(int frames){(void)frames;return 0;}
 static void debug_server_set_fmv_quiet(int quiet){(void)quiet;}
 static void debug_server_wait_if_paused(void){}
 static void debug_server_record_frame(void){++record_calls;++s_frame_count;}
 static void debug_server_check_watchpoints(void){++watch_calls;}
+static unsigned checkpoint_calls;static uint64_t checkpoint_frame;
+static void tas_checkpoint_on_frame(uint64_t frame){++checkpoint_calls;checkpoint_frame=frame;}
+static int source_gpu_runtime_active(void){return 0;}
 #endif
 static void send_ok(int id){(void)id;strcpy(response,"ok");}
 static void send_err(int id,const char *text){(void)id;snprintf(response,sizeof response,"ERROR:%s",text);}
@@ -75,7 +127,7 @@ static int json_get_int(const char *json,const char *key,int fallback){
         'handle_clear_input', 'handle_input_route_clear', 'handle_input_route_append',
         'handle_input_route_start', 'handle_input_route_stop', 'handle_input_route_status',
         'input_route_loaded', 'debug_server_note_savestate_loaded',
-        'input_route_next', 'debug_server_get_input_override',
+        'input_route_next', 'debug_server_seek_input_route', 'input_file_next', 'debug_server_get_input_override',
         'debug_server_get_input_override_port2'))
     checks = r'''
 static void queue(void){
@@ -161,24 +213,61 @@ int main(void){
 #ifdef PSX_NO_DEBUG_TOOLS
     assert(record_calls==0&&watch_calls==0);
 #else
-    assert(record_calls==3&&watch_calls==3);
+    assert(record_calls==3&&watch_calls==3&&checkpoint_calls==3&&checkpoint_frame==103);
 #endif
-    puts("debug input route: P2 timing, isolation, deferred start, clearing and legacy P1 pass");
+    /* File captures validate the previous sample, never a nonexistent first
+     * sample. Keep the debug observer/checkpoint path enabled in this test. */
+    for(unsigned mode=0;mode<3;++mode){
+        pending=p2_pending=applied=p2_applied=terminal=0;
+        expect_dual=s_dualshock_route_mode=mode==2;s_two_port_mode=mode==1;
+        s_input_route_active=s_input_route_file_mode=1;s_input_route_count=2;
+        s_input_route_index=s_input_route_consumed=0;s_input_route_remaining=1;
+        s_input_route[0]=(InputRouteStep){1,0xffef};
+        s_input_route[1]=(InputRouteStep){1,0xffff};
+        s_input_route_p2[0]=0xfffd;s_input_route_p2[1]=0xffff;
+        for(unsigned n=0;n<2;++n){
+            s_dualshock_route[n].frames=1;s_dualshock_route[n].buttons=n?0xffff:0xffef;
+            memset(s_dualshock_route[n].axes_ly_lx_ry_rx,128,4);s_dualshock_route[n].analog_button=0;
+        }
+        held[0]=held[1]=0xffff;
+        assert(debug_server_get_input_override()==0xffef);
+        assert(!applied&&!p2_applied&&s_input_route_consumed==1);
+        held[0]=0xffef;if(s_two_port_mode)held[1]=(uint16_t)debug_server_get_input_override_port2();
+        assert(debug_server_get_input_override()==0xffff);
+        assert(applied==1&&p2_applied==(mode==1)&&s_input_route_consumed==2);
+        held[0]=0xffff;if(s_two_port_mode)held[1]=(uint16_t)debug_server_get_input_override_port2();
+        terminal=1;assert(debug_server_get_input_override()==0xffff);
+        assert(applied==2&&p2_applied==(mode==1?2:0)&&!pending&&!p2_pending&&s_input_route_consumed==2);
+        if(mode!=1){
+            /* Seeking restores a completed boundary, not a half-delivered
+             * sample, even if this process previously issued an input. */
+            terminal=0;s_input_route_active=1;s_input_route_index=s_input_route_consumed=0;
+            s_input_route_remaining=1;
+            assert(debug_server_get_input_override()==0xffef&&pending);
+            assert(debug_server_seek_input_route(1)&&!pending);
+            int before=applied;
+            assert(debug_server_get_input_override()==0xffff&&pending&&applied==before);
+            held[0]=0xffff;terminal=1;
+            assert(debug_server_get_input_override()==0xffff&&!pending&&applied==before+1);
+        }
+    }
+    puts("debug input route: TCP controls plus first/delivered/terminal digital,P2,DualShock captures pass");
     return 0;
 }
 '''
     with tempfile.TemporaryDirectory(prefix='psx-input-route-') as directory:
         path = Path(directory) / 'route.c'
-        path.write_text(preamble + '\n#define INPUT_ROUTE_MAX_STEPS' + declarations +
+        path.write_text(preamble + '\n' + declarations +
                         'static uint64_t s_input_route_start_frame = 0;\n' + body +
                         '\nstatic void vblank_input_poll(int *p1,int *p2){\n' +
-                        input_poll + '\n*p1=override;*p2=override_p2;\n}\n' + checks)
-        executable = Path(directory) / 'route.exe'
+                        input_poll + '\n(void)s_digital_pad_injected_frame;*p1=override;*p2=override_p2;\n}\n' + checks)
         for lean in (False, True):
-            subprocess.run([args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror',
-                            *(['-DPSX_NO_DEBUG_TOOLS=1'] if lean else []), str(path),
-                            '-o', str(executable)], check=True)
-            subprocess.run([str(executable)], check=True)
+            for opt in ('-O0', '-O2'):
+                executable = Path(directory) / ('route' + opt + ('-lean' if lean else '') + '.exe')
+                subprocess.run([args.cc, '-std=c11', opt, '-Wall', '-Wextra', '-Werror',
+                                *(['-DPSX_NO_DEBUG_TOOLS=1'] if lean else []), '-I'+str(runtime/'include'), str(path),
+                                '-o', str(executable)], check=True)
+                subprocess.run([str(executable)], check=True)
 
 
 if __name__ == '__main__':

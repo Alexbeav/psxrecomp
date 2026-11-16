@@ -24,7 +24,8 @@ static int boot_clears, cd_handoffs, device_restores;
 #ifndef PSX_TEST_SNAPSHOT_PACKAGE_LOOKUP
 int mod_runtime_snapshot_package_active(const char *id) { (void)id; return 0; }
 #endif
-uint32_t i_stat, i_mask, g_psx_icache_tv[1024];
+uint32_t i_stat, i_mask;
+#include "../src/psx_icache.c"
 uint64_t psx_cycle_count;
 uint32_t g_psx_gcs_frac;
 uint32_t psx_guest_cycle_scale_config(void) { return 1; }
@@ -45,16 +46,21 @@ void psx_kernel_bless_note_range(uint32_t p,uint32_t n) { (void)p; (void)n; }
 void gte_canonicalize_cpu_state(CPUState* cpu) { cpu->gpr[0]=0; }
 uint32_t interrupts_get_cycles_since_vblank(void) { return 42; }
 void interrupts_set_cycles_since_vblank(uint32_t n) { (void)n; ++device_restores; }
+/* Counters round-trip so the checkpoint test can see a timer2 perturbation;
+ * they start at zero, as the other fields stay. */
+static uint16_t fixture_timer_counter[3];
 void timers_get_snapshot(uint16_t c[3],uint32_t m[3],uint16_t t[3],int32_t irq[3],uint32_t f[3]) {
-    memset(c,0,6); memset(m,0,12); memset(t,0,6); memset(irq,0,12); memset(f,0,12);
+    memcpy(c,fixture_timer_counter,6); memset(m,0,12); memset(t,0,6); memset(irq,0,12); memset(f,0,12);
 }
 void timers_set_snapshot(const uint16_t c[3],const uint32_t m[3],const uint16_t t[3],const int32_t irq[3],const uint32_t f[3]) {
-    (void)c;(void)m;(void)t;(void)irq;(void)f; ++device_restores;
+    memcpy(fixture_timer_counter,c,6); (void)m;(void)t;(void)irq;(void)f; ++device_restores;
 }
 #define MODULE(name) uint32_t name##_snapshot_bytes(void){return 4;} \
     void name##_snapshot_write(uint8_t* p){memset(p,0,4);} \
     int name##_snapshot_read(const uint8_t* p,uint32_t n){(void)p;++device_restores;return n==4;}
 MODULE(gpu) MODULE(spu) MODULE(cdrom) MODULE(dma) MODULE(sio) MODULE(mdec)
+int gpu_snapshot_validate(const uint8_t* p,uint32_t n){return p && n==4;}
+int dma_snapshot_validate(const uint8_t* p,uint32_t n){return p && n==4;}
 int sio_snapshot_validate(const uint8_t* p,uint32_t n){(void)p;return n==4;}
 int mdec_snapshot_validate(const uint8_t* p,uint32_t n){(void)p;return n==4;}
 int cdrom_snapshot_validate(const uint8_t* p,uint32_t n){(void)p;return n==4;}
@@ -135,7 +141,7 @@ int main(void) {
         uint8_t *phase=test_find_section(saved,len,BS_SEC_GAME_START,&phase_offset,&phase_bytes);
         assert(phase);
         uint32_t count=read32(saved+28);
-        assert(read32(saved + 4)==BOOT_STATE_VERSION_WITHOUT_HOST && read32(phase)==(uint32_t)started);
+        assert(read32(saved+4)==BOOT_STATE_VERSION_WITHOUT_HOST && read32(phase)==(uint32_t)started);
         fntrace_restore_game_started(!started); ram[0x100]=0; cpu.pc=0;
         assert(boot_state_load_buffer(saved,len,123,0x801b0000,&cpu));
         assert(fntrace_is_game_started()==started && ram[0x100]==0xab && cpu.pc==0x80050044);
@@ -176,3 +182,64 @@ int main(void) {
     puts("snapshot handoff: cold/warm, BIOS/game, compressed/raw and atomic rejection passed");
     return 0;
 }
+
+/* Composed component boundaries for this hardware-double fixture. I-cache
+ * serialization above is real; these arrays are fixture state, not evidence
+ * for interpreter/scheduler/source GPU/device fidelity. */
+uint64_t g_psx_device_gen;
+static uint8_t fixture_exec[DIRTY_RAM_CHECKPOINT_BYTES];
+static uint8_t fixture_sched[PSX_SCHEDULER_SNAPSHOT_BYTES];
+static uint8_t fixture_memctrl[72], fixture_irq_timing[64];
+static int fixture_exact(const uint8_t *p,uint32_t n,const uint8_t *value,uint32_t bytes) {
+    return p && n==bytes && !memcmp(p,value,bytes);
+}
+uint32_t dirty_ram_checkpoint_pc(uint32_t fallback) { return fallback; }
+void dirty_ram_checkpoint_write(uint8_t *out) { memcpy(out,fixture_exec,sizeof fixture_exec); }
+int dirty_ram_checkpoint_validate(const uint8_t *p,uint32_t n) {return fixture_exact(p,n,fixture_exec,sizeof fixture_exec);}
+int dirty_ram_checkpoint_read(const uint8_t *p,uint32_t n) {return dirty_ram_checkpoint_validate(p,n);}
+void psx_scheduler_snapshot_write(uint8_t *out,uint32_t n) {assert(n==sizeof fixture_sched);memcpy(out,fixture_sched,n);}
+int psx_scheduler_snapshot_validate(const uint8_t *p,uint32_t n,const uint8_t *ram) {
+    return ram && fixture_exact(p,n,fixture_sched,sizeof fixture_sched);
+}
+int psx_scheduler_snapshot_read(const uint8_t *p,uint32_t n,CPUState *cpu) {
+    return cpu && fixture_exact(p,n,fixture_sched,sizeof fixture_sched);
+}
+uint32_t memory_control_snapshot_bytes(void) {return sizeof fixture_memctrl;}
+void memory_control_snapshot_write(uint8_t *out) {memcpy(out,fixture_memctrl,sizeof fixture_memctrl);}
+int memory_control_snapshot_read(const uint8_t *p,uint32_t n) {
+    if(!p||n!=sizeof fixture_memctrl)return 0;memcpy(fixture_memctrl,p,n);++device_restores;return 1;
+}
+void interrupts_timing_wire_write(uint8_t *out) {memcpy(out,fixture_irq_timing,sizeof fixture_irq_timing);}
+int interrupts_timing_wire_read(const uint8_t *p,uint32_t n) {
+    if(!p||n!=sizeof fixture_irq_timing)return 0;memcpy(fixture_irq_timing,p,n);++device_restores;return 1;
+}
+int source_gpu_runtime_active(void) {return 0;}
+int timers_source_active(void) {return 0;}
+int dma_src_active(void) {return 0;}
+int interrupts_raster_comparison_active(void) {return 0;}
+#define INACTIVE_WIRE(name) void name##_write(uint8_t *p){(void)p;abort();}     int name##_read(const uint8_t *p,uint32_t n){(void)p;(void)n;abort();}
+INACTIVE_WIRE(interrupts_raster_wire)
+INACTIVE_WIRE(source_gpu_raster_wire)
+INACTIVE_WIRE(source_gpu_service_wire)
+INACTIVE_WIRE(timers_source_wire)
+INACTIVE_WIRE(dma_src_wire)
+#undef INACTIVE_WIRE
+uint32_t dma_src_wire_bytes(void) {return 0;}
+void source_gpu_runtime_rederive_returns(void) {}
+void interrupts_note_state_load(int present) {(void)present;}
+void gte_precision_timeline_invalidate(void) {}
+int mdec_snapshot_prepare(const uint8_t *p,uint32_t n) {return mdec_snapshot_validate(p,n);}
+int sio_snapshot_shape_ok(uint32_t n) {return n==4;}
+int spu_snapshot_validate(const uint8_t *p,uint32_t n) {return p && n==4;}
+int spu_cd_snapshot_validate(const uint8_t *p,uint32_t n) {
+    PstR r;uint32_t frames;pst_r_init(&r,p,n);
+    return p && pst_r_u32(&r,&frames) && frames<=1024 && n==4+4*frames;
+}
+
+/* The real I-cache owner shares this fixture's existing guest clock. */
+int g_ls_replay_active;
+uint64_t psx_get_cycle_count(void) {return psx_cycle_count;}
+void psx_advance_cycles_slow(uint32_t cycles) {psx_cycle_count+=cycles;}
+
+/* Report-only accounting is outside this fixture's hardware seams. */
+void dirty_ram_pc_table_game_load(void) {}

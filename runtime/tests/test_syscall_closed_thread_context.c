@@ -10,6 +10,9 @@
 static uint32_t ram[0x10000 / 4];
 static CPUState cpu;
 uint64_t s_frame_count = 0;
+uint32_t g_psx_cyc_batch;
+uint32_t g_psx_cyc_batch_limit = 0;
+uint32_t *g_psx_cyc_local_acc;
 
 static uint32_t rd(uint32_t a) { assert(a < sizeof ram && !(a & 3)); return ram[a / 4]; }
 static void wr(uint32_t a, uint32_t v) { assert(a < sizeof ram && !(a & 3)); ram[a / 4] = v; }

@@ -104,7 +104,35 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr);
  * so a load mid-pass#1 that is visible at the start of pass#2 forks BB-edge
  * IRQ cadence (matched clocks, mismatched GPRs). */
 void overlay_loader_set_load_freeze(int freeze);
+
+/* Native overlay execution on (1, default) or all overlays interpreted (0).
+ * Replays pin 0 while they record or play (PS1B-191 stopgap). */
+void overlay_loader_set_native_exec(int on);
+int  overlay_loader_get_native_exec(void);
 int  overlay_loader_load_frozen(void);
+
+/* PS1B-238(a): emulation-thread protection shared by replay and netplay.
+ * The last release restores native execution and removes only its own load
+ * freeze. The independent selfcheck freeze remains under its original owner.
+ * Diagnostic no-pin runs remain unprotected and must say so in their evidence. */
+enum { OVERLAY_TIER_REPLAY = 0, OVERLAY_TIER_NETPLAY = 1 };
+typedef struct OverlayTierWitness {
+    uint32_t holders[2];
+    uint32_t native_exec, load_frozen, candidates, dlls;
+    uint64_t native_entries, intervals, admission_checks, blocked_admissions;
+    uint64_t dispatch_checks, blocked_dispatches, blocked_flag_changes;
+    uint64_t begin_frame, begin_cycle, end_frame, end_cycle;
+    uint64_t begin_native_entries, end_native_entries;
+    uint32_t begin_candidates, end_candidates, begin_dlls, end_dlls;
+    uint64_t first_violation_frame, first_violation_cycle;
+    uint32_t first_violation_pc, violations, overflow;
+} OverlayTierWitness;
+int overlay_loader_tier_hold(unsigned kind);
+void overlay_loader_tier_release(unsigned kind);
+void overlay_loader_tier_witness(OverlayTierWitness *out);
+/* One compact JSON object, also used by the final run report. Returns 0 when
+ * the buffer cannot hold it; no partial object is accepted as evidence. */
+int overlay_loader_tier_witness_json(char *out, int cap);
 
 /* Drop the negative lazy-lookup memo (host-only). Call on snap restore so
  * resim#1 and resim#2 take the same dispatch path. */
@@ -137,6 +165,18 @@ int overlay_loader_has_cached_crc(uint32_t region_start, uint32_t crc);
 
 /* Returns number of functions currently registered in the dynamic table. */
 int overlay_loader_registered_count(void);
+/* Units for game text the game rewrote with CPU stores (PS1B-421): how many
+ * were loaded through the lazy load's wider window, how many of them were
+ * taken out again, how many pages were left to the interpreter after `limit`
+ * take-outs. Any pointer may be NULL. */
+void overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
+                                      uint32_t *backed_off_pages, uint32_t *limit);
+/* The loads through that window: the time they took (Windows; 0 elsewhere), the
+ * pages that reached the limit of loads, and that limit. */
+void overlay_loader_get_modified_text_loads(uint64_t *load_us, uint32_t *load_bound_pages,
+                                            uint32_t *load_limit);
+/* Code-range hashes computed at dispatch, and how many did not match. */
+void overlay_loader_get_rehash_counts(uint32_t *rehashes, uint32_t *misses);
 
 /* Returns full loader state for TCP diagnostics. */
 void overlay_loader_get_status(int *active, int *registered,
@@ -150,6 +190,16 @@ void overlay_loader_get_status(int *active, int *registered,
 /* Most recent loader event string (DLL load success/failure). Surfaced via
  * the overlay_loader_status TCP command — no stderr logging (Rule 3). */
 const char *overlay_loader_last_msg(void);
+/* First stale-cache line of this process (a shard refused for its ABI tag, or
+ * a cache folder written by another codegen version). Kept, because
+ * last_msg is overwritten by the next event; empty when nothing was stale. */
+const char *overlay_loader_stale_cache_msg(void);
+/* Rejections for an overlay_abi() tag that is not this build's. A file that
+ * stays on disk is counted again by each rescan that finds it. */
+uint64_t overlay_loader_abi_rejected(void);
+/* The overlay_abi() tag and codegen version this build loads (overlay_api.h). */
+int overlay_loader_abi_tag(void);
+int overlay_loader_codegen_ver(void);
 
 /* Inc3 §8.5: a write into the code range of a currently-executing native
  * overlay entry cannot be recovered lazily — that entry is permanently
@@ -169,6 +219,8 @@ void overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidations,
                                  uint32_t *last_write_addr,
                                  uint32_t *last_write_size,
                                  int *regions, uint32_t *revalidations);
+/* Kernel-window share (phys < 0x10000) of disp_native / disp_interp. */
+void overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp);
 void overlay_loader_get_load_timing(uint64_t *total_us, uint64_t *max_us,
                                     uint64_t *last_us);
 /* Opt-in PSX_RUNTIME_PERF_DIAG sampler: returns and clears the hottest native

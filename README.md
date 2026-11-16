@@ -1,3 +1,8 @@
+# TAS replay branch
+
+For the verified Tekken 3 TAS, follow the [clean-clone setup and replay guide](tools/tasreplays/README.md).
+It builds from your USA disc and SCPH1001 BIOS, then verifies the original TAS through the 8.80-second victory.
+
 <p align="center">
   <img src="docs/assets/psxrecomp-logo.png" alt="PSXRecomp" width="640">
 </p>
@@ -6,6 +11,8 @@
 
 Local controller startup and the in-game Analog button are described in
 [Controller mode](docs/CONTROLLER_MODE.md).
+Native pointer devices and neGcon selection are described in
+[Native peripherals](docs/NATIVE_PERIPHERALS.md).
 
 > ℹ️ **Note from mstan:** This repo and I are now part of [RetroPortingToolkit](https://retroportingtoolkit.com/). I remain a primary maintainer of psxrecomp alongside the team. [More info](https://1379.tech/forming-a-collective-retro-porting-toolkit/).
 
@@ -153,7 +160,7 @@ and building an executable. The sections below are the broader reference.
 
 ### Build requirements
 
-Every platform needs **Git**, **Python 3**, **CMake 3.20+**, **Ninja**, and a
+Every platform needs **Git**, **Python 3.9+**, **CMake 3.20+**, **Ninja**, and a
 C/C++ compiler (the recompiler is C++20; the runtime is C99 + C++17). SDL3 is
 fetched automatically if no system package is found.
 
@@ -310,6 +317,11 @@ Two things worth knowing:
 - **Save files work either way.** Memory cards are shared. *Savestates* are not:
   one made with OpenBIOS won't load under the retail BIOS, or the other way
   round, so the game won't let you mix them.
+- **Games on several discs.** A savestate belongs to the disc that was in the
+  drive, and loading it mounts that disc for you. A savestate made after an
+  in-game disc change by a build older than this one is filed under the disc
+  the game was started on; rename the file with the right disc number
+  (`_disc2`) before you load it.
 
 Titles with a verified OpenBIOS incompatibility require the compatible retail
 BIOS instead and say so up front.
@@ -679,7 +691,7 @@ Core subsystems, framework-wide:
 | Interpreter failover | Correctness net for not-yet-native code; being compiled away by sharding |
 | CD-ROM / MDEC / XA | FMVs stream and play; XA/CDDA timing stays authentic |
 | Memory cards | Save and load supported across game projects |
-| SIO0 controllers | Digital pad + DualShock config; per-game analog/digital selection |
+| SIO0 controllers | Digital pad + DualShock config; automatic local mode and live Analog button |
 | GPU | Software + OpenGL + Vulkan backends; widescreen FOV/HUD work per game |
 | SPU | Working; reverb/noise/sweep and exact SPU-IRQ accuracy still being tightened |
 | Interrupts, COP0, timers, GTE | Working; cycle-accuracy foundation is an active depth-phase focus |
@@ -754,8 +766,14 @@ generated C is optimized. Game projects generate their own
 
 ## Input
 
+Ordinary local controllers use [automatic mode handling](docs/CONTROLLER_MODE.md):
+digital startup, game-controlled analog support, and an in-game F3 Analog button.
+
 Keyboard and Xbox-style controller input work out of the box; the default
-fullscreen toggle is F11 / Alt+Enter / Cmd+F. **Full button maps, controller
+fullscreen toggle is Alt+Enter / Ctrl+F (Cmd+F on macOS), and F11 starts and
+stops a player replay (F7, then Tab, lists the replays). The launcher's Record
+replay checkbox records a whole session from power-on for automated testing
+([docs/PLAYER_REPLAYS.md](docs/PLAYER_REPLAYS.md)). **Full button maps, controller
 configuration, and rebinding live in each game's repo and in-app launcher** —
 they're game-facing, not part of the framework. The standalone framework runtime
 accepts keyboard input for navigating the selected OpenBIOS or retail BIOS shell

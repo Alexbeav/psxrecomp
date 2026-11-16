@@ -40,3 +40,7 @@ int main(void) {
     puts("PASS: header-only fetch loses 7 guest cycles and changes cache/load state");
     return 0;
 }
+
+
+uint64_t psx_get_cycle_count(void) { return cycles; }
+void overlay_flush_cycles(void) {}

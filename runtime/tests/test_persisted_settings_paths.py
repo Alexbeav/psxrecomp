@@ -20,11 +20,11 @@ CALL_SITES = [
     'cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0))',
     ': anchor_on_exe_dir(argv0, std::filesystem::path(line));',
     'settings_bios_storage = anchor_on_exe_dir(argv[0], us.bios_path).string();',
-    'memcard_dir   = anchor_on_exe_dir(argv[0], us.memcard_dir);',
-    'memcard1_path = anchor_on_exe_dir(argv[0], us.memcard1_path);',
-    'memcard2_path = anchor_on_exe_dir(argv[0], us.memcard2_path);',
-    'memcard1_path = anchor_on_exe_dir(argv[0], seed.memcard1_path);',
-    'memcard2_path = anchor_on_exe_dir(argv[0], seed.memcard2_path);',
+    'memcard_dir   = anchor_card_path(argv[0], us.memcard_dir);',
+    'memcard1_path = anchor_card_path(argv[0], us.memcard1_path);',
+    'memcard2_path = anchor_card_path(argv[0], us.memcard2_path);',
+    'memcard1_path = anchor_card_path(argv[0], seed.memcard1_path);',
+    'memcard2_path = anchor_card_path(argv[0], seed.memcard2_path);',
 ]
 
 
@@ -43,7 +43,7 @@ def main():
         assert site in text, 'main.cpp no longer anchors: ' + site
     adapters = []
     for name in ('normalize_disc_path_for_launch', 'resolve_persisted_disc_path',
-                 'anchor_on_exe_dir'):
+                 'anchor_on_exe_dir', 'anchor_card_path'):
         start = text.index('static std::filesystem::path ' + name + '(')
         adapters.append(text[start:text.index('\n}\n', start) + 2])
     config = (root.parent / 'recompiler/src/config_loader.cpp').read_text(encoding='utf-8')
@@ -70,6 +70,7 @@ def main():
 #include <string>
 #include "host_path.h"
 #include "disc_path.h"
+#include "config_loader.h"
 namespace fs = std::filesystem;
 namespace PSXRecompV4 {
 ''' + relative_adapter + '''
@@ -88,6 +89,7 @@ int main(int argc, char** argv) {
     std::filesystem::path resolved =
         mode == "persisted" ? resolve_persisted_disc_path(path, argv[3])
       : mode == "anchor"    ? anchor_on_exe_dir(argv[3], path)
+      : mode == "card"      ? anchor_card_path(argv[3], path)
       :                       normalize_disc_path_for_launch(path);
     if (mode == "sidecar") {
         write_cached_path(argv[3], "disc.cfg", path);
@@ -105,7 +107,8 @@ int main(int argc, char** argv) {
         env['PATH'] = str(Path(compiler).parent) + os.pathsep + env.get('PATH', '')
         exe = base / ('probe.exe' if os.name == 'nt' else 'probe')
         subprocess.run([compiler, '-std=c++17', '-Werror=return-type', '-I'+str(root/'include'),
-                        '-I'+str(root.parent/'recompiler/include'), str(source),
+                        '-I'+str(root.parent/'recompiler/include'),
+                        '-I'+str(root.parent/'recompiler/src'), str(source),
                         str(root/'src/disc_path.cpp'), str(root/'src/cue_sheet.cpp'), '-o', str(exe)],
                        check=True, env=env)
 
@@ -141,6 +144,11 @@ int main(int argc, char** argv) {
         check_same('anchor', 'bios/SCPH1001.BIN', product/'bios/SCPH1001.BIN')
         check('anchor', product/'cards', (product/'cards').as_posix())
         check('anchor', '', '')
+        check_same('card', 'cards/../cards/card1.mcd', product/'cards/card1.mcd')
+        check('card', product/'cards', (product/'cards').as_posix())
+        check('card', '', '')
+        if os.name == 'nt':
+            check('card', '//server/share/card1.mcd', '//server/share/card1.mcd')
         print('persisted paths: disc consumers and sidecar save/reopen '
               '(relative, absolute, empty, missing, CLI cwd, Windows UNC) '
               'and BIOS/memory card (".", relative, absolute, empty) passed')

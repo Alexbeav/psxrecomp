@@ -9,15 +9,22 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "dirty_ram_interp.c"
 
 def test_interp_substitutes_after_instruction_hook():
     text = SRC.read_text(encoding="utf-8")
-    start = text.index("static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,\n"
-                       "                            uint32_t *next_pc_out) {")
-    body = text[start:text.index("static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,", start + 10)]
     patch = "if (g_psx_mod_immediate_live) insn = psx_mod_immediate_patch(pc, insn);"
     hook = "if (g_psx_mod_instruction_hooks) psx_mod_instruction(cpu, pc, insn);"
-    assert body.count(patch) == 1
-    assert body.index(hook) < body.index("const uint32_t original_instruction = insn;") < body.index(patch), "hook guards the original word"
-    # decode of the load/store fields happens after the substitution
-    assert body.index(patch) < body.index("const uint32_t ld_op = op_field(insn);")
+    for name in ("exec_one_fetched_context",):
+        definition = re.search(r'static int ' + name + r'\([^;{]*\)\s*\{', text)
+        assert definition, name + ': execution owner missing'
+        start = definition.start()
+        end = text.index("\nstatic int ", start + 10)
+        body = text[start:end]
+        assert body.count(patch) == 1, name
+        assert body.index(hook) < body.index("const uint32_t original_instruction = insn;") < body.index(patch), name + ": hook guards the original word"
+        # The shared execution owner decodes only after substituting the immediate.
+        assert body.index(patch) < body.index("const uint32_t ld_op = op_field(insn)"), name
+
+    wrapper = re.search(r'static int exec_one_fetched\([^;{]*\)\s*\{([^}]+)\}', text)
+    assert wrapper and 'return exec_one_fetched_context(cpu,pc,insn,next_pc_out,0,0,0);' in wrapper.group(1)
+    assert text.count(patch) == 1, 'every execution path uses the shared patch owner'
 
 
 def test_interp_includes_header():

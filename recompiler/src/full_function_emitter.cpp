@@ -2,6 +2,7 @@
 // See full_function_emitter.h for the design contract.
 
 #include "full_function_emitter.h"
+#include "load_value_emission.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -245,6 +246,28 @@ bool FullFunctionEmitter::emit_function(
     // The function entry is always a leader.
     block_leaders.insert(func.entry_addr);
 
+    // A normal syscall resumes at the following guest instruction. Register
+    // that interior address with the owning function, like a call return.
+    auto relocate_ra = [](uint32_t rom_ra) -> uint32_t {
+        return bios_runtime_pc(rom_ra);
+    };
+    // Without it, the unknown-dispatch trampoline can resolve a JR directly
+    // and omit both instruction fetches and its delay-slot effects.
+    for (const auto& [addr, raw] : addr_to_raw) {
+        if ((raw & 0xFC00003Fu) != 0x0000000Cu || !addr_to_raw.count(addr + 4u))
+            continue;
+        const auto previous = addr_to_raw.find(addr - 4u);
+        if (previous != addr_to_raw.end()) {
+            const auto prior = StrictTranslator::translate(
+                PSXRecomp::MipsDecoder::decode(previous->second, previous->first),
+                relocate_ra(previous->first));
+            if (prior.is_terminator &&
+                std::string(prior.terminator_kind ? prior.terminator_kind : "") != "rfe")
+                continue; // Delay-slot exception restart is a separate contract.
+        }
+        block_leaders.insert(addr + 4u);
+    }
+
     // Collect continuation labels for this function (populated during emit).
     std::vector<ContinuationLabel> local_continuations;
 
@@ -363,9 +386,7 @@ bool FullFunctionEmitter::emit_function(
      * Shell code runs at RAM 0x80030000+, kernel Part 2 at 0x500+.
      * Without this, handler/callback tables get ROM addresses instead of
      * RAM addresses, breaking pointer comparisons in the BIOS. */
-    auto relocate_ra = [](uint32_t rom_ra) -> uint32_t {
-        return bios_runtime_pc(rom_ra);
-    };
+
 
     // First pass: identify terminators and their delay slots.
     for (const auto& [addr, raw] : addr_to_raw) {
@@ -418,6 +439,40 @@ bool FullFunctionEmitter::emit_function(
         }
     }
 
+    // T110 — exact-EPC resume points.
+    //
+    // An interrupt that becomes deliverable at a ROM instruction must take
+    // COP0.EPC = that exact instruction (hardware; also observed on the
+    // BizHawk oracle). The runtime used
+    // to defer such a delivery to the next re-enterable boundary because the
+    // static dispatch could only re-enter at a block leader, which MOVED the
+    // architectural EPC: Abe's Oddysee took an IRQ at BFC041F8 (`bne` closing
+    // a three-instruction loop) and stored BFC041D0 — the branch's own target,
+    // because the deferral ran the branch and its slot first. EPC stays
+    // faithful; the resume side grows instead. Every instruction that can be
+    // an EPC becomes a dispatch key, so psx_is_dispatchable() accepts it.
+    //
+    // NOT a resume point (each exclusion is a correctness requirement, not a
+    // size optimisation):
+    //   - a block leader / function entry: already a key, label already emitted.
+    //   - a branch/jump delay slot: architecturally the EPC is the TERMINATOR
+    //     with Cause.BD set (psx_check_interrupts_delay_slot), never the slot.
+    //     The slot's emitted body is also guarded on psx_delay_<term>, which a
+    //     fresh function entry initialises to 0.
+    // Pending load values live in CPUState, so a successor is a legal resume
+    // entry. These entries do not alter block leaders or the timing model.
+    std::set<uint32_t> resume_points;
+    for (const auto& [pc, word] : addr_to_raw) {
+        (void)word;
+        if (block_leaders.count(pc)) continue;
+        if (all_function_entries_norm.count(normalize_address(pc))) continue;
+        if (pending_at.count(pc)) continue;
+        resume_points.insert(pc);
+    }
+    for (uint32_t rp : resume_points) {
+        local_continuations.push_back({rp, cont_key(rp, normalize_address(rp)), norm});
+    }
+
     // Phase 1.0e-d: precompute per-block cycle estimates. For each block
     // leader L, count instructions from L up to (but not including) the
     // next leader address (or end of function). Conservative 1 cycle per
@@ -437,12 +492,25 @@ bool FullFunctionEmitter::emit_function(
              * this equals the old instruction count; Stage-2 real costs land in
              * that one function and every backend updates together. */
             count += psx_instr_base_cycles(walker->second);
-            native_span_cycles[leader] += psx_native_instr_cycles(walker->second, relocate_ra(walker->first));
             ++walker;
             if (walker == addr_to_raw.end()) break;
             if (block_leaders.count(walker->first)) break;
         }
         block_cycles[leader] = count;
+    }
+
+    // Each admitted interior entry starts a native span too. Split only the
+    // opt-in span accounting; the existing reference block timing is unchanged.
+    std::set<uint32_t> native_span_leaders = block_leaders;
+    native_span_leaders.insert(resume_points.begin(), resume_points.end());
+    for (auto it = addr_to_raw.begin(); it != addr_to_raw.end(); ++it) {
+        if (!native_span_leaders.count(it->first)) continue;
+        auto next = it;
+        do {
+            native_span_cycles[it->first] +=
+                psx_native_instr_cycles(next->second, relocate_ra(next->first));
+            ++next;
+        } while (next != addr_to_raw.end() && !native_span_leaders.count(next->first));
     }
 
     /* Emit branch-predicate variable declarations at function entry,
@@ -482,245 +550,18 @@ bool FullFunctionEmitter::emit_function(
         default:   return rt == r;                         /* I-type ALU + loads */
         }
     };
-    /* MIPS-I load-delay-slot modeling (dependent pairs only). On a real
-     * R3000A the instruction after a load executes in the load's delay
-     * shadow: if it READS the load's destination register it sees the OLD
-     * value (the load writes back one instruction later). Compilers and
-     * assemblers schedule around this, so the recompiler historically
-     * skipped it — but OpenBIOS's cardfasttrack.s exploits it DELIBERATELY
-     * ("move $at, $k0  / * gotta break those bad emulators * /" right after
-     * `lw $k0, ...($k0)`): without modeling, the fasttrack's buffer-pointer
-     * writeback lands at ptr+lo16 (a kernel-heap stomp at OpenBIOS 0x9960)
-     * instead of the pointer cell, every streamed card byte hits buffer[0],
-     * and the game reads a zeroed sector -> "Memory Card is not formatted".
-     *
-     * Model: at a simple load (LB/LBU/LH/LHU/LW, rt!=0) whose IMMEDIATE
-     * successor in the same emission (not across a label, not a delay slot)
-     * reads rt, emit the load into the function-scope temp psx_ldd_<addr>
-     * (memory read stays at the load's position — MMIO order and cycle
-     * interlock unchanged), emit the successor untouched (its reads of
-     * gpr[rt] naturally see the old value), then flush
-     * `cpu->gpr[rt] = psx_ldd_<addr>` after the successor's register reads.
-     * If the successor architecturally writes rt (its writeback is later in
-     * program order, so it wins on hardware), the flush is dropped — unless
-     * the successor is itself a deferred load to rt (chain), whose own
-     * writeback is deferred further and must not be pre-clobbered.
-     * Unmodeled shapes (dependent pair split by a label, load in a branch
-     * delay slot with a dependent successor, LWL/LWR pairs) are logged so
-     * they can't fail silently. Non-dependent loads emit byte-identically
-     * to before. Beetle/mednafen models the same semantics (LDWhich), so
-     * cosim stays aligned. */
-    auto insn_reads_gpr = [](uint32_t w, uint32_t r) -> bool {
-        if (r == 0 || w == 0) return false;   /* $zero / nop */
-        uint32_t op = w >> 26, rs = (w >> 21) & 31, rt = (w >> 16) & 31, fn = w & 63;
-        switch (op) {
-        case 0x00:
-            switch (fn) {
-            case 0x00: case 0x02: case 0x03: return rt == r;             /* sll/srl/sra (shamt) */
-            case 0x04: case 0x06: case 0x07: return rs == r || rt == r;  /* sllv/srlv/srav */
-            case 0x08: case 0x09: return rs == r;                        /* jr/jalr */
-            case 0x0C: case 0x0D: return false;                          /* syscall/break */
-            case 0x10: case 0x12: return false;                          /* mfhi/mflo */
-            case 0x11: case 0x13: return rs == r;                        /* mthi/mtlo */
-            default:   return rs == r || rt == r;                        /* muldiv + 3-op ALU */
-            }
-        case 0x01: return rs == r;                                       /* regimm branches */
-        case 0x02: case 0x03: return false;                              /* j/jal */
-        case 0x04: case 0x05: return rs == r || rt == r;                 /* beq/bne */
-        case 0x06: case 0x07: return rs == r;                            /* blez/bgtz */
-        case 0x08: case 0x09: case 0x0A: case 0x0B:
-        case 0x0C: case 0x0D: case 0x0E: return rs == r;                 /* addi..xori */
-        case 0x0F: return false;                                         /* lui */
-        case 0x10: return ((w >> 21) & 31) == 0x04 && rt == r;           /* mtc0 */
-        case 0x12: { uint32_t f = (w >> 21) & 31;
-                     return (f == 0x04 || f == 0x06) && rt == r; }       /* mtc2/ctc2 */
-        case 0x22: case 0x26: return rs == r || rt == r;                 /* lwl/lwr: base + merge */
-        case 0x20: case 0x21: case 0x23: case 0x24: case 0x25:
-                   return rs == r;                                       /* simple loads: base */
-        case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2E:
-                   return rs == r || rt == r;                            /* sb/sh/swl/sw/swr */
-        case 0x32: case 0x3A: return rs == r;                            /* lwc2/swc2 base */
-        default:   return rs == r || rt == r;                            /* conservative */
-        }
-    };
-    auto simple_load_dest = [](uint32_t w) -> int {
-        uint32_t op = w >> 26;
-        if (op == 0x20 || op == 0x21 || op == 0x23 || op == 0x24 || op == 0x25) {
-            uint32_t rt = (w >> 16) & 31;
-            return rt ? static_cast<int>(rt) : -1;
-        }
-        return -1;
-    };
-    /* load addr -> {dest reg, flush writeback (vs discard)} */
-    std::map<uint32_t, std::pair<int, bool>> ldd_sites;
-    /* Load addrs whose dependent successor is an LWL/LWR merging into that
-     * same rt. LWL/LWR read their destination late enough to receive the
-     * forwarded result of an immediately preceding load, so hardware merges
-     * into the value the load just fetched -- they are NOT subject to the
-     * load delay. The merge base must therefore name psx_ldd_<addr>, and the
-     * ordinary writeback is suppressed because the merge already consumed it.
-     * Without this the load was deferred AND then discarded (the successor
-     * writes rt), so the fetched word vanished and the merge combined the
-     * stale pre-load register -- silently wrong code. Mirrors the CFG
-     * emitter's set_lwlr_merge_forward path. */
-    std::set<uint32_t> ldd_lwlr_forward;
-    std::string unmodeled_load_delay;
-    for (const auto& [la, lw_raw] : addr_to_raw) {
-        int dest = simple_load_dest(lw_raw);
-        uint32_t lop = lw_raw >> 26;
-        bool is_lwlr = (lop == 0x22 || lop == 0x26);
-        if (dest < 0 && !is_lwlr) continue;
-        int dep_reg = is_lwlr ? static_cast<int>((lw_raw >> 16) & 31) : dest;
-        if (dep_reg <= 0) continue;
-        if (pending_at.count(la)) {
-            /* Load in a branch delay slot: the shadow instruction is the
-             * dynamic successor (target or fallthrough) — cross-block,
-             * unmodeled. Log if either static successor depends. */
-            const PendingBranch& pb = pending_at[la];
-            bool dep = false;
-            auto f = addr_to_raw.find(pb.terminator_addr + 8);
-            if (f != addr_to_raw.end() && insn_reads_gpr(f->second, dep_reg)) dep = true;
-            auto t = addr_to_raw.find(pb.target);
-            if (pb.target && t != addr_to_raw.end() && insn_reads_gpr(t->second, dep_reg)) dep = true;
-            if (dep) {
-                unmodeled_load_delay = fmt::format(
-                    "load 0x{:08X} in a branch delay slot has a dependent successor", la);
-                if (out_interpreter_reason) {
-                    std::fprintf(stderr,
-                        "[load-delay] UNMODELED: load 0x%08X in delay slot with dependent successor (func 0x%08X)\n",
-                        la, func.entry_addr);
-                }
-            }
-            continue;
-        }
-        auto nx = addr_to_raw.find(la + 4);
-        if (nx == addr_to_raw.end()) {
-            /* Successor belongs to another function/fragment (code_ptr
-             * confetti). Can't model across the boundary — but a dependent
-             * pair here would fail SILENTLY, so peek the ROM and log it. */
-            uint32_t base_phys = base_addr & 0x1FFFFFFFu;
-            uint32_t nx_phys = (la + 4) & 0x1FFFFFFFu;
-            if (nx_phys >= base_phys && nx_phys + 4 <= base_phys + rom.size()) {
-                uint32_t nx_raw = read_u32_le(rom, nx_phys - base_phys);
-                if (insn_reads_gpr(nx_raw, dep_reg)) {
-                    unmodeled_load_delay = fmt::format(
-                        "dependent load pair crosses a fragment boundary after 0x{:08X}", la);
-                    if (out_interpreter_reason) {
-                        std::fprintf(stderr,
-                            "[load-delay] UNMODELED: dependent pair crosses fragment boundary after load 0x%08X rt=%d (func 0x%08X)\n",
-                            la, dep_reg, func.entry_addr);
-                    }
-                }
-            }
-            continue;
-        }
-        if (!insn_reads_gpr(nx->second, dep_reg)) continue;
-        if (is_lwlr) {
-            /* LWL immediately followed by LWR to the same rt (or vice versa)
-             * is the documented MIPS-I exception: the hardware forwards the
-             * partial result to the pair's second half. Our immediate
-             * writeback gives exactly that merge — correct, don't log. */
-            uint32_t nop_ = nx->second >> 26, nrt = (nx->second >> 16) & 31;
-            bool complementary = (nrt == (uint32_t)dep_reg) &&
-                                 ((lop == 0x22 && nop_ == 0x26) || (lop == 0x26 && nop_ == 0x22));
-            if (!complementary) {
-                unmodeled_load_delay = fmt::format(
-                    "LWL/LWR 0x{:08X} has a dependent non-complementary successor", la);
-                if (out_interpreter_reason) {
-                    std::fprintf(stderr,
-                        "[load-delay] UNMODELED: LWL/LWR 0x%08X with dependent successor (func 0x%08X)\n",
-                        la, func.entry_addr);
-                }
-            }
-            continue;
-        }
-        if (block_leaders.count(la + 4)) {
-            unmodeled_load_delay = fmt::format(
-                "dependent load pair is split by a label at 0x{:08X}", la + 4);
-            if (out_interpreter_reason) {
-                std::fprintf(stderr,
-                    "[load-delay] UNMODELED: dependent pair split by label at 0x%08X (func 0x%08X)\n",
-                    la + 4, func.entry_addr);
-            }
-            continue;
-        }
-        {
-            const uint32_t nop_ = nx->second >> 26;
-            const uint32_t nrt_ = (nx->second >> 16) & 31u;
-            if ((nop_ == 0x22u || nop_ == 0x26u) &&
-                nrt_ == static_cast<uint32_t>(dep_reg)) {
-                ldd_lwlr_forward.insert(la);
-                ldd_sites[la] = {dest, false};
-                continue;
-            }
-        }
-        ldd_sites[la] = {dest, true};
-    }
-    if (!unmodeled_load_delay.empty()) {
-        // dirty_ram_dispatch interprets live main-RAM bytes only. Relocated
-        // kernel/shell functions satisfy that contract; a pure ROM function
-        // does not. Never turn a correctness fallback into a later
-        // unknown-dispatch abort: stop generation if there is no interpreter
-        // backend capable of executing every instruction in this function.
-        const bool ram_backed = std::all_of(
-            addr_to_raw.begin(), addr_to_raw.end(),
-            [](const auto& insn) {
-                return (bios_runtime_pc(insn.first) & 0x1FFFFFFFu) <
-                       (2u * 1024u * 1024u);
-            });
-        if (!ram_backed) {
-            throw std::runtime_error(fmt::format(
-                "cannot safely emit BIOS function 0x{:08X}: {}; "
-                "the function is not RAM-backed, so interpreter fallback is unavailable",
-                func.entry_addr, unmodeled_load_delay));
-        }
-        if (out_interpreter_reason) {
-            *out_interpreter_reason = unmodeled_load_delay;
-            std::fprintf(stderr,
-                "[load-delay] FALLBACK: function 0x%08X excluded from native dispatch; using interpreter (%s)\n",
-                func.entry_addr, unmodeled_load_delay.c_str());
-        }
-        return false;
-    }
-
     // Shadow 'out' with a reference to 'body' so all existing out+= lines
     // write to the temporary buffer.  The real 'out' is assembled at the end.
     std::string& func_out = body;
     #define out func_out
 
-    for (auto& [la, s] : ldd_sites) {
-        if (ldd_lwlr_forward.count(la)) {
-            /* The LWL/LWR merge consumes the temp; no writeback and no
-               discard. Do NOT let the successor-writes-rt rule below turn
-               this into a discard. */
-            std::fprintf(stderr,
-                "[load-delay] modeled pair: load 0x%08X rt=%d succ 0x%08X "
-                "LWL/LWR-forward (func 0x%08X)\n",
-                la, s.first, la + 4, func.entry_addr);
-            continue;
-        }
-        uint32_t nw = addr_to_raw.at(la + 4);
-        if (insn_writes_gpr(nw, static_cast<uint32_t>(s.first))) {
-            auto nsite = ldd_sites.find(la + 4);
-            bool chain = (nsite != ldd_sites.end() && nsite->second.first == s.first);
-            s.second = chain;   /* successor's write wins unless it is itself deferred */
-        }
-        std::fprintf(stderr,
-            "[load-delay] modeled pair: load 0x%08X rt=%d succ 0x%08X flush=%d (func 0x%08X)\n",
-            la, s.first, la + 4, s.second ? 1 : 0, func.entry_addr);
-    }
-    auto jr_snapshot_needed = [&](uint32_t term_addr, uint32_t term_raw) -> bool {
-        uint32_t rs = (term_raw >> 21) & 0x1F;
-        /* jr/jalr in a load shadow (`lw $rs,..; jr $rs`): hardware reads the
-         * PRE-load value. The psx_jrt_ latch (emitted before the deferred
-         * writeback flush) captures exactly that — force the snapshot. */
-        auto ls = ldd_sites.find(term_addr - 4);
-        if (ls != ldd_sites.end() && static_cast<uint32_t>(ls->second.first) == rs) return true;
-        auto ds = addr_to_raw.find(term_addr + 4);
-        if (ds == addr_to_raw.end()) return false;  /* orphaned ds: resolved pre-delay */
-        return insn_writes_gpr(ds->second, rs);
+    // Latch every indirect target before its slot: a pending load can cross
+    // this function's entry, so local-pair analysis cannot prove it harmless.
+    auto jr_snapshot_needed = [&](uint32_t, uint32_t) { return true; };
+    auto value_writer = [&](uint32_t raw) {
+        for (uint32_t r=1;r<32;r++) if (insn_writes_gpr(raw,r)) return r;
+        return 0u;
     };
-
     for (const auto& [ds_addr, pb] : pending_at) {
         branch_decls += fmt::format("    int psx_delay_{:08X} = 0;\n", pb.terminator_addr);
         if (is_branch_kind(pb.kind.c_str())) {
@@ -731,10 +572,6 @@ bool FullFunctionEmitter::emit_function(
             branch_decls += fmt::format("    uint32_t psx_jrt_{:08X} = 0;\n", pb.terminator_addr);
         }
     }
-    for (const auto& [la, s] : ldd_sites) {
-        branch_decls += fmt::format("    uint32_t psx_ldd_{:08X} = 0;  /* load-delay temp */\n", la);
-    }
-
     auto should_probe_pc = [](uint32_t pc) -> bool {
         switch (pc) {
         case 0xBFC148DCu:
@@ -755,32 +592,6 @@ bool FullFunctionEmitter::emit_function(
 
     const bool per_insn_cycles = bios_cycle_per_insn();
 
-    /* Flush a deferred load writeback after its dependent successor's
-     * register reads (successor = instruction at succ_addr; the load sits at
-     * succ_addr - 4). No-op when no site precedes succ_addr. */
-    auto emit_ldd_flush = [&](uint32_t succ_addr) {
-        auto it = ldd_sites.find(succ_addr - 4);
-        if (it == ldd_sites.end()) return;
-        if (ldd_lwlr_forward.count(it->first)) {
-            out += fmt::format(
-                "    /* psx_ldd_{:08X} forwarded into the LWL/LWR merge above */\n",
-                it->first);
-            return;
-        }
-        if (it->second.second) {
-            out += fmt::format("    cpu->gpr[{}] = psx_ldd_{:08X};  /* load-delay writeback */\n",
-                               it->second.first, it->first);
-        } else {
-            out += fmt::format("    (void)psx_ldd_{:08X};  /* load-delay: successor overwrites rt */\n",
-                               it->first);
-        }
-    };
-
-    // Per-instruction R3000A load-delay interlock (cycle_per_insn mode): §1 base +
-    // GPR_DEPRES + DO_LDS for one instruction, emitted BEFORE its body so §1 precedes
-    // any muldiv/GTE deadline stall (Beetle order). CPU loads (op 0x20-0x26) are
-    // SKIPPED — psx_cyc_load_* runs their full interlock inside the body. The dep/res
-    // mask is a gen-time literal. Replaces the old flat per-instruction +1.
     auto emit_insn_interlock = [&](uint32_t w, uint32_t pc) {
         if (!addr_to_raw.count(pc)) {
             out += "#if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)\n";
@@ -818,8 +629,9 @@ bool FullFunctionEmitter::emit_function(
     auto emit_icache_fetch = [&](uint32_t rom_addr) {
         if (!per_insn_cycles) return;
         const uint32_t pc = relocate_ra(rom_addr);
+        out += fmt::format("#ifdef PSX_SOURCE_BUS_BOUNDARY\n    psx_source_bus_boundary(cpu, 0x{:08X}u);\n#endif\n",pc);
         if (!psx_fetch_uncached(pc) &&
-            !(block_leaders.count(rom_addr) || (pc & 0xCu) == 0)) return;
+            !(block_leaders.count(rom_addr) || resume_points.count(rom_addr) || (pc & 0xCu) == 0)) return;
         out += fmt::format("#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_icache_fetch(cpu, 0x{:08X}u);\n#endif\n",
                            pc);
     };
@@ -973,6 +785,13 @@ bool FullFunctionEmitter::emit_function(
             }
         }
 
+        if (!block_leaders.count(addr) && resume_points.count(addr)) {
+            out += fmt::format("label_{:08X}: ;\n", addr);
+            out += "#if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)\n";
+            out += fmt::format("    psx_native_span_charge({}u);\n", native_span_cycles[addr]);
+            out += "#endif\n";
+        }
+
         // Per-instruction cycle charge (faithful-timing mode). Emitted for EVERY
         // in-function instruction (terminators, non-terminators, in-block delay
         // slots are all separate addr_to_raw entries) in execution order, so the
@@ -981,6 +800,7 @@ bool FullFunctionEmitter::emit_function(
         // delay slots are inlined elsewhere and charged at those sites.
         emit_icache_fetch(addr);
         emit_insn_interlock(raw, addr);
+        out += "    psx_load_value_begin(cpu);\n";
 
         // Decode and translate.
         PSXRecomp::DecodedInstruction d = PSXRecomp::MipsDecoder::decode(raw, addr);
@@ -1085,7 +905,7 @@ bool FullFunctionEmitter::emit_function(
             /* Deferred load writeback for a `load; branch/jump-reading-rt`
              * pair: the condition / psx_jrt_ latch above read the OLD value
              * (hardware: shadow read); flush before the delay slot runs. */
-            emit_ldd_flush(addr);
+            if (auto r=value_writer(raw)) out += fmt::format("    psx_load_value_cancel(cpu, {}u);\n",r);
             // For J/JAL/JALR/JR: normally nothing emitted at terminator
             // address — resolution happens after delay slot.  But if the
             // delay slot falls outside this function, resolve NOW (the
@@ -1133,7 +953,7 @@ bool FullFunctionEmitter::emit_function(
                                                    ds_addr, ds_raw, ds_tr.comment);
                                 emit_icache_fetch(ds_addr);
                                 emit_insn_interlock(ds_raw, ds_addr);
-                                out += fmt::format("    {}\n", ds_tr.c_code);
+                                out += emit_load_value(ds_raw,value_writer(ds_raw),ds_tr.c_code);
                             } else if (ds_raw != 0u) {
                                 /* jr never falls through, so a slot we cannot
                                  * inline is a LOST side effect (the bug class
@@ -1178,7 +998,7 @@ bool FullFunctionEmitter::emit_function(
                             // (block mode already counts it in the owning block_cycles).
                             emit_icache_fetch(ds_addr);
                             emit_insn_interlock(ds_raw, ds_addr);
-                            out += fmt::format("    {}\n", ds_tr.c_code);
+                            out += emit_load_value(ds_raw,value_writer(ds_raw),ds_tr.c_code);
                             ds_inlined = true;
                         }
                     }
@@ -1247,7 +1067,7 @@ bool FullFunctionEmitter::emit_function(
                             // (block mode already counts it in the owning block_cycles).
                             emit_icache_fetch(ds_addr);
                             emit_insn_interlock(ds_raw, ds_addr);
-                            out += fmt::format("    {}\n", ds_tr.c_code);
+                            out += emit_load_value(ds_raw,value_writer(ds_raw),ds_tr.c_code);
                         }
                     }
                     uint32_t target = relocate_j_target(addr, tr.terminator_target);
@@ -1277,7 +1097,7 @@ bool FullFunctionEmitter::emit_function(
                             // (block mode already counts it in the owning block_cycles).
                             emit_icache_fetch(ds_addr);
                             emit_insn_interlock(ds_raw, ds_addr);
-                            out += fmt::format("    {}\n", ds_tr.c_code);
+                            out += emit_load_value(ds_raw,value_writer(ds_raw),ds_tr.c_code);
                         }
                     }
                     uint32_t target = relocate_j_target(addr, tr.terminator_target);
@@ -1334,7 +1154,7 @@ bool FullFunctionEmitter::emit_function(
                             // (block mode already counts it in the owning block_cycles).
                             emit_icache_fetch(ds_addr);
                             emit_insn_interlock(ds_raw, ds_addr);
-                            out += fmt::format("    {}\n", ds_tr.c_code);
+                            out += emit_load_value(ds_raw,value_writer(ds_raw),ds_tr.c_code);
                         }
                     }
                     if (cps) {
@@ -1369,42 +1189,9 @@ bool FullFunctionEmitter::emit_function(
         }
 
 
-        // Non-terminator: emit normally — unless this load's successor reads
-        // its destination (MIPS-I load-delay pair): then defer the register
-        // writeback into psx_ldd_<addr>, flushed after the successor.
+        // Shared pipeline remains live across labels, calls and host returns.
         out += fmt::format("    /* 0x{:08X}: {:08X}  {} */\n", addr, raw, tr.comment);
-        if (ldd_sites.count(addr) && !tr.c_code_deferred.empty()) {
-            out += fmt::format("    /* load-delay pair: gpr[{}] writeback deferred past 0x{:08X} */\n",
-                               ldd_sites[addr].first, addr + 4);
-            out += fmt::format("    {}\n", tr.c_code_deferred);
-        } else if (ldd_lwlr_forward.count(addr - 4u)) {
-            /* This LWL/LWR consumes the pending load from addr-4: point its
-             * merge base at the deferred temp. strict_translator emits that
-             * base as a single psx_old_rt initializer reading the GPR, which
-             * still holds the PRE-load value here. If that emitted shape ever
-             * changes, fail the build rather than silently emit a stale merge. */
-            const int fwd_rt = ldd_sites.at(addr - 4u).first;
-            const std::string from =
-                fmt::format("uint32_t psx_old_rt      = cpu->gpr[{}];", fwd_rt);
-            const std::string to =
-                fmt::format("uint32_t psx_old_rt      = psx_ldd_{:08X};", addr - 4u);
-            std::string fwd = tr.c_code;
-            const size_t at = fwd.find(from);
-            if (at == std::string::npos) {
-                throw std::runtime_error(fmt::format(
-                    "cannot forward pending load 0x{:08X} into the LWL/LWR at "
-                    "0x{:08X} (func 0x{:08X}): merge-base initializer not found",
-                    addr - 4u, addr, func.entry_addr));
-            }
-            fwd.replace(at, from.size(), to);
-            out += fmt::format(
-                "    /* LWL/LWR merge takes the forwarded psx_ldd_{:08X} */\n",
-                addr - 4u);
-            out += fmt::format("    {}\n", fwd);
-        } else {
-            out += fmt::format("    {}\n", tr.c_code);
-        }
-        emit_ldd_flush(addr);
+        out += emit_load_value(raw,value_writer(raw),tr.c_code,false);
         out += emit_cosim_instr(addr);
 
         // Check if this instruction is a delay slot with pending resolution.
@@ -2166,6 +1953,8 @@ void FullFunctionEmitter::emit_dispatch(
     out += fmt::format("static const uint32_t {}psx_bios_native_stub_count = 3u;\n\n",
                        g_sym_prefix);
     auto emit_stub_insn = [&](uint32_t offset, uint32_t word) {
+        out += offset ? fmt::format("#ifdef PSX_SOURCE_BUS_BOUNDARY\n        psx_source_bus_boundary(cpu, addr + {}u);\n#endif\n", offset)
+                      : std::string("#ifdef PSX_SOURCE_BUS_BOUNDARY\n        psx_source_bus_boundary(cpu, addr);\n#endif\n");
         out += offset ? fmt::format("        psx_icache_fetch(cpu, addr + {}u);\n", offset)
                       : std::string("        psx_icache_fetch(cpu, addr);\n");
         out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",

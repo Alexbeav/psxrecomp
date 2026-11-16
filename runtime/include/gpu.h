@@ -16,6 +16,16 @@ extern "C" {
 #endif
 
 void     gpu_init(void);
+/* Ordinary renderer queue: service only on the device clock. */
+void gpu_queue_service(void);
+/* Non-mutating admission shared with the full machine-state loader. */
+int gpu_snapshot_validate(const uint8_t *p, uint32_t len);
+uint32_t gpu_queue_cycles_to_event(void);
+int gpu_queue_has_space(void);
+uint32_t gpu_dma_vram_upload_words(void); /* Active GP0(A0) payload remaining. */
+/* Experimental LL gate: 1 idle, 0 qualified mono-polyline wait, -1 outside
+ * scope. This does not represent source draw budget or FIFO occupancy. */
+int gpu_dma_source_ll_ready(void);
 uint32_t gpu_read_gpustat(void);   /* 0x1F801814 read */
 uint32_t gpu_read_gpuread(void);   /* 0x1F801810 read */
 void     gpu_write_gp0(uint32_t val);  /* 0x1F801810 write */
@@ -62,6 +72,8 @@ void gpu_texture_correction_stats(uint64_t *attempts, uint64_t *armed,
  * packed RGB888 lives in the CPU mirror; treating A0 rects as 1555 FBO uploads
  * both wastes bandwidth and force-flushes when UP_RECTS_MAX is hit (MotK FMV). */
 int  gpu_display_is_depth24(void);
+int  gpu_video_standard_is_pal(void);   /* GP1(08h) bit 3: 0 NTSC, 1 PAL */
+int  gpu_display_is_interlaced(void);   /* GP1(08h) bit 5, passive accessor */
 void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
                            uint8_t* r, uint8_t* g, uint8_t* b);
 /* Same decode against any 1024x512 VRAM image (e.g. a display-ring snapshot)
@@ -80,6 +92,23 @@ void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out
  * source rows staged. */
 uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo* di, uint32_t* buf,
                                    uint32_t w, uint32_t margin);
+/* [video] fmv_crop_to_picture. On: gpu_get_display_info reports a depth24
+ * frame with screen_height == height and screen_origin_y == 0 (no black
+ * canvas rows above or below the picture), and a zero staging margin still
+ * blanks columns a known upload span leaves uncovered. Off (the default
+ * here): the PAL/NTSC active-video canvas. Presentation only, not guest
+ * state. */
+void gpu_set_depth24_crop_to_picture(int on);
+/* [runtime] gpu_draw_timing (player setting, PSX_GPU_DRAW_TIMING; default
+ * off). On: the ordinary renderer charges each GP0 command its drawing time
+ * and drops the GPU DMA request while the FIFO holds a whole command, so a
+ * linked-list transfer lasts as long as the list takes to draw. Team Buddies
+ * needs it to finish loading (PS1G-160). Off: commands and transfers finish
+ * at once, as before. Changes guest timing, so recorded replays made with it
+ * off may not play the same with it on. */
+void gpu_set_draw_timing(int on);
+int  gpu_draw_timing(void);
+int  gpu_depth24_crop_to_picture(void);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
  * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
  * else the covered RGB width. Present black-fills [limit, crtc_w) without
@@ -769,6 +798,15 @@ void gpu_ws_set_nw_hud_tag_rects(int on);
 int      gpu_ws_census_dump(uint32_t f0, uint32_t f1, const char *path);
 void     gpu_ws_census_set(int on);
 uint64_t gpu_ws_census_seq(void);
+
+/* Optional source-bus queries; inactive default ownership is unchanged. */
+/* Hash-only normalization: remove presentation helpers, never guest latches.
+ * The resulting bytes are not a restorable snapshot. */
+void gpu_snapshot_mask_present_helpers(uint8_t *p, uint32_t len);
+void gpu_queue_service(void);
+uint32_t gpu_queue_cycles_to_event(void);
+int gpu_dma_source_ll_ready(void);
+uint32_t gpu_dma_vram_upload_words(void);
 
 #ifdef __cplusplus
 }

@@ -24,7 +24,7 @@ function Quote-ProcessArgument([string]$Value) {
 
 # Default GameRoot is the ISOLATED game worktree (_wt-tomba2-interp-perf,
 # branch interp/game-isolated, forked from Tomba2Recomp's validated master),
-# NOT the shared F:\Projects\psxrecomp\Tomba2Recomp checkout — that checkout's
+# NOT the shared F:\Projects\psxrecomp\Tomba2Recomp checkout - that checkout's
 # HEAD belongs to the AOT overlay-spike investigation (branch
 # feat/aot-overlay-spike, uncommitted AOT files) and its game.toml has already
 # drifted from master (adds overlay_capture_history). Reading game.toml from
@@ -40,7 +40,7 @@ $GameRoot = (Resolve-Path $GameRoot).Path
 # build-tomba2-interp-iso-rel is configured from the ISOLATED game worktree
 # (_wt-tomba2-interp-perf, branch interp/game-isolated) with
 # -DPSXRECOMP_GAME_EXE_NAME_OVERRIDE=Tomba2InterpPerf, so the build emits
-# Tomba2InterpPerf.exe natively — there is no more Tomba2Recomp.exe in this
+# Tomba2InterpPerf.exe natively - there is no more Tomba2Recomp.exe in this
 # build dir to alias. The old build-tomba2-perf-rel dir (shared checkout,
 # CMAKE_HOME_DIRECTORY=Tomba2Recomp) built plain Tomba2Recomp.exe and this
 # script used to Copy-Item a uniquely-named alias next to it so process-name
@@ -66,7 +66,7 @@ foreach ($required in @($isolatedExe, $gameConfig, $bios, $recompiler, $compileT
 # Tomba2Recomp build is already running. The two now build from separate
 # worktrees/exe names, so they can no longer collide on-disk, but they can
 # still collide at runtime (same debug port range, same memcard/BIOS files
-# read concurrently, same taskkill-by-name cleanup a human runs by hand) —
+# read concurrently, same taskkill-by-name cleanup a human runs by hand) -
 # so the guard stays broad on purpose rather than narrowing to just our own
 # process name.
 foreach ($conflictingName in @('Tomba2InterpPerf', 'Tomba2Recomp')) {
@@ -87,7 +87,7 @@ foreach ($dir in @($stateDir, (Split-Path $capturePath -Parent), $runDir, $logDi
 
 # Windows Python EXPLICITLY (never unqualified 'python'): the game process
 # inherits whatever PATH the launching shell had, and an MSYS python first on
-# PATH cannot open the Windows-style script path — every autocompile run then
+# PATH cannot open the Windows-style script path - every autocompile run then
 # fails with "can't open file" and the reshard silently never happens.
 $windowsPython = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
 if (-not (Test-Path -LiteralPath $windowsPython -PathType Leaf)) {

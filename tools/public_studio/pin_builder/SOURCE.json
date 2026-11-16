@@ -1,0 +1,222 @@
+{
+  "source_repo": "https://github.com/Alexbeav/PSX-References",
+  "commit": "b04011e219d014fe57451bc33b4f2c869bf53890",
+  "subtree": "corpus/tools",
+  "purpose": "retain established PIN.json/UI.json and v1 module build route",
+  "files": {
+    "workbench_output.py": {
+      "sha256": "8ee20218daeabe6c04bf4fcfa9798f111ec3bf601e00b24357a58f306c63052e",
+      "bytes": 67645
+    },
+    "mac_build.py": {
+      "sha256": "01b148ff04b1bd989c31d174f078e2817a4828fedce6a694d406af719d96afb2",
+      "bytes": 8549
+    },
+    "pin_build.py": {
+      "sha256": "284e595d2a1e4029d7253970a14efed6e4556e0c7f3c80ea9aae84d32dcbf41d",
+      "bytes": 158891
+    },
+    "workbench_package.py": {
+      "sha256": "5755f6ca53ceb85e7fa61fd6d97cfab805da2d4b48b16f8145ba8812fe5267bb",
+      "bytes": 47662
+    },
+    "zip_step.py": {
+      "sha256": "51607bef8da12fb18cb4ee62e381b39a5aeb5ae7b819b931b4338eefd519300a",
+      "bytes": 3452
+    },
+    "lean_boot_gate.py": {
+      "sha256": "9fe38be149ae18fc1225b5aab4601811daa40513a56cac6cefdfa2bcf7412dc8",
+      "bytes": 48926
+    },
+    "overlay_only_gate.py": {
+      "sha256": "8f1111419d5c1d3e4f7d5eb43919f8dc7af48b769cee26268f36b610fed7e6ab",
+      "bytes": 16151
+    },
+    "start_memory.py": {
+      "sha256": "c739cc3c9fcc839e19596fe1a0d0a3d47e324639999e400aaeea95cf3b761004",
+      "bytes": 11187
+    },
+    "chd_source.py": {
+      "sha256": "2b7385e782e206d42e7eeef2fef8d8954d3a98deed079bdaa71eaad82e1e3311",
+      "bytes": 3482
+    },
+    "build_jobs.py": {
+      "sha256": "51f3fcd85633f082d43602d3f4a5d0da90b86786d8597200a04c2565a955ce2e",
+      "bytes": 1113
+    },
+    "workbench_progress.py": {
+      "sha256": "e8c9149e7b56c9e26c1008b263db148666eab4f1de6fd886b0e5ac9e846be933",
+      "bytes": 9526
+    },
+    "ui_selection.py": {
+      "sha256": "65b314e0f2322e8d7ae1d25e3703521f71a717744be08d258c66377e7fcdd885",
+      "bytes": 19046
+    },
+    "studio_settings.py": {
+      "sha256": "b646140b9059bb2c842481694407a7cb660fdb8972331a4db57f2944c0a601b6",
+      "bytes": 12117
+    },
+    "chd_intake.py": {
+      "sha256": "1ec4160d627d7d99521f2ccf7c38ce62b22b145a87be03f20461dc0f3320888e",
+      "bytes": 9405
+    },
+    "baseline_workflow.py": {
+      "sha256": "9cfdc58ecd10c5bd89cfd2ed63506b91cfb076bd8f431ad476678d05f13e9683",
+      "bytes": 62267
+    },
+    "m3u_intake.py": {
+      "sha256": "4ff6d26633e6dd86a7a43b4943df0b041e3805dbac69b8d27c521395ce4877a1",
+      "bytes": 17198
+    },
+    "local_input_binding.py": {
+      "sha256": "c36e265e7147bba3a0cabb39a76f14debd2f12ad59e709fbe96b6661f1384b9c",
+      "bytes": 4609
+    },
+    "workbench_compile.py": {
+      "sha256": "b809b968e42948a6aa0a1cb6a68b40aabb365fd6be3dfb3d7aa127c1ef187a76",
+      "bytes": 11190
+    },
+    "workbench.py": {
+      "sha256": "31d5aebef223d4613190aaf47d1aba5ef771c24f7f7eb6dbb7b51b725035c7ed",
+      "bytes": 15376
+    },
+    "workbench_runs.py": {
+      "sha256": "20399773aa4e4d26a3a9f4037b0ad7b4d524fe8a21306974bab7e32448b0ce4b",
+      "bytes": 15700
+    },
+    "retention_policy.py": {
+      "sha256": "80dd4524df4b773e477a1cd15ef37fbf8e2e9ca58eac1ae8317acd726fe26539",
+      "bytes": 8362
+    },
+    "intervention_ledger.py": {
+      "sha256": "86cc8f3d1df56ce8301b071e3c9243e8a98711e046f1abb750b7717c1b33f092",
+      "bytes": 5498
+    },
+    "component_freeze.py": {
+      "sha256": "76786abff631b02fecb2e88cedf2e15283867fe7b2191d2fcc81aa8a3b73bbb4",
+      "bytes": 6124
+    },
+    "autonomy_run.py": {
+      "sha256": "4c653450abc12a868cccbd744c0d7606e55762fd34c43eac25a997e9606b01d3",
+      "bytes": 22460
+    },
+    "trace_seed_effect.py": {
+      "sha256": "1a88d42f973529f9a3a72fd1c01b87d1dc234e2c37f9d1aab649b02491f8195e",
+      "bytes": 2662
+    },
+    "session_monitor.py": {
+      "sha256": "2d61bf014f4a2a8127263568f5ddbff5aa2be43f7bf5e2db6e104678553db881",
+      "bytes": 5079
+    },
+    "route_provenance.py": {
+      "sha256": "b4bef724795dd3a1ba1fda59403d713b4fda9692d6547f406de0e343683f5c1e",
+      "bytes": 4777
+    },
+    "oracle_resume.py": {
+      "sha256": "6fcf8c33358c3274d66ad5ad1bc4190d432d328fed24a9f747888e41d37c45d1",
+      "bytes": 13617
+    },
+    "oracle_runner.py": {
+      "sha256": "5d486a5b656c9cd6ec88af0009aa6b47c0b9695a0bb6362e8ffb7486383d133b",
+      "bytes": 14886
+    },
+    "parse_redux_events.py": {
+      "sha256": "37f7060dc1b411682a0d1499ce6a19b9786813b5cca909de14978c7621023c46",
+      "bytes": 3262
+    },
+    "experiment_contract.py": {
+      "sha256": "b41cbdd6f7cf5f3236cfd943450f0c4026ec5cd2f3bffa60f7625ded3728e483",
+      "bytes": 9426
+    },
+    "evidence_namespace.py": {
+      "sha256": "711d21253ecfda6ecbcc9e4905696e048ebdb8cae7e18f489e4b75f2d49b735e",
+      "bytes": 5677
+    },
+    "oracle_backend_adapter.py": {
+      "sha256": "c3514a5c4f6622540e3afc1c2ad56280746d0a58f34d9b4110e63f1437911a79",
+      "bytes": 13717
+    },
+    "generated_coverage.py": {
+      "sha256": "f5a5ee3ecf0c03fb92549ea88180c6f45d8b1d8af06f4e9e453a3ffc9bbd1865",
+      "bytes": 5276
+    },
+    "deterministic_recorder.py": {
+      "sha256": "bb3518c09b7be1e7c06b944c2a29c5836070e6512ca50b8af7e73a196341bcb5",
+      "bytes": 3623
+    },
+    "candidate_entry_census.py": {
+      "sha256": "05edec8070b22d9266ed623382d71779aa70c47731a3271d2737a1ed73ac7073",
+      "bytes": 15530
+    },
+    "linux_build.py": {
+      "sha256": "1994d71bd66d85de29cbe64547acdb9dbad3da89e1edd3a769ba87e2afc2803d",
+      "bytes": 14076
+    },
+    "workbench_set.py": {
+      "sha256": "1332e4ea4b9d50d06ae44a79a31fcf90b02a7df0405b8d8063a149530e212486",
+      "bytes": 42984
+    },
+    "workbench_set_package.py": {
+      "sha256": "1008a0501e19cd3b4752e46ba4ac68514a01d3f589ad46542ca2a91649446a61",
+      "bytes": 47819
+    },
+    "product_residue.py": {
+      "sha256": "aa11762fdcf4786cc355fb70d5e87a65ac12891b68375f437f018731ed7aaca2",
+      "bytes": 5995
+    },
+    "overlay_compile_check.py": {
+      "sha256": "494a9e5925eac9fe36e0e6c348dd98657c3aa2b59ab2f8ac4a525208961e3911",
+      "bytes": 18440
+    }
+  },
+  "adaptations": [
+    "guarded read-only owned-file cleanup from d79c871a",
+    "public edition automatically scaffolds without review warnings/gates",
+    "chdman is optional; actual CHD fallback reports missing decoder if needed",
+    "all source snapshots and v1 contract/refusal checks retained"
+  ],
+  "result_files": {
+    "autonomy_run.py": "4c653450abc12a868cccbd744c0d7606e55762fd34c43eac25a997e9606b01d3",
+    "baseline_workflow.py": "9cfdc58ecd10c5bd89cfd2ed63506b91cfb076bd8f431ad476678d05f13e9683",
+    "build_jobs.py": "51f3fcd85633f082d43602d3f4a5d0da90b86786d8597200a04c2565a955ce2e",
+    "candidate_entry_census.py": "05edec8070b22d9266ed623382d71779aa70c47731a3271d2737a1ed73ac7073",
+    "chd_intake.py": "1ec4160d627d7d99521f2ccf7c38ce62b22b145a87be03f20461dc0f3320888e",
+    "chd_source.py": "2b7385e782e206d42e7eeef2fef8d8954d3a98deed079bdaa71eaad82e1e3311",
+    "component_freeze.py": "76786abff631b02fecb2e88cedf2e15283867fe7b2191d2fcc81aa8a3b73bbb4",
+    "deterministic_recorder.py": "bb3518c09b7be1e7c06b944c2a29c5836070e6512ca50b8af7e73a196341bcb5",
+    "evidence_namespace.py": "711d21253ecfda6ecbcc9e4905696e048ebdb8cae7e18f489e4b75f2d49b735e",
+    "experiment_contract.py": "b41cbdd6f7cf5f3236cfd943450f0c4026ec5cd2f3bffa60f7625ded3728e483",
+    "generated_coverage.py": "f5a5ee3ecf0c03fb92549ea88180c6f45d8b1d8af06f4e9e453a3ffc9bbd1865",
+    "intervention_ledger.py": "86cc8f3d1df56ce8301b071e3c9243e8a98711e046f1abb750b7717c1b33f092",
+    "lean_boot_gate.py": "9fe38be149ae18fc1225b5aab4601811daa40513a56cac6cefdfa2bcf7412dc8",
+    "linux_build.py": "1994d71bd66d85de29cbe64547acdb9dbad3da89e1edd3a769ba87e2afc2803d",
+    "local_input_binding.py": "c36e265e7147bba3a0cabb39a76f14debd2f12ad59e709fbe96b6661f1384b9c",
+    "m3u_intake.py": "4ff6d26633e6dd86a7a43b4943df0b041e3805dbac69b8d27c521395ce4877a1",
+    "mac_build.py": "01b148ff04b1bd989c31d174f078e2817a4828fedce6a694d406af719d96afb2",
+    "oracle_backend_adapter.py": "c3514a5c4f6622540e3afc1c2ad56280746d0a58f34d9b4110e63f1437911a79",
+    "oracle_resume.py": "6fcf8c33358c3274d66ad5ad1bc4190d432d328fed24a9f747888e41d37c45d1",
+    "oracle_runner.py": "5d486a5b656c9cd6ec88af0009aa6b47c0b9695a0bb6362e8ffb7486383d133b",
+    "overlay_compile_check.py": "494a9e5925eac9fe36e0e6c348dd98657c3aa2b59ab2f8ac4a525208961e3911",
+    "overlay_only_gate.py": "8f1111419d5c1d3e4f7d5eb43919f8dc7af48b769cee26268f36b610fed7e6ab",
+    "parse_redux_events.py": "37f7060dc1b411682a0d1499ce6a19b9786813b5cca909de14978c7621023c46",
+    "pin_build.py": "9b943bf44bb8999498aa46050c5b1e8a7a5070b25d49591a9b4b0be22f5053a0",
+    "product_residue.py": "aa11762fdcf4786cc355fb70d5e87a65ac12891b68375f437f018731ed7aaca2",
+    "retention_policy.py": "80dd4524df4b773e477a1cd15ef37fbf8e2e9ca58eac1ae8317acd726fe26539",
+    "route_provenance.py": "b4bef724795dd3a1ba1fda59403d713b4fda9692d6547f406de0e343683f5c1e",
+    "session_monitor.py": "2d61bf014f4a2a8127263568f5ddbff5aa2be43f7bf5e2db6e104678553db881",
+    "start_memory.py": "c739cc3c9fcc839e19596fe1a0d0a3d47e324639999e400aaeea95cf3b761004",
+    "studio_settings.py": "b646140b9059bb2c842481694407a7cb660fdb8972331a4db57f2944c0a601b6",
+    "trace_seed_effect.py": "1a88d42f973529f9a3a72fd1c01b87d1dc234e2c37f9d1aab649b02491f8195e",
+    "ui_selection.py": "65b314e0f2322e8d7ae1d25e3703521f71a717744be08d258c66377e7fcdd885",
+    "workbench.py": "31d5aebef223d4613190aaf47d1aba5ef771c24f7f7eb6dbb7b51b725035c7ed",
+    "workbench_compile.py": "b809b968e42948a6aa0a1cb6a68b40aabb365fd6be3dfb3d7aa127c1ef187a76",
+    "workbench_output.py": "8ee20218daeabe6c04bf4fcfa9798f111ec3bf601e00b24357a58f306c63052e",
+    "workbench_package.py": "5755f6ca53ceb85e7fa61fd6d97cfab805da2d4b48b16f8145ba8812fe5267bb",
+    "workbench_progress.py": "e8c9149e7b56c9e26c1008b263db148666eab4f1de6fd886b0e5ac9e846be933",
+    "workbench_runs.py": "595460407fd3dc32050c6d2f1e422bdd870ea195c4990c04bca729aa05386b78",
+    "workbench_set.py": "1332e4ea4b9d50d06ae44a79a31fcf90b02a7df0405b8d8063a149530e212486",
+    "workbench_set_package.py": "bef3156dbae143ab81f14f78eb8ace1d299422fcfdba92141b9c2078a71a045b",
+    "zip_step.py": "51607bef8da12fb18cb4ee62e381b39a5aeb5ae7b819b931b4338eefd519300a",
+    "__init__.py": "e34d615b8577693d98e3649e318f96b1409bf26adc016ed6a986ea607dcfbfe2"
+  }
+}

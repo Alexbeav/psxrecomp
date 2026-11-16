@@ -213,6 +213,13 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-11-07 — local controller mode (PS1B-639).** Ordinary input no longer
+  reasserts a startup mode. Local pads start as digital-mode DualShock devices;
+  mode commands and a manual Analog button own subsequent changes. Mapping
+  follows actual mode. Explicit title locks, synchronized input and peripherals
+  retain their separate contracts. A protocol regression reproduces the old
+  mode overwrite and passes on the candidate; full host validation is recorded
+  on the issue before preview delivery.
 - **2026-11-05 — raw images and boundary follow-up.** The follow-up to
   v0.3.6-alpha accounts for all 14 raw BINs and 167 overlay symbol
   groups have explicit dispositions. Across 174 loaded images, seven false

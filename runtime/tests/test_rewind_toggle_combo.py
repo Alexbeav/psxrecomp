@@ -37,7 +37,7 @@ assert "savestate_menu_toggle(key)" in MAIN
 assert "savestate_menu_toggle(0)" in MAIN
 assert 'std::getenv("PSX_FAST_FORWARD_SPEED")' in MAIN
 assert "bool manual_turbo_active = false;" in MAIN
-assert "Fast forward: %dx" in MAIN
+assert "Fast forward: %.1fx" in MAIN
 assert "g_frame_period_ms / (double)mult" in MAIN
 
 # Fast-forward has a controller host shortcut alongside the keyboard Turbo key:
@@ -47,7 +47,8 @@ assert "g_frame_period_ms / (double)mult" in MAIN
 assert "static int           g_hotkey_pad_fast_forward = 1528;" in MAIN
 assert "PSX_HOTKEY_PAD_SELECT_L1" in MAIN
 assert "PSX_ASSIST_BIND_FAST_FORWARD" in MAIN
-assert "hotkey_shortcut_down(PSX_ASSIST_BIND_FAST_FORWARD, g_hotkey_pad_fast_forward)) {" in MAIN
+assert "(kb_turbo || hotkey_shortcut_down(PSX_ASSIST_BIND_FAST_FORWARD," in MAIN
+assert "manual_turbo_requested = g_manual_turbo_latched || (!g_fast_forward_toggle_mode &&" in MAIN
 assert MAIN.count("ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD]") == \
     MAIN.count("ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU]")
 assert '"Fast-forward",' in MAIN
@@ -64,7 +65,7 @@ assert "static int g_manual_turbo_latched = 0;" in MAIN
 assert "static void fast_forward_toggle_flip(void)" in MAIN
 assert "fast_forward_toggle_poll_buttons();" in MAIN
 assert "host_keymap_match_event(HOST_KEYMAP_TURBO_TOGGLE," in MAIN
-assert "if (kb_turbo || g_manual_turbo_latched ||" in MAIN
+assert "if (manual_turbo_requested) {" in MAIN
 assert MAIN.count("ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE]") == \
     MAIN.count("ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD]")
 assert '"Fast-forward toggle",' in MAIN

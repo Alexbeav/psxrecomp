@@ -537,6 +537,24 @@ class NoSplitGuardTests(unittest.TestCase):
 
 # (e) ----------------------------------------------------------------------
 class CacheKeyTests(unittest.TestCase):
+    def test_emitter_header_precedes_staged_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staged = root / 'staged'
+            exact = root / 'build' / 'runtime' / 'include'
+            staged.mkdir()
+            exact.mkdir(parents=True)
+            (staged / 'overlay_codegen_hash.h').write_text(
+                '#define PSX_OVERLAY_CODEGEN_HASH 0xaabbccddu\n', encoding='utf-8')
+            (exact / 'overlay_codegen_hash.h').write_text(
+                '#define PSX_OVERLAY_CODEGEN_HASH 0x11223344u\n', encoding='utf-8')
+            # A development emitter owns its identity; a packaged emitter
+            # without an adjacent build header uses the staged SDK header.
+            self.assertEqual(CO.codegen_hash(str(staged), str(root / 'build' / 'r')),
+                             0x11223344)
+            self.assertEqual(CO.codegen_hash(str(staged), str(root / 'packaged' / 'r')),
+                             0xaabbccdd)
+
     def _cmake_list(self):
         self.assertIsNotNone(CMAKE, 'cmake not found: pass --cmake or put '
                                     'cmake on PATH')
@@ -586,8 +604,10 @@ class CacheKeyTests(unittest.TestCase):
             saved = CO.overlay_config_hash
             CO.overlay_config_hash = lambda recompiler, toml: 0x1234ABCD
             try:
-                tag_a = CO.cache_tag(str(tmp / 'a'), 'r', 'g', 0)
-                tag_b = CO.cache_tag(str(tmp / 'b'), 'r', 'g', 0)
+                # Isolate this staged-package test from the live build's
+                # exact-emitter header, which correctly takes precedence.
+                tag_a = CO.cache_tag(str(tmp / 'a'), str(tmp / 'isolated-emitter' / 'r'), 'g', 0)
+                tag_b = CO.cache_tag(str(tmp / 'b'), str(tmp / 'isolated-emitter' / 'r'), 'g', 0)
             finally:
                 CO.overlay_config_hash = saved
             self.assertNotEqual(tag_a, tag_b)

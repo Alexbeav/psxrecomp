@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard PSX display enhancements as trusted-mod-only features."""
+"""Guard trusted mod/session ownership alongside restored player display controls."""
 
 import re
 from pathlib import Path
@@ -14,7 +14,6 @@ HEADER = (ROOT / "runtime" / "include" / "mod_plugins.h").read_text(
 for declaration in (
     "constexpr bool ws_offered = false;",
     "constexpr bool ws_ultrawide_offered = false;",
-    "constexpr bool frame_interpolation_offered = false;",
     "constexpr bool skip_fmv_offered = false;",
 ):
     assert declaration in MAIN, f"PSX launcher capability must default off: {declaration}"
@@ -29,7 +28,7 @@ for legacy_route in (
 
 for hidden_capability in (
     "gi->widescreen_supported = 0;",
-    "gi->aspect_mask = 0;",
+    "gi->aspect_mask = 7;",
 ):
     assert hidden_capability in MAIN
 
@@ -74,9 +73,9 @@ assert re.findall(r"^static PSXModSessionBaseline g_mod_owned_baseline;$",
 assert MAIN.index("static PSXModSessionBaseline g_mod_owned_baseline;") < helper_start
 assert MAIN.count("PSXModSessionBaseline") == 1, \
     "no other session baseline may exist (every call would be a first call)"
-assert MAIN.count("g_mod_owned_baseline") == 5, \
-    "only reset, the VSync preference reader and launcher VSync Apply may use the baseline"
-assert MAIN.count("g_mod_owned_baseline.values.video_vsync = g_video_vsync;") == 1
+assert MAIN.count("g_mod_owned_baseline") == 11, \
+    "only reset, the VSync/interpolation launcher preference readers, Apply and the live video apply may use the baseline"
+assert MAIN.count("g_mod_owned_baseline.values.video_vsync = g_video_vsync;") == 2  # Apply and psx_video_apply_live
 assert "ls.vsync = psx_vsync_to_launcher(launcher_vsync_preference());" in MAIN
 
 # The call: the persistent baseline, and the native-pacing flag as it stands
@@ -102,11 +101,15 @@ COPIES = (
     ("frame_period_ms", "g_frame_period_ms"),
 )
 before = c_statements(helper[len(HELPER_SIG):call_at])
-expected = ["psx_local_mouse_clear();", "PSXModSessionScalars live;"] + [
+expected = ["psx_mod_internal_resolution_reset();",
+            "memcard_set_extension_codec(nullptr, nullptr);",
+            "debug_server_request(0);",  # upstream 27babe2fb: the session drops a mod listener request
+            "psx_local_mouse_clear();", "psx_keybinds_clear_session_players();",
+            "PSXModSessionScalars live;"] + [
     f"live.{f} = {g};" for f, g in COPIES
 ]
 assert sorted(before) == sorted(expected), \
-    f"only mouse reset and scalar copy-in may precede the baseline call, got {before}"
+    f"only session resets and scalar copy-in may precede the baseline call, got {before}"
 
 # After the call: the copy-out, each once, then the native-pacing flag cleared.
 after = helper[call_end:]
@@ -172,7 +175,7 @@ assert "if (!s_bezel_tex || ww <= 0 || wh <= 0) return;" in GL
 # Session start: one sequence for every session, after its commit or netplay
 # clear. It clears the controller, load and disc-speed choices, resets
 # mod-owned presentation state, activates, then applies what activation chose.
-session_start = MAIN.index("auto start_mod_session = [&](bool netplay) {")
+session_start = MAIN.index("auto start_mod_session = [&](bool netplay) -> bool {")
 session = MAIN[session_start:MAIN.index("\n    };\n", session_start)]
 order = [session.index(step) for step in (
     "g_mod_controller_mode_override.fill(-1);",
@@ -199,7 +202,8 @@ assert MAIN.count("reset_mod_owned_presentation();") == 1, \
 # disc the plan selects, all above session_reboot.
 reboot = MAIN.index("\nsession_reboot:\n")
 first_commit = MAIN.index("mod_runtime_commit(resolved_disc, &mod_error)")
-first_start = MAIN.index("start_mod_session(net_cfg.enabled);")
+START_SESSION = "if (!start_mod_session(net_cfg.enabled)) {"
+first_start = MAIN.index(START_SESSION)
 first_disc = MAIN.index("std::string disc_path_str = session_disc_path(resolved_disc);")
 assert first_commit < session_start < first_start < first_disc < reboot, \
     "first boot must commit, start the session, then mount the plan's disc"
@@ -212,25 +216,33 @@ rematch_start = MAIN.index('"psxrecomp: cannot apply netplay mods "',
 rematch = MAIN[rematch_start:]
 rematch = rematch[:rematch.index("goto session_reboot;")]
 commit = rematch.index("mod_runtime_commit(resolved_disc,")
-rematch_session = rematch.index("start_mod_session(net_cfg.enabled);")
+rematch_session = rematch.index(START_SESSION)
 rematch_disc = rematch.index("disc_path_str = session_disc_path(resolved_disc);")
 assert commit < rematch_session < rematch_disc, \
     "rematch must commit, start the session, then mount the plan's disc"
-assert MAIN.count("start_mod_session(net_cfg.enabled);") == 2, \
+assert MAIN.count(START_SESSION) == 2, \
     "exactly the first boot and the rematch start a session"
+for start_at in (first_start, rematch_start + rematch_session):
+    failure = MAIN[start_at:MAIN.index("}", start_at) + 1]
+    assert re.search(r"\{\s*SDL_Quit\(\);\s*return 1;\s*\}", failure), \
+        "failed activation must terminate before mounting a session disc"
 
-# Rematch 4:3 re-clamp: the launcher round-trips the previous match's aspect
-# (16:9/21:9 from the netplay local viewport) through ls.aspect_index. While
-# widescreen is mod-owned the Settings aspect is 4:3, so the rematch path
-# re-applies that clamp after the launcher, before the session start, where
-# a plugin's activation or the netplay local viewport can still replace it.
-clamp = "if (!ws_offered) {\n                g_video_aspect_num = 4;\n                g_video_aspect_den = 3;\n            }"
-assert rematch.count(clamp) == 1, "rematch must re-clamp the aspect to 4:3"
-clamp_at = rematch.index(clamp)
-assert commit < clamp_at < rematch_session, \
-    "4:3 re-clamp must follow the commit and precede the session start"
+# Display aspect is now exposed in Settings. A saved or launcher-selected
+# preference must survive both startup and rematch before trusted activation.
+# The session reset/activation ordering above remains required.
+assert "clamping display aspect" not in MAIN
+assert "if (!ws_offered) {" not in rematch
 assert MAIN.rfind("case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;",
                   0, rematch_start) > MAIN.index("soft_return_lobby:"), \
-    "the launcher's aspect must be applied before the rematch re-clamp"
+    "the launcher's selected aspect must be applied before rematch activation"
 
-print("mod-owned PSX display controls guard passed")
+# Restored interpolation must survive launcher-less startup and subsequent
+# sessions; plugin reset/activation and environment ordering above remain.
+assert "ignoring the legacy Settings value" not in MAIN[MAIN.index("/* Load acceleration is mod-owned"):MAIN.index("/* Latency knobs:")]
+assert "psx_mod_session_baseline_set_frame_interpolation(&g_mod_owned_baseline," in MAIN[MAIN.index("soft_return_lobby:"):]
+assert "g_mod_owned_baseline.values.frame_interpolation : g_frame_interpolation" in MAIN
+assert "g_mod_owned_baseline.values.frame_interpolation_fps : g_frame_interpolation_fps" in MAIN
+assert MAIN.index("if (us.has_frame_interpolation)") < MAIN.index("auto apply_player_presentation_environment") < first_start
+print("mod-owned PSX display controls and restored preferences guard passed")
+
+assert session.index("reset_mod_owned_presentation();") < session.index("apply_player_presentation_environment();") < session.index("mod_runtime_activate_plugins();")

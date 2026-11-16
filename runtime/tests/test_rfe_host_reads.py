@@ -35,7 +35,8 @@ static int allowed, shadow, replay, mismatch;
 static const uint32_t pcb=0xE000, tcb=0xE100, target=0x80020000;
 static jmp_buf g_scheduler_jmpbuf;
 static struct { uint32_t target_tcb,resume_pc; int reason; } g_sched_escape;
-enum { PSX_RUN_RESUME_CURRENT=3 };
+enum { PSX_RUN_RESUME_CURRENT=3, PSX_PUB_RFE=1 };
+static void psx_publish_note(int site,uint32_t pc,uint32_t origin) { (void)site;(void)pc;(void)origin; }
 static uint32_t host_word(uint32_t address) {
     if (address==0x108u) return pcb;
     if (address==pcb) return tcb;

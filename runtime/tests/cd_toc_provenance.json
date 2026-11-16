@@ -1,0 +1,21 @@
+{
+  "schema": "t172-cd-toc-provenance-v1",
+  "base": "b15429704b7821ec314c1fc9a6eb1cb3287c0735",
+  "tested_commit": "aa8291a9df234c56a9f55fce28c1e2198066681c",
+  "owned_function": "static int source_toc_seek_cycles(void)",
+  "authority": "Sanitized root declaration/caller/domain contract; independently authored opaque probes and model. No unowned implementation, root tool/model or compiler-log reads.",
+  "primary_reference": "Pinned PSX-SPX a253f078553f83b4e540f087abf0c28d954b6293; cd-toc-preflight-v1.json binds references.",
+  "receipt": "..\\evidence\\validation-receipt-cd-toc-v1.json",
+  "receipt_sha256": "0f9e535e72b936a0ec4528ec99575a3399a91fe30e093b26c07a395873f77a71",
+  "totals": {
+    "cases": 9432,
+    "rows": 9432,
+    "events": 36564
+  },
+  "negative_controls": 54,
+  "full_translation_unit_checks": 7,
+  "scope": "Only source_toc_seek_cycles; actual MSF and accepted seek wrapper/header preserved. Synthetic jitter only, all20state fields unchanged. Fullsigned32head and uint64clock sentinels here do not broaden head-update domain. Bounded MSF arithmetic; no actual PRNG/command lifecycle/media/hardware/fullrestore/legal claim.",
+  "identity_note": "Root confirmed head_sha256 labels owned implicit fragment, same as selected_header_sha256; preservation checks dependencies_sha256, seek_header_sha256, wrapper_sha256 and sha_source_sha256.",
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "publication": "Pending independent T77 review/publication; no worker push."
+}

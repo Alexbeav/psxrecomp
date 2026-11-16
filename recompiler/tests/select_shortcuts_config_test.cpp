@@ -1,4 +1,4 @@
-/* select_shortcuts_config_test — game.toml [controller] select_shortcuts.
+/* select_shortcuts_config_test - game.toml [controller] select_shortcuts.
  *
  *   1. absent means the host keeps its Select + button shortcuts;
  *   2. false turns them off, true spells the default;

@@ -16,6 +16,7 @@
 #define PSXRECOMP_DIRTY_RAM_INTERP_H
 
 #include <stdint.h>
+
 #include <string.h>
 #include "psx_memory.h"
 #include "cpu_state.h"
@@ -23,6 +24,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Use the caller's fetched instruction: instruction-cache bytes may differ
+ * from RAM, and an explicit masked-reject site matches the complete word. */
+int dirty_ram_bltz_taken(uint32_t pc, uint32_t instruction, uint32_t value);
+
+/* Instruction continuation captured only while the source boundary callback runs. */
+#define DIRTY_RAM_CHECKPOINT_BYTES 36u
+void dirty_ram_checkpoint_enter(uint32_t pc, int slot, uint32_t target, int taken);
+void dirty_ram_checkpoint_leave(void);
+uint32_t dirty_ram_checkpoint_pc(uint32_t fallback);
+void dirty_ram_checkpoint_write(uint8_t *out);
+int dirty_ram_checkpoint_validate(const uint8_t *in, uint32_t len);
+int dirty_ram_checkpoint_read(const uint8_t *in, uint32_t len);
+int dirty_ram_checkpoint_resume_pending(void);
+void dirty_ram_checkpoint_resume(CPUState *cpu);
 
 /* Returns 1 if `addr` lies in a dirty kernel-RAM page and the interpreter
  * ran a basic block at that PC.  Returns 0 if `addr` is clean (caller must
@@ -70,10 +86,11 @@ void dirty_ram_span_last_failure(DirtyRamSpanFailure *out);
 void dirty_ram_span_get(uint32_t *lo, uint32_t *hi);
 void dirty_ram_span_set(uint32_t lo, uint32_t hi);
 
-/* Retire a deferred R3000A load-delay writeback (see dirty_ram_interp.c). The
- * interpreter defers a load's destination-register write past the delay-slot
- * instruction, as hardware does; call this anywhere control leaves the
- * interpreter or an exception is delivered, so no register write is dropped. */
+/* End an R3000A load-delay window (see dirty_ram_interp.c). The interpreter
+ * writes a load's (or MFC2/CFC2's) destination at once and shows the old value
+ * only to the instruction in the delay slot; call this anywhere control leaves
+ * the interpreter or an exception is delivered, so the window does not outlive
+ * the instruction stream it belongs to. */
 void dirty_ram_ld_delay_flush(CPUState* cpu);
 
 /* Drop a deferred load-delay writeback WITHOUT applying it. Required on
@@ -90,9 +107,16 @@ void dirty_ram_ld_delay_discard(void);
 typedef struct DirtyRamLoadDelay {
     uint32_t rt, val, age;
     int      armed;
+    uint32_t old, next, seq;   /* hidden value, delay-slot PC, arming step */
 } DirtyRamLoadDelay;
 void dirty_ram_ld_delay_save(DirtyRamLoadDelay *out);
 void dirty_ram_ld_delay_restore(const DirtyRamLoadDelay *in);
+
+/* Checkpoint resume: put back the pending load a state carried (its
+ * CPU_EXEC section) and keep it through the next
+ * dirty_ram_ld_delay_discard(), which psx_cycles_resync_after_restore calls
+ * after every load. Without the section the load is dropped as before. */
+void dirty_ram_ld_delay_restore_from_state(const DirtyRamLoadDelay *in);
 
 /* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
  * gap) after snap restore. Not in boot_state — peers that drifted through FMV
@@ -181,6 +205,15 @@ int      dirty_ram_is_dirty(uint32_t phys);
  * on writes into the body. Runtime-patched bodies (pad/SIO install stubs)
  * never verify and keep interpreting — faithful either way. */
 int      psx_kernel_bless_dispatchable(uint32_t phys);
+/* PS1B-306: nonzero when the active image's bless table fits the runtime's
+ * verify-state array (PSX_KBLESS_MAX_ENTRIES). A table that does not fit is
+ * refused at start-up and in the bless latch. Reads only; sets *entries and
+ * *capacity when non-NULL. */
+int      psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity);
+/* Bless latch: -1 not decided yet, 0 off, 1 on. Reads only. Off always in
+ * source (TAS) mode; the reason string says why it is off. */
+int      psx_kernel_bless_state(void);
+const char* psx_kernel_bless_off_reason(void);
 /* True when a declared kernel patch range ENDS at this RAM address. The
  * emitter registered that PC as a continuation key, so the interpreter hands
  * straight-line flow back to static dispatch there and only the guest's
@@ -188,6 +221,7 @@ int      psx_kernel_bless_dispatchable(uint32_t phys);
 int      psx_kernel_patch_range_ends_at(uint32_t phys);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_stats(uint64_t out[8]);
+void     psx_kernel_bless_paranoid_stats(uint64_t out[5]);
 void     psx_kernel_bless_resync_after_restore(void);
 /* Soft-return rematch / BIOS switch: drop latched SCPH↔OpenBIOS window +
  * CLEAN/MISMATCH so the next kbless_on() re-reads psx_bios_image. */
@@ -198,7 +232,10 @@ void     psx_kernel_bless_reset_for_boot(void);
  * when the page is dirty — i.e. a gameplay overlay overwrote the boot text
  * after the game-start baseline, so the bytes there are runtime overlay code
  * (see the window model note above). Clean boot text never enters the window
- * (it runs compiled; capturing it would violate the static-first design). */
+ * (it runs compiled; capturing it would violate the static-first design).
+ * A text page the game rewrote with CPU stores is text_modified, not dirty,
+ * and stays outside this window. The loader's lazy load has a wider window
+ * for it (overlay_loader.c, lazy_load_window_contains; PS1B-421). */
 static inline int overlay_cache_window_contains(uint32_t phys) {
     return phys < DIRTY_RAM_KERNEL_WINDOW_END
         || phys >= OVERLAY_REGION_FLOOR
@@ -219,6 +256,17 @@ void     dirty_ram_text_guard_resync_after_restore(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);
+/* Pages where the boot executable the console loads differs from the image the
+ * static code was generated from (text_source_guard.h). Native text dispatch
+ * is refused on them. Call after dirty_ram_register_text_image. */
+uint32_t dirty_ram_text_note_source_image(const uint8_t *loaded,
+                                          uint32_t phys_lo, uint32_t len,
+                                          const uint32_t *source_crc32,
+                                          uint32_t source_count,
+                                          uint32_t source_phys_lo,
+                                          uint32_t source_len,
+                                          uint32_t *first_phys);
+uint32_t dirty_ram_text_foreign_pages(void);
 int      dirty_ram_text_native_ok(uint32_t phys);
 /* Exact CFG ranges; exec_pc clips ranges that end before the resume PC. */
 int      dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
@@ -232,6 +280,7 @@ int      dirty_ram_text_image_registered(void);
 void     dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len);
 uint64_t dirty_ram_text_native_blocked(void);
 uint32_t dirty_ram_text_diverged_pages(void);
+int      dirty_ram_text_image_range(uint32_t *lo, uint32_t *hi);
 
 /* Counters for visibility / TCP debug.  Increment in interpreter; expose
  * via debug_server.c if helpful. */

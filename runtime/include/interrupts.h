@@ -1,4 +1,4 @@
-﻿#ifndef PSXRECOMP_INTERRUPTS_H
+#ifndef PSXRECOMP_INTERRUPTS_H
 #define PSXRECOMP_INTERRUPTS_H
 
 #include <stdint.h>
@@ -30,13 +30,56 @@ void psx_snapshot_host_call_restore(unsigned depth);
 #define IRQ_SPU     9
 #define IRQ_PIO     10
 
+void interrupts_raster_gp1(uint32_t);
+int interrupts_raster_gpu_status(uint32_t *);
+uint32_t interrupts_source_snapshot_bytes(void);
+void interrupts_source_snapshot_write(uint8_t *);
+int interrupts_source_snapshot_read(const uint8_t *,uint32_t,int);
 void interrupts_init(void);
+uint32_t interrupts_raster_wire_bytes(void);
+void interrupts_raster_wire_write(uint8_t *out);
+int interrupts_raster_wire_read(const uint8_t *in, uint32_t len);
+int interrupts_raster_comparison_active(void);
+int interrupts_raster_perturb(const char *field);
+void interrupts_note_state_load(int raster_section_present);
+uint32_t interrupts_timing_wire_bytes(void);
+void     interrupts_timing_wire_write(uint8_t *out);
+int      interrupts_timing_wire_read(const uint8_t *in, uint32_t len);
+int      interrupts_source_irq_slot_live(void);
+int      interrupts_timing_perturb(const char *field);
+int      psx_defer_switch_pending(void);
+int psx_irq_opcode_eligible(uint32_t pc);
+int psx_interrupt_cooldown_active(void);
+int psx_check_interrupts_delay_slot(struct CPUState* cpu,uint32_t slot_pc,
+                                  uint32_t target,int taken,uint32_t instruction);
+
+/* Syscall-to-delivery control. Explicit handler switches must not be deferred. */
+int psx_exception_nest_depth(void);
+void psx_note_changethread_in_handler_switch(void);
+
+/* Syscall-to-delivery control. Explicit handler switches must not be deferred. */
+int psx_exception_nest_depth(void);
+void psx_note_changethread_in_handler_switch(void);
 
 /* Save-state restore: re-anchor host-only IRQ pacing after psx_cycle_count is
  * overwritten from a snapshot. Clears absolute-cycle cooldowns / deferred
  * switches that would otherwise strand delivery until the restored clock
  * catches up to the pre-load host timeline (warm-reload picture freeze). */
 void interrupts_resync_after_restore(void);
+
+/* Checkpoint resume: the IRQ delivery state that interrupts_resync_after_restore
+ * otherwise resets (its IRQ_TIMING section). Absolute cycles are on the
+ * restored clock. A set keeps these fields through the next resync. */
+typedef struct PsxIrqResumeTiming {
+    uint64_t cooldown_until;      /* post-exception IRQ cooldown deadline */
+    uint32_t sio_seq_seen;        /* last SIO sequence the VBlank defer saw */
+    uint64_t sio_progress_cycle;  /* cycle of that SIO progress */
+    uint32_t defer_from;          /* deferred thread switch: interrupted TCB */
+    uint32_t defer_target;        /* deferred thread switch: target TCB */
+    uint32_t defer_pending;       /* 1 = a deferred switch is waiting */
+} PsxIrqResumeTiming;
+void interrupts_resume_timing_get(PsxIrqResumeTiming *out);
+void interrupts_resume_timing_set(const PsxIrqResumeTiming *in);
 
 /* Netplay diag: last VBLANK irqctx exit/restore (+ v0) for peer diff. */
 void interrupts_log_last_vblank_irqctx(const char *tag);
@@ -109,6 +152,8 @@ uint32_t cycles_to_next_event(void);
 
 /* Query whether we are currently inside an exception handler dispatch. */
 int psx_get_in_exception(void);
+/* Nonzero while an in-exception thread switch waits for a site-0 poll. */
+int psx_defer_switch_pending(void);
 
 /* Most recent block-leader IRQ-check guest PC / compiled resume latch.
  * Used by the post-savestate freeze probe (vblank-time "where was the game"). */

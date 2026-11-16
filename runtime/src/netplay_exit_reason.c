@@ -1,5 +1,6 @@
 /* Why a netplay match ended, in words. See netplay_exit_reason.h. */
 #include "netplay_exit_reason.h"
+#include "sio.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -158,6 +159,62 @@ void netplay_start_failure_text(int start_rc, int has_netplay,
     } else {
         snprintf(out, cap, "Netplay could not start (code %d).", start_rc);
     }
+}
+
+void netplay_start_failure_report_text(int start_rc, int has_netplay,
+                                       const char *bind_hostport,
+                                       const char *peer_hostport, int bind_probe,
+                                       int sys_error, const char *sys_text,
+                                       char *out, size_t cap)
+{
+    /* The listen address becomes the fixed word. Its port is kept only when
+     * it is one to five digits after the last colon: a listen text that is
+     * not "address:port" is something the player typed, and none of it goes
+     * into the report. */
+    char bind[32];
+    const char *colon = bind_hostport ? strrchr(bind_hostport, ':') : NULL;
+    size_t digits = 0;
+    if (colon) {
+        while (colon[1 + digits] >= '0' && colon[1 + digits] <= '9') ++digits;
+        if (digits == 0 || digits > 5 || colon[1 + digits] != '\0') colon = NULL;
+    }
+    snprintf(bind, sizeof(bind), "%s%s", NETPLAY_REPORT_ADDRESS, colon ? colon : "");
+    netplay_start_failure_text(start_rc, has_netplay, bind,
+                               (peer_hostport && peer_hostport[0]) ? NETPLAY_REPORT_ADDRESS : "",
+                               bind_probe, sys_error, sys_text, out, cap);
+}
+
+int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap)
+{
+    const char *device;
+    if (out && cap) out[0] = '\0';
+    switch (sio_device) {
+    case SIO_DEVICE_PAD:    return 0;
+    case SIO_DEVICE_MOUSE:  device = "PS1 Mouse"; break;
+    case SIO_DEVICE_NEGCON: device = "neGcon";    break;
+    case SIO_DEVICE_GUNCON: device = "GunCon";    break;
+    default:                device = "device that is not a pad"; break;
+    }
+    if (out && cap)
+        snprintf(out, cap,
+                 "Netplay needs a pad or the keyboard: port %d is set to a %s. "
+                 "Change the controller for that port and start again.",
+                 port, device);
+    return 1;
+}
+
+int netplay_boot_mode_settle(const NetplayBootMode *kit, NetplayBootMode *mode)
+{
+    int changed;
+    if (!kit || !mode) return 0;
+    /* Compare as on/off: a caller may hand in any non-zero value for on. */
+    changed = (!kit->bios_hle != !mode->bios_hle) ||
+              (!kit->keep_intro != !mode->keep_intro) ||
+              (!kit->fast_boot != !mode->fast_boot);
+    mode->bios_hle   = kit->bios_hle ? 1 : 0;
+    mode->keep_intro = kit->keep_intro ? 1 : 0;
+    mode->fast_boot  = kit->fast_boot ? 1 : 0;
+    return changed;
 }
 
 int netplay_boot_mismatch_final(uint32_t mismatch_since_ms, uint32_t now_ms,

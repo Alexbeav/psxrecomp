@@ -10,7 +10,9 @@
 #include <intrin.h>       /* MSVC intrinsics: _BitScanReverse (no __builtin_clz) */
 #endif
 #include "cdrom.h"
+#include "gpu.h"
 #include "dma.h"
+#include "source_gpu_runtime.h"
 #include "interrupts.h"
 #include "sio.h"
 #include "starvation_ring.h"
@@ -218,6 +220,8 @@ static void advance_devices(uint32_t c) {
     psx_cycle_count += (uint64_t)c;
     sio_advance(c);
     cdrom_advance(c);
+    source_gpu_runtime_advance();
+    gpu_queue_service();
     dma_advance(c);
     timers_advance(c);
     interrupts_advance_cycles(c);
@@ -306,6 +310,8 @@ static uint32_t devices_cycles_to_next_internal_event(void) {
     uint32_t best = interrupts_cycles_to_vblank();   /* frame pacing always */
     uint32_t t = timers_cycles_to_irq(0xFFFFFFFFu);  if (t < best) best = t;
     uint32_t c = cdrom_cycles_to_irq(0xFFFFFFFFu);   if (c < best) best = c;
+    uint32_t g = source_gpu_runtime_cycles_to_event(); if(g<best)best=g;
+    uint32_t q = gpu_queue_cycles_to_event(); if(q<best)best=q;
     uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
     uint32_t s = sio_cycles_to_irq(0xFFFFFFFFu);     if (s < best) best = s;
     uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
@@ -945,35 +951,10 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
     idle_reset_progress();
     if (s_idle_audited_only) *s_track = 0;
     s_idle_last_cycle = psx_cycle_count;
-    /* GTE/muldiv completion deadlines and load-absorb give-back are host-only
-     * absolute cycle stamps (not in BS_SEC_CPU). After a warm load they still
-     * hold the pre-load live timeline; the next psx_gte_stall / muldiv_stall
-     * would then advance (live_ts - restored_cycle) in one shot — tens of
-     * millions of cycles / N nested presents with zero IRQ checks (MotK
-     * transform CTC2 path). Anchor them at the restored clock. */
-    {
-        /* A snap with BS_SEC_CPUTIM carried them relative to its clock --
-         * keep those; older snaps anchor at the restored clock as before. */
-        extern int g_boot_state_cpu_timing_restored;
-        if (cpu && !g_boot_state_cpu_timing_restored) {
-            cpu->gte_ts_done = psx_cycle_count;
-            cpu->muldiv_ts_done = psx_cycle_count;
-            memset(cpu->read_absorb, 0, sizeof(cpu->read_absorb));
-            cpu->read_absorb_which = 0;
-            cpu->read_fudge = 0x20u; /* no committed predecessor load */
-            cpu->ld_which_t = 0x20u; /* no pending load dest */
-            cpu->ld_absorb = 0;
-        }
-        g_boot_state_cpu_timing_restored = 0;
-    }
-    /* Dirty-RAM interpreter load-delay writebacks live in host statics, not
-     * BS_SEC_CPU. Discard (do not flush): snap GPRs are already architectural.
-     * A stale pending v0 write from the pre-load timeline was forking MotK
-     * resim peers (countdown vs BIOS v0=1) at matched guest clocks. */
-    {
-        extern void dirty_ram_ld_delay_discard(void);
-        dirty_ram_ld_delay_discard();
-    }
+    /* v8 restores guest timing and pending load writeback from the snapshot.
+     * They belong to the restored clock and must survive host resynchronization. */
+    (void)cpu;
+    g_psx_cycle_fast_limit = 0;
     /* Entry-poll %%64 stride + 4096-insn pump gap are host-only; reset so
      * both peers take the first post-load dirty wait IRQ on the same phase. */
     {
@@ -1251,3 +1232,6 @@ int psx_cycle_uncharged_end(const PsxCycleFreeze *save) {
     freeze_restore_deferred(save);
     return uncharged;
 }
+
+/* Device-state generation owner, shared with restore/IRQ/source GPU. */
+uint64_t g_psx_device_gen;

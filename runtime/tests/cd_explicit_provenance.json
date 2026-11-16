@@ -1,0 +1,21 @@
+{
+  "schema": "t172-cd-explicit-provenance-v1",
+  "base": "d850e47d822973c3e474ad43b078f5c58a35cd9a",
+  "tested_commit": "8adf61d12a81807d1dc898efa8b86ed296efcd94",
+  "owned_function": "static int source_explicit_seek_cycles(uint8_t cmd)",
+  "authority": "Sanitized root declaration/caller/domain contract; independently authored opaque probes and model. No unowned implementation, root tool/model or compiler-log reads.",
+  "primary_reference": "Pinned PSX-SPX a253f078553f83b4e540f087abf0c28d954b6293; cd-explicit-preflight-v1.json binds references.",
+  "receipt": "..\\evidence\\validation-receipt-cd-explicit-v1.json",
+  "receipt_sha256": "6a3b1e585cc8299ef72a3f89cf6362137b42a426067ce82f00255b42229e77c5",
+  "totals": {
+    "cases": 10544,
+    "rows": 10544,
+    "events": 76040
+  },
+  "negative_controls": 62,
+  "full_translation_unit_checks": 7,
+  "scope": "Only source_explicit_seek_cycles; actual MSF and accepted seek wrapper/header preserved. All256command bytes tested at helper boundary, not dispatcher admission. Synthetic jitter; full24field/return/events. No actual head update/speed/media; caller lifecycle outside ownership; no fullrestore/hardware/legal claim.",
+  "identity_note": "head_sha256 labels owned explicit-seek fragment, same as selected_header_sha256; dependency preservation checks dependencies_sha256,seek_header_sha256,wrapper_sha256,sha_source_sha256.",
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "publication": "Pending independent T77 review/publication; no worker push."
+}

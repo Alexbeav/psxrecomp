@@ -27,6 +27,7 @@ import json
 import re
 import struct
 import sys
+import zlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,7 @@ DST_SEC = 2352
 USER = 2048
 USER_OFF = 24
 EXE_HDR = 0x800
+EXE_PAGE = 4096
 SYNC = bytes([0x00] + [0xFF] * 10 + [0x00])
 
 
@@ -72,6 +74,12 @@ class DiscProbe:
     # Final Fantasy VII ships one byte-identical executable on three discs
     # under three serials (SCUS-94163/64/65).
     boot_exe_sha256: str = ""
+    # The same program can still hash differently per disc: a set may patch a
+    # disc number or a file name into each disc's copy (Metal Gear Solid Europe
+    # differs by one byte of a path string). The size and the per-page CRCs of
+    # the loaded image let verify_disc_set tell such a copy from another program.
+    boot_exe_size: int = 0
+    boot_exe_page_crc32: list[str] = field(default_factory=list)
     seed_count: int = 0
     seed_addrs: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -179,13 +187,24 @@ def first_binary_bin(cue_path: Path, files_order: list[str], tracks: list[CueTra
     return resolve_cue_file(cue_path, name)
 
 
-def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[str]) -> str:
-    """Match runtime disc_identity.cpp psxrecomp-toc-v1 SHA-256."""
+def toc_canonical(cue_path: Path, tracks: list[CueTrack], files_order: list[str],
+                  sizes: dict[str, int] | None = None) -> str:
+    """The psxrecomp-toc-v1 text of a cue: the track count, the lead-out, and
+    each track's type, start and pregap. Its SHA-256 is the fingerprint.
+
+    ``sizes`` gives the byte size of each FILE by its name in the cue. With it
+    no file is looked up, so a track table that is not on disk as a cue and
+    its files (a CHD's) gets the text of the cue it stands for.
+    """
     next_lba = 0
     file_start: dict[str, int] = {}
     for name in files_order:
-        path = resolve_cue_file(cue_path, name)
-        size = path.stat().st_size
+        if sizes is not None:
+            path = Path(name)
+            size = int(sizes[name])
+        else:
+            path = resolve_cue_file(cue_path, name)
+            size = path.stat().st_size
         raw = size % DST_SEC == 0 and size > 0
         sec = DST_SEC if raw else USER
         if size % sec != 0:
@@ -211,8 +230,38 @@ def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[st
         lines.append(
             f"t={t.number},a={audio},start={start},pregap={pregap}\n"
         )
-    canonical = "".join(lines)
+    return "".join(lines)
+
+
+def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[str],
+                    sizes: dict[str, int] | None = None) -> str:
+    """Match runtime disc_identity.cpp psxrecomp-toc-v1 SHA-256."""
+    canonical = toc_canonical(cue_path, tracks, files_order, sizes)
     return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def boot_exe_page_crc32(exe: bytes) -> list[str]:
+    """CRC-32 of each 4 KiB RAM page of the image a PS-X EXE loads.
+
+    The image is the `t_size` bytes after the 2048-byte header, which the
+    console copies to `t_addr`. Pages follow RAM page boundaries, so the first
+    and last entries cover a partial page when the load address or the end is
+    not page-aligned. The header's padding is not loaded and is left out; it
+    can hold mastering leftovers that differ between otherwise equal discs.
+    """
+    if len(exe) <= EXE_HDR or exe[:8] != b"PS-X EXE":
+        return []
+    load = struct.unpack_from("<I", exe, 0x18)[0]
+    size = struct.unpack_from("<I", exe, 0x1C)[0]
+    image = exe[EXE_HDR : EXE_HDR + size] if size else exe[EXE_HDR:]
+    out: list[str] = []
+    pos, addr = 0, load
+    while pos < len(image):
+        take = min(EXE_PAGE - (addr % EXE_PAGE), len(image) - pos)
+        out.append(f"{zlib.crc32(image[pos : pos + take]) & 0xFFFFFFFF:08x}")
+        pos += take
+        addr += take
+    return out
 
 
 def scan_jal_seeds(exe: bytes) -> list[int]:
@@ -288,6 +337,36 @@ def parse_root_entries(root: bytes) -> dict[str, tuple[int, int]]:
     return entries
 
 
+def parse_directory_entries(directory: bytes) -> dict[str, tuple[int, int, bool]]:
+    """Return ISO9660 directory records as extent, size, and directory flag."""
+    entries: dict[str, tuple[int, int, bool]] = {}
+    i = 0
+    while i < len(directory):
+        reclen = directory[i]
+        if reclen == 0:
+            i = ((i // USER) + 1) * USER
+            if i >= len(directory):
+                break
+            continue
+        if i + reclen > len(directory):
+            break
+        extent = struct.unpack_from("<I", directory, i + 2)[0]
+        size = struct.unpack_from("<I", directory, i + 10)[0]
+        is_directory = bool(directory[i + 25] & 0x02)
+        namelen = directory[i + 32]
+        name = directory[i + 33 : i + 33 + namelen]
+        if b";" in name:
+            name = name.split(b";")[0]
+        if name not in (b"\x00", b"\x01"):
+            entries[name.decode("ascii", "replace")] = (
+                extent,
+                size,
+                is_directory,
+            )
+        i += reclen
+    return entries
+
+
 def read_file(read_user, data: bytes, extent: int, size: int) -> bytes:
     out = bytearray()
     rem, lba = size, extent
@@ -300,6 +379,34 @@ def read_file(read_user, data: bytes, extent: int, size: int) -> bytes:
     return bytes(out)
 
 
+def resolve_iso_file(
+    read_user,
+    data: bytes,
+    root_entries: dict[str, tuple[int, int, bool]],
+    path: str,
+) -> tuple[int, int]:
+    """Resolve a case-insensitive root or nested ISO9660 file path."""
+    parts = [part for part in re.split(r"[\\/]", path) if part]
+    if not parts:
+        raise KeyError(path)
+    entries = root_entries
+    for index, part in enumerate(parts):
+        names = {name.upper(): name for name in entries}
+        actual = names.get(part.upper())
+        if actual is None:
+            raise KeyError(path)
+        extent, size, is_directory = entries[actual]
+        if index == len(parts) - 1:
+            if is_directory:
+                raise KeyError(path)
+            return extent, size
+        if not is_directory:
+            raise KeyError(path)
+        directory = read_file(read_user, data, extent, size)
+        entries = parse_directory_entries(directory)
+    raise KeyError(path)
+
+
 def parse_system_cnf(cnf: bytes) -> str:
     text = cnf.decode("ascii", "replace")
     m = re.search(r"BOOT\s*=\s*cdrom:\\?([^;\s]+)", text, re.I)
@@ -308,8 +415,7 @@ def parse_system_cnf(cnf: bytes) -> str:
     if not m:
         raise SystemExit("SYSTEM.CNF has no BOOT= line")
     token = m.group(1).strip()
-    token = token.split("\\")[-1].split("/")[-1]
-    return token
+    return token.lstrip("\\/")
 
 
 def normalize_serial(boot_exe: str) -> tuple[str, str]:
@@ -340,10 +446,41 @@ def display_name_from_cue(cue_path: Path, volume_id: str) -> str:
     return name.strip() or stem
 
 
+def probe_chd(chd_path: Path, *, identity_only: bool = False) -> DiscProbe:
+    """Probe a .chd by extracting it to a temporary Redump-shaped cue/bin set.
+
+    The setup wizard accepts .chd for every disc of a set, and update_disc_set
+    probes each one; without this a multi-disc CHD set was rejected ("expects
+    a .cue"), the failure was non-fatal, and game.toml kept its placeholder
+    roster. Extracting through psx_chd reuses the exact cue layout Generate
+    normalizes to, so the digests and psxrecomp-toc-v1 fingerprint are those
+    of the equivalent Redump dump.
+    """
+    import tempfile
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import psx_chd  # tools/psx_chd.py
+
+    framework_root = Path(__file__).resolve().parents[2]
+    lib_path = psx_chd.find_libchdr(None, framework_root)
+    if lib_path is None:
+        raise SystemExit(psx_chd.unsupported_message(chd_path))
+    with tempfile.TemporaryDirectory(prefix="probe_chd_") as tmp:
+        with psx_chd.ChdDisc(chd_path, psx_chd.LibChdr(lib_path)) as disc:
+            cue = psx_chd.extract(disc, Path(tmp), chd_path.stem + ".cue")
+        p = probe(cue, identity_only=identity_only)
+    p.cue_path = str(chd_path)
+    p.cue_name = chd_path.name
+    p.notes.append("probed from a .chd through libchdr (temporary Redump-layout extract).")
+    return p
+
+
 def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
     cue_path = cue_path.resolve()
+    if cue_path.suffix.lower() == ".chd":
+        return probe_chd(cue_path, identity_only=identity_only)
     if cue_path.suffix.lower() != ".cue":
-        raise SystemExit("probe_disc expects a .cue (Redump multi-track layout)")
+        raise SystemExit("probe_disc expects a .cue (Redump multi-track layout) or a .chd")
 
     tracks, files_order = parse_cue(cue_path)
     bin_path = first_binary_bin(cue_path, files_order, tracks)
@@ -409,7 +546,9 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
     root = bytearray()
     for i in range((root_size + USER - 1) // USER):
         root += read_user(data, root_extent + i)
-    entries = parse_root_entries(bytes(root[:root_size]))
+    root_bytes = bytes(root[:root_size])
+    entries = parse_root_entries(root_bytes)
+    directory_entries = parse_directory_entries(root_bytes)
 
     if "SYSTEM.CNF" not in entries:
         # Very early titles (e.g. King's Field, Dec 1994) ship no SYSTEM.CNF;
@@ -430,25 +569,28 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
         extent, fsize = entries["SYSTEM.CNF"]
         cnf = read_file(read_user, data, extent, fsize)
         boot_token = parse_system_cnf(cnf)
-    serial, boot_exe = normalize_serial(boot_token)
+    boot_leaf = re.split(r"[\\/]", boot_token)[-1]
+    serial, boot_exe = normalize_serial(boot_leaf)
 
     disc_boot = boot_token
-    if disc_boot not in entries:
-        if boot_exe in entries:
+    try:
+        bext, bsize = resolve_iso_file(
+            read_user, data, directory_entries, disc_boot
+        )
+    except KeyError:
+        # Some malformed images omit the directory portion from SYSTEM.CNF.
+        # Preserve the historical root-file fallback by normalized EXE name.
+        try:
+            bext, bsize = resolve_iso_file(
+                read_user, data, directory_entries, boot_exe
+            )
             disc_boot = boot_exe
-        else:
-            upper = {k.upper(): k for k in entries}
-            if disc_boot.upper() in upper:
-                disc_boot = upper[disc_boot.upper()]
-            elif boot_exe.upper() in upper:
-                disc_boot = upper[boot_exe.upper()]
-            else:
-                raise SystemExit(
-                    f"boot EXE {boot_token!r} not on disc "
-                    f"(found {sorted(entries)[:24]})"
-                )
+        except KeyError:
+            raise SystemExit(
+                f"boot EXE {boot_token!r} not on disc "
+                f"(found {sorted(entries)[:24]})"
+            )
 
-    bext, bsize = entries[disc_boot]
     exe = read_file(read_user, data, bext, bsize)
     if exe[:8] != b"PS-X EXE":
         raise SystemExit(f"{disc_boot} is not a PS-X EXE")
@@ -459,7 +601,7 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
     s_addr = struct.unpack_from("<I", exe, 0x30)[0]
     seeds = scan_jal_seeds(exe)
 
-    boot_name = disc_boot
+    boot_name = re.split(r"[\\/]", disc_boot)[-1]
     if not serial:
         serial, _ = normalize_serial(boot_name)
 
@@ -506,6 +648,8 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
         notes=notes,
         boot_exe_bytes=exe,
         boot_exe_sha256=hashlib.sha256(exe).hexdigest() if exe else "",
+        boot_exe_size=len(exe),
+        boot_exe_page_crc32=boot_exe_page_crc32(exe),
     )
 
 
@@ -778,8 +922,6 @@ def main() -> int:
         Path(args.json_out).write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
-    else:
-        print(json.dumps({k: v for k, v in payload.items() if k != "seed_addrs"}, indent=2))
 
     if args.write_game_toml:
         text = render_game_toml(
@@ -842,6 +984,10 @@ def main() -> int:
         f"tracks={p.track_count} entry={p.entry_pc} seeds={p.seed_count}{fp_note}",
         file=sys.stderr,
     )
+    # Keep the machine-readable document last even when a caller combines stderr.
+    sys.stderr.flush()
+    if not args.json_out:
+        print(json.dumps(payload, indent=2), flush=True)
     return 0
 
 

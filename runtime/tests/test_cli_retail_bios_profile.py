@@ -53,6 +53,27 @@ class RetailBiosProfileTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "SCPH5552.*exit 2"):
                     cli.regen_bios_profile(fw, "bios/SCPH5552.toml", progress=progress)
 
+    def test_parser_takes_the_setup_hosts_generate_and_rebuild_calls(self):
+        # The argument lists host/psxrecomp_codegen_host.c builds on both launch
+        # routes. The host forwards the BIOS stem CMake linked; a parser without
+        # --bios-stem stops Generate with exit 2 on every retail-BIOS install.
+        host = (ROOT / "host/psxrecomp_codegen_host.c").read_text(encoding="utf-8")
+        self.assertIn('"--bios-stem"', host)
+        parser = cli.build_parser()
+        generate = parser.parse_args([
+            "generate", "--project-root", "r", "--config", "r/game.toml", "--disc", "d.chd",
+            "--bios", "b.bin", "--bios-stem", "SCPH5552",
+            "--gen-marker", "SCES_000.10_dispatch.c", "--json-progress"])
+        self.assertEqual(generate.bios_stem, "SCPH5552")
+        self.assertEqual(
+            cli.retail_bios_stem({"bios_config": "psxrecomp/bios/SCPH1001.toml"}, generate.bios_stem),
+            "SCPH5552")
+        rebuild = parser.parse_args([
+            "rebuild", "--project-root", "r", "--config", "r/game.toml", "--build-dir", "r/build-release",
+            "--target", "psx-runtime", "--exe-basename", "Game", "--disc", "d.chd", "--no-pgo",
+            "--prune-after", "build-intermediates", "--json-progress"])
+        self.assertTrue(rebuild.no_pgo)
+
     def test_successful_regen_writes_emitter_stamp(self):
         with tempfile.TemporaryDirectory() as temporary:
             fw = Path(temporary)

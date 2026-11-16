@@ -1,4 +1,4 @@
-﻿#ifndef PSXRECOMP_CDROM_H
+#ifndef PSXRECOMP_CDROM_H
 #define PSXRECOMP_CDROM_H
 
 #include <stdint.h>
@@ -8,6 +8,53 @@ extern "C" {
 #endif
 
 void cdrom_init(const char* cue_path);
+/* Tells the drive whether the CPU is inside its exception handler; a response
+ * is not presented to the interrupt controller while it is. NULL = no hold. */
+void cdrom_set_exception_probe(int (*probe)(void));
+
+/* Replace the mounted image without resetting the emulated machine.
+ *
+ * The replacement is transactional: the new image is opened before the old
+ * handle is released, so a bad path leaves the current disc untouched.  On a
+ * successful swap the active read/CD-DA/XA streams are stopped and the drive
+ * emits the same shell-close/reinsert notification as the debug reinsert
+ * path.  `scex` may be NULL to retain the current license-region response
+ * (needed for audio/non-PSX discs whose region cannot be identified).
+ *
+ * This is an offline host action.  It refuses to mutate the mounted disc while
+ * a netplay session is active.  The caller owns persistence policy; the
+ * runtime overlay deliberately treats selected paths as session-only. */
+int cdrom_replace_disc(const char* cue_path, const char scex[4]);
+
+/* Input-route disc events. These keep the recorded open/select/close
+ * boundaries distinct. Select is transactional and is valid only while the
+ * route-held tray is open. Close makes the selected media readable now. */
+/* Passive readback of the real mounted reader and lid, for input receipts.
+ * state[0]=physical open,[1]=media ready,[2]=sectors,[3]=tracks.
+ * The handle is borrowed; callers must never mutate or close it. */
+void cdrom_route_observe(uint32_t state[4]);
+void *cdrom_route_media_handle(void);
+int cdrom_route_tray_open(void);
+int cdrom_route_disc_select(const char* cue_path, const char scex[4]);
+int cdrom_route_tray_close(void);
+int cdrom_route_apply_event(uint8_t event, const char* disc_path,
+                            const char scex[4], char* why, uint32_t why_size);
+
+/* Put another image in the drive for a save-state load, without a lid event.
+ *
+ * A state restores the drive's registers, FIFOs and sector buffers, but not
+ * the image the drive reads. A state taken on another disc of a set therefore
+ * needs that disc mounted before it is loaded. Unlike cdrom_replace_disc this
+ * changes no guest-visible drive state: the load that follows restores it, and
+ * a refused load must leave the running game exactly as it was.
+ *
+ * cdrom_restore_mount_begin opens the image and makes it the mounted disc; the
+ * previous image stays open. cdrom_restore_mount_end(1) releases the previous
+ * image; cdrom_restore_mount_end(0) puts it back and closes the new one.
+ * begin returns 0, and changes nothing, when the image cannot be opened, when
+ * netplay is active or when a begin is already open. */
+int  cdrom_restore_mount_begin(const char* cue_path, const char scex[4]);
+void cdrom_restore_mount_end(int keep);
 uint32_t cdrom_snapshot_bytes(void);
 int cdrom_snapshot_validate(const uint8_t *p, uint32_t len);
 
@@ -19,6 +66,8 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len);
  * drive and render nothing -- a black screen with no explanation. Callers that
  * passed a real path must check this and report. */
 int cdrom_has_disc(void);
+/* Was an SBI companion loaded into the currently mounted reader? */
+int cdrom_has_sbi(void);
 /* Disc license region for GetID ("SCEE"/"SCEA"/"SCEI"); derived from the
  * mounted disc's boot serial at launch. Defaults to "SCEA" (SCPH1001). */
 void cdrom_set_disc_scex(const char scex[4]);
@@ -27,6 +76,8 @@ void cdrom_set_disc_scex(const char scex[4]);
 void cdrom_set_speed(int divisor);
 /* Store configured game speed (applied post-BIOS via cdrom_notify_game_started). */
 void cdrom_set_game_speed(int divisor);
+int cdrom_get_speed(void);
+int cdrom_get_game_speed(void);
 /* Called by fntrace on first game-range dispatch; switches to game speed. */
 void cdrom_notify_game_started(void);
 /* LBA of the most recent SetLoc command (-1 if none yet). Used by the DMA
@@ -69,6 +120,7 @@ void cdrom_warm_route_stats_json(char* out, int cap);
  * Diagnostics only: recording never changes CD scheduling or delivery. */
 void cdrom_timing_reset(void);
 void cdrom_timing_stats_json(char* out, int cap);
+void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent, uint32_t *longest_run);
 int cdrom_get_delivered_lba(void);
 /* Presentation-only stream identity. Advances on a successful SetLoc or
  * seek, independent of host time; not part of emulated controller state. */
@@ -107,6 +159,14 @@ int  cdrom_disc_roster_count(void);
 int  cdrom_disc_selected(void);
 const char *cdrom_disc_roster_path(int index_1based);
 int  cdrom_disc_select(int index_1based);
+/* The save-state disc token of each roster entry, when it is not the entry's
+ * roster index: a program of a multi-program set mounts only its own discs,
+ * and its states take each disc's position in the whole set. A token of 0,
+ * or no table (count 0), keeps the roster index. */
+void cdrom_disc_scope_tokens_set(const int *tokens, int count);
+/* A save-state load of another disc's state mounts that disc through pin I's
+ * cdrom_restore_mount_begin/end (above), driven by the frontend
+ * (psx_frontend_savestate_mount_disc). */
 
 /* TOC of the image currently mounted; 0 when the drive is empty. Two images
  * of a set have different TOCs, so this is how a caller confirms that a disc
@@ -149,6 +209,8 @@ int cdrom_load_in_progress(void);
 /* Physical non-XA data-read command state, without the logical load gap
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);
+int cdrom_data_load_read_now(void);   /* data sectors now: not XA audio, not CD-DA */
+int cdrom_xa_mode_enabled(void);      /* SetMode bit 6 (XA-ADPCM) */
 
 /* boot_state / netplay digest — full controller FSM (sector FIFOs included). */
 uint32_t cdrom_snapshot_bytes(void);
@@ -184,6 +246,8 @@ void cdrom_tick(void);
 
 /* DMA channel 3 interface */
 uint32_t cdrom_dma_read(void);
+/* Optional source-profile byte drain; unavailable bytes are zero. */
+uint32_t cdrom_dma_read_padded(void);
 int cdrom_dma_ready(void);
 uint32_t cdrom_dma_sector_word_count(void);
 
@@ -267,6 +331,8 @@ typedef struct CDROMSectorDebugState {
 
 typedef struct CDROMTraceEntry {
     uint64_t seq;
+    uint64_t cycle;
+    uint32_t guest_ra;
     uint32_t addr;
     uint32_t val;
     uint32_t func;
@@ -300,6 +366,19 @@ typedef struct CDROMTraceEntry {
 #define CDROM_SECTOR_HISTORY_CAP (1 << 13)
 #define CDROM_SECTOR_HISTORY_BYTES 128
 
+/* Passive source-CDDA Play-start inputs. These are diagnostics only and do
+ * not enter the controller snapshot or select a drive model. */
+typedef struct CDROMSourceCDDAPlayDebugState {
+    uint64_t cycle, computed_due_cycle, head_due_cycle;
+    int32_t origin_lba, target_lba, head_lba, head_target_lba;
+    int32_t lower_bound_cycles;
+    uint32_t jitter_cycles, delay_cycles;
+    uint32_t random_cursor_before, random_cursor_after;
+    uint32_t random_calls_before, random_calls_after;
+    uint8_t valid, new_seek, requested_track, motor, paused, mode;
+    uint8_t was_playing, was_seeking, setloc_pending, head_valid;
+} CDROMSourceCDDAPlayDebugState;
+
 typedef struct CDROMCommandHistoryEntry {
     uint64_t seq;
     /* Guest cycle at which this command was issued/executed. Frame numbers
@@ -331,6 +410,10 @@ typedef struct CDROMCommandHistoryEntry {
     uint8_t pending_pending;
     uint8_t queued_cmd;
     uint8_t queued_pending;
+    uint8_t source_clock;
+    uint32_t source_random_cursor;
+    uint32_t source_random_calls;
+    CDROMSourceCDDAPlayDebugState source_cdda_play;
     /* Immediate response FIFO as the guest will read it (e.g. the GetTD MSF,
      * the GetTN track range), so a TOC can be checked from the ring. */
     uint8_t response_count;

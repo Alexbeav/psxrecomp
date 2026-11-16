@@ -11,9 +11,10 @@
 # here runs natively on the host afterwards. That is the same property upstream
 # relies on to ship one AppImage for every distro.
 #
-# The package list is upstream's own scripts/appimage/install-packages.sh,
-# copied verbatim out of the pinned checkout by duckstation_oracle.py. It is not
-# reproduced or modified here -- it is the authority on what the build needs.
+# The package list is upstream's own scripts/appimage/install-packages.sh.
+# duckstation_oracle.py reads it from the user's pinned checkout when it builds
+# this image. This repository holds no copy of it and does not modify it -- it
+# is the authority on what the build needs.
 
 FROM ubuntu:22.04
 

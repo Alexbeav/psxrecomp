@@ -105,7 +105,8 @@ class TemplateContract(unittest.TestCase):
     def test_links_committed_bios_backends(self):
         self.assertNotIn("generate_openbios", self.text, "BIOS C is committed, not emitted in CI")
         self.assertIn("-DPSXRECOMP_BIOS_STALE_FATAL=ON", self.text)
-        self.assertIn("BIOS backends linked: .*SCPH1001", self.text)
+        self.assertIn("BIOS backends linked: .*OpenBIOS", self.text)
+        self.assertIn("-DPSXRECOMP_ALLOW_NO_BIOS=OFF", self.text)
 
     def test_configures_a_full_build(self):
         self.assertIn("-DPSXRECOMP_REQUIRE_GAME_C=ON", self.text)
@@ -115,7 +116,7 @@ class TemplateContract(unittest.TestCase):
         self.assertIn("BIOS backends linked: .*OpenBIOS", self.text)
 
     def test_packages_through_the_bundled_wrapper(self):
-        self.assertIn("scripts/package_release.sh build-ci", self.text)
+        self.assertIn("scripts/package_prebuilt_release.sh build-ci", self.text)
         self.assertNotIn("package_setup_release.sh", self.text)
         self.assertNotIn("package_setup_host.sh", self.text)
 
@@ -150,9 +151,14 @@ class ScaffoldContract(unittest.TestCase):
         self.assertTrue(tpl.is_file(), tpl)
         self.assertFalse((TOOLKIT / "templates" / "package_setup_release.sh.in").exists())
         text = tpl.read_text(encoding="utf-8")
-        self.assertIn("package_game_release.sh", text)
+        self.assertIn("package_title_release.sh", text)
+        self.assertIn('--config packaging/release.toml "$@"', text)
+        prebuilt = (TOOLKIT / "templates" / "package_prebuilt_release.sh.in").read_text(encoding="utf-8")
+        self.assertIn("package_game_release.sh", prebuilt)
         self.assertNotIn("package_setup_host.sh", text)
         self.assertNotIn("--project-dir", text, "a bundled release ships no sources")
+        self.assertNotIn("package_setup_host.sh", prebuilt)
+        self.assertNotIn("--project-dir", prebuilt, "CI packaging ships no sources")
 
     def test_scaffold_scripts_use_the_new_template_and_wrapper(self):
         for script in (TOOLKIT / "setup_project.sh", TOOLKIT / "setup_project.ps1"):
@@ -271,7 +277,18 @@ class ProjectStudioContract(unittest.TestCase):
             self.assertTrue(pk.ok, pk.message)
             wrapper = root / "scripts" / "package_release.sh"
             self.assertTrue(wrapper.is_file())
-            self.assertIn("package_game_release.sh", wrapper.read_text(encoding="utf-8"))
+            self.assertIn("package_title_release.sh", wrapper.read_text(encoding="utf-8"))
+            prebuilt = root / "scripts" / "package_prebuilt_release.sh"
+            self.assertTrue(prebuilt.is_file(), "CI invokes this wrapper")
+            self.assertIn("package_game_release.sh", prebuilt.read_text(encoding="utf-8"))
+            # Repair a missing CI wrapper even when the official one exists;
+            # preserve user changes unless force is selected.
+            prebuilt.unlink()
+            wrapper.write_text("# user customization\n", encoding="utf-8")
+            repaired = op_emit_packager(root, opts)
+            self.assertTrue(repaired.ok, repaired.message)
+            self.assertTrue(prebuilt.is_file())
+            self.assertEqual(wrapper.read_text(encoding="utf-8"), "# user customization\n")
             ci = op_emit_ci_workflow(root, opts)
             self.assertTrue(ci.ok, ci.message)
             wf = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

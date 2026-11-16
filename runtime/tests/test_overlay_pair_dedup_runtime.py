@@ -49,7 +49,7 @@ def arch_abi() -> str:
 
 
 def run(command: list[str], *, cwd: pathlib.Path | None = None) -> None:
-    result = subprocess.run(command, cwd=cwd, text=True,
+    result = subprocess.run(command, cwd=cwd, text=True, encoding="utf-8", errors="replace",
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise RuntimeError(
@@ -57,6 +57,7 @@ def run(command: list[str], *, cwd: pathlib.Path | None = None) -> None:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     if result.stdout.strip():
+        sys.stdout.reconfigure(encoding="utf-8")
         print(result.stdout.strip())
 
 
@@ -84,8 +85,10 @@ def compile_fixture(gcc: str, out: pathlib.Path, *, instance: int,
     run(command)
 
 
-def compile_harness(gcc: str, out: pathlib) -> None:
+def compile_harness(gcc: str, out: pathlib, *, codegen_hash: int | None = None) -> None:
     platform_defines = ["-D_GNU_SOURCE"] if platform.system() != "Windows" else []
+    if codegen_hash is not None:
+        platform_defines.append(f"-DPSX_OVERLAY_CODEGEN_HASH=0x{codegen_hash:08x}u")
     command = [
         gcc, "-std=c11", "-O0", "-Wall", "-Wextra",
         "-DPSX_NO_DEBUG_TOOLS",
@@ -95,6 +98,7 @@ def compile_harness(gcc: str, out: pathlib) -> None:
         str(RUNTIME / "src" / "overlay_loader.c"),
         str(RUNTIME / "src" / "overlay_path_canon.c"),
         str(RUNTIME / "src" / "overlay_posix.c"),
+        str(RUNTIME / "src" / "host_span_ring.c"),
         str(RUNTIME / "src" / "crc32.c"),
         str(TESTS / "overlay_pair_dedup_harness.c"), "-o", str(out),
     ]

@@ -105,6 +105,8 @@ STUBS_C = r"""
 #include "harness_common.h"
 #include <stdio.h>
 #include <stdlib.h>
+/* Both debug-trace variants deliberately leave source bus selection off. */
+int source_gpu_runtime_active(void){return 0;}
 
 static const PsxKernelBody s_psx_bios_kernel_bodies[1] = {{0, 0, 0}};
 const PsxKernelBody *psx_bios_kernel_bodies = s_psx_bios_kernel_bodies;
@@ -138,12 +140,21 @@ uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_dispatch_seg_bitmap[PSX_CODE_SEGMENT_COUNT][DIRTY_RAM_EXEC_BITMAP_WORDS] = {{0}};
 int g_psx_render_pass_active = 0;
+/* Out-of-line cycle state psx_cyc.h reaches at -O0 (memory_byte_recorder). */
+uint64_t psx_next_service_cycle = 0;
+int psx_in_device_service = 0;
+uint32_t g_psx_cyc_batch = 0, g_psx_cyc_batch_limit = 0;
+uint32_t g_psx_gcs_recip_q16 = 0, g_psx_gcs_frac = 0;
+void psx_devices_service_to_now(void) {}
+void psx_advance_cycles_slow(uint32_t cycles) { psx_cycle_count += cycles; }
 
 /* These services are inactive in the ordinary RAM/scratchpad trace probes. */
-int psx_mod_host_output_scope(void) { abort(); }
-int render_pass_mmio_read_allowed(uint32_t address, uint32_t width) {
-    (void)address; (void)width; abort();
+/* This trace fixture never enables the instruction cache; attaching the
+ * ordinary RAM region is the only cache integration call it permits. */
+void psx_icache_attach_ram(const uint8_t *ram, uint32_t bytes) {
+    if (!ram || (bytes != 0x200000u && bytes != 0x800000u)) abort();
 }
+int psx_mod_host_output_scope(void) { abort(); }
 void psx_icache_isc_store(uint32_t biu, uint32_t addr, uint32_t value) {
     (void)biu; (void)addr; (void)value; abort();
 }
@@ -173,6 +184,9 @@ void ds_note_read(uint32_t addr, uint8_t width) { (void)addr; (void)width; }
 void ds_note_write(uint32_t addr, uint8_t width) { (void)addr; (void)width; }
 void ds_note_dma_write(void) {}
 void psx_devices_mmio_sync(void) {}
+int render_pass_mmio_read_allowed(uint32_t phys, uint32_t width) {
+    (void)phys; (void)width; return 1;
+}
 void psx_fatal_halt(const char *reason) { fprintf(stderr, "%s\n", reason); abort(); }
 void psx_irq_refresh_cause_ip2(void) {}
 int sio_card_should_hold_imask_bit7(void) { return 0; }
@@ -457,6 +471,8 @@ def build(cc: str, work: pathlib.Path, memory_source: pathlib.Path, name: str,
         str(memory_copy),
         str(ROOT / "runtime" / "src" / "kernel_patch_ranges.c"),
         str(ROOT / "runtime" / "src" / "psx_ram_geometry.c"),
+        str(ROOT / "runtime" / "src" / "text_source_guard.c"),
+        str(ROOT / "runtime" / "src" / "crc32.c"),
         str(work / "stubs.c"),
         str(work / trace_source),
         "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections",
@@ -476,7 +492,7 @@ def run(exe: pathlib.Path, loops: int = 1) -> dict[str, str]:
     if loops != 1:
         cmd.extend(["--loops", str(loops)])
     proc = subprocess.run(cmd, cwd=exe.parent, check=True, text=True,
-                          stdout=subprocess.PIPE)
+                          encoding='utf-8', errors='replace', stdout=subprocess.PIPE)
     return parse(proc.stdout.strip())
 
 

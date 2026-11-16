@@ -1,0 +1,31 @@
+{
+  "task": "T172",
+  "status": "Qualified; independent review and publication pending",
+  "base": "98682c6b634065c648265203757443e70e76d870",
+  "tested_commit": "f092e94ebc567124d775fb1f8ecdb1554918e5a4",
+  "scope": "Exactly five guarded pending notification fragments in runtime/src/cdrom.c: state-clear, enqueue, present, ack-schedule, service",
+  "validation": {
+    "datasets": 8,
+    "profile_cases": 3872,
+    "rows": 283520,
+    "callback_entry_snapshots": 93422,
+    "negative_controls": 32,
+    "full_controller_and_declaration_compile_checks": 7
+  },
+  "plans": [
+    "cd-pending-plan-v1.json",
+    "cd-pending-holdout-plan-v1.json"
+  ],
+  "receipt": "validation-receipt-cd-pending-v1.json",
+  "preservation": "cd-pending-preservation-v1.json: all six unowned raw regions preserved",
+  "inputs": "Declaration/storage/caller contract from T77, pinned primary PSX-SPX and independently authored opaque observations. Old CD bodies/comments, harness, resolver, compiler logs, source exports, historical tests and random tape remain unread.",
+  "retained_attempts": "Observer v1 traces retained as historical only. Two omitted trace arguments identified before installation; all qualification uses observer v2 with all four trace arguments.",
+  "limitations": [
+    "Notification fragment compatibility only; not a full CD pipeline replacement",
+    "No command, sector reading, data FIFO payload transfer, IRQ mask/INTC, drive timing or XA filtering integration",
+    "No actual snapshot continuation, full game, hardware accuracy, performance, quality graduation or legal clearance claim"
+  ],
+  "notice_status": "Original file header and all unowned bytes preserved. T77 reports no explicit notices inside owned fragments. LICENSE unchanged.",
+  "documentation_impact": "Internal replacement with unchanged public interface. Canonical Notion specification and regression ledger updated; no product API or configuration documentation change.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}

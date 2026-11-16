@@ -158,6 +158,7 @@ struct RuntimeMods {
     /* The plan is a netplay match's own-view set: its hooks run only inside
      * psx_mod_render_local_view, its vblank/savestate callbacks not at all. */
     bool netplay_view_plan = false;
+    bool launcher_netplay_context = false;
     const ModResolution::Plugin* current_plugin = nullptr;
     CPUState* current_function_cpu = nullptr;
     bool current_function_finished = false;
@@ -1110,6 +1111,14 @@ int feature_set_option_impl(const char* package_id, const char* feature_id,
 }
 
 #if defined(RECOMP_LAUNCHER)
+std::vector<const ModOption*> provider_options(const ModPackage& package) {
+    std::vector<const ModOption*> out;
+    const bool online = state().launcher_netplay_context || psx_mod_netplay_is_active();
+    for (const ModOption& option : package.options)
+        if (option.visible_in(online)) out.push_back(&option);
+    return out;
+}
+
 void copy_text(char* out, size_t capacity, const std::string& value) {
     if (!out || capacity == 0) return;
     std::snprintf(out, capacity, "%s", value.c_str());
@@ -1145,7 +1154,7 @@ int provider_package_get(void*, int index, RecompLauncherCModPackage* out) {
     copy_text(out->source_name, sizeof(out->source_name), package->source_name);
     copy_text(out->source_url, sizeof(out->source_url), package->source_url);
     out->enabled = package_has_enabled_feature(*package);
-    out->option_count = (int)package->options.size();
+    out->option_count = (int)provider_options(*package).size();
     /* A bundled package is build output. Offering to remove it would succeed
      * and then be silently undone by the next build. */
     out->removable = !package_in_use(*package) &&
@@ -1157,8 +1166,10 @@ int provider_option_get(void*, const char* package_id, int index,
                         RecompLauncherCModOption* out) {
     if (!package_id || !out || index < 0) return 0;
     const ModPackage* package = selected_package(package_id);
-    if (!package || (size_t)index >= package->options.size()) return 0;
-    const ModOption& option = package->options[(size_t)index];
+    if (!package) return 0;
+    const auto options = provider_options(*package);
+    if ((size_t)index >= options.size()) return 0;
+    const ModOption& option = *options[(size_t)index];
     std::memset(out, 0, sizeof(*out));
     copy_text(out->id, sizeof(out->id), option.id);
     copy_text(out->label, sizeof(out->label), option.label);
@@ -1168,14 +1179,18 @@ int provider_option_get(void*, const char* package_id, int index,
     copy_text(out->default_value, sizeof(out->default_value), option.default_value);
     out->type = option.type == ModOptionType::Boolean ? RECOMP_MOD_OPTION_BOOLEAN :
                 option.type == ModOptionType::Choice ? RECOMP_MOD_OPTION_CHOICE :
+#ifdef RECOMP_LAUNCHER_HAS_MOD_OPTION_BINDING
                 option.type == ModOptionType::Binding ? RECOMP_MOD_OPTION_BINDING :
+#endif
                                                        RECOMP_MOD_OPTION_INTEGER;
 #ifdef RECOMP_LAUNCHER_HAS_MOD_OPTION_TEXT
     if (option.type == ModOptionType::Decimal) out->type = RECOMP_MOD_OPTION_TEXT;
 #endif
+#ifdef RECOMP_LAUNCHER_HAS_MOD_OPTION_BINDING
     out->slider = option.slider;
     out->allow_wheel = option.allow_wheel;
     out->display_divisor = option.display_divisor;
+#endif
     out->min_value = option.min_value;
     out->max_value = option.max_value;
     out->step = option.step;
@@ -1229,8 +1244,8 @@ bool provider_feature_at(int index, const ModPackage*& package,
 std::vector<const ModOption*> provider_feature_options(
     const ModPackage& package, const std::string& feature_id) {
     std::vector<const ModOption*> out;
-    for (const ModOption& option : package.options)
-        if (option.feature_id == feature_id) out.push_back(&option);
+    for (const ModOption* option : provider_options(package))
+        if (option->feature_id == feature_id) out.push_back(option);
     return out;
 }
 
@@ -1337,14 +1352,19 @@ int provider_feature_option_get(void*, const char* package_id,
     out->type = option.type == ModOptionType::Boolean
         ? RECOMP_MOD_OPTION_BOOLEAN
         : option.type == ModOptionType::Choice
-            ? RECOMP_MOD_OPTION_CHOICE : option.type == ModOptionType::Binding
-                ? RECOMP_MOD_OPTION_BINDING : RECOMP_MOD_OPTION_INTEGER;
+            ? RECOMP_MOD_OPTION_CHOICE
+#ifdef RECOMP_LAUNCHER_HAS_MOD_OPTION_BINDING
+            : option.type == ModOptionType::Binding ? RECOMP_MOD_OPTION_BINDING
+#endif
+            : RECOMP_MOD_OPTION_INTEGER;
 #ifdef RECOMP_LAUNCHER_HAS_MOD_OPTION_TEXT
     if (option.type == ModOptionType::Decimal) out->type = RECOMP_MOD_OPTION_TEXT;
 #endif
+#ifdef RECOMP_LAUNCHER_HAS_MOD_OPTION_BINDING
     out->slider = option.slider;
     out->allow_wheel = option.allow_wheel;
     out->display_divisor = option.display_divisor;
+#endif
     out->min_value = option.min_value;
     out->max_value = option.max_value;
     out->step = option.step;
@@ -1669,7 +1689,39 @@ RecompLauncherCModProvider provider = {
 };
 #endif
 
+const PSXModNetplayProfile* requested_netplay_profile() {
+    const PSXModNetplayProfile* fallback=nullptr;
+    for(unsigned i=0;i<psx_mod_netplay_profile_count();++i) {
+        const auto* profile=psx_mod_netplay_profile_at(i);
+        if(!profile->select_when_feature_enabled) {if(!fallback)fallback=profile;continue;}
+        if(state().initialized && profile->settings_package_id &&
+           state().manager.feature_enabled(profile->settings_package_id,profile->settings_feature_id)) return profile;
+    }
+    return fallback;
+}
+unsigned requested_netplay_players() {
+    const auto* profile=psx_mod_netplay_profile();
+    if(!profile || !profile->max_players)return 0;
+    unsigned count=profile->max_players;
+    if(profile->optional_last_seat_option) {
+        const auto& s=state();
+        const auto value=psx_mod_netplay_is_active()
+            ? s.manager.feature_option_value(s.plan,profile->settings_package_id,profile->settings_feature_id,profile->optional_last_seat_option)
+            : s.manager.feature_option_value(profile->settings_package_id,profile->settings_feature_id,profile->optional_last_seat_option);
+        if(value=="none")--count;
+    }
+    return count;
+}
 } // namespace
+
+int mod_runtime_netplay_player_limit(int fallback) {
+    const unsigned count=psx_mod_netplay_player_count();
+    return count?(int)count:fallback;
+}
+
+void mod_runtime_set_launcher_netplay_context(bool online) {
+    state().launcher_netplay_context = online;
+}
 
 static std::optional<ModPackageManager> offline_manager_before_netplay;
 static bool netplay_content_negotiation_enabled = false;
@@ -1844,6 +1896,8 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
         catalog_before == s.loaded_catalog;
 #endif
     s.initialized = true;
+    psx_mod_netplay_set_profile_selector(requested_netplay_profile);
+    psx_mod_netplay_set_player_count_selector(requested_netplay_players);
     return true;
 }
 
@@ -1925,7 +1979,9 @@ static bool prepare_profile_settings(const PSXModNetplayProfile* profile,
             return false;
         }
         ModPackageManager settings = s.manager;
-        if (!settings.set_feature_enabled(package->id, profile->settings_feature_id, true, error))
+        /* Install the complete tuple while inactive, then validate once. A
+         * valid roster permutation can have invalid intermediate choices. */
+        if (!settings.set_feature_enabled(package->id, profile->settings_feature_id, false, error))
             return false;
         const bool host_options = caps && caps->valid && caps->mod_count != 0;
         if (host_options) {
@@ -1951,6 +2007,7 @@ static bool prepare_profile_settings(const PSXModNetplayProfile* profile,
         }
         if (host_options && !feat_csv_apply_options(settings, package->id,
                 profile->settings_feature_id, caps->mods[0].feats, error)) return false;
+        if (!settings.set_feature_enabled(package->id, profile->settings_feature_id, true, error)) return false;
         ModSelection selection;
         selection.version = package->version;
         ModFeatureSelection& feature = selection.features[profile->settings_feature_id];
@@ -2516,6 +2573,8 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
     s.ticket_ready = false;
     PreparedPlanInputs inputs;
     inputs.disc_path = disc_path;
+    const bool disc_independent = save_selection && !psx_mod_netplay_is_active() &&
+        session_plan_fp().empty() && offline_disc_independent(s);
 #if defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
     inputs.disc_independent = save_selection && !psx_mod_netplay_is_active() &&
         session_plan_fp().empty() && offline_disc_independent(s);
@@ -2523,12 +2582,13 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         (host_file_identity(disc_path, inputs.disc_identity) &&
          host_file_identity(resolve_disc_path(disc_path).data, inputs.data_identity));
 #endif
+    // Offline selections that consume no disc identity do not decode the image.
+    // Dependent selections must hash even after a prior hash-free same-path commit.
 #if !defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
-    // Offline legacy commits retain path-based digest reuse. A netplay commit
-    // must remeasure even after a same-path lobby offer was prepared.
-    const bool need_hash = !save_selection || disc_path != s.disc_path;
+    const bool need_hash = !disc_independent &&
+        (!save_selection || disc_path != s.disc_path || s.disc_sha256.empty());
 #else
-    const bool need_hash = !inputs.disc_independent;
+    const bool need_hash = !disc_independent;
 #endif
     if (need_hash) {
         std::string hash_error, digest;
@@ -2547,7 +2607,11 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         s.disc_path = disc_path;
         s.disc_sha256.clear();
     }
-    if (!prepare_resources(disc_path, error, !inputs.disc_independent)) return false;
+    if (disc_independent) {
+        s.disc_path = disc_path;
+        s.disc_sha256.clear();
+    }
+    if (!prepare_resources(disc_path, error, !disc_independent)) return false;
 #if defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
     inputs.stable = dependency_files(s, disc_path, inputs.dependencies, inputs.disc_independent);
 #else
@@ -3266,7 +3330,6 @@ static std::filesystem::path mounted_disc_path(const PSXRecompV4::RuntimeMods& s
     }
     return s.effective_disc_path.empty() ? s.disc_path : s.effective_disc_path;
 }
-
 extern "C" int psx_mod_replace_disc_file(const char* path, const void* bytes,
                                          uint32_t size, uint32_t* first_lba) {
     using namespace PSXRecompV4;
@@ -4399,6 +4462,20 @@ extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
  * ABI provider, without its types. Main thread. */
 extern "C" int psx_mod_feature_enable(const char* package_id, const char* feature_id, int enabled) {
     return PSXRecompV4::feature_enable_impl(package_id, feature_id, enabled);
+}
+extern "C" int psx_mod_feature_selected(const char* package_id, const char* feature_id) {
+    using namespace PSXRecompV4;
+    if (!package_id || !feature_id || !state().initialized) return 0;
+    return state().manager.feature_enabled(package_id, feature_id) ? 1 : 0;
+}
+extern "C" int psx_mod_feature_active(const char* package_id, const char* feature_id) {
+    using namespace PSXRecompV4;
+    if (!package_id || !feature_id) return 0;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return 0;
+    for (const ModResolution::Plugin& plugin : s.plan.plugins)
+        if (plugin.package_id == package_id && plugin.feature_id == feature_id) return 1;
+    return 0;
 }
 extern "C" int psx_mod_feature_set_option(const char* package_id, const char* feature_id,
                                           const char* option_id, const char* value) {

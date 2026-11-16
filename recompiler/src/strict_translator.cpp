@@ -582,8 +582,6 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
     //   This makes the C output architecturally correct for ALL
     //   branches, regardless of what their delay slot does.
     //
-    // BLTZAL / BGEZAL (REGIMM rt 0x10, 0x11) are NOT implemented: zero
-    // inventory hits.
     // -----------------------------------------------------------------
 
     // BEQ rs, rt, simm16 (op 0x04)
@@ -677,15 +675,14 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
     }
 
     // REGIMM (op 0x01): BLTZ (rt 0x00), BGEZ (rt 0x01).
-    // BLTZAL / BGEZAL (rt 0x10, 0x11) intentionally not implemented:
-    // no inventory hits.
+    // The link variants snapshot rs before writing RA.
     if (opcode == 0x01) {
         const uint8_t rs = (d.raw >> 21) & 0x1F;
         const uint8_t rt_field = (d.raw >> 16) & 0x1F;
         const int32_t simm = static_cast<int32_t>(static_cast<int16_t>(d.raw & 0xFFFF));
         const uint32_t target = d.address + 4 + static_cast<uint32_t>(simm * 4);
         const uint32_t fallthrough = d.address + 8;
-        if (rt_field == 0x00) { // BLTZ
+        if (rt_field == 0x00 || rt_field == 0x10) { // BLTZ / BLTZAL
             r.supported = true;
             r.is_terminator = true;
             r.terminator_kind = "branch_bltz";
@@ -693,6 +690,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             r.pre_delay_code = fmt::format(
                 "uint32_t psx_brA_{:08X} = cpu->gpr[{}];",
                 d.address, static_cast<int>(rs));
+            if (rt_field & 0x10u) r.pre_delay_code += fmt::format(" cpu->gpr[31] = 0x{:08X}u;", pc + 8u);
             r.c_code = fmt::format(
                 "if ((int32_t)psx_brA_{:08X} < 0) {{ cpu->pc = 0x{:08X}u; return; }} "
                 "cpu->pc = 0x{:08X}u; return;",
@@ -700,7 +698,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             r.comment = fmt::format("bltz {}, 0x{:08X}", gpr_name(rs), target);
             return r;
         }
-        if (rt_field == 0x01) { // BGEZ
+        if (rt_field == 0x01 || rt_field == 0x11) { // BGEZ / BGEZAL
             r.supported = true;
             r.is_terminator = true;
             r.terminator_kind = "branch_bgez";
@@ -708,6 +706,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             r.pre_delay_code = fmt::format(
                 "uint32_t psx_brA_{:08X} = cpu->gpr[{}];",
                 d.address, static_cast<int>(rs));
+            if (rt_field & 0x10u) r.pre_delay_code += fmt::format(" cpu->gpr[31] = 0x{:08X}u;", pc + 8u);
             r.c_code = fmt::format(
                 "if ((int32_t)psx_brA_{:08X} >= 0) {{ cpu->pc = 0x{:08X}u; return; }} "
                 "cpu->pc = 0x{:08X}u; return;",
@@ -906,7 +905,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
         const uint8_t rs = (d.raw >> 21) & 0x1F;
         const uint8_t rt = (d.raw >> 16) & 0x1F;
         const int32_t simm = static_cast<int32_t>(static_cast<int16_t>(d.raw & 0xFFFF));
-        const uint32_t mask = 1u << rs;   /* GPR_DEP rs; dest rt armed via LDWhich */
+        const uint32_t mask = 1u << rs;   /* GPR_DEP rs; dest rt armed via ld_which_t */
         r.supported = true;
         const std::string addr_expr = fmt::format(
             "(uint32_t)((int32_t)cpu->gpr[{}] + ({}))", static_cast<int>(rs), simm);
@@ -979,7 +978,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
                 "uint32_t psx_shift_left  = (3u - psx_byte_offset) * 8u; "
                 "uint32_t psx_keep_mask   = (1u << psx_shift_left) - 1u; "
                 "uint32_t psx_word        = psx_cyc_load_word(cpu, psx_aligned, {}, 0x{:X}u); "
-                "uint32_t psx_old_rt      = cpu->gpr[{}]; "
+                "uint32_t psx_old_rt      = psx_load_value_merge(cpu, {}u); "
                 "cpu->gpr[{}] = (psx_old_rt & psx_keep_mask) | (psx_word << psx_shift_left);",
                 static_cast<int>(rt), mask, static_cast<int>(rt), static_cast<int>(rt));
         r.c_code = fmt::format(
@@ -1005,7 +1004,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
                 "uint32_t psx_shift_right = psx_byte_offset * 8u; "
                 "uint32_t psx_keep_mask   = ~(0xFFFFFFFFu >> psx_shift_right); "
                 "uint32_t psx_word        = psx_cyc_load_word(cpu, psx_aligned, {}, 0x{:X}u); "
-                "uint32_t psx_old_rt      = cpu->gpr[{}]; "
+                "uint32_t psx_old_rt      = psx_load_value_merge(cpu, {}u); "
                 "cpu->gpr[{}] = (psx_old_rt & psx_keep_mask) | (psx_word >> psx_shift_right);",
                 static_cast<int>(rt), mask, static_cast<int>(rt), static_cast<int>(rt));
         r.c_code = fmt::format(
@@ -1316,8 +1315,8 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
 
         if (rs == 0x00) { // MFC0 rt, rd  -- gpr[rt] = cop0[rd]
             r.supported = true;
-            // MFC0 is a delayed load (Beetle: LDAbsorb=0, LDWhich=rt): no give-back
-            // cycles, but sets ReadFudge=rt so a load in the next slot gets no fudge.
+            // MFC0 is a delayed load (ld_absorb=0, ld_which_t=rt): no give-back
+            // cycles, but sets read_fudge=rt so a load in the next slot gets no fudge.
             r.c_code = emit_gpr_write(rt, fmt::format("cpu->cop0[{}]", static_cast<int>(rd)))
                 + fmt::format("\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    cpu->ld_absorb = 0u; cpu->ld_which_t = {}u;\n#endif",
                               static_cast<int>(rt));
@@ -1350,8 +1349,8 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
         const std::string gte_stall =
             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
         // MFC2/CFC2 (GPR-dest reads): stall to the GTE deadline AND hand the stall
-        // amount to the next instruction(s) as a load-delay give-back (Beetle
-        // MFC2/CFC2: LDAbsorb=gte_ts_done-ts, LDWhich=rt). §1+DO_LDS ran in the
+        // amount to the next instruction(s) as a load-delay give-back
+        // (ld_absorb=gte_ts_done-now, ld_which_t=rt). §1+DO_LDS ran in the
         // function's per-instruction psx_cyc_step (COP2 is non-load).
         const std::string gte_read = fmt::format(
             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_read(cpu, {});\n#endif\n    ", static_cast<int>(rt));
@@ -1437,7 +1436,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
         // §1+DO_LDS charged by full_function_emitter's psx_cyc_step (op 0x32 is
         // non-load); the GTE deadline stall by psx_gte_stall; psx_cyc_lwc2_read does
-        // the ReadMemory timing (completion +1, no LDWhich arm — dest is a GTE reg).
+        // the ReadMemory timing (completion +1, no ld_which_t arm — dest is a GTE reg).
         std::string addr = offset == 0
             ? fmt::format("cpu->gpr[{}]", static_cast<int>(rs))
             : fmt::format("(uint32_t)((int32_t)cpu->gpr[{}] + ({}))", static_cast<int>(rs), static_cast<int>(offset));

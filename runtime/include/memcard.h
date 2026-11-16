@@ -99,6 +99,12 @@ int memcard_debug_read_buffer(int card, uint32_t offset, uint32_t len,
 int memcard_export_raw(int card, uint8_t *dst);
 int memcard_import_raw(int card, const uint8_t *src);
 
+/* Player replay cards are RAM-only. Standard raw images are representable;
+ * extended-card codecs/tails need a format the current recorder does not have. */
+int memcard_replay_supported(void);
+int memcard_replay_begin(const uint8_t *images, unsigned mask);
+void memcard_replay_end(void);
+
 /* Redirect on-disk paths for both slots (e.g. guest netplay sandbox) without
  * reloading RAM. Subsequent flushes write to the new paths. Returns 0. */
 int memcard_rebind_dir(const char *dir);
@@ -113,6 +119,15 @@ int memcard_rebind_path(int card, const char *path);
 
 /* Reload in-memory images from the currently bound filepaths (0 = ok). */
 int memcard_reload_bound(void);
+
+/* Replay playback (PS1B-316): the guest sees `images` (2 x MEMCARD_SIZE, slot
+ * order; card n is inserted when bit n of `mask` is set) instead of the
+ * player's cards. Pending player writes are flushed first; the replay cards
+ * have no file, so the guest's writes to them stay in memory. Returns 0. */
+int memcard_replay_begin(const uint8_t *images, unsigned mask);
+/* Back to the player's card files, reloaded from disk. No-op when no replay
+ * cards are in. */
+void memcard_replay_end(void);
 
 #ifdef __cplusplus
 }

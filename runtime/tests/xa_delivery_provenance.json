@@ -1,0 +1,15 @@
+{
+ "schema":"t172-xa-delivery-provenance-v1",
+ "base":"14d1cb79a2869e8ce0b6c691dbaba4bc3648faf1",
+ "tested_commit":"986f6e135a74c58b62d197388f492f30291b8934",
+ "owned":["maybe_deliver_xa_audio"],
+ "inputs":["T77 declaration/state/caller and opaque contract v1","pinned primary PSX-SPX hardware documentation","independently authored opaque observations"],
+ "primary_reference_revision":"a253f078553f83b4e540f087abf0c28d954b6293",
+ "excluded_exposure":["old implementation/comments","inherited source-profile tests","root model, builders/harnesses/generated headers/source exports/compiler diagnostics"],
+ "actual_preserved_dependencies":["classifier","xa_is_audio_realtime","xa_reset_decode","accepted XA4 decoder pair","accepted resampler","accepted volume application"],
+ "observation_seams":["xa_zero_scan","spu_cd_audio_push","trace_cdrom"],
+ "preserved":["all source bytes outside installed region","original file notices and LICENSE","EOF and data suppression policies","earlier accepted slices"],
+ "domain":{"raw_bytes":2352,"payload_offset":24,"delivery_fields":"eight uint8 fields; explicit metadata may differ from raw bytes","controls":"uint8","stream_active":"signed32","history_seeds":"signed24","lba":"signed32","null":"raw and delivery admitted per observer","alias":"disjoint"},
+ "compatibility_caveats":["mute short-circuits processing and preserves history unlike hardware description","reserved decoder shifts 13-15 preserve baseline shift12","resampler preserves pinned GCC overflow observations with defined arithmetic"],
+ "limits":["no full signed32 history/restore claim","no production scanner or real sink/IRQ/timing/transport execution","no hardware correction or audible-gameplay claim","no formal clean-room/legal-clearance/quality claim"]
+}

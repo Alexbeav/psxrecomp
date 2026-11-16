@@ -46,6 +46,28 @@ sys.path.insert(0, str(HERE))
 import probe_disc  # noqa: E402
 
 
+def ensure_chd_reader(project_root: Path) -> bool:
+    """True when libchdr is available to probe a .chd, building it if needed.
+
+    probe_disc reads a .chd through libchdr, which recompiler/ builds next to
+    the emitters (CMake target ``chdr``). The setup wizard records the disc set
+    BEFORE Generate, and on a fresh kit Generate is what first builds that
+    target -- so every .chd set failed here and the roster kept its
+    placeholders (PS1B-118). Build it the same way Generate does.
+    """
+    framework_root = HERE.parent.parent
+    for d in (framework_root, framework_root / "tools"):
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    import psx_chd  # noqa: E402  tools/psx_chd.py
+    if psx_chd.find_libchdr(project_root, framework_root) is not None:
+        return True
+    import psxrecomp_cli  # noqa: E402
+    from sdk_progress import ProgressReporter  # noqa: E402
+    return psxrecomp_cli.ensure_chd_reader(project_root, ProgressReporter()) is not None
+
+
+
 def toml_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -225,6 +247,17 @@ def main() -> int:
             print(f"error: missing disc image {c}", file=sys.stderr)
             return 1
 
+    if any(c.suffix.lower() == ".chd" for c in cues):
+        if not ensure_chd_reader(game_toml.resolve().parent):
+            print("error: CHD reader unavailable; disc configuration unchanged", file=sys.stderr)
+            return 1
+
+    set_tool = program_set_tool(game_toml)
+    if set_tool is not None:
+        if tmp is not None:
+            tmp.cleanup()
+        return update_program_set(set_tool, game_toml, cues, check=args.check)
+
     # Probe each disc, writing the same per-disc artifacts the Retro path
     # leaves behind (disc_probe.json, disc_probe.2.json, ...).
     probes, probe_jsons = [], []
@@ -302,6 +335,53 @@ def main() -> int:
     print(f"updated {game_toml} for {len(paths)} disc(s)")
     return 0
 
+
+# Restored first-party replay-base owners used by the composed CLI.
+def program_set_tool(config: Path):
+    """tools/program_set.py when *config* is a set of programs (set.toml)."""
+    tools = str(HERE.parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import program_set  # noqa: E402
+    return program_set if program_set.is_set_config(config) else None
+
+def update_program_set(program_set, set_toml: Path, cues: list[Path], *, check: bool) -> int:
+    """A set of programs (set.toml): record where the player's discs are.
+
+    The discs of such a set boot different programs (Resident Evil 2), so the
+    one-program rule of verify_disc_set.py does not apply. What must hold
+    instead is that every disc of the set is given and that each image is the
+    disc its position names. Only [game] discs is written: the serials are the
+    set's declaration, not something the player's images decide.
+    """
+    try:
+        spec = program_set.load_set(set_toml)
+        if len(cues) != len(spec["serials"]):
+            raise program_set.SetError(
+                f"{spec['title']} has {len(spec['serials'])} discs and {len(cues)} were given. "
+                "Setup builds every program of this game, so it needs every disc.")
+        program_set.check_discs(spec, list(cues))
+    except program_set.SetError as error:
+        print(f"error: {error} -- nothing written", file=sys.stderr)
+        return 1
+    for number, (cue, serial) in enumerate(zip(cues, spec["serials"]), start=1):
+        print(f"  disc {number}: {serial}  {cue.name}")
+    before = set_toml.read_text(encoding="utf-8")
+    surgeon = TomlSurgeon(before)
+    paths = [str(c) for c in cues]
+    if surgeon.current_values("game", "discs") != paths:
+        surgeon.replace("game", "discs", render_array("discs", paths))
+    new_text = surgeon.text()
+    if check:
+        if new_text != before:
+            print(f"out of date: {set_toml}", file=sys.stderr)
+            return 1
+        print(f"ok: {set_toml}")
+        return 0
+    if new_text != before:
+        set_toml.write_text(new_text, encoding="utf-8")
+    print(f"updated {set_toml} for the {len(paths)} discs of the set")
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

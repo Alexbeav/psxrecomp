@@ -38,6 +38,7 @@ assert EXTRACT_SPEC.loader is not None
 EXTRACT_SPEC.loader.exec_module(EXTRACT)
 
 LOAD = 0x80010000
+C_COMPILER = os.environ.get('CC') or shutil.which('gcc')
 
 
 def put(data, offset, word):
@@ -3138,9 +3139,7 @@ def check_tcc_runtime_define_parity():
 
 def check_real_batched_fragment_publication(recompiler):
     """A poorer same-byte pair stays intact while one richer supplement wins."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = C_COMPILER
     if not gcc:
         return
 
@@ -3224,9 +3223,7 @@ def check_real_batched_fragment_publication(recompiler):
 
 def check_real_hosted_fragment_publication(recompiler):
     """Only exact cached-owner identity may authorize a hosted alias pair."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = C_COMPILER
     if not gcc:
         return
     data = bytearray(0x100)
@@ -3449,9 +3446,7 @@ def check_observed_dispatch_fragment_recovery():
 
 def check_observed_dispatch_cli_recovery(recompiler):
     """An empty shared seed set still recovers once, with byte-variant guards."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = C_COMPILER
     if not gcc:
         return
     data, entry, cap = make_observed_orphan_capture()
@@ -3526,9 +3521,7 @@ def check_observed_dispatch_cli_recovery(recompiler):
 
 def check_full_hosted_fixed_point(recompiler):
     """A clean two-variant CLI build must make its second run a true no-op."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = C_COMPILER
     if not gcc:
         return
     host = LOAD
@@ -3638,9 +3631,7 @@ def check_full_hosted_fixed_point(recompiler):
 
 def check_full_candidate_cli_fastpath(recompiler):
     """An already-full single-tier cache must bypass every compile recipe."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = C_COMPILER
     if not gcc:
         return
     with tempfile.TemporaryDirectory() as td:
@@ -3921,10 +3912,13 @@ def check_return_adjacent_scheduled_frames():
 
 
 def main():
+    global C_COMPILER
     default_recompiler = ROOT / "recompiler" / "build" / "psxrecomp-game.exe"
     parser = argparse.ArgumentParser()
     parser.add_argument("--recompiler", default=str(default_recompiler))
+    parser.add_argument("--compiler", default=C_COMPILER)
     args = parser.parse_args()
+    C_COMPILER = args.compiler
     if not os.path.isfile(args.recompiler):
         raise SystemExit(f"recompiler not found: {args.recompiler}")
 

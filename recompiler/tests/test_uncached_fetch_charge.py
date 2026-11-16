@@ -106,6 +106,13 @@ int g_ls_replay_active = 0;
 static unsigned long long cycles;
 void psx_advance_cycles(uint32_t c) { cycles += c; }
 void psx_cpu_charge(uint32_t c) { cycles += c; }
+/* No overlay charge accumulator or instruction observer is installed here.
+ * The real cache owner still accounts every fetch against this same clock. */
+uint64_t psx_get_cycle_count(void) { return cycles; }
+void overlay_flush_cycles(void) {}
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t pc) {
+    psx_cpu_step_boundary_fn(cpu, pc);
+}
 int main(void) {
     static CPUState cpu;
     char line[64];
@@ -156,7 +163,7 @@ class Harness:
             for op, pc in prog:
                 script.append("N\n" if op == "N" else "%s %08X\n" % (op, pc))
         out = subprocess.run([self.exe], input="".join(script), capture_output=True,
-                             text=True, check=True).stdout.split("\n")
+                             text=True, encoding="utf-8", errors="replace", check=True).stdout.split("\n")
         vals = [tuple(int(x) for x in ln.split()) for ln in out if ln.strip()]
         res, i = [], 0
         for prog in programs:
@@ -227,7 +234,10 @@ def bios_runs(text, problems):
             elif idx is not None:
                 run["insns"][idx] = (run["insns"][idx][0], tag)
             continue
-        if orphan is not None and not line.lstrip().startswith("#"):
+        # The optional bus boundary precedes the same orphan's fetch. It is
+        # an instruction decorator, not the orphan's decoded body. Keep the
+        # fetch association across exactly that seam and preprocessor lines.
+        if orphan is not None and not line.lstrip().startswith(("#", "psx_source_bus_boundary(")):
             orphan = None
         if m:
             if pending is not None:
@@ -329,7 +339,7 @@ def main():
         os.makedirs(out)
         r = subprocess.run([args.bios_recompiler, "--config",
                             os.path.join(ROOT, "bios", "OpenBIOS.toml"), "--out-dir", out],
-                           cwd=ROOT, capture_output=True, text=True)
+                           cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode != 0:
             raise SystemExit("psxrecomp-bios failed:\n%s" % (r.stderr or r.stdout))
         with open(os.path.join(out, "OpenBIOS_full.c")) as f:

@@ -114,9 +114,13 @@ def main() -> int:
         "*.exe", "*.obj", "*.pdb", "*.lib")
     shutil.copytree(ROOT / "runtime", framework / "runtime", ignore=source_ignore)
     shutil.copytree(ROOT / "recompiler", framework / "recompiler", ignore=source_ignore)
+    # runtime.cmake embeds Vulkan SPIR-V through tools/embed_spirv.py, and
+    # PSX_ENABLE_VULKAN defaults ON, so the packaged framework needs it.
+    (framework / "tools").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "tools" / "embed_spirv.py", framework / "tools")
     # This policy source is a canonical codegen-hash input and a dependency of
     # the runtime's hash target, even when a generated project uses no overlays.
-    (framework / "tools").mkdir()
+    (framework / "tools").mkdir(exist_ok=True)
     shutil.copy2(ROOT / "tools" / "compile_overlays.py", framework / "tools")
     bios_profiles = {
         "OpenBIOS.toml": ROOT / "bios" / "OpenBIOS.toml",
@@ -125,6 +129,7 @@ def main() -> int:
         "SCPH5500.toml": ROOT / "bios" / "SCPH5500.toml",
         "SCPH5501.toml": ROOT / "bios" / "SCPH5501.toml",
         "SCPH5552.toml": ROOT / "bios" / "SCPH5552.toml",
+        "SCPH7000.toml": ROOT / "bios" / "SCPH7000.toml",
     }
     (framework / "bios").mkdir()
     for filename, source in bios_profiles.items():

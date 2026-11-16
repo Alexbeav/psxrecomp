@@ -44,7 +44,7 @@ int main(void) {
     callbacks.cpu_charge = advance;
     overlay_init(&callbacks);
     assert(overlay_abi() == PSX_OVERLAY_ABI_TAG);
-    assert(PSX_OVERLAY_ABI_VERSION == 35);
+    assert(PSX_OVERLAY_ABI_VERSION == 37);
     assert((overlay_abi() & 0xFFFF) != 30 && (overlay_abi() & 0xFFFF) != 31);
     assert(psx_ws_screen_x_bound(-256) == -512);
     assert(psx_ws_screen_x_bound(256) == 512);

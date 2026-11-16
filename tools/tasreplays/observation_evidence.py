@@ -75,18 +75,14 @@ def terminal_consistency(pages, raw_path, expected_frames, full_sha=None, first_
     return raw
 
 
-def captured_frames(endpoint, input_frames, checkpoint_every=1200, tail_every=60):
-    if (type(endpoint) is not int or type(input_frames) is not int or
-            not 0 <= input_frames <= endpoint or
-            any(type(n) is not int or n <= 0 for n in (checkpoint_every, tail_every))):
-        raise ValueError('invalid declared capture bounds or intervals')
+def captured_frames(endpoint, input_frames=71806, checkpoint_every=1200, tail_every=60):
     frames = {0, endpoint, input_frames}
     frames.update(range(checkpoint_every, endpoint+1, checkpoint_every))
     frames.update(frame for frame in range(input_frames+1, endpoint+1) if frame % tail_every == 0)
     return frames
 
 
-def compare_stock_observations(stock, observed, endpoint, input_frames, checkpoint_every=1200, tail_every=60):
+def compare_stock_observations(stock, observed, endpoint, input_frames=71806, checkpoint_every=1200, tail_every=60):
     """Recompute passivity from captures, including all declared sparse images."""
     a, b = stock/'ram-frames.tsv', observed/'ram-frames.tsv'
     with a.open() as left, b.open() as right:

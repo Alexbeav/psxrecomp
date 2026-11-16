@@ -12,14 +12,15 @@ game C** and ships the **compiled game**.
 **New Project Layout** (`tools/new_project_layout/setup_project.{sh,ps1}`) copies
 this template into the title repo and replaces `YOUR_*` / `yourgame-release`
 using `--zip-prefix` (or a derived acronym) plus the window title. It also
-writes `scripts/package_release.sh`, `README.md`, and an optional
+writes `scripts/package_release.sh`, `scripts/package_prebuilt_release.sh`,
+`README.md`, and an optional
 `framework_pins.txt` snapshot, and can opt in wizard/netplay via
 `--enable-wizard` / `--enable-netplay`. Release CI pins via submodule gitlinks
 and only logs SHAs with `record_pins.sh` (no `verify_pins` gate).
 
 **Existing titles:** `tools/generate_ci` writes (and `--check`s) the filled
 workflow; Project Studio (`tools/new_project_layout/migrate_project.py apply` /
-`gui`) emits the same packager wrapper + `release.yml` and un-ignores
+`gui`) emits both packager wrappers plus `release.yml` and un-ignores
 `generated/`.
 A title still on the retired setup-host shape is moved whole by
 `tools/migrate_bundled_release.py` (pins, workflow, packager, regenerate,
@@ -92,14 +93,16 @@ Keep only this in the game repo:
 - For netplay titles: `PSX_NETPLAY ON` **before** `include(runtime.cmake)`
   (`ENABLE_NETPLAY_IF_PRESENT` alone is too late), plus `-DPSX_NETPLAY=ON`
   in the release workflow configure step
-- Thin `scripts/package_release.sh` wrapping `package_game_release.sh`
-- Zip prefix / display name / disc hint in that wrapper
+- `scripts/package_release.sh` calls `package_title_release.sh` for an optimized
+  release; its settings live in `packaging/release.toml`.
+- CI calls `scripts/package_prebuilt_release.sh`, which wraps
+  `package_game_release.sh` to package the compiled build.
 - Release notes / GitHub Release job naming
 
 Release CI configures with `-DPSXRECOMP_REQUIRE_GAME_C=ON
 -DPSXRECOMP_BIOS_STALE_FATAL=ON` after `check_generated.sh`, and asserts from
-the configure log that the generated game C and both committed BIOS backends
-(OpenBIOS, SCPH-1001) were linked.
+the configure log that the generated game C and committed OpenBIOS backend
+were linked. SCPH-1001 remains a local option and is not required in public CI.
 
 ## Windows code signing
 

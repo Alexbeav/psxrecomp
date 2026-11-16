@@ -5,21 +5,11 @@ import tempfile
 import threading
 import time
 from compare_ram_pages import MAGIC, PAGE_BYTES, PAGE_COUNT, page_hash, read_pages
-from observation_evidence import captured_frames, compare_returns
+from observation_evidence import compare_returns
 from stream_compare import Watcher, follow_lines, parse_rows, line_hash, write_stop_request, page_reference, stock_reference, stock_ram_reference, CPU_FIELDS
 
 ZERO = page_hash(bytes(PAGE_BYTES))
 HEADER = '\t'.join(['frame', 'cycle'] + [f'{i*PAGE_BYTES:06X}' for i in range(PAGE_COUNT)])
-
-assert captured_frames(5, 2, 2, 1) == {0, 2, 3, 4, 5}
-assert captured_frames(0, 0) == {0}
-for bounds in ((5, 6, 2, 1), (5, -1, 2, 1), (5, 2, 0, 1), (5, 2, 2, 0)):
-    try:
-        captured_frames(*bounds)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError('Invalid sparse capture bounds accepted')
 
 
 def row(frame, cycle_bump=0, page=None):

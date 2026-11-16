@@ -5,6 +5,10 @@
 static OverlayCallbacks g_cbs;
 static uint32_t s_pending_cycles;
 
+/* Live observer state also prevents fused-entry admission during replay. */
+#define g_psx_cpu_step_boundary_callback \
+    (g_cbs.cpu_step_boundary_enabled && g_cbs.cpu_step_boundary_enabled(1))
+
 PSX_OVERLAY_EXPORT void overlay_flush_cycles(void) {
     uint32_t cycles = s_pending_cycles;
     s_pending_cycles = 0;
@@ -27,7 +31,7 @@ static uint32_t s_last_store_pc_local;
 uint32_t *g_psx_last_store_pc_p = &s_last_store_pc_local;
 
 PSX_OVERLAY_EXPORT int overlay_abi(void) {
-    return PSX_OVERLAY_ABI_VERSION | (PSX_OVERLAY_FLAVOR << 16);
+    return PSX_OVERLAY_ABI_TAG;
 }
 
 PSX_OVERLAY_EXPORT void overlay_init(const OverlayCallbacks *cbs) {
@@ -70,6 +74,14 @@ void gte_execute(CPUState *cpu, uint32_t cmd) {
 int psx_syscall(CPUState *cpu, uint32_t code) {
     overlay_flush_cycles();
     return g_cbs.psx_syscall(cpu, code);
+}
+void source_gpu_runtime_latch_bltz(uint32_t pc, int taken) {
+    g_cbs.source_latch_bltz(pc, taken);
+}
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc,
+                    int in_delay_slot) {
+    overlay_flush_cycles();
+    g_cbs.psx_game_break(cpu, code, pc, in_delay_slot);
 }
 void psx_native_bad_entry(CPUState *cpu, uint32_t owner, uint32_t pc) {
     overlay_flush_cycles();
@@ -125,9 +137,25 @@ uint32_t psx_cyc_lwc2_read(CPUState *cpu, uint32_t addr) {
     overlay_flush_cycles();
     return g_cbs.cyc_lwc2_read ? g_cbs.cyc_lwc2_read(cpu, addr) : cpu->read_word(addr);
 }
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+#include <stdio.h>
+#include <stdlib.h>
+PSX_OVERLAY_EXPORT void source_gpu_runtime_cpu_boundary(CPUState *cpu,uint32_t pc){
+    overlay_flush_cycles();
+    if(!g_cbs.source_bus_boundary){fputs("source overlay requires CPU boundary callback\n",stderr);exit(1);}
+    g_cbs.source_bus_boundary(cpu,pc);
+}
+#endif
 void psx_icache_fetch(CPUState *cpu, uint32_t addr) {
     overlay_flush_cycles();
     if (g_cbs.icache_fetch) g_cbs.icache_fetch(cpu, addr);
+}
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t addr) {
+    if (g_cbs.cpu_step_boundary_enabled &&
+        g_cbs.cpu_step_boundary_enabled(0) && g_cbs.cpu_step_boundary) {
+        overlay_flush_cycles();
+        g_cbs.cpu_step_boundary(cpu, addr);
+    }
 }
 void psx_muldiv_set(CPUState *cpu, uint32_t latency) {
     overlay_flush_cycles();

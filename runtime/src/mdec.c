@@ -424,7 +424,7 @@ static int decode_rle_block(int16_t *block, const uint8_t *quant,
     while (word == 0xFE00u && *pos < end) {
         word = mdec.input[(*pos)++];
     }
-    if (word == 0xFE00u) return 0;
+    if (word == 0xFE00u) return 0; /* trailing alignment is not a block */
     mdec.decode_blocks++;
 
     /* Dequant in Beetle's <<4 fixed-point domain (mdec.cpp:439-485), clamp
@@ -506,24 +506,21 @@ static uint8_t *emit_rgb_pixel(uint8_t *out, int y, int cr, int cb) {
 }
 
 static void append_luma_block(const int16_t *yblk) {
-    if (mdec.output_depth == 0) {
-        uint8_t *out = output_reserve(32u);
-        if (!out) return;
-        for (unsigned i = 0; i < 64; i += 2) {
-            unsigned low = (unsigned)(clamp_int(yblk[i], -128, 127) + 136) >> 4;
-            unsigned high = (unsigned)(clamp_int(yblk[i+1], -128, 127) + 136) >> 4;
-            if (low > 15) low = 15;
-            if (high > 15) high = 15;
-            out[i/2] = (uint8_t)((low | (high << 4)) ^
-                                  (mdec.output_signed ? 0x88u : 0u));
-        }
-        mdec.output_size += 32u;
-        return;
-    }
-    uint8_t *out = output_reserve(64u);
+    uint32_t bytes = mdec.output_depth == 0 ? 32u : 64u;
+    uint8_t *out = output_reserve(bytes);
     if (!out) return;
-    for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
-    mdec.output_size += 64u;
+    if (mdec.output_depth == 0) {
+        for (int i = 0; i < 64; i += 2) {
+            unsigned lo = (clamp_int(yblk[i], -128, 127) + 136) >> 4;
+            unsigned hi = (clamp_int(yblk[i+1], -128, 127) + 136) >> 4;
+            if (lo > 15) lo = 15;
+            if (hi > 15) hi = 15;
+            out[i/2] = (uint8_t)((lo | (hi << 4)) ^ (mdec.output_signed ? 0x88u : 0u));
+        }
+    } else {
+        for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
+    }
+    mdec.output_size += bytes;
 }
 
 #if defined(MDEC_HAVE_SSE2)
@@ -806,6 +803,8 @@ uint64_t mdec_color_age_cycles(void) {
     return psx_cycle_count - mdec_last_color_decode_cycle;
 }
 
+#include "mdec_source_profile.inc"
+
 void mdec_init(void) {
     memset(&mdec, 0, sizeof(mdec));
     memset(mdec_trace, 0, sizeof(mdec_trace));
@@ -820,6 +819,9 @@ void mdec_init(void) {
     }
     mdec.output_depth = 3;
     mdec.current_block = 4;
+    mdec_source_profile_init();
+    /* The optional controller uses the separate authored scalar decoder. */
+    if (source_mdec_enabled) return;
 #if defined(MDEC_HAVE_SSE2)
     idct_simd_selfcheck();
     memset(mdec.scale, 0, sizeof(mdec.scale));
@@ -877,6 +879,7 @@ void mdec_init(void) {
 }
 
 uint32_t mdec_read(uint32_t addr) {
+    if(source_mdec_enabled)return (addr&4u)?source_mdec_status(&source_mdec):source_mdec_read(&source_mdec,0,NULL);
     uint32_t offset = addr & 7u;
     if (offset == 0) {
         return mdec_dma_read_word();
@@ -914,6 +917,11 @@ uint32_t mdec_read(uint32_t addr) {
 }
 
 void mdec_write(uint32_t addr, uint32_t value) {
+    if(source_mdec_enabled){
+        if(addr&4u)source_mdec_control(&source_mdec,value);
+        else source_mdec_write(&source_mdec,value,0);
+        source_mdec_require();return;
+    }
     uint32_t offset = addr & 7u;
     if (offset == 0) {
         write_data(value);
@@ -930,6 +938,7 @@ void mdec_write(uint32_t addr, uint32_t value) {
 }
 
 void mdec_dma_write_word(uint32_t value) {
+    if(source_mdec_enabled){source_mdec_write(&source_mdec,value,1);source_mdec_require();return;}
     write_data(value);
 }
 
@@ -937,6 +946,7 @@ void mdec_dma_write_word(uint32_t value) {
  * early if the FIFO becomes not-ready after a decode completes mid-burst.
  * Guest bytes + decode triggers match N× mdec_dma_write_word. */
 uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
+    if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.in_count<32)mdec_dma_write_word(src[n++]);return n;}
     uint32_t moved = 0;
     while (moved < max_words) {
         if (!mdec_dma_write_ready()) break;
@@ -965,6 +975,7 @@ uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
 }
 
 uint32_t mdec_dma_read_word(void) {
+    if(source_mdec_enabled){uint32_t offset;return mdec_source_dma_read(&offset);}
     uint32_t value = 0;
     uint32_t start_pos = mdec.output_pos;
     uint32_t avail = (start_pos < mdec.output_size)
@@ -995,6 +1006,7 @@ uint32_t mdec_dma_read_word(void) {
 
 /* Drain up to `max_words` into a contiguous LE destination (DMA ch1). */
 uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
+    if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.out_count)dst[n++]=mdec_dma_read_word();return n;}
     uint32_t moved = 0;
     while (moved < max_words && mdec.output_pos < mdec.output_size) {
         dst[moved] = mdec_dma_read_word();
@@ -1004,11 +1016,13 @@ uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
 }
 
 int mdec_dma_write_ready(void) {
+    if(source_mdec_enabled)return source_mdec_can_write(&source_mdec);
     if (mdec.output_pos < mdec.output_size) return 0;
     return !mdec.busy || mdec.input_count < mdec.expected_halfwords;
 }
 
 int mdec_dma_read_ready(void) {
+    if(source_mdec_enabled)return source_mdec_can_read(&source_mdec);
     return mdec.output_pos < mdec.output_size;
 }
 
@@ -1107,7 +1121,7 @@ static uint32_t mdec_snap_fixed_bytes(void) {
 uint32_t mdec_snapshot_bytes(void) {
     uint64_t n = (uint64_t)mdec_snap_fixed_bytes() +
                  (uint64_t)mdec.input_count * 2u +
-                 (uint64_t)mdec.output_size;
+                 (uint64_t)mdec.output_size + mdec_source_tail_bytes();
     if (n > 0xffffffffu) return 0;
     return (uint32_t)n;
 }
@@ -1158,6 +1172,7 @@ void mdec_snapshot_write(uint8_t *p) {
         (void)pst_w_u16(&w, mdec.input ? mdec.input[i] : 0u);
     if (mdec.output_size && mdec.output)
         (void)pst_w_bytes(&w, mdec.output, mdec.output_size);
+    (void)mdec_source_tail_write(&w);
 }
 
 /* Wire offsets of the fields mdec_snapshot_read gates on (layout above): ver
@@ -1186,11 +1201,15 @@ int mdec_snapshot_validate(const uint8_t *p, uint32_t len) {
         output_size > MDEC_SNAP_OUTPUT_MAX)
         return 0;
     if (mdec_wire_u32(p, MDEC_SNAP_OFF_OUTPUT_POS) > output_size) return 0;
-    return (uint64_t)len - mdec_snap_fixed_bytes() >=
-           (uint64_t)input_count * 2u + output_size;
+    uint64_t base=(uint64_t)mdec_snap_fixed_bytes()+(uint64_t)input_count*2u+output_size;
+    if (base>len) return 0;
+    if (source_mdec_enabled)
+        return mdec_source_tail_read(p+(size_t)base,len-(uint32_t)base,0);
+    return 1;
 }
 
-int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
+static int mdec_snapshot_parse(const uint8_t *p, uint32_t len,
+                               MDECState *next, PstR *payload, uint64_t *out_age) {
     PstR r;
     uint32_t ver = 0, input_count = 0, output_size = 0, reserved;
     uint64_t age = MDEC_SNAP_AGE_NEVER;
@@ -1199,69 +1218,86 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     pst_r_init(&r, p, len);
     if (!pst_r_u32(&r, &ver) ||
         (ver != MDEC_SNAP_VER && ver != MDEC_SNAP_VER_V1)) return 0;
-    if (!pst_r_u32(&r, &mdec.command) ||
-        !pst_r_u32(&r, &mdec.expected_halfwords) ||
-        !pst_r_u32(&r, &mdec.last_status) ||
-        !pst_r_u32(&r, &mdec.decode_macroblocks) ||
-        !pst_r_u32(&r, &mdec.decode_blocks) ||
-        !pst_r_u32(&r, &mdec.decode_stop_reason) ||
-        !pst_r_u32(&r, &mdec.decode_input_pos) ||
-        !pst_r_u32(&r, &mdec.decode_input_end) ||
-        !pst_r_u32(&r, &mdec.dma_in_words) ||
-        !pst_r_u32(&r, &mdec.dma_out_words) ||
-        !pst_r_u32(&r, &mdec.dma_read_underflows) ||
-        !pst_r_u32(&r, &mdec.output_pos) ||
+    if (!pst_r_u32(&r, &next->command) ||
+        !pst_r_u32(&r, &next->expected_halfwords) ||
+        !pst_r_u32(&r, &next->last_status) ||
+        !pst_r_u32(&r, &next->decode_macroblocks) ||
+        !pst_r_u32(&r, &next->decode_blocks) ||
+        !pst_r_u32(&r, &next->decode_stop_reason) ||
+        !pst_r_u32(&r, &next->decode_input_pos) ||
+        !pst_r_u32(&r, &next->decode_input_end) ||
+        !pst_r_u32(&r, &next->dma_in_words) ||
+        !pst_r_u32(&r, &next->dma_out_words) ||
+        !pst_r_u32(&r, &next->dma_read_underflows) ||
+        !pst_r_u32(&r, &next->output_pos) ||
         !pst_r_u32(&r, &reserved) ||
         !pst_r_u32(&r, &reserved))
         return 0;
-    if (!pst_r_u8(&r, &mdec.output_bit15) ||
-        !pst_r_u8(&r, &mdec.output_signed) ||
-        !pst_r_u8(&r, &mdec.output_depth) ||
-        !pst_r_u8(&r, &mdec.current_block) ||
-        !pst_r_u8(&r, &mdec.busy) ||
-        !pst_r_u8(&r, &mdec.input_full) ||
-        !pst_r_u8(&r, &mdec.enable_dma_in) ||
-        !pst_r_u8(&r, &mdec.enable_dma_out))
+    if (!pst_r_u8(&r, &next->output_bit15) ||
+        !pst_r_u8(&r, &next->output_signed) ||
+        !pst_r_u8(&r, &next->output_depth) ||
+        !pst_r_u8(&r, &next->current_block) ||
+        !pst_r_u8(&r, &next->busy) ||
+        !pst_r_u8(&r, &next->input_full) ||
+        !pst_r_u8(&r, &next->enable_dma_in) ||
+        !pst_r_u8(&r, &next->enable_dma_out))
         return 0;
-    if (!pst_r_bytes(&r, mdec.y_quant, 64u) ||
-        !pst_r_bytes(&r, mdec.uv_quant, 64u))
+    if (!pst_r_bytes(&r, next->y_quant, 64u) ||
+        !pst_r_bytes(&r, next->uv_quant, 64u))
         return 0;
     for (int i = 0; i < 64; i++) {
         if (!pst_r_i16(&r, &s16)) return 0;
-        mdec.scale[i] = s16;
+        next->scale[i] = s16;
     }
     if (!pst_r_u32(&r, &input_count) || !pst_r_u32(&r, &output_size) ||
         !pst_r_u64(&r, &age))
         return 0;
     if (input_count > MDEC_SNAP_INPUT_MAX || output_size > MDEC_SNAP_OUTPUT_MAX)
         return 0;
-    if (mdec.output_pos > output_size) return 0;
+    if (next->output_pos > output_size) return 0;
     if ((size_t)(r.end - r.p) <
         (size_t)input_count * 2u + (size_t)output_size)
         return 0;
-    /* Continued MMIO/DMA writes fill the complete command, not just the
-     * prefix already present when the snapshot was saved. */
-    uint32_t input_capacity = input_count > mdec.expected_halfwords
-                            ? input_count : mdec.expected_halfwords;
-    if (!ensure_input_capacity(input_capacity ? input_capacity : 1u)) return 0;
-    if (!ensure_output_capacity(output_size ? output_size : 1u)) return 0;
-    mdec.input_count = input_count;
-    mdec.output_size = output_size;
-    for (uint32_t i = 0; i < input_count; i++) {
-        uint16_t hw;
-        if (!pst_r_u16(&r, &hw)) return 0;
-        mdec.input[i] = hw;
-    }
-    if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
-        return 0;
-    /* Age is guest cycles since the last colour decode. "Never" stays never:
-     * restoring it as a recent decode reports FMV that is not playing. A decode
-     * older than the restored clock's origin cannot be recent either. */
+    next->input_count = input_count;
+    next->output_size = output_size;
     if (ver == MDEC_SNAP_VER_V1 && age == MDEC_SNAP_V1_AGE_NEVER)
         age = MDEC_SNAP_AGE_NEVER;
-    if (age == MDEC_SNAP_AGE_NEVER || age > psx_cycle_count)
-        mdec_last_color_decode_cycle = MDEC_NEVER_DECODED;
-    else
-        mdec_last_color_decode_cycle = psx_cycle_count - age;
+    *payload = r;
+    *out_age = age;
+    return 1;
+}
+
+/* Reserve the full in-progress command before the machine-wide commit. */
+int mdec_snapshot_prepare(const uint8_t *p, uint32_t len) {
+    MDECState next = mdec;
+    PstR payload;
+    uint64_t age;
+    if (!mdec_snapshot_parse(p, len, &next, &payload, &age)) return 0;
+    uint32_t need = next.input_count > next.expected_halfwords
+                  ? next.input_count : next.expected_halfwords;
+    return (!(need || !source_mdec_enabled) || ensure_input_capacity(need ? need : 1u)) &&
+           (!(next.output_size || !source_mdec_enabled) ||
+            ensure_output_capacity(next.output_size ? next.output_size : 1u));
+}
+
+int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
+    MDECState next = mdec;
+    PstR r;
+    uint64_t age;
+    if (!mdec_snapshot_parse(p, len, &next, &r, &age) ||
+        !mdec_snapshot_prepare(p, len)) return 0;
+    next.input = mdec.input;
+    next.input_cap = mdec.input_cap;
+    next.output = mdec.output;
+    next.output_cap = mdec.output_cap;
+    /* Parsing validated every read and source-profile tail before any commit. */
+    for (uint32_t i = 0; i < next.input_count; i++)
+        (void)pst_r_u16(&r, &next.input[i]);
+    if (next.output_size) (void)pst_r_bytes(&r, next.output, next.output_size);
+    if (source_mdec_enabled &&
+        !mdec_source_tail_read(r.p, (uint32_t)(r.end-r.p), 1)) return 0;
+    mdec = next;
+    mdec_last_color_decode_cycle = age == MDEC_SNAP_AGE_NEVER || age > psx_cycle_count
+                                ? MDEC_NEVER_DECODED : psx_cycle_count - age;
     return 1;
 }

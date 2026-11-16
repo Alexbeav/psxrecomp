@@ -149,3 +149,6 @@ recompiler/build-*/
 # Project Studio GUI venv (customtkinter)
 tools/new_project_layout/.venv/
 tools/new_project_layout/project_studio_repos.json
+
+# Recreated local compiler extraction; tool identity stays in its manifest.
+.cache/

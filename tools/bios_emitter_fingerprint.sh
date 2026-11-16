@@ -9,9 +9,18 @@
 #   PSXRECOMP_FP_DEBUG=1 also prints "<digest>  <path>" per input to stderr.
 set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROFILE="${1:-bios/SCPH1001.toml}"
+PROFILE="bios/SCPH1001.toml"
+args=(-DROOT="$ROOT")
+for arg in "$@"; do
+  case "$arg" in
+    --list) args+=(-DFP_LIST=1) ;;
+    --hand-list) args+=(-DFP_HAND_LIST=1) ;;
+    --*) echo "bios_emitter_fingerprint: unknown option $arg" >&2; exit 3 ;;
+    *) PROFILE="$arg" ;;
+  esac
+done
 CMAKE_BIN="${CMAKE:-cmake}"
 command -v "$CMAKE_BIN" >/dev/null 2>&1 || { echo "bios_emitter_fingerprint: cmake not found on PATH" >&2; exit 1; }
-args=(-DROOT="$ROOT" -DPROFILE="$PROFILE")
+args+=(-DPROFILE="$PROFILE")
 [ -n "${PSXRECOMP_FP_DEBUG:-}" ] && args+=(-DFP_DEBUG=1)
-exec "$CMAKE_BIN" "${args[@]}" -P "$ROOT/tools/bios_emitter_fingerprint.cmake"
+"$CMAKE_BIN" "${args[@]}" -P "$ROOT/tools/bios_emitter_fingerprint.cmake" || exit 3

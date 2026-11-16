@@ -1,6 +1,8 @@
 // config_loader.cpp — see config_loader.h for the contract.
 
 #include "config_loader.h"
+#include "player_settings.h"
+#include <iomanip>
 
 #include <unordered_set>
 #include <algorithm>
@@ -320,6 +322,7 @@ int pad_mode_from_settings_string(const std::string& s, int fallback) {
     std::string l;
     l.reserve(s.size());
     for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
+    if (l == "negcon")  return PAD_MODE_NEGCON;
     if (l == "hybrid")  return PAD_MODE_ANALOG;
     if (l == "analog")  return PAD_MODE_ANALOG;
     if (l == "digital") return PAD_MODE_DIGITAL;
@@ -330,6 +333,7 @@ const char* pad_mode_to_string(int mode) {
     /* Never writes "hybrid": the mod requests it at runtime and it is not
      * persisted as a user preference. */
     switch (mode) {
+        case PAD_MODE_NEGCON: return "negcon";
         case PAD_MODE_DIGITAL: return "digital";
         default:               return "analog";
     }
@@ -697,6 +701,8 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         rt.turbo_loads = toml::find<bool>(runtime, "turbo_loads");
         rt.has_turbo_loads = true;
     }
+    if (runtime.contains("fast_loading_optout"))
+        rt.fast_loading_optout = toml::find<bool>(runtime, "fast_loading_optout");
     if (runtime.contains("offer_turbo_loads")) {
         rt.offer_turbo_loads =
             toml::find<bool>(runtime, "offer_turbo_loads");
@@ -868,7 +874,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[video] depth24_trailing_margin out of range (0..64): {}", n));
             }
             rt.video_depth24_trailing_margin = static_cast<int>(n);
+            rt.video_depth24_trailing_margin_set = true;
         }
+        if (video.contains("fmv_crop_to_picture"))
+            rt.video_fmv_crop_to_picture = toml::find<bool>(video, "fmv_crop_to_picture");
         if (video.contains("internal_resolution")) {
             const toml::value& ir = toml::find(video, "internal_resolution");
             int value = 0;
@@ -1800,7 +1809,13 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     }
     const toml::value& game = *prog_ptr;
 
-    const std::string name = toml::find<std::string>(game, "name");
+    // A set's setup config names several independently generated programs.
+    // It needs disc identity and a title, but has no executable of its own.
+    const bool program_set = cfg.contains("set");
+    const std::string name =
+        (!game.contains("name") && program_set && toml::find(cfg, "set").contains("title"))
+            ? toml::find<std::string>(toml::find(cfg, "set"), "title")
+            : toml::find<std::string>(game, "name");
     const std::string id   = game.contains("id")
                                 ? toml::find<std::string>(game, "id")
                                 : std::string{};
@@ -1816,11 +1831,12 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         exe_field = toml::find<std::string>(game, "exe");
     } else if (game.contains("rom")) {
         exe_field = toml::find<std::string>(game, "rom");
-    } else {
+    } else if (!program_set) {
         throw std::runtime_error(
             fmt::format("{}: [game] missing 'exe' or 'rom' field", config_path.string()));
     }
-    const fs::path exe_path = PSXRecompV4::host_resolve(root, exe_field);
+    const fs::path exe_path =
+        exe_field.empty() ? fs::path{} : PSXRecompV4::host_resolve(root, exe_field);
 
     // Auto-detect EXE header values for any field not explicitly set in TOML.
     // Parses the PS-X EXE header once and fills in load_address, entry_pc,
@@ -1860,7 +1876,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     const uint32_t load_address =
         game.contains("load_address")
             ? parse_hex(toml::find<std::string>(game, "load_address"), "game.load_address")
-            : (auto_hdr.ok ? auto_hdr.load_address : []() -> uint32_t {
+            : (auto_hdr.ok ? auto_hdr.load_address : program_set ? 0x80010000u : []() -> uint32_t {
                 throw std::runtime_error(
                     "game.toml: missing 'load_address' in [game] and could not "
                     "auto-detect from EXE header");
@@ -1872,7 +1888,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     const uint32_t text_size =
         game.contains("text_size")
             ? parse_hex(toml::find<std::string>(game, "text_size"), "game.text_size")
-            : (auto_hdr.ok ? auto_hdr.text_size : []() -> uint32_t {
+            : (auto_hdr.ok ? auto_hdr.text_size : program_set ? 0u : []() -> uint32_t {
                 throw std::runtime_error(
                     "game.toml: missing 'text_size' in [game] and could not "
                     "auto-detect from EXE header");
@@ -1897,6 +1913,24 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<std::string> disc_serials;
     if (game.contains("disc_serials"))
         disc_serials = toml::find<std::vector<std::string>>(game, "disc_serials");
+    /* The set positions this build boots; see GameConfig::program_discs. A
+     * value outside the roster or listed twice is a kit error: refuse it, so a
+     * program can never be left with no disc of its own. */
+    std::vector<int> program_discs;
+    if (game.contains("program_discs")) {
+        program_discs = toml::find<std::vector<int>>(game, "program_discs");
+        for (size_t i = 0; i < program_discs.size(); ++i) {
+            const int n = program_discs[i];
+            bool repeated = false;
+            for (size_t j = 0; j < i; ++j)
+                if (program_discs[j] == n) repeated = true;
+            if (n < 1 || n > (int)discs.size() || repeated)
+                throw std::runtime_error(
+                    "[game] program_discs must list distinct 1-based positions "
+                    "in [game] discs; got " + std::to_string(n) + " with " +
+                    std::to_string(discs.size()) + " disc(s)");
+        }
+    }
 
     // Optional expected disc identity (launcher verification badge).
     bool has_disc_crc = false;
@@ -2060,18 +2094,22 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     }
 
     // [recompiler]
-    if (!cfg.contains("recompiler")) {
+    if (!cfg.contains("recompiler") && !program_set) {
         throw std::runtime_error(
             fmt::format("{}: missing [recompiler] block", config_path.string()));
     }
-    const toml::value& recomp = toml::find(cfg, "recompiler");
+    static const toml::value no_recompiler_table(toml::table{});
+    const toml::value& recomp =
+        cfg.contains("recompiler") ? toml::find(cfg, "recompiler") : no_recompiler_table;
 
-    if (!recomp.contains("seeds")) {
+    if (!recomp.contains("seeds") && !program_set) {
         throw std::runtime_error(
             fmt::format("{}: [recompiler] missing 'seeds' field", config_path.string()));
     }
     const fs::path seeds_path =
-        PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "seeds"));
+        recomp.contains("seeds")
+            ? PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "seeds"))
+            : fs::path{};
 
     fs::path bios_thunks_path;
     if (recomp.contains("bios_thunks")) {
@@ -3002,6 +3040,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*stack_base*/       stack_base,
         /*discs*/            discs,
         /*disc_serials*/     disc_serials,
+        /*program_discs*/    program_discs,
         /*has_disc_crc*/     has_disc_crc,
         /*disc_crc*/         disc_crc,
         /*disc_sha1*/        disc_sha1,
@@ -3188,6 +3227,11 @@ UserSettings load_user_settings(const fs::path& path) {
     // Each field guarded independently so one bad value can't blank the rest.
     auto try_get = [](auto&& fn) { try { fn(); } catch (const std::exception&) {} };
 
+    if (doc.contains("settings_format")) try_get([&]{
+        const auto n = toml::find<int64_t>(doc, "settings_format");
+        if (n > 0 && n < 1000) s.settings_format = (int)n;
+    });
+
     if (doc.contains("video")) {
         const toml::value& v = toml::find(doc, "video");
         if (v.contains("renderer")) try_get([&]{
@@ -3234,6 +3278,11 @@ UserSettings load_user_settings(const fs::path& path) {
         if (v.contains("bios_hle")) try_get([&]{
             s.bios_hle = toml::find<bool>(v, "bios_hle"); s.has_bios_hle = true;
         });
+        if (s.settings_format < 2 && (s.has_fast_boot || s.has_bios_hle)) {
+            s.boot_keys_were_echoes = true;
+            s.has_fast_boot = false;
+            s.has_bios_hle = false;
+        }
         if (v.contains("fullscreen")) try_get([&]{
             // Tri-state (0 off / 1 borderless / 2 exclusive). Back-compat: a
             // settings.toml written before the tri-state migration stores this
@@ -3292,9 +3341,15 @@ UserSettings load_user_settings(const fs::path& path) {
         // rewind / rewind_depth / rewind_interval moved to the built-in
         // Rewind mod (psx.feature.rewind); the old keys are ignored.
     }
-    // [audio] holds no player setting: frequency (the output sample rate) is
-    // the runtime's built-in rate and spu_hq is the built-in Enhanced Audio
-    // mod. Both old keys are ignored and the next save drops them.
+    // Only host volume is a player audio setting. Sample rate and HQ remain
+    // owned by the runtime and the Enhanced Audio mod.
+    if (doc.contains("audio")) {
+        const auto& a = toml::find(doc, "audio");
+        if (a.contains("volume")) try_get([&] {
+            s.volume = std::max(0, std::min(100, toml::find<int>(a, "volume")));
+            s.has_volume = true;
+        });
+    }
     if (doc.contains("hotkeys")) {
         const toml::value& h = toml::find(doc, "hotkeys");
         if (h.contains("rewind_pad")) try_get([&]{
@@ -3482,6 +3537,17 @@ UserSettings load_user_settings(const fs::path& path) {
             s.multitap_analog = toml::find<bool>(ct, "multitap_analog");
             s.has_multitap_analog = true;
         });
+        if (ct.contains("mouse_sensitivity")) try_get([&]{
+            const auto& value = toml::find(ct, "mouse_sensitivity");
+            const double scale = value.is_integer() ? (double)value.as_integer() : value.as_floating();
+            if (scale >= 0.05 && scale <= 10.0) {
+                s.mouse_sensitivity = scale; s.has_mouse_sensitivity = true;
+            }
+        });
+        if (ct.contains("mouse_capture")) try_get([&]{
+            s.mouse_capture = toml::find<bool>(ct, "mouse_capture");
+            s.has_mouse_capture = true;
+        });
         if (ct.contains("jogcon_force_feedback")) try_get([&]{
             s.jogcon_force_feedback = toml::find<bool>(ct, "jogcon_force_feedback");
             s.has_jogcon_force_feedback = true;
@@ -3501,10 +3567,32 @@ UserSettings load_user_settings(const fs::path& path) {
             }
         });
     }
+    for (const auto& spec : kExtraPlayerSettings) {
+        if (!doc.contains(spec.section)) continue;
+        const auto& section=toml::find(doc,spec.section);
+        if (!section.contains(spec.key)) continue;
+        try_get([&] {
+            const auto& raw=toml::find(section,spec.key);
+            std::string value;
+            if (spec.kind==PlayerSettingKind::Boolean) value=raw.as_boolean()?"true":"false";
+            else if (spec.kind==PlayerSettingKind::Text || spec.kind==PlayerSettingKind::Choice ||
+                     (spec.kind==PlayerSettingKind::ResolutionFloor && raw.is_string())) value=raw.as_string().str;
+            else {
+                std::ostringstream text;
+                text << std::setprecision(17);
+                if (raw.is_integer()) text << raw.as_integer();
+                else if (raw.is_floating()) text << raw.as_floating();
+                else return;
+                value=text.str();
+            }
+            if (player_setting_valid(spec,value)) s.extra_player_settings[player_setting_id(spec)]=value;
+        });
+    }
     return s;
 }
 
-fs::path relative_to_folder(const fs::path& p, const fs::path& folder) {
+fs::path relative_to_folder(const fs::path& p, const fs::path& folder,
+                            const fs::path& install_root) {
     if (p.empty() || folder.empty() || !p.is_absolute()) return p;
     std::error_code ec;
     const fs::path base = fs::weakly_canonical(folder, ec);
@@ -3512,9 +3600,29 @@ fs::path relative_to_folder(const fs::path& p, const fs::path& folder) {
     const fs::path full = fs::weakly_canonical(p, ec);
     if (ec) return p;
     const fs::path r = full.lexically_relative(base);
-    // Outside the folder (other drive, or a "../" climb) stays absolute.
-    if (r.empty() || r.is_absolute() || *r.begin() == "..") return p;
+    if (r.empty() || r.is_absolute()) return p;
+    if (*r.begin() != "..") return r;
+    // Outside the folder (other drive, or a "../" climb) stays absolute, with
+    // one exception: the folder is one level below the install's root and the
+    // path lies inside that root. Then the one climb stays inside the install
+    // and moves with it. A deeper folder, or a path outside the root, keeps
+    // its full path: a climb out of the install would name another place
+    // after a move.
+    if (install_root.empty()) return p;
+    const fs::path root = fs::weakly_canonical(install_root, ec);
+    if (ec || base.parent_path() != root) return p;
+    const fs::path in_root = full.lexically_relative(root);
+    if (in_root.empty() || in_root.is_absolute() || *in_root.begin() == "..")
+        return p;
     return r;
+}
+
+namespace {
+fs::path g_user_settings_install_root;
+}
+
+void set_user_settings_install_root(const fs::path& root) {
+    g_user_settings_install_root = root;
 }
 
 bool save_user_settings(const fs::path& path, const UserSettings& s) {
@@ -3534,10 +3642,33 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     // copied to another PC. Readers anchor relative paths on the exe
     // directory, which is where settings.toml lives.
     auto rel = [&](const fs::path& p) { return fwd(relative_to_folder(p, path.parent_path())); };
+    auto rel_card = [&](const fs::path& p) {
+        return fwd(relative_to_folder(p, path.parent_path(), g_user_settings_install_root));
+    };
 
     f << "# psxrecomp user settings - written by the launcher. Safe to hand-edit.\n";
     f << "# Overrides the bundled game.toml; the command line overrides this file.\n\n";
+    f << "settings_format = " << UserSettings::kFormat << "\n\n";
 
+    auto has_extra = [&](const char* section) {
+        for (const auto& spec:kExtraPlayerSettings)
+            if (!std::strcmp(spec.section,section) && s.extra_player_settings.count(player_setting_id(spec))) return true;
+        return false;
+    };
+    auto write_extra = [&](const char* section, bool heading) {
+        if (!has_extra(section)) return;
+        if (heading) f << "\n[" << section << "]\n";
+        for (const auto& spec:kExtraPlayerSettings) {
+            if (std::strcmp(spec.section,section)) continue;
+            auto item=s.extra_player_settings.find(player_setting_id(spec));
+            if (item==s.extra_player_settings.end() || !player_setting_valid(spec,item->second)) continue;
+            f << spec.key << " = ";
+            if (spec.kind==PlayerSettingKind::Text || spec.kind==PlayerSettingKind::Choice ||
+                spec.kind==PlayerSettingKind::ResolutionFloor) f << std::quoted(item->second);
+            else f << item->second;
+            f << "\n";
+        }
+    };
     f << "[video]\n";
     if (s.has_renderer)
         f << "renderer          = \""
@@ -3578,6 +3709,15 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
+    write_extra("video",false);
+    write_extra("runtime",true);
+    /* One [audio] table: the extra audio rows and the host volume share it
+     * (a second [audio] heading makes the file unreadable TOML). */
+    if (has_extra("audio") || s.has_volume) {
+        f << "\n[audio]\n";
+        write_extra("audio",false);
+        if (s.has_volume) f << "volume = " << std::max(0, std::min(100, s.volume)) << "\n";
+    }
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu ||
         s.has_hotkey_pad_fast_forward || s.has_hotkey_pad_fast_forward_toggle ||
         s.has_fast_forward_speed || s.has_fast_forward_mode) {
@@ -3622,11 +3762,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         s.has_memcard1_enabled || s.has_memcard2_enabled) {
         f << "\n[memcard]\n";
         if (s.has_memcard_dir)
-            f << "dir     = \"" << rel(s.memcard_dir) << "\"\n";
+            f << "dir     = \"" << rel_card(s.memcard_dir) << "\"\n";
         if (s.has_memcard1_path)
-            f << "card1   = \"" << rel(s.memcard1_path) << "\"\n";
+            f << "card1   = \"" << rel_card(s.memcard1_path) << "\"\n";
         if (s.has_memcard2_path)
-            f << "card2   = \"" << rel(s.memcard2_path) << "\"\n";
+            f << "card2   = \"" << rel_card(s.memcard2_path) << "\"\n";
         if (s.has_memcard1_enabled)
             f << "enable1 = " << (s.memcard1_enabled ? "true" : "false") << "\n";
         if (s.has_memcard2_enabled)
@@ -3634,7 +3774,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
 
     {
-        bool any_ctrl = s.has_deadzone || s.has_multitap_enabled ||
+        bool any_ctrl = has_extra("controller") || s.has_mouse_sensitivity || s.has_mouse_capture ||
+                        s.has_deadzone || s.has_multitap_enabled ||
                         s.has_multitap_analog || s.has_jogcon_force_feedback;
         for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
             if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
@@ -3649,6 +3790,7 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
                 "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
                 "p5_deadzone"};
             f << "\n[controller]\n";
+            write_extra("controller",false);
             for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
                 if (s.has_p_device[i])
                     f << kDevKeys[i] << " = \"" << s.p_device[i] << "\"\n";
@@ -3667,6 +3809,14 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             if (s.has_jogcon_force_feedback)
                 f << "jogcon_force_feedback = "
                   << (s.jogcon_force_feedback ? "true" : "false") << "\n";
+            if (s.has_mouse_sensitivity) {
+                char sens[32];
+                std::snprintf(sens, sizeof sens, "%.3f", s.mouse_sensitivity);
+                f << "mouse_sensitivity = " << sens << "\n";
+            }
+            if (s.has_mouse_capture)
+                f << "mouse_capture = "
+                  << (s.mouse_capture ? "true" : "false") << "\n";
             /* Keep a global deadzone= for older readers (mirrors P1). */
             if (s.has_deadzone || s.has_p_deadzone[0])
                 f << "deadzone  = "
@@ -3792,3 +3942,4 @@ bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
 }
 
 } // namespace PSXRecompV4
+

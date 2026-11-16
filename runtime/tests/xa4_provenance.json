@@ -1,0 +1,13 @@
+{
+  "schema": "t172-xa4-provenance-v1",
+  "base": "9df13f58d390d962e8a3e4a561024dc2fe75843f",
+  "tested_commit": "8478bc0a082db75d66b014ede5e70e3db22864d8",
+  "owned": ["xa_decode_sector_4bit_stereo", "xa_decode_sector_4bit_mono"],
+  "primary_reference": {"repository_commit": "a253f078553f83b4e540f087abf0c28d954b6293", "path": "docs/cdromformat.md", "sha256": "d391c98d5156b41edb15759e56b21e5619f73b12e2a541d9806f4bb68c981950"},
+  "inputs": ["T77 declaration/storage/caller contract", "pinned primary hardware documentation", "opaque independently authored experiments"],
+  "excluded_exposure": ["old decoder implementation and comments", "inherited source-profile vectors", "restricted builders, harnesses, source exports and compiler logs"],
+  "preserved": ["all surrounding source bytes", "actual unowned clamp", "file-level notices", "repository LICENSE"],
+  "domain": {"input_bytes": 2304, "output_int16_samples": 8064, "history_seed_min": -8388608, "history_seed_max": 8388607, "aliasing": "disjoint non-null input, output and history"},
+  "compatibility_difference": "Reserved shifts 13-15 use shift 12 in baseline observations; pinned hardware documentation specifies shift 9. Replacement preserves baseline behavior.",
+  "limits": ["not full signed32 snapshot compatibility", "no actual reset/restore policy claim", "no hardware-accuracy claim", "no resampling or transport claim", "no audible-gameplay or quality-graduation claim", "no formal clean-room or legal-clearance claim"]
+}

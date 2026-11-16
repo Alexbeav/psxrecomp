@@ -121,6 +121,13 @@ int  sio_get_multitap(void);
 /* phys_port: 0 = console Port 1, 1 = console Port 2. Default 0. */
 void sio_set_multitap_port(int phys_port);
 int  sio_get_multitap_port(void);
+/* Swap which console port each of the first two pads answers on: logical
+ * pad 0 on Port 2 and logical pad 1 on Port 1, as if the plugs were swapped.
+ * The pads keep their buttons, type and rumble; memory cards stay on their
+ * ports. Works in a one-player build: pad 0 moves to Port 2 and Port 1 is
+ * empty. Ignored while a multitap is on. Host state, not saved in a state. */
+void sio_set_pads_swapped(int swapped);
+int  sio_get_pads_swapped(void);
 /* Tomba-only legacy pad config path ([controller] legacy_pad_config). */
 void sio_set_legacy_cfg(int enabled);
 int  sio_get_legacy_cfg(void);
@@ -204,6 +211,7 @@ void sio_netplay_canonicalize_session_pads(int slot_count);
  * => 1) at boot/hotplug. Default is 1 (config-capable) so existing
  * analog/hybrid behaviour is unchanged. */
 void sio_set_pad_config_capable(int slot, int capable);
+int sio_get_pad_config_capable(int slot);
 
 /* Read the raw DualShock motor state selected by the guest's 0x4D rumble map
  * and most recent 0x42 poll. `small` is the fixed-strength high-frequency
@@ -235,6 +243,59 @@ int      sio_peek_ack_visible_reads(void);
 int sio_get_pad_connected(int slot);
 int sio_get_pad_analog(int slot);
 void sio_get_pad_sticks(int slot, uint8_t out[4]);
+
+/* ---- Port device kind (PS1B-279) ----
+ * Which device answers on a logical pad slot. SIO_DEVICE_PAD (the default) is
+ * the digital pad / DualShock above; nothing about it changes. SIO_DEVICE_MOUSE
+ * is the Sony PS1 Mouse (SCPH-1030/1090): ID 5A12h, it answers only the 42h
+ * read with 6 bytes (12h 5Ah FFh buttons dX dY) and ignores every other
+ * command. Spec: recomp-corpus references/ps1/PERIPHERAL-MOUSE-SPEC.md.
+ * The kind is a host preference (which plug is in the port), like the
+ * multitap: it survives sio_init and is not part of the snapshot wire.
+ * Switching a slot's kind clears that slot's mouse motion, buttons, config
+ * latch and rumble map. Connection is still sio_set_pad_connected. */
+#define SIO_DEVICE_PAD    0
+#define SIO_DEVICE_MOUSE  1
+/* SIO_DEVICE_NEGCON (PS1B-304) is the Namco neGcon twist controller: ID 5A23h,
+ * it answers only the 42h read with 8 bytes (23h 5Ah, two button bytes, twist,
+ * I, II, L) and ignores every other command. Spec: recomp-corpus
+ * references/ps1/PERIPHERAL-NEGCON-SPEC.md. Switching a slot to or from it
+ * resets its neGcon state to idle (no button, twist centred, I/II/L 00h). */
+#define SIO_DEVICE_NEGCON 2
+/* SIO_DEVICE_GUNCON (PS1B-305) is the Namco GunCon cinch-type light gun: ID
+ * 5A63h, it answers only the 42h read with 8 bytes (63h 5Ah, two button
+ * bytes, X and Y as little-endian halfwords) and ignores every other command.
+ * Spec: recomp-corpus references/ps1/PERIPHERAL-GUNCON-SPEC.md. Switching a
+ * slot to or from it resets it to idle: no button, "no light" (X=0001h,
+ * Y=000Ah). */
+#define SIO_DEVICE_GUNCON 3
+#define SIO_GUNCON_NO_LIGHT_X 0x0001u
+#define SIO_GUNCON_NO_LIGHT_Y 0x000Au
+void sio_set_port_device(int slot, int kind);
+int  sio_get_port_device(int slot);
+/* Host mouse motion in device counts (positive X = right, positive Y = down).
+ * Added to a per-slot accumulator that each read drains by at most one byte
+ * (-128..+127) per axis; the rest carries to the next read. The accumulator
+ * is clamped to +/-SIO_MOUSE_ACCUM_MAX so a long gap between reads does not
+ * store a large jump. No effect unless the slot is a mouse. */
+#define SIO_MOUSE_ACCUM_MAX 1024
+void sio_mouse_add_motion(int slot, int dx, int dy);
+/* Host button state: nonzero = pressed. */
+void sio_set_mouse_buttons(int slot, int left, int right);
+/* Drop any motion not yet read (capture released, focus lost). */
+void sio_mouse_clear_motion(int slot);
+/* neGcon state for the next reads. buttons is the neGcon halfword as sent
+ * (active low: bit 3 Start, 4-7 D-pad, 11 R, 12 B, 13 A); bits the neGcon does
+ * not have are forced to 1. twist 80h = centre; i, ii, l 00h = released.
+ * No effect unless the slot is a neGcon. */
+void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
+                          uint8_t i, uint8_t ii, uint8_t l);
+/* GunCon state for the next reads. buttons is the GunCon halfword as sent
+ * (active low: bit 3 A, bit 13 trigger, bit 14 B); bits it does not have are
+ * forced to 1. x is 8 MHz clocks since HSYNC, y scanlines since VSYNC; pass
+ * SIO_GUNCON_NO_LIGHT_X/Y when the gun sees no light. No effect unless the
+ * slot is a GunCon. */
+void sio_set_guncon_state(int slot, uint16_t buttons, uint16_t x, uint16_t y);
 
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
@@ -380,6 +441,15 @@ typedef struct {
 } SioIrqEntry;
 
 uint32_t sio_get_irq_ring(const SioIrqEntry **buf_out, int *write_idx_out);
+
+int sio_snapshot_shape_ok(uint32_t len);
+void sio_set_pad_mode_button(int slot, int pressed);
+
+int sio_get_pad_mode_button(int slot);
+
+int sio_source_fsm_live(int *pad_live, int *mc_live);
+
+void sio_source_survey_sizes(uint32_t out[5]);
 
 #ifdef __cplusplus
 }

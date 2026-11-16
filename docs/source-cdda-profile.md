@@ -1,0 +1,71 @@
+# Octoshock 2.3 CD-audio comparison profile
+
+`PSX_CD_CDDA_MODEL=octoshock-2.3` requires the explicit source command-clock
+tape. The route adapters abesoddysee, biohazard, crash, megamanx4, megamanx5,
+pepsiman, redc and spyro select it; the default and Tekken profiles do not.
+The original movie and its frame count are unchanged.
+
+CLAIM: CDDA uses the source drive seek deadline and two physical sector buffers
+before decoded audio reaches the existing native SPU queue. Position/report
+SubQ belongs to the physical read head. Reports replace one pending asynchronous
+response and wait for IRQ acknowledgement plus the 2000-clock receive interval.
+Pause acknowledges the old status, rewinds up to four physical reads, stops the
+producer immediately and preserves already queued audio. Stop and MotorOn use
+the source phase-one state and second-response delays. This is oracle
+compatibility, not measured hardware timing.
+
+ORACLE CORE: BizHawk tag 2.3 (Octoshock), commit
+`a15b31a46bdac27d843d3ebbc5a860012d8452fb`.
+The oracle controller remains in a separate external GPL oracle; it is never
+linked into the native runtime or used as a movie replay core. The runtime's
+CD-DA start, service, notification and peek code was rewritten from black-box
+observations in T172 (`runtime/tests/cdda_*_provenance*.json`). The Pause
+move-back is specified in
+`recomp-corpus/references/ps1/CDROM-SOURCE-PROFILE-SPEC.md`, row P3.
+
+REGRESSION DATA (not a stock-core capture; it was recorded from a build of the oracle's source and
+includes 13 values of the controller's inner state): `runtime/tests/cdrom_source_cdda_fixtures.json` binds four complete
+synthetic-disc transcripts for modes 0/2/4/6: explicit track play, seek boundary,
+position query, pause/resume, already-playing Play, report retention/replacement,
+track pregap autopause, leadout, clamped track argument, pause during seek,
+Stop and MotorOn including repeated commands. Every post-warm-up response byte,
+13 declared controller values at every observation, and each fresh 588-frame
+stereo PCM sector are compared. These are 1,117,988 little-endian output words
+per optimization mode, not inferred parity from the game's image. The authored
+disc has three tracks, deterministic PCM, generated CRC-valid SubQ and no retail
+content. The cold tray/motor image differs between isolated host initialization
+and production native boot; ordinary Reset/GetStat establishes the unit starting
+condition and those warm-up response bytes are explicitly excluded. Inactive
+source timers, unused internal state and downstream SPU mixing are not projected.
+
+DATA-TRACK PLAY (PS1G-116): `runtime/tests/cdrom_source_cdda_data_track_fixtures.json` binds five
+more transcripts from the same oracle build, disc, warm-up and projection. Play starts at a SetLoc
+inside the data track (modes 0, 1, 3 and 5) and runs into audio track 2; the fifth case is the
+SetLoc/Setmode 1/SeekP/Mute/Play order of Spyro: Year of the Dragon's disc check. The oracle
+accepts Play there: the drive seeks, walks, reports and pauses as on an audio track. A buffered
+sector reaches the SPU only while the sub-Q of the sector under the head has the control data bit
+(0x40) clear, so the two data sectors still in the buffer play when the head enters track 2. The
+synthetic data sectors carry an MSF/mode header in bytes 12-15 on both sides. The stage refused
+this Play with exit status 2.
+
+REPRODUCE: configure the runtime CMake tests with GNU C and run
+`ctest --test-dir <build> -R cdrom_source_cdda --output-on-failure`.
+O0 and O2 replay each complete transcript (four audio-track and five data-track
+transcripts), check that Play on the data track starts, and check rejection of scan
+commands, double-speed playback and active data-read to Play. Each transcript also runs
+with a snapshot round trip after every operation, including queued PCM and
+pending reports. See [TAS checkpoints](TAS_CHECKPOINTS.md) for replay qualification.
+Fixtures bind original upstream, external oracle source head/tree/core hash,
+authoring driver, random-word tape, complete operation stream and output hash.
+External build/authoring recipes are retained in the campaign recovery evidence.
+
+Scope: single-speed play with valid SubQ on audio tracks and from the data track
+into audio, ordinary authored commands, cold source-clock selection. Double speed,
+Forward/Backward, active data-read to Play and hardware timing are not
+qualified. Any track count is accepted (PS1G-118). The transcripts cover three
+tracks; a scope case checks that a 57-track disc starts a Play as the
+three-track disc does. From track 10 on, the binary track a Play asks for
+differs from the BCD SubQ track, so autopause ends that Play at its first
+sector. No oracle transcript covers a disc of more than nine tracks.
+Full Pepsiman RAM/clock parity and witnessed ending remain separate
+acceptance gates, as does the unchanged Tekken regression after shared changes.

@@ -65,6 +65,41 @@ void netplay_start_failure_text(int start_rc, int has_netplay,
                                 int sys_error, const char *sys_text,
                                 char *out, size_t cap);
 
+#define NETPLAY_REPORT_ADDRESS "(address)"
+void netplay_start_failure_report_text(int start_rc, int has_netplay,
+                                       const char *bind_hostport,
+                                       const char *peer_hostport, int bind_probe,
+                                       int sys_error, const char *sys_text,
+                                       char *out, size_t cap);
+
+/* A netplay match carries pad input only (PS1B-313). A seat whose device is a
+ * PS1 Mouse or a GunCon would sit in the match with no input, and a neGcon
+ * would lose its twist; before this the match started and nothing told the
+ * player. `sio_device` is the device the seat presents (sio.h SIO_DEVICE_*),
+ * `port` the seat's number as the player sees it (1 = Player 1).
+ * Returns 0 for a pad and leaves `out` empty. Returns 1 for anything else and
+ * writes one sentence that names the device and the port; it fits the lobby
+ * client's last_error. */
+#define NETPLAY_SEAT_REFUSAL_CAP 160
+int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap);
+
+/* The peers of a match must boot the BIOS the same way (PS1B-382). The boot
+ * has three inputs, each resolved per player: the kit's game.toml, then the
+ * player's settings.toml, then the launcher. Two peers of one build that
+ * differed started a match and forked for good at sim 22, with nothing said.
+ * A match therefore boots with the kit's values, which both peers share.
+ * Sets `*mode` to `*kit`. Returns 1 when that changed a value (the player had
+ * chosen otherwise, and is shown NETPLAY_BOOT_MODE_NOTICE), 0 when it did not. */
+typedef struct NetplayBootMode {
+    int bios_hle;    /* [runtime] bios_hle */
+    int keep_intro;  /* [runtime] bios_hle_keep_intro */
+    int fast_boot;   /* [runtime] fast_boot (alias of the boot skip) */
+} NetplayBootMode;
+#define NETPLAY_BOOT_MODE_NOTICE \
+    "Netplay: this match uses the game's own BIOS setting."
+int netplay_boot_mode_settle(const NetplayBootMode *kit, NetplayBootMode *mode);
+
+
 #ifdef __cplusplus
 }
 #endif

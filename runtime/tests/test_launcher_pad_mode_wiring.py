@@ -55,13 +55,18 @@ assert (
 # The C++ unit test hard-codes 1/2 rather than dragging config_loader.h's
 # dependency chain into a header-only test. Pin the enum so it cannot drift.
 assert (
-    "enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };"
+    "enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2, PAD_MODE_NEGCON = 3 };"
     in CONFIG_LOADER
 ), "PadMode values changed; test_launcher_pad_mode_resolve.cpp hard-codes them"
 
 # ---- both launcher-exit readback loops go through it ----------------------
 CALL = "PSXRecompV4::resolve_player_mode_after_launcher("
 calls = [i for i in range(len(MAIN)) if MAIN.startswith(CALL, i)]
+# The in-game menu apply (upstream dc031b6a3) resolves the posted mode too;
+# it is not a launcher exit, so it is counted on its own.
+menu = [i for i in calls if "post.pad_mode[i]" in MAIN[i:i + 200]]
+assert len(menu) == 1, "the in-game menu apply must resolve the posted pad mode"
+calls = [i for i in calls if i not in menu]
 assert len(calls) == 2, (
     "expected exactly 2 launcher-exit readback sites calling "
     f"resolve_player_mode_after_launcher(), found {len(calls)}. A third "
@@ -81,7 +86,11 @@ assert "player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;" not in MAIN, (
     "a launcher-exit path is overwriting a seat's configured mode with "
     "DIGITAL again"
 )
-assert MAIN.count("ls.pad_mode[i] = player_mode[i];") == 2, (
+# Verbatim, except that a neGcon seat goes to an older launcher as Analog
+# (launcher_pad_mode_to_launcher, PS1B-304).
+SEED = ("ls.pad_mode[i] = PSXRecompV4::launcher_pad_mode_to_launcher("
+        "player_mode[i],kLauncherNegconMode);")
+assert MAIN.count(SEED) == 2, (
     "the host must seed the launcher with the seat's configured mode "
     "verbatim, at both launcher-entry sites"
 )
@@ -142,12 +151,12 @@ assert MAIN.index("\nsession_reboot:") > MAIN.index(APPLY), (
     "the soft-return re-assert in the readback loop may be redundant -- "
     "re-derive before deleting it"
 )
-assert MAIN.count("g_mod_controller_mode_override[i])") == 2, (
+assert MAIN.count("g_mod_controller_mode_override[i])") == 3, (  # two exits and the menu apply
     "both launcher-exit resolutions must be passed the live override; found "
     f"{MAIN.count('g_mod_controller_mode_override[i])')} such argument(s)"
 )
 # The direct apply block reads it twice (the >= 0 test and the assignment).
-assert MAIN.count("g_mod_controller_mode_override[i]") == 4, (
+assert MAIN.count("g_mod_controller_mode_override[i]") == 5, (  # + the menu apply
     "expected 4 g_mod_controller_mode_override[i] reads: the apply block's "
     "guard + assignment, plus one argument per launcher-exit resolution; "
     f"found {MAIN.count('g_mod_controller_mode_override[i]')}"

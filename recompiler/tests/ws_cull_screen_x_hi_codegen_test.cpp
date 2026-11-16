@@ -130,7 +130,7 @@ void unlisted_instructions_stay_vanilla() {
     PSXRecomp::CodeGenConfig config{};
     config.emit_comments = true;
     const auto lui = generate_first_instruction(kLuiS6, config);
-    check(has(lui, "cpu->gpr[22] = 0x0200 << 16;"), "unlisted lui stays vanilla");
+    check(has(lui, "cpu->gpr[22] = 0x0200u << 16;"), "unlisted lui stays vanilla");
     check(!has(lui, "psx_ws_cull_lui_hi"), "unlisted lui does not call the helper");
     const auto bltz = generate_first_instruction(kBltzT0, config);
     check(has(bltz, "(int32_t)cpu->gpr[8] < 0"), "unlisted bltz stays vanilla");
@@ -151,7 +151,7 @@ void listed_sites_emit_the_helpers() {
 
     const auto lui = generate_first_instruction(kLuiS6, config);
     check(has(lui, kLuiHelper), "a screen_x site on lui routes through psx_ws_cull_lui_hi");
-    check(!has(lui, "cpu->gpr[22] = 0x0200 << 16;"), "the vanilla lui is replaced");
+    check(!has(lui, "cpu->gpr[22] = 0x0200u << 16;"), "the vanilla lui is replaced");
     check(!exits_with_failure([&] { generate_first_instruction(kLuiS6, config); }),
           "a screen_x site on lui generates");
 

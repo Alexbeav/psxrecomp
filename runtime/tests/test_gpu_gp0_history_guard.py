@@ -231,7 +231,9 @@ uint64_t psx_cycle_count = 0;
 uint32_t g_debug_last_store_pc = 0x80012340u;
 uint32_t g_psx_ram_size = 0x00200000u;
 uint32_t g_psx_ram_mask = 0x001FFFFFu;
-void psx_video_timing_set_pal(int pal) { (void)pal; }
+/* No frame boundary is serviced in this scripted register/VRAM fixture. */
+uint32_t interrupts_get_cycles_since_vblank(void) { return 0; }
+void gr_display_mode_changed(void) {}
 GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
 int gl_renderer_texture_banks_supported(void) { return 0; }
 int gl_renderer_select_texture_bank(uint16_t id) { return id == 0; }
@@ -272,6 +274,7 @@ void text_xlate_vram_upload(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 { (void)x; (void)y; (void)w; (void)h; }
 
 int ws_cull_should_keep(uint32_t addr) { (void)addr; return 1; }
+int gte_nclip_zero_positive(void) { return 0; }
 int ws_ui_group_should_keep(uint32_t addr) { (void)addr; return 1; }
 uint32_t psx_mod_gpu_dma_resolve_address(uint32_t address) { return address; }
 int psx_mod_gpu_dma_memory_contains(uint32_t addr, uint32_t len) { (void)addr; (void)len; return 0; }
@@ -509,6 +512,37 @@ def assert_source_shape(gpu: str) -> None:
         fail("polyline header capture hook was removed")
 
 
+STUBS_C += r"""
+#include "source_gpu_runtime.h"
+uint64_t psx_next_service_cycle;
+uint64_t psx_get_cycle_count(void){return psx_cycle_count;}
+/* Optional source owners stay inactive in default GPU execution fixtures. */
+int source_gpu_runtime_active(void){return 0;}
+int source_gpu_runtime_ready(void){return -2;}
+void source_gpu_runtime_set_dispatch_sink(SourceGPUDispatchSink sink){(void)sink;}
+uint32_t source_gpu_runtime_status_bits(void){return 0;}
+void source_gpu_runtime_gp0(uint32_t value){(void)value;fputs("unexpected source GP0 owner\n",stderr);exit(1);}
+void source_gpu_runtime_gp1(uint32_t value){(void)value;}
+void source_gpu_runtime_read(void){}
+void source_gpu_runtime_copy(SourceGPUServiceClock *clock,SourceGPUCommandProjection *command){(void)clock;(void)command;fputs("unexpected source GPU view\n",stderr);exit(1);}
+uint32_t source_gpu_runtime_snapshot_bytes(void){return 0;}
+void source_gpu_runtime_snapshot_write(uint8_t *p){(void)p;}
+int source_gpu_runtime_snapshot_read(const uint8_t *p,uint32_t n,int apply){(void)p;(void)apply;return !n;}
+void interrupts_raster_gp1(uint32_t word){(void)word;}
+int interrupts_raster_gpu_status(uint32_t *bits){(void)bits;return 0;}
+uint32_t interrupts_source_snapshot_bytes(void){return 0;}
+void interrupts_source_snapshot_write(uint8_t *p){(void)p;}
+int interrupts_source_snapshot_read(const uint8_t *p,uint32_t n,int apply){(void)p;(void)apply;return !n;}
+uint32_t sw_source_texture_snapshot_bytes(void){return 0;}
+void sw_source_texture_snapshot_write(uint8_t *p){(void)p;}
+int sw_source_texture_snapshot_read(const uint8_t *p,uint32_t n,int apply){(void)p;(void)apply;return !n;}
+void gr_source_texture_control(unsigned action,uint32_t page){(void)action;(void)page;}
+int gr_draw_source_triangle(const int *x,const int *y,const uint32_t *colors,int shaded,int dither,int interlace,unsigned field,const SourceGPUTexture *texture,int *extra){(void)x;(void)y;(void)colors;(void)shaded;(void)dither;(void)interlace;(void)field;(void)texture;(void)extra;fputs("unexpected source raster\n",stderr);exit(1);}
+int gr_draw_source_block(const SourceGPUBlock *block,int *extra){(void)block;(void)extra;fputs("unexpected source raster\n",stderr);exit(1);}
+
+"""
+
+
 def write_sources(work: pathlib.Path) -> None:
     (work / "driver.c").write_text(DRIVER_C, encoding="utf-8")
     (work / "stubs.c").write_text(STUBS_C, encoding="utf-8")
@@ -526,6 +560,7 @@ def build(cc: str, work: pathlib.Path, name: str, prod: bool) -> pathlib.Path:
         str(work / "driver.c"),
         str(GPU_C),
         str(GPU_TIMELINE_C),
+        str(ROOT / "runtime/src/psx_video_timing.c"),
         str(work / "stubs.c"),
     ])
     if platform.system() == "Darwin":

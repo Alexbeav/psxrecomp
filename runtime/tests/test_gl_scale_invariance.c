@@ -84,6 +84,8 @@
 #include "gl_postfx_projection_fixture.h"
 #include "gl_fmv_fixture.h"
 #include "gpu_hd_texture_stubs.inc"
+/* This renderer-only scene has no interlaced guest row suppression. */
+int gpu_raster_skipped_row(void){return -1;}
 #include "mod_texture_banks.c"
 #include "gl_batch_policy_lle.c"
 #include "gl_batch_policy_hle.c"
@@ -93,6 +95,7 @@ uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t n,uint32_t a){(void)n;(void)a;ret
 int psx_mod_host_output_scope(void){return 0;}
 uint32_t psx_mod_read_word(uint32_t a){(void)a;return 0;}
 int g_psx_vram_dirty_tracking=0;
+int g_psx_render_pass_active=0; /* standalone fixture has no title render pass */
 uint64_t s_frame_count=0;
 void gpu_vram_dirty_mark_row_impl(uint32_t y){(void)y;}
 void gpu_vram_dirty_mark_rect(int x,int y,int w,int h){(void)x;(void)y;(void)w;(void)h;}
@@ -132,6 +135,7 @@ int present_shot_take(char *out,int n){(void)out;(void)n;return 0;}
 void present_shot_done(int ok){(void)ok;}
 int host_osd_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
 int host_osd_volume_image(const uint32_t **p,int *w,int *h){return host_osd_image(p,w,h);}
+int host_osd_rec_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
 void host_osd_present_done(void){}
 int psx_rewind_overlay_image(const uint32_t **p,int *w,int *h){return host_osd_image(p,w,h);}
 float psx_rewind_slide(void){return 0.0f;}
@@ -459,6 +463,11 @@ static int mask_main(int scale, int window) {
             }
             printf("mask %s check-%s: native kept=%d drawn=%d, at S kept=%d drawn=%d\n",
                    kinds[k], on ? "on" : "off", kept, drawn, hkept, hdrawn);
+            if (k==2 && !on && hdrawn != MASK_W*scale && n) {
+                const uint32_t *row=img+(size_t)(MASK_ROW*scale+scale/2)*ow;
+                fprintf(stderr,"textured first pixel at S=%08x native=%04x mod=%d,%d,%d raw=%d\n",
+                        row[MASK_X0*scale],peek[MASK_ROW*1024+MASK_X0],s_mod_r,s_mod_g,s_mod_b,s_mod_raw);
+            }
             int want_kept = on ? MASK_W : 0, want_drawn = on ? 0 : MASK_W;
             char label[96];
             snprintf(label, sizeof label, "mask %s check-%s: native VRAM", kinds[k], on ? "on" : "off");
@@ -854,7 +863,7 @@ static int capture_main(int scale, int window) {
     s_interp_enabled = 1;
     s_interp_suspended = 0;
     check(interp_capture(fbo, sx, 0, FRAME_W, FRAME_H, 0, 1, GL_PRES_VRAM,
-                         0, 0, 1) == 1,
+                         0, 0, 1) == INTERP_CAPTURED,
           "blend history captured");
     if (s_interp_w != cw || s_interp_h != ch)
         fprintf(stderr, "blend capture %dx%d want %dx%d (source %dx%d)\n",

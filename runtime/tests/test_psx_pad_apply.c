@@ -27,6 +27,9 @@ uint64_t psx_get_cycle_count(void) {
 }
 uint32_t memory_get_sr(void) { return 0; }
 void debug_server_poll(void) {}
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
+}
 void debug_server_log_sio_write(uint32_t a, uint32_t v, uint8_t w) {
     (void)a; (void)v; (void)w;
 }
@@ -57,6 +60,7 @@ int memcard_write_sector(int card, int sector, const uint8_t *buf) {
     (void)card; (void)sector; (void)buf; return -1;
 }
 void memcard_flush(int card) { (void)card; }
+int memcard_last_flush_result(int card) { (void)card; return -1; }
 
 #define SIO_TX_DATA 0x1F801040u
 #define SIO_RX_DATA 0x1F801040u
@@ -216,6 +220,7 @@ int main(void) {
     EXPECT("replacement.unlocked", 0, sio_get_pad_mode_locked(0));
     EXPECT("replacement.digital", 0, sio_get_pad_analog(0));
     EXPECT("replacement.config.off", 0, sio_get_pad_config_mode(0));
+    EXPECT("replacement.config.capable", 1, sio_get_pad_config_capable(0));
     EXPECT("replacement.toggle.accepted", 1, sio_toggle_pad_mode(0));
     poll_bytes(b);
     EXPECT("replacement.dualshock.not.jogcon", 0x73, b[1]);
@@ -302,5 +307,3 @@ int main(void) {
 
 int g_psx_render_pass_active;
 
-/* Match the current SIO flush-status query in this no-file fixture. */
-int memcard_last_flush_result(int card) { (void)card;return 0; }

@@ -1,8 +1,7 @@
 /* Device-level regression: guest RAM is not SIO hardware state.
  * Uses production SIO with a synthetic clock/card, no BIOS or retail data.
- * Independent references: Beetle frontio.cpp DoDSRIRQ/Write and irq.cpp
- * IRQ_Assert/IRQ_Write: SIO cannot modify the INTC mask, and deasserting
- * SELECT cancels the device's pending DSR pulse.
+ * Rule under test: SIO cannot modify the INTC mask, and deasserting SELECT
+ * cancels the device's pending DSR pulse.
  */
 #include "../src/sio.c"
 #include <stdio.h>
@@ -22,6 +21,9 @@ uint32_t memory_get_sr(void) { return 0; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat |= 1u << bit; }
 void debug_server_poll(void) {}
 void debug_server_log_sio_write(uint32_t a, uint32_t v, uint8_t w) { (void)a; (void)v; (void)w; }
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
+}
 void event_ring_record_aux(uint16_t a, uint8_t b, uint32_t c) { (void)a; (void)b; (void)c; }
 void starvation_ring_record(uint8_t a, uint8_t b, uint8_t c, uint16_t d, uint16_t e,
     int f, int g, int h, int i, int j, uint8_t k, uint32_t l,
@@ -45,6 +47,7 @@ int memcard_write_sector(int slot, int sector, const uint8_t *buf) {
     (void)slot; (void)sector; (void)buf; return 0;
 }
 void memcard_flush(int slot) { (void)slot; }
+int memcard_last_flush_result(int slot) { (void)slot; return 0; }
 
 static void check(const char *name, int ok) {
     checks++; if (!ok) failures++;
@@ -96,5 +99,3 @@ int main(int argc, char **argv) {
 /* Standalone device test: not executing a render-only checkpoint. */
 int g_psx_render_pass_active;
 
-/* Match the current SIO flush-status query in this no-file fixture. */
-int memcard_last_flush_result(int card) { (void)card;return 0; }

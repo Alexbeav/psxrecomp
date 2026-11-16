@@ -5,6 +5,8 @@
 // PlayStation boot serial (from the actual SYSTEM.CNF directory entry, with
 // an early-image scan as fallback), derives the region from the
 // serial prefix, and optionally compares against an expected serial / CRC32.
+// Boot filenames with a fifth letter after a known territory prefix (for
+// example SLUSP012.06) use the same canonical serial form (SLUS-01206).
 //
 // Also mounts the resolved path via ISOReader to capture TOC geometry
 // (track count, lead-out, per-track LBAs) and a stable disc_fp fingerprint
@@ -16,6 +18,9 @@
 // the two never drift apart.
 
 #pragma once
+
+// Canonicalize five-letter boot filenames after a known territory prefix.
+#define PSX_DISC_BOOT_SERIAL_VERSION 2
 
 #include <cstdint>
 #include <filesystem>
@@ -44,9 +49,14 @@ struct DiscIdentity {
 
     // Mount / TOC (ISOReader on resolve_disc_path().mount).
     bool        from_cue       = false;  // mount path is a .cue
+    bool        from_chd       = false;  // mount path is a .chd: one file that holds every track
     bool        cue_fallback   = false;  // resolver fell back from a broken cue to a bin
     bool        upgraded_to_cue = false; // caller picked bin; mounted owning cue
     bool        toc_opened     = false;  // ISOReader::Open succeeded on mount
+    bool        sbi_loaded     = false;  // actual mounted reader has replacements;
+                                         // true only with toc_opened (the launcher's
+                                         // SBI row and sbi_warning both read it)
+    std::string sbi_warning;             // nonfatal known-serial missing-SBI note
     int         track_count    = 0;      // >= 1 when toc_opened
     uint32_t    leadout_lba    = 0;      // iso sector count (GetTD track 0)
     std::string disc_fp;                 // lowercase hex SHA-256 of canonical TOC
@@ -60,7 +70,7 @@ struct DiscIdentity {
 
 // Optional title policy from game.toml [netplay] (0 / empty = do not check).
 struct NetplayDiscExpect {
-    bool        require_cue = false;
+    bool        require_cue = false;           // a .chd satisfies it: it cannot be a bare track
     int         required_tracks = 0;           // exact iso_track_count; 0 = skip
     bool        has_required_leadout = false;
     uint32_t    required_leadout_lba = 0;

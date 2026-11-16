@@ -98,6 +98,7 @@ int psx_mod_memory_begin_session(int session_owned);
  * host pointers; immutable host assets are reconstructed separately. */
 uint32_t psx_mod_memory_snapshot_bytes(void);
 void psx_mod_memory_snapshot_write(uint8_t* out);
+int psx_mod_memory_snapshot_validate(const uint8_t *data, uint32_t size);
 int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size);
 /* 1 iff psx_mod_memory_snapshot_read would accept the section; mutates nothing. */
 int psx_mod_memory_snapshot_validate(const uint8_t* data, uint32_t size);

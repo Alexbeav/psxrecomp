@@ -33,6 +33,8 @@
 /* Stub boot_state so the MotK save/load glue links without the full runtime. */
 #ifdef NETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE
 #include "cpu_state.h"
+int psx_netplay_local_slot(void) { return 0; }
+int psx_netplay_is_resimulating(void) { return 0; }
 int boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
                            uint32_t entry_pc, uint8_t** out_data,
                            size_t* out_len) {

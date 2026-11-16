@@ -29,6 +29,15 @@ uint32_t psx_read_word(uint32_t addr)
     memcpy(&v, &g_test_ram[addr & 0x1FFFFCu], 4);
     return v;
 }
+/* The real scheduler inspects the same fixture RAM without guest-read hooks. */
+int psx_peek_word(uint32_t addr, uint32_t *out)
+{
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (!out || addr >= 0xC0000000u || (addr & 3u) || phys >= 0x800000u)
+        return 0;
+    memcpy(out, &g_test_ram[phys & 0x1FFFFFu], sizeof(*out));
+    return 1;
+}
 void psx_host_write_word(uint32_t addr, uint32_t value)
 {
     memcpy(&g_test_ram[addr & 0x1FFFFCu], &value, 4);
@@ -83,6 +92,7 @@ void gpu_vblank_flush_present(void) {}
 void gpu_vblank_clear_deferred_present(void) {}
 void psx_guest_cycle_scale_vblank(void) {}
 void psx_devices_service_to_now(void) {}
+void psx_devices_mmio_sync(void) {}
 int  dma_cdrom_transfer_active(void) { return 0; }
 uint16_t spu_ctrl_read(void) { return 0; }
 int  psx_idle_skip_is_enabled(void) { return 0; }
@@ -134,3 +144,34 @@ uint64_t crash_trace_dispatch_seq_get(void) { return 0; }
 void psx_unknown_dispatch_record(uint32_t a, uint32_t p) { (void)a; (void)p; }
 void psx_crash_trace_dump(const char *r, void *i) { (void)i; fprintf(stderr, "crash: %s\n", r); }
 void psx_fatal_halt(const char *r) { fprintf(stderr, "FATAL: %s\n", r); exit(2); }
+
+uint64_t g_psx_cycle_fast_limit;
+
+uint64_t g_psx_device_gen;
+uint32_t memory_get_ram_bytes(void) { return sizeof g_test_ram; }
+int memory_peek_instruction_word(uint32_t address,uint32_t *out) {
+    uint32_t physical=address&0x1fffffffu;
+    if(!out || physical>sizeof g_test_ram-4 || (physical&3))return 0;
+    memcpy(out,g_test_ram+physical,4);return 1;
+}
+int source_gpu_runtime_active(void) { return 0; }
+int gpu_video_standard_is_pal(void) { return 0; }
+int gpu_display_is_interlaced(void) { return 0; }
+int timers_source_raster_enabled(void) { return 0; }
+void timers_source_raster_event(void *ctx,uint64_t cycle,unsigned event,int blank) {
+    (void)ctx;(void)cycle;(void)event;(void)blank;abort();
+}
+void timers_source_raster_finish(uint64_t cycle) {(void)cycle;abort();}
+void dirty_ram_checkpoint_enter(uint32_t pc,int slot,uint32_t target,int taken) {
+    (void)pc;(void)slot;(void)target;(void)taken;
+}
+void dirty_ram_checkpoint_leave(void) {}
+/* No source-boundary observer is armed; the temporary continuation hooks
+ * above have no consumer. Cache fetch itself uses the real owner. */
+#include "../src/psx_icache.c"
+void psx_publish_note(uint32_t site,uint32_t target,uint32_t origin) {
+    (void)site;(void)target;(void)origin;
+}
+
+/* Backing state for the real scheduler escape reset, not an interpreter double. */
+int g_precise_mode;

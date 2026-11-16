@@ -1,10 +1,11 @@
 """psxrecomp_cli.py rebuild: host portability and configure-flag precedence.
 
-No cmake, compiler or game runs: configure/build are replaced by recorders, so
-these cases pin what the CLI asks CMake for, and that the pre-build mtime clamp
-works on hosts without lutimes (Windows CPython).
+No game or CMake build runs: product configure/build are recorders. The clean
+exit timer is compiled alone with synthetic SDL ticks and no frontend.
 """
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -84,6 +85,10 @@ class RebuildConfigureFlagsTest(unittest.TestCase):
 
         def configure(root, build_dir, pgo, extra, progress):
             self.configures.append((pgo, list(extra)))
+            Path(build_dir).mkdir(parents=True, exist_ok=True)
+            (Path(build_dir) / 'CMakeCache.txt').write_text('\n'.join(
+                flag[2:].replace('=', ':BOOL=', 1)
+                for flag in extra if flag.startswith('-D') and '=' in flag), encoding='utf-8')
 
         with mock.patch.object(cli, 'activate_embedded_toolchain', return_value=True), \
              mock.patch.object(cli, '_cmake_configure', side_effect=configure), \
@@ -106,12 +111,58 @@ class RebuildConfigureFlagsTest(unittest.TestCase):
         self.rebuild(['-DPSX_DEBUG_TOOLS=ON'])
         self.assertEqual([self.debug_tools(e) for _, e in self.configures], ['ON'])
 
-    def test_pgo_instrument_stage_keeps_debug_tools_on(self):
-        # PGO training drives the debug server; a user OFF must not break it,
-        # while the optimized stage still honours the user's choice.
+    def test_pgo_instrument_stage_uses_the_product_shape(self):
+        # The runtime's clean self-exit flushes profiles without a debug server.
+        # Instrumented and final functions must have the same debug control flow.
         self.rebuild(['-DPSX_DEBUG_TOOLS=OFF'], pgo=True)
         self.assertEqual([(p, self.debug_tools(e)) for p, e in self.configures],
-                         [('generate', 'ON'), ('use', 'OFF')])
+                         [('generate', 'OFF'), ('use', 'OFF')])
+
+
+class ProductExitTimerTest(unittest.TestCase):
+    def test_the_actual_runtime_timer_is_disabled_or_exits_cleanly_at_its_deadline(self):
+        compiler = shutil.which(os.environ.get('CXX', 'g++'))
+        if not compiler:
+            self.skipTest('C++ compiler unavailable for the isolated runtime timer')
+        text = (ROOT / 'runtime/src/main.cpp').read_text(encoding='utf-8')
+        start = text.index('static void exit_after_tick(void) {')
+        body = text[start:text.index('\nstatic void frame_report_tick', start)]
+        self.assertIn('exit_after_tick();', text[text.index('frame_report_tick(s_frame_count);'):])
+        harness = '''#include <cstdint>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <cassert>
+static uint64_t ticks;
+uint64_t SDL_GetTicks() { return ticks; }
+void psx_crash_trace_set_exit_origin(const char *origin) {
+    assert(!std::strcmp(origin,"exit_after_ms"));
+    std::puts("clean-exit-origin");
+}
+'''+body+'''
+int main(int argc,char **argv) {
+    assert(argc==2); ticks=100; exit_after_tick();
+    ticks=149; exit_after_tick(); std::puts("before-deadline");
+    ticks=150; exit_after_tick(); std::puts("timer-disabled");
+}
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            src = root / 'timer.cpp'
+            src.write_text(harness, encoding='utf-8')
+            exe = root / ('timer.exe' if os.name == 'nt' else 'timer')
+            for opt in ('-O0', '-O2'):
+                subprocess.run([compiler, '-std=c++17', opt, str(src), '-o', str(exe)],
+                               stdin=subprocess.DEVNULL, check=True, capture_output=True)
+                for value in ('0', '-5', '50'):
+                    env = dict(os.environ, PSX_EXIT_AFTER_MS=value)
+                    result = subprocess.run([str(exe), 'synthetic'], env=env,
+                                            stdin=subprocess.DEVNULL, capture_output=True,
+                                            text=True, encoding='utf-8', errors='replace', timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('before-deadline', result.stdout)
+                    self.assertEqual('clean-exit-origin' in result.stdout, value == '50')
+                    self.assertEqual('timer-disabled' in result.stdout, value != '50')
 
 
 class EmitterHostToolsTest(unittest.TestCase):

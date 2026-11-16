@@ -17,12 +17,30 @@
  * memory and dispatch answers are seams, everything else aborts. */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "cpu_state.h"
+#include "dispatch_publish.h"
+#include "inactive_icache_seams.h"
+uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit;
+uint32_t *g_psx_cyc_local_acc;
+/* This dispatch/value fixture selects no source-device profile or observer. */
+int source_gpu_runtime_active(void) { return 0; }
+/* This dispatch-only fixture has no host request to change discs. */
+int psx_defer_switch_pending(void) { return 0; }
+int g_input_instruction_histogram_active, g_psx_gcs_batch;
+int g_psx_dispatch_depth; /* No nested native dispatch in this fixture. */
 
 /* No mod hooks are active in this interpreter fixture. */
 uint32_t g_psx_mod_instruction_hooks = 0;
 uint32_t g_psx_mod_function_entry_hooks = 0;
+int (*g_psx_func_override_hook)(CPUState *, uint32_t);
+int g_psx_mod_immediate_live = 0;
+uint32_t g_psx_gcs_recip_q16 = 65536u;
+uint32_t g_psx_gcs_frac = 0u;
+int psx_mod_try_function_replacement(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address; return 0;
+}
 
 int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop_addr);
 extern uint64_t g_dirty_ram_blocks_run;   /* one per interpreter hand-back */
@@ -49,6 +67,14 @@ int psx_is_dispatchable(uint32_t pc) { (void)pc; return 1; }
 
 static unsigned s_compiled_calls;
 static uint32_t s_compiled_addr;
+static unsigned s_publish_calls;
+static uint32_t s_published_pc, s_publish_origin;
+void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin) {
+    if (site != PSX_PUB_INTERP_EXIT) abort();
+    ++s_publish_calls;
+    s_published_pc = target;
+    s_publish_origin = origin;
+}
 int psx_dispatch_game_compiled(CPUState *cpu, uint32_t addr) {
     (void)cpu;
     ++s_compiled_calls;
@@ -104,9 +130,17 @@ static void run_from(uint32_t start, unsigned expect_handbacks,
     cpu.pc = start;
     s_compiled_calls = 0;
     s_compiled_addr = 0;
+    s_publish_calls = 0;
     const uint64_t blocks = g_dirty_ram_blocks_run;
     dirty_ram_dispatch(&cpu, start, 0);
     const unsigned handbacks = (unsigned)(g_dirty_ram_blocks_run - blocks);
+    /* Direct compiled admission happens before the interpreter-exit note.
+     * Only the plain interpreter return publishes that note. */
+    if (s_publish_calls != (expect_compiled ? 0u : expect_handbacks) ||
+        (!expect_compiled && (s_published_pc != expect_pc || s_publish_origin != start))) {
+        fprintf(stderr, "FAIL: incorrect interpreter hand-back publication\n");
+        ++failures;
+    }
     printf("start=%08X hand-backs=%u compiled=%u@%08X pc=%08X\n", (unsigned)start,
            handbacks, s_compiled_calls, (unsigned)s_compiled_addr, (unsigned)cpu.pc);
     if (handbacks != expect_handbacks) {
@@ -128,6 +162,32 @@ static void run_from(uint32_t start, unsigned expect_handbacks,
 }
 
 int main(void) {
+    /* Native game dispatch validates live RAM. Its interpreted continuations
+     * must use the same code image, even when a line still holds older words. */
+    {
+        const uint32_t pc = 0x80040000u;
+        const unsigned index = (pc >> 2) & 1023u;
+        const uint32_t live_word = 0x38020007u; /* xori v0,zero,7 */
+        CPUState cpu;
+        memset(&cpu, 0, sizeof cpu);
+        memcpy(ram + 0x40000u, &live_word, sizeof live_word);
+        cpu.read_word = psx_read_word;
+        cpu.pc = pc;
+        g_psx_icache_active = 1;
+        g_psx_icache_tv[index] = pc;
+        g_psx_icache_data[index] = 0x38020001u; /* older xori v0,zero,1 */
+        g_psx_icache_held[index] = 1;
+        dirty_ram_dispatch(&cpu, pc, pc + 4u);
+        if (cpu.gpr[2] != 7u || g_psx_icache_active != 1 ||
+            g_psx_icache_data[index] != 0x38020001u) {
+            fputs("FAIL: native continuation mixed held and live instructions\n", stderr);
+            ++failures;
+        }
+        memset(ram + 0x40000u, 0, sizeof live_word);
+        g_psx_icache_active = 0;
+        g_psx_icache_tv[index] = 0;
+        g_psx_icache_held[index] = 0;
+    }
     /* Through refused text: one hand-back, then compiled code at 0x42000. */
     run_from(0x80040FF0u, 1u, 0x80042000u, 0u);
     /* Control: a clean page outside game text is handed back at once. */

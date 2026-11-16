@@ -269,6 +269,11 @@ int psx_load_delay_enabled(void);
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
 
+extern uint32_t g_dma_cpu_read_wait;
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+extern int g_source_gpu_runtime_enabled;
+#endif
+
 /* Overlay DLLs route timed loads through the host callback shim so they share
  * runtime timing and memory state. Normal generated code keeps the main-RAM
  * fast path inline. */
@@ -280,11 +285,16 @@ uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
 #else
 /* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;
  * KSEG2 / MMIO / lockstep / data-shard fall through to *_slow in memory.c. */
+extern int g_ram_read_watch_active;
+extern void debug_server_trace_ram_read_watch(uint32_t phys, uint32_t value);
 static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+    if(g_source_gpu_runtime_enabled)return psx_cyc_load_word_slow(cpu,addr,rt,reg_mask);
+#endif
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (addr < 0xC0000000u && g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
+    if (!g_dma_cpu_read_wait && addr < 0xC0000000u && g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
         if (g_psx_load_delay) {
             psx_cyc_base(cpu);
@@ -300,6 +310,8 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
         }
         uint32_t value;
         memcpy(&value, g_psx_ram + (phys & g_psx_ram_mask), sizeof(value));
+        if (g_ram_read_watch_active)
+            debug_server_trace_ram_read_watch(phys & g_psx_ram_mask, value);
         return value;
     }
     return psx_cyc_load_word_slow(cpu, addr, rt, reg_mask);
@@ -312,9 +324,12 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
 
 static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
+#ifdef PSX_SOURCE_BUS_BOUNDARY
+    if(g_source_gpu_runtime_enabled)return psx_cyc_load_half_slow(cpu,addr,rt,reg_mask);
+#endif
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (addr < 0xC0000000u && g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
+    if (!g_dma_cpu_read_wait && addr < 0xC0000000u && g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
         if (g_psx_load_delay) {
             psx_cyc_base(cpu);
@@ -330,6 +345,8 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
         }
         uint16_t value;
         memcpy(&value, g_psx_ram + (phys & g_psx_ram_mask), sizeof(value));
+        if (g_ram_read_watch_active)
+            debug_server_trace_ram_read_watch(phys & g_psx_ram_mask, value);
         return value;
     }
     return psx_cyc_load_half_slow(cpu, addr, rt, reg_mask);

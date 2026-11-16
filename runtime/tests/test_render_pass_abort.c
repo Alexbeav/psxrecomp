@@ -73,6 +73,10 @@ static int32_t  s_ti[3];
 
 uint8_t *memory_get_ram_ptr(void) { return s_ram; }
 uint32_t memory_get_ram_bytes(void) { return (uint32_t)sizeof s_ram; }
+/* This fixture owns plain RAM, with no executable-block cache to bless. */
+void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
+    (void)phys; (void)len;
+}
 uint8_t *memory_get_scratchpad_ptr(void) { return s_spad; }
 uint32_t dma_snapshot_bytes(void) { return sizeof s_dma_regs; }
 void dma_snapshot_write(uint8_t *p) { memcpy(p, s_dma_regs, sizeof s_dma_regs); }
@@ -219,6 +223,13 @@ int gl_renderer_local_pair_begin(int x, int y, int w, int h, int reuse) {
     return gl_renderer_pass_begin(x,y,w,h,0,0,reuse);
 }
 int gl_renderer_local_pair_set_presentation(int enabled) { (void)enabled;return 1; }
+int gl_renderer_local_grid_set_presentation(int enabled) { (void)enabled;return 1; }
+int gl_renderer_local_triple_set_presentation(int enabled) { (void)enabled;return 1; }
+int gl_renderer_local_grid_publish(uint64_t id,uint64_t cycle,const int32_t view[4][3],unsigned views) {
+    (void)cycle;(void)view;
+    if(s_stereo_mask!=(1u<<views)-1u)return 0;
+    s_stereo_published=id;return 1;
+}
 int gl_renderer_stereo_end(uint32_t eye, int keep) {
     gl_renderer_pass_end(0, keep);
     if (keep) s_stereo_mask |= 1u << eye;
@@ -397,6 +408,14 @@ static int stereo_draw(struct CPUState *cpu, void *user, uint32_t eye) {
 
     guest_frame(cpu, &frames, 0);
     return 1;
+}
+static int grid_draw(struct CPUState *cpu,void *user,uint32_t seat) {
+    Frames frames={5,user && seat==3};
+    guest_frame(cpu,&frames,0);return 1;
+}
+static int triple_draw(struct CPUState *cpu,void *user,uint32_t seat) {
+    Frames frames={5,user && seat==2};
+    guest_frame(cpu,&frames,0);return 1;
 }
 
 typedef struct Live {
@@ -662,8 +681,25 @@ int main(void) {
         check_live(&live,"after local second-view watchdog");
         CHECK(psx_mod_render_local_pair(&cpu,&frame,stereo_draw,NULL)==1,
               "local pair recovers after watchdog");
+        CHECK(psx_mod_render_local_grid(&cpu,&frame,grid_draw,NULL)==1,"complete local grid publishes");
+        kept=s_stereo_published;
+        CHECK(!psx_mod_render_local_grid(&cpu,&frame,grid_draw,&runaway),"fourth-view watchdog discards the grid");
+        CHECK(s_stereo_published==kept && !s_stereo_mask && !psx_mod_local_view_scope(),"grid watchdog retains complete frame and closes scope");
+        check_live(&live,"after fourth-view watchdog");
+        CHECK(psx_mod_render_local_grid(&cpu,&frame,grid_draw,NULL)==1,"grid recovers after watchdog");
+        /* Isolate this failure case from the preceding seven deliberate
+         * faults; the session correctly disables passes on its eighth. */
+        render_pass_reset_session();snap(&live);
+        CHECK(psx_mod_render_local_triple(&cpu,&frame,triple_draw,NULL)==1,"complete local triple publishes");
+        kept=s_stereo_published;
+        CHECK(!psx_mod_render_local_triple(&cpu,&frame,triple_draw,&runaway),"third-view watchdog discards the triple");
+        CHECK(s_stereo_published==kept && !s_stereo_mask && !psx_mod_local_view_scope(),"triple watchdog retains complete frame and closes scope");
+        check_live(&live,"after third-view watchdog");
+        CHECK(psx_mod_render_local_triple(&cpu,&frame,triple_draw,NULL)==1,"triple recovers after watchdog");
     }
 
     printf(failures ? "FAILED (%d)\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;
 }
+
+#include "source_bus_inactive_clock.inc"

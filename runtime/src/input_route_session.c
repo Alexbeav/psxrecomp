@@ -1,0 +1,1218 @@
+/* Route identity, markers, release replay and the diagnostic recorder (T101).
+ * See input_route_session.h. Every entry point is one branch when no route
+ * or recording is armed. */
+#include "input_route_session.h"
+#include "disc_digest_cache.h"
+#include "input_route_v3_file.h"
+#include "input_dualshock_delivery.h"
+#include "psx_sha256.h"
+#include "psx_file_create_new.h"
+#include "sio.h"
+#ifdef PSX_NO_DEBUG_TOOLS
+#include "crash_trace.h"
+#include "input_route_observer.h"
+#endif
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+extern uint8_t *g_psx_ram;
+extern uint64_t psx_cycle_count;
+
+/* Full 40-hex psxrecomp commit, stamped by runtime.cmake on this file only. */
+#ifndef PSX_FRAMEWORK_PIN
+#define PSX_FRAMEWORK_PIN ""
+#endif
+
+#define RAM_PAGE_BYTES 4096u
+#define PATH_BYTES 4096u
+
+static char s_product_serial[INPUT_ROUTE_V3_TEXT];
+static char s_product_disc[PATH_BYTES];
+static char s_product_bios_stem[INPUT_ROUTE_V3_TEXT];
+/* The digest is hashed once per disc: a disc change calls set_disc, which
+ * drops it. */
+static int s_digest_cached;
+static uint32_t s_digest_kind;
+static uint8_t s_digest[32];
+/* Player-replay digest, which may come from the persistent file cache. */
+static int s_replay_digest_cached;
+static uint32_t s_replay_digest_kind;
+static uint8_t s_replay_digest[32];
+static char s_disc_roster[INPUT_ROUTE_V3_MAX_DISCS][PATH_BYTES];
+static uint32_t s_disc_roster_count;
+static InputRouteEventExecutor s_event_executor;
+
+/* Armed state shared by replay and record. */
+static int s_active;         /* markers to check, or recording */
+static int s_owns_ports;     /* PSXRTI3 digital route or recording */
+static int s_route_armed;    /* any route admitted, whatever its format */
+static int s_recording;
+static int s_exit_after_markers;
+static int s_all_matched = 1;
+static uint32_t s_frame;     /* inputs supplied before the current boundary */
+static InputRouteV3 s_meta;
+static InputRouteMarker s_markers[INPUT_ROUTE_V3_MAX_MARKERS];
+static InputRouteCheckpoint *s_checkpoints;
+static uint32_t s_next_marker;
+static uint32_t s_next_event;
+static FILE *s_event_receipt_stream;
+
+/* Release replay. */
+static InputRouteStep *s_digital;
+static InputDualShockRouteStep *s_dual;
+static InputTwoDigitalRouteStep *s_two_digital;
+static uint32_t s_step_count, s_step_index, s_step_remaining;
+static int s_release_loaded, s_release_dual, s_release_two_digital;
+static uint16_t s_release_port2 = 0xffff;
+static uint8_t s_dual_axes[4] = {128, 128, 128, 128};
+static uint8_t s_dual_mode_button;
+#ifdef PSX_NO_DEBUG_TOOLS
+/* Route pictures in a release product (PS1B-404). The diagnostic product
+ * drives the route observer from its debug server; a release product has no
+ * debug server, so the release replay drives it, and only when
+ * PSX_INPUT_ROUTE_CAPTURE_DIR is set. */
+static int s_release_capture;
+static uint32_t s_release_consumed;  /* inputs supplied so far */
+static int s_release_in_observer;    /* an observer call is on the stack */
+static char s_release_complete_path[4096];
+extern uint64_t s_frame_count;
+#endif
+
+/* Recorder (diagnostic product only). */
+#ifndef PSX_NO_DEBUG_TOOLS
+static char s_record_path[PATH_BYTES];
+static uint16_t *s_words;
+static uint32_t s_word_count, s_record_steps;
+static int s_record_truncated;
+static unsigned s_pending[8];
+static unsigned s_pending_count;
+#endif
+
+static void hex(const uint8_t *bytes, unsigned n, char *out)
+{
+    static const char digits[] = "0123456789abcdef";
+    for (unsigned i = 0; i < n; ++i) {
+        out[2 * i] = digits[bytes[i] >> 4];
+        out[2 * i + 1] = digits[bytes[i] & 15];
+    }
+    out[2 * n] = 0;
+}
+
+static void copy_text(char *dst, size_t size, const char *src)
+{
+    size_t n = src ? strlen(src) : 0;
+    if (n >= size) n = size - 1;
+    if (n) memcpy(dst, src, n);
+    dst[n] = 0;
+}
+
+void input_route_session_set_product(const char *disc_serial,
+                                     const char *disc_path,
+                                     const char *bios_path)
+{
+    const char *base = bios_path ? bios_path : "";
+    const char *dot;
+    size_t n;
+    copy_text(s_product_serial, sizeof(s_product_serial), disc_serial);
+    copy_text(s_product_disc, sizeof(s_product_disc), disc_path);
+    s_digest_cached = 0;
+    s_replay_digest_cached = 0;
+    for (const char *p = base; *p; ++p)
+        if (*p == '/' || *p == '\\') base = p + 1;
+    dot = strrchr(base, '.');
+    n = dot && dot != base ? (size_t)(dot - base) : strlen(base);
+    if (n >= sizeof(s_product_bios_stem)) n = sizeof(s_product_bios_stem) - 1;
+    memcpy(s_product_bios_stem, base, n);
+    s_product_bios_stem[n] = 0;
+}
+
+void input_route_session_set_disc(const char *disc_serial, const char *disc_path)
+{
+    copy_text(s_product_serial, sizeof(s_product_serial), disc_serial);
+    copy_text(s_product_disc, sizeof(s_product_disc), disc_path);
+    s_digest_cached = 0;
+    s_replay_digest_cached = 0;
+}
+
+int input_route_session_set_disc_roster(const char *const *paths, uint32_t count)
+{
+    memset(s_disc_roster, 0, sizeof(s_disc_roster));
+    s_disc_roster_count = 0;
+    if (!count) return 1;
+    if (!paths || count > INPUT_ROUTE_V3_MAX_DISCS) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!paths[i] || !paths[i][0] || strlen(paths[i]) >= PATH_BYTES) return 0;
+        copy_text(s_disc_roster[i], sizeof(s_disc_roster[i]), paths[i]);
+    }
+    s_disc_roster_count = count;
+    return 1;
+}
+
+void input_route_session_set_event_executor(InputRouteEventExecutor executor)
+{
+    s_event_executor = executor;
+}
+
+int input_route_session_event_position(uint32_t *boundary,uint32_t *ordinal)
+{
+    if (!s_active || !s_frame || s_next_event>=s_meta.event_count) return 0;
+    if(boundary)*boundary=s_frame-1u;
+    if(ordinal)*ordinal=s_next_event;
+    return 1;
+}
+
+/* The product and focused real-ISO fixture use this same passive receipt
+ * writer after the production drive operation. Requested state is not used
+ * as drive readback. No receipt exists unless full audit was requested. */
+static void event_json_text(FILE *f,const char *text) {
+    fputc(34,f);
+    for(const unsigned char *p=(const unsigned char*)text;*p;++p) {
+        if(*p==34 || *p==92)fputc(92,f);
+        if(*p<32)fprintf(f,"\\u%04x",*p);else fputc(*p,f);
+    }
+    fputc(34,f);
+}
+int input_route_session_event_receipt(uint8_t event,uint8_t disc_index,int result,
+    uint64_t runtime_frame,uint64_t cycle,const uint32_t before[4],const uint32_t after[4],
+    const char *actual_bin_path,int source_available,const char *reason)
+{
+    const char *audit=getenv("PSX_INPUT_ROUTE_FULL_AUDIT");
+    if(!audit || strcmp(audit,"1"))return 1;
+    FILE *stream=s_event_receipt_stream;
+    if(!stream) {
+        const char *dir=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");char path[4096];
+        if(!dir || !*dir)return 0;
+        int n=snprintf(path,sizeof path,"%s/disc-events.jsonl",dir);
+        if(n<0 || (size_t)n>=sizeof path || !(stream=psx_file_create_new(path,1)))return 0;
+        s_event_receipt_stream=stream;
+    }
+    uint32_t boundary=0,ordinal=0;
+    if(!input_route_session_event_position(&boundary,&ordinal))return 0;
+    fprintf(stream,"{\"source_input_frame\":%u,\"route_boundary\":%u,\"runtime_frame\":%llu,"
+                   "\"phase\":\"before_next_input\",\"ordinal\":%u,\"event\":%u,\"disc_index\":%u,"
+                   "\"cycle\":%llu,\"result\":%d,\"tray_open_before\":%u,\"tray_open_after\":%u,"
+                   "\"media_ready_after\":%u,\"actual_sectors\":%u,\"actual_tracks\":%u,"
+                   "\"actual_source_available\":%d,\"actual_bin_path\":",
+                   boundary+1u,boundary,(unsigned long long)runtime_frame,ordinal,event,disc_index,
+                   (unsigned long long)cycle,result,before[0],after[0],after[1],after[2],after[3],source_available);
+    event_json_text(stream,actual_bin_path?actual_bin_path:"");
+    fputs(",\"reason\":",stream);event_json_text(stream,reason?reason:"");fputs("}\n",stream);
+    return !ferror(stream) && fflush(stream)==0;
+}
+
+int input_route_session_checkpoint_get(uint32_t out[INPUT_ROUTE_SESSION_CHECKPOINT_WORDS]) {
+    if(!out || s_recording || s_release_loaded) return 0;
+    out[0]=(uint32_t)s_active;out[1]=(uint32_t)s_owns_ports;
+    out[2]=(uint32_t)s_route_armed;out[3]=s_frame;
+    out[4]=s_next_marker;out[5]=s_next_event;
+    out[6]=(uint32_t)s_all_matched;out[7]=(uint32_t)s_exit_after_markers;
+    return 1;
+}
+int input_route_session_checkpoint_validate(const uint32_t in[INPUT_ROUTE_SESSION_CHECKPOINT_WORDS]) {
+    return in && !s_recording && !s_release_loaded &&
+        in[0]<=1u && in[1]==(uint32_t)s_owns_ports && in[2]==(uint32_t)s_route_armed &&
+        in[3]<=s_meta.frames+1u && in[4]<=s_meta.marker_count && in[5]<=s_meta.event_count &&
+        in[6]<=1u && in[7]==(uint32_t)s_exit_after_markers;
+}
+int input_route_session_checkpoint_flush(void) {
+    return !s_event_receipt_stream || fflush(s_event_receipt_stream)==0;
+}
+int input_route_session_checkpoint_restore(const uint32_t in[INPUT_ROUTE_SESSION_CHECKPOINT_WORDS],
+                                          const uint8_t *receipts,size_t bytes) {
+    uint32_t lines=0;
+    if(!input_route_session_checkpoint_validate(in) || s_event_receipt_stream || (bytes && !receipts))return 0;
+    for(size_t i=0;i<bytes;i++)if(receipts[i]=='\n')++lines;
+    if(lines!=in[5] || (bytes && receipts[bytes-1]!='\n'))return 0;
+    if(bytes) {
+        const char *dir=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");char path[4096];
+        int n=dir?snprintf(path,sizeof path,"%s/disc-events.jsonl",dir):-1;
+        if(n<0 || (size_t)n>=sizeof path || !(s_event_receipt_stream=psx_file_create_new(path,1)))return 0;
+        if(fwrite(receipts,1,bytes,s_event_receipt_stream)!=bytes || fflush(s_event_receipt_stream))return 0;
+    }
+    s_active=(int)in[0];s_frame=in[3];s_next_marker=in[4];s_next_event=in[5];s_all_matched=(int)in[6];
+    return 1;
+}
+
+/* ---- Disc digest (run_native.checkpoint_asset_digest) ---- */
+
+
+static int ends_with_ci(const char *text, const char *suffix)
+{
+    size_t a = strlen(text), b = strlen(suffix);
+    if (a < b) return 0;
+    for (size_t i = 0; i < b; ++i)
+        if (tolower((unsigned char)text[a - b + i]) != tolower((unsigned char)suffix[i]))
+            return 0;
+    return 1;
+}
+
+static int word_ci(const char *p, const char *word)
+{
+    for (; *word; ++p, ++word)
+        if (toupper((unsigned char)*p) != *word) return 0;
+    return 1;
+}
+
+/* One cue line. Returns 0 when not a FILE line, 1 with `name` filled for a
+ * quoted BINARY FILE line, -1 for any other FILE line. */
+static int cue_file_line(const char *line, char *name, size_t size)
+{
+    const char *p = line, *start;
+    while (isspace((unsigned char)*p)) ++p;
+    if (!word_ci(p, "FILE") || isalnum((unsigned char)p[4]) || p[4] == '_') return 0;
+    p += 4;
+    if (!isspace((unsigned char)*p)) return -1;
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p++ != '"') return -1;
+    start = p;
+    while (*p && *p != '"' && *p != '\r' && *p != '\n') ++p;
+    if (*p != '"' || p == start || (size_t)(p - start) >= size) return -1;
+    memcpy(name, start, (size_t)(p - start));
+    name[p - start] = 0;
+    ++p;
+    if (!isspace((unsigned char)*p)) return -1;
+    while (isspace((unsigned char)*p)) ++p;
+    if (!word_ci(p, "BINARY")) return -1;
+    p += 6;
+    while (isspace((unsigned char)*p)) ++p;
+    return *p ? -1 : 1;
+}
+
+static const char *disc_digest_path(const char *path, uint32_t *kind,
+                                    uint8_t out[32], int use_file_cache);
+
+int input_route_session_asset_digest(const char *path, uint32_t *kind, uint8_t out[32])
+{
+    return kind && out && disc_digest_path(path, kind, out, 0) == NULL;
+}
+
+/* Route evidence (PSXRTI3 identity) always hashes the whole disc. Player
+ * replays may use the persistent per-file cache (disc_digest_cache.h), which
+ * trusts path, size, mtime and a head/tail spot hash. A full hash taken in
+ * this process serves both (the s_replay_digest* cache is declared above). */
+
+static const char *disc_digest(uint32_t *kind, uint8_t out[32])
+{
+    if (!s_digest_cached) {
+        const char *error = disc_digest_path(s_product_disc, &s_digest_kind, s_digest, 0);
+        if (error) return error;
+        s_digest_cached = 1;
+    }
+    *kind = s_digest_kind;
+    memcpy(out, s_digest, 32);
+    return NULL;
+}
+
+static const char *replay_disc_digest(uint32_t *kind, uint8_t out[32])
+{
+    if (s_digest_cached) return disc_digest(kind, out);
+    if (!s_replay_digest_cached) {
+        const char *error = disc_digest_path(s_product_disc, &s_replay_digest_kind,
+                                             s_replay_digest, 1);
+        if (error) return error;
+        s_replay_digest_cached = 1;
+    }
+    *kind = s_replay_digest_kind;
+    memcpy(out, s_replay_digest, 32);
+    return NULL;
+}
+
+int input_route_session_prefetch_disc_digest(void)
+{
+    uint32_t kind;
+    uint8_t digest[32];
+    return replay_disc_digest(&kind, digest) == NULL;
+}
+
+static const char *disc_digest_path(const char *path, uint32_t *kind,
+                                    uint8_t out[32], int use_file_cache)
+{
+    int (*sha256_file)(const char *, uint8_t[32]) =
+        use_file_cache ? disc_digest_cache_sha256 : disc_digest_full_sha256;
+    uint8_t digest[32];
+    char text[65];
+    if (!path || !path[0]) return "no disc is mounted";
+    if (!sha256_file(path, digest)) return "cannot read the disc image";
+    if (!ends_with_ci(path, ".cue")) {
+        *kind = INPUT_ROUTE_DISC_DIGEST_FILE;
+        memcpy(out, digest, 32);
+        return NULL;
+    }
+    FILE *f = fopen(path, "rb");
+    char *cue;
+    long size;
+    if (!f || fseek(f, 0, SEEK_END) || (size = ftell(f)) < 0 || size > (1L << 20) ||
+        fseek(f, 0, SEEK_SET)) { if (f) fclose(f); return "cannot read the cue sheet"; }
+    cue = (char *)malloc((size_t)size + 1);
+    if (!cue || fread(cue, 1, (size_t)size, f) != (size_t)size) {
+        free(cue); fclose(f); return "cannot read the cue sheet";
+    }
+    fclose(f);
+    cue[size] = 0;
+    psx_sha256_ctx ctx;
+    const char *error = NULL;
+    int tracks = 0;
+    char dir[PATH_BYTES];
+    size_t dir_len = 0;
+    for (size_t i = 0; path[i]; ++i)
+        if (path[i] == '/' || path[i] == '\\') dir_len = i + 1;
+    memcpy(dir, path, dir_len);
+    psx_sha256_init(&ctx);
+    hex(digest, 32, text);
+    psx_sha256_update(&ctx, (const uint8_t *)text, 64);
+    char *line = cue;
+    if ((unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB &&
+        (unsigned char)line[2] == 0xBF) line += 3;
+    while (!error && line && *line) {
+        char *next = strpbrk(line, "\r\n");
+        char name[PATH_BYTES], track[PATH_BYTES];
+        if (next) *next++ = 0;
+        int kind_line = cue_file_line(line, name, sizeof(name));
+        if (kind_line < 0) error = "cue FILE line is not a quoted BINARY track";
+        else if (kind_line > 0) {
+            if (dir_len + strlen(name) >= sizeof(track)) error = "cue track path too long";
+            else {
+                memcpy(track, dir, dir_len);
+                strcpy(track + dir_len, name);
+                if (!sha256_file(track, digest)) error = "cannot read a cue track";
+                else {
+                    hex(digest, 32, text);
+                    psx_sha256_update(&ctx, (const uint8_t *)"\n", 1);
+                    psx_sha256_update(&ctx, (const uint8_t *)text, 64);
+                    ++tracks;
+                }
+            }
+        }
+        line = next;
+    }
+    free(cue);
+    if (error) return error;
+    if (!tracks) return "cue sheet has no tracks";
+    psx_sha256_final(&ctx, out);
+    *kind = INPUT_ROUTE_DISC_DIGEST_CUE;
+    return NULL;
+}
+
+/* ---- Checkpoints ---- */
+
+static void checkpoint_now(uint32_t frame, InputRouteCheckpoint *c)
+{
+    c->frame = frame;
+    c->cycle = psx_cycle_count;
+    psx_sha256_compute(g_psx_ram, INPUT_ROUTE_RAM_PAGES * RAM_PAGE_BYTES, c->ram_sha256);
+    for (uint32_t p = 0; p < INPUT_ROUTE_RAM_PAGES; ++p) {
+        uint64_t hash = UINT64_C(14695981039346656037);
+        const uint8_t *bytes = g_psx_ram + p * RAM_PAGE_BYTES;
+        for (uint32_t i = 0; i < RAM_PAGE_BYTES; ++i)
+            hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
+        c->pages[p] = hash;
+    }
+}
+
+static const char *marker_name(uint32_t kind)
+{
+    return kind == INPUT_ROUTE_MARKER_MENU ? "menu" : "gameplay";
+}
+
+static const InputRouteCheckpoint *recorded_checkpoint(uint32_t frame)
+{
+    for (uint32_t i = 0; i < s_meta.checkpoint_count; ++i)
+        if (s_checkpoints[i].frame == frame) return &s_checkpoints[i];
+    return NULL;
+}
+
+static void check_marker(const InputRouteMarker *m)
+{
+    InputRouteCheckpoint now;
+    const InputRouteCheckpoint *want = recorded_checkpoint(m->frame);
+    char sha[65];
+    checkpoint_now(m->frame, &now);
+    hex(now.ram_sha256, 32, sha);
+    const char *verdict = "unrecorded";
+    if (want) {
+        int ram = !memcmp(want->ram_sha256, now.ram_sha256, 32);
+        int cycle = want->cycle == now.cycle;
+        verdict = ram && cycle ? "match" : "mismatch";
+        if (!(ram && cycle)) s_all_matched = 0;
+    }
+    fprintf(stdout,
+            "input_route_marker: frame=%u kind=%s cycle=%llu ram_sha256=%s checkpoint=%s\n",
+            (unsigned)m->frame, marker_name(m->kind),
+            (unsigned long long)now.cycle, sha, verdict);
+    if (want && strcmp(verdict, "match")) {
+        char want_sha[65];
+        unsigned shown = 0, differing = 0;
+        hex(want->ram_sha256, 32, want_sha);
+        fprintf(stdout, "input_route_marker_expected: frame=%u cycle=%llu ram_sha256=%s differing_pages=",
+                (unsigned)m->frame, (unsigned long long)want->cycle, want_sha);
+        for (uint32_t p = 0; p < INPUT_ROUTE_RAM_PAGES; ++p)
+            if (want->pages[p] != now.pages[p]) {
+                ++differing;
+                if (shown++ < 16) fprintf(stdout, "%s0x%06X", shown > 1 ? "," : "", p * RAM_PAGE_BYTES);
+            }
+        fprintf(stdout, "%s (%u)\n", differing > 16 ? ",..." : "", differing);
+    }
+    fflush(stdout);
+}
+
+/* ---- Admission ---- */
+
+static int refuse(const char *path, const char *why)
+{
+    fprintf(stderr, "input route rejected: %s (%s)\n", why, path);
+    return 0;
+}
+
+#ifdef PSX_NO_DEBUG_TOOLS
+/* A release product honours the capture directory and the capture interval,
+ * nothing else of the observer. Its other options read state that only the
+ * debug server keeps, or belong to evidence runs; with the capture directory
+ * set, one of them refuses the route by name, so that an evidence file that
+ * was asked for is never silently missing. Returns 0 when refused. */
+/* The observer ends the process itself: status 0 after it wrote the completion
+ * record at the route's end, status 3 when a delivery or a file fails. The
+ * exit is named for the run report here, after the files are written, so a
+ * run that fails at its last boundary is not reported as a finished capture.
+ * Registered after the crash trace's own handler, so it runs before it. */
+static void release_capture_at_exit(void)
+{
+    if (!s_release_in_observer) return;
+    FILE *done = fopen(s_release_complete_path, "rb");
+    if (done) fclose(done);
+    psx_crash_trace_set_exit_origin(done ? "input_route_capture_complete"
+                                         : "input_route_capture_failed");
+}
+
+static int release_capture_begin(const char *path, uint32_t frames, int dualshock)
+{
+    /* A watch list and a card identity have no "off" value: refused when set.
+     * The others are refused unless "0". */
+    static const struct { const char *name; int off_value; } diagnostic_only[] = {
+        {"PSX_INPUT_ROUTE_WATCH_U16", 0}, {"PSX_INPUT_ROUTE_CARD1_SHA256", 0},
+        {"PSX_INPUT_ROUTE_NEUTRAL_TAIL", 1}, {"PSX_INPUT_ROUTE_CPU_STATE", 1},
+        {"PSX_INPUT_ROUTE_VIDEO_STATE", 1}, {"PSX_INPUT_ROUTE_TRACE", 1},
+    };
+    const char *dir = getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
+    if (!dir) return 1;
+    for (size_t i = 0; i < sizeof(diagnostic_only) / sizeof(diagnostic_only[0]); ++i) {
+        const char *value = getenv(diagnostic_only[i].name);
+        if (!value) continue;
+        if (diagnostic_only[i].off_value && !strcmp(value, "0")) continue;
+        fprintf(stderr, "input route rejected: %s needs the diagnostic product; a release "
+                        "product honours PSX_INPUT_ROUTE_CAPTURE_DIR and "
+                        "PSX_INPUT_ROUTE_CAPTURE_EVERY only (%s)\n",
+                diagnostic_only[i].name, path);
+        return 0;
+    }
+    /* The completion record tells a finished capture from a failed one at
+     * exit, so it must not be there before this run writes it. */
+    int n = snprintf(s_release_complete_path, sizeof(s_release_complete_path),
+                     "%s/complete.json", dir);
+    if (n < 0 || (size_t)n >= sizeof(s_release_complete_path))
+        return refuse(path, "the capture directory name is too long");
+    FILE *held = dir[0] ? fopen(s_release_complete_path, "rb") : NULL;
+    if (held) {
+        fclose(held);
+        return refuse(path, "the capture directory already holds a finished capture");
+    }
+    atexit(release_capture_at_exit);
+    s_release_in_observer = 1;
+    const int ready = dualshock ? input_route_observer_dualshock_init(frames)
+                                : input_route_observer_init(frames);
+    s_release_in_observer = 0;
+    if (!ready)
+        return refuse(path, "the capture directory or interval is not valid");
+    s_release_capture = 1;
+    s_release_consumed = 0;
+    fprintf(stdout, "input_route_capture: product=release frames=%u\n", (unsigned)frames);
+    return 1;
+}
+
+/* What SIO holds from the input supplied at the last boundary. The diagnostic
+ * product reports this right after it samples the pad; here it is read at the
+ * next boundary, so that main.cpp needs no call of its own. Nothing but the
+ * next input writes the buttons and sticks in between. A DualShock's analog
+ * mode belongs to the guest, so the mode reported is the one at that boundary. */
+static void release_capture_delivered(void)
+{
+    if (!s_release_consumed) return;
+    if (s_release_dual) {
+        uint8_t sticks[4];
+        int connected = input_route_dualshock_ports_match();
+        sio_get_pad_sticks(0, sticks);
+        input_route_observer_dualshock_applied(sio_get_pad_buttons_slot(0), sticks,
+            connected, sio_get_pad_config_capable(0), sio_get_pad_analog(0));
+        return;
+    }
+    input_route_observer_applied(sio_get_pad_buttons_slot(0),
+                                 sio_get_pad_connected(0), sio_get_pad_analog(0));
+}
+#endif
+
+static int alloc_steps(InputRouteStep **digital, InputDualShockRouteStep **dual)
+{
+    *digital = (InputRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS, sizeof(**digital));
+    *dual = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS, sizeof(**dual));
+    if (*digital && *dual) return 1;
+    free(*digital); free(*dual);
+    *digital = NULL; *dual = NULL;
+    return 0;
+}
+
+static const char *validate_event_roster(const InputRouteV3 *meta)
+{
+    if (!meta->event_count && !meta->disc_count) return NULL;
+    if (meta->event_count && !s_event_executor)
+        return "console event executor not configured";
+    for (uint32_t i = 0; i < meta->event_count; ++i)
+        if (meta->events[i].event == INPUT_ROUTE_EVENT_RESET)
+            return "console reset event not supported";
+    if (s_disc_roster_count != meta->disc_count)
+        return "console event disc roster count";
+    for (uint32_t i = 0; i < meta->disc_count; ++i) {
+        uint32_t kind = 0;
+        uint8_t digest[32];
+        const char *error = disc_digest_path(s_disc_roster[i], &kind, digest, 0);
+        if (error) return "console event disc roster unreadable";
+        if (kind != meta->discs[i].kind || memcmp(digest, meta->discs[i].digest, 32))
+            return "console event disc roster digest";
+    }
+    return NULL;
+}
+
+int input_route_session_admit(const char *path)
+{
+    unsigned char magic[8];
+    InputRouteStep *digital;
+    InputDualShockRouteStep *dual;
+    InputTwoDigitalRouteStep *two_digital;
+    InputRouteV3 meta;
+    uint32_t count = 0, frames = 0;
+    const char *error = NULL;
+    int v3, dualshock;
+    FILE *f;
+    if (s_active || s_release_loaded) return refuse(path, "a route is already armed");
+    f = fopen(path, "rb");
+    if (!f) return refuse(path, "cannot open");
+    if (fread(magic, 1, sizeof(magic), f) != sizeof(magic) || fseek(f, 0, SEEK_SET)) {
+        fclose(f); return refuse(path, "short header");
+    }
+    v3 = !memcmp(magic, "PSXRTI3\0", 8);
+#ifndef PSX_NO_DEBUG_TOOLS
+    /* PSXRTI1/PSXRTI2 stay entirely with the debug-server preload. */
+    if (!v3) { fclose(f); s_route_armed = 1; return 1; }
+#else
+    if (!v3 && memcmp(magic, "PSXRTI1\0", 8) && memcmp(magic, "PSXRTI2\0", 8)) {
+        fclose(f); return refuse(path, "unsupported route format");
+    }
+#endif
+    if (!alloc_steps(&digital, &dual)) { fclose(f); return refuse(path, "out of memory"); }
+    two_digital = (InputTwoDigitalRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS,
+                                                     sizeof(*two_digital));
+    if (!two_digital) { fclose(f); free(digital); free(dual); return refuse(path, "out of memory"); }
+    memset(&meta, 0, sizeof(meta));
+    if (v3) {
+        if (!s_checkpoints)
+            s_checkpoints = (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS,
+                                                         sizeof(*s_checkpoints));
+        error = s_checkpoints ? input_route_v3_read_impl_capacity(f, &meta, digital, dual, two_digital,
+                                                         s_markers, s_checkpoints, NULL,INPUT_ROUTE_STORAGE_STEPS)
+                              : "out of memory";
+        if (!error) error = validate_event_roster(&meta);
+        count = meta.steps; frames = meta.frames;
+        dualshock = meta.port_count
+            ? meta.port_count == 1 && meta.port_devices[0] == INPUT_ROUTE_DEVICE_DUALSHOCK
+            : meta.record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
+    } else if (!memcmp(magic, "PSXRTI2\0", 8)) {
+        error = input_dualshock_route_read(f, dual, &count, &frames);
+        dualshock = 1;
+    } else {
+        error = input_route_read(f, digital, &count, &frames);
+        dualshock = 0;
+    }
+    if (fclose(f) && !error) error = "close error";
+    for (uint32_t i = 0; !error && dualshock && i < count; ++i)
+        if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
+#ifdef PSX_NO_DEBUG_TOOLS
+    if (!error && meta.port_count == 2 && getenv("PSX_INPUT_ROUTE_CAPTURE_DIR"))
+        error = "two-port release capture is not supported";
+#endif
+    if (error) {
+        free(digital); free(dual); free(two_digital);
+        memset(s_markers, 0, sizeof(s_markers));
+        return refuse(path, error);
+    }
+#ifdef PSX_NO_DEBUG_TOOLS
+    if (!release_capture_begin(path, frames, dualshock)) {
+        free(digital); free(dual); free(two_digital);
+        memset(s_markers, 0, sizeof(s_markers));
+        return 0;
+    }
+#endif
+    s_route_armed = 1;
+#ifdef PSX_NO_DEBUG_TOOLS
+    /* Release replay owns the steps. The diagnostic product reparses them in
+     * its debug-server preload, which keeps its evidence observers. */
+    if (meta.port_count == 2) {
+        s_two_digital = two_digital; free(digital); free(dual);
+    } else if (dualshock) {
+        s_dual = dual; free(digital); free(two_digital);
+    } else {
+        s_digital = digital; free(dual); free(two_digital);
+    }
+    s_step_count = count;
+    s_step_index = 0;
+    s_release_two_digital = meta.port_count == 2;
+    s_step_remaining = s_release_two_digital ? s_two_digital[0].frames :
+                       dualshock ? s_dual[0].frames : s_digital[0].frames;
+    s_release_dual = dualshock;
+    s_release_loaded = 1;
+    if (dualshock && !s_release_two_digital) input_route_admit_cold_p1(1);
+    fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=%s product=release\n",
+            (unsigned)frames, (unsigned)count, v3 ? "PSXRTI3" : dualshock ? "PSXRTI2" : "PSXRTI1");
+#else
+    free(digital); free(dual); free(two_digital);
+#endif
+    if (!v3) return 1;
+    s_meta = meta;
+    s_next_marker = 0;
+    s_next_event = 0;
+    s_frame = 0;
+    s_active = meta.marker_count != 0 || meta.event_count != 0;
+    if (!dualshock || meta.port_count == 2) {
+        /* A PSXRTI3 digital body declares its digital controller ports. */
+        s_owns_ports = 1;
+        input_route_admit_cold_p1(0);
+        if (meta.port_count == 2) {
+            sio_set_pad_connected(1, 1);
+            sio_set_pad_config_capable(1, 0);
+        }
+    }
+    const char *exit_after = getenv("PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS");
+    s_exit_after_markers = exit_after && !strcmp(exit_after, "1") && meta.marker_count;
+    fprintf(stdout, "input_route_extension: identity=%s markers=%u checkpoints=%u\n",
+            meta.has_identity ? "present" : "absent", (unsigned)meta.marker_count,
+            (unsigned)meta.checkpoint_count);
+    return 1;
+}
+
+uint32_t input_route_session_port_count(void)
+{
+    return s_route_armed ? s_meta.port_count : 0u;
+}
+
+const char *input_route_session_read_v3_two_digital(FILE *f,
+                                                    InputTwoDigitalRouteStep *steps,
+                                                    uint32_t *step_count,
+                                                    uint32_t *frame_count)
+{
+    InputRouteV3 meta;
+    const char *error;
+    *step_count = *frame_count = 0;
+    if (!s_checkpoints) return "PSXRTI3 route was not admitted";
+    error = input_route_v3_read_impl_capacity(f,&meta,NULL,NULL,steps,s_markers,s_checkpoints,NULL,INPUT_ROUTE_STORAGE_STEPS);
+    if (error) return error;
+    if (meta.port_count != 2) return "route does not declare two digital pads";
+    *step_count = meta.steps;
+    *frame_count = meta.frames;
+    return NULL;
+}
+
+const char *input_route_session_read_v3_digital(FILE *f, InputRouteStep *steps,
+                                                uint32_t *step_count,
+                                                uint32_t *frame_count)
+{
+    InputRouteV3 meta;
+    const char *error;
+    *step_count = *frame_count = 0;
+    if (!s_checkpoints) return "PSXRTI3 route was not admitted";
+    error = input_route_v3_read_impl_capacity(f,&meta,steps,NULL,NULL,s_markers,s_checkpoints,NULL,INPUT_ROUTE_STORAGE_STEPS);
+    if (error) return error;
+    *step_count = meta.steps;
+    *frame_count = meta.frames;
+    return NULL;
+}
+
+const char *input_route_session_read_v3_dualshock(FILE *f,
+                                                  InputDualShockRouteStep *steps,
+                                                  uint32_t *step_count,
+                                                  uint32_t *frame_count)
+{
+    InputRouteV3 meta;
+    const char *error;
+    *step_count = *frame_count = 0;
+    if (!s_checkpoints) return "PSXRTI3 route was not admitted";
+    error = input_route_v3_read_impl_capacity(f,&meta,NULL,steps,NULL,s_markers,s_checkpoints,NULL,INPUT_ROUTE_STORAGE_STEPS);
+    if (error) return error;
+    *step_count = meta.steps;
+    *frame_count = meta.frames;
+    return NULL;
+}
+
+/* ---- Identity ---- */
+
+static const char *boot_mode_name(int call_hle, int boot_skip)
+{
+    if (call_hle && boot_skip) return "hle";
+    if (call_hle) return "hle-calls";
+    if (boot_skip) return "hle-boot";
+    return "lle";
+}
+
+static int valid_pin(const char *pin)
+{
+    if (strlen(pin) != 40) return 0;
+    for (unsigned i = 0; i < 40; ++i)
+        if (!((pin[i] >= '0' && pin[i] <= '9') || (pin[i] >= 'a' && pin[i] <= 'f')))
+            return 0;
+    return 1;
+}
+
+static int stem_equal(const char *a, const char *b)
+{
+    for (; *a && *b; ++a, ++b)
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+    return *a == *b;
+}
+
+static const char *digest_kind_name(uint32_t kind)
+{
+    return kind == INPUT_ROUTE_DISC_DIGEST_CUE ? "cue" : "file";
+}
+
+int input_route_session_verify_identity(int call_hle, int boot_skip)
+{
+    const char *boot = boot_mode_name(call_hle, boot_skip);
+    const char *pin = PSX_FRAMEWORK_PIN;
+    uint32_t kind = 0;
+    uint8_t digest[32];
+    const char *error;
+    int mismatches = 0;
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (s_recording) {
+        error = NULL;
+        if (!valid_pin(pin))
+            error = "this product has no framework pin (built outside a psxrecomp git checkout)";
+        else if (!s_product_serial[0] || !s_product_bios_stem[0])
+            error = "a disc with a boot serial and a BIOS file are required";
+        else
+            error = disc_digest(&kind, digest);
+        if (error) {
+            s_recording = 0;
+            fprintf(stderr, "input route recording refused: %s (disc %s)\n", error, s_product_disc);
+            return 0;
+        }
+        s_meta.has_identity = 1;
+        copy_text(s_meta.pin, sizeof(s_meta.pin), pin);
+        copy_text(s_meta.disc_serial, sizeof(s_meta.disc_serial), s_product_serial);
+        copy_text(s_meta.bios_stem, sizeof(s_meta.bios_stem), s_product_bios_stem);
+        copy_text(s_meta.boot_mode, sizeof(s_meta.boot_mode), boot);
+        s_meta.disc_digest_kind = kind;
+        memcpy(s_meta.disc_digest, digest, 32);
+        fprintf(stdout, "input_route_recording: path=%s pin=%s disc=%s bios=%s boot=%s\n",
+                s_record_path, pin, s_product_serial, s_product_bios_stem, boot);
+        return 1;
+    }
+#endif
+    if (!s_meta.has_identity) return 1;
+#define MISMATCH(field, route_value, product_value) do { \
+        if (!mismatches++) fprintf(stderr, "psxrecomp: input route refused: it was recorded on a different product\n"); \
+        fprintf(stderr, "  %-10s route=%s  product=%s\n", field, route_value, product_value); \
+    } while (0)
+    if (!valid_pin(pin)) MISMATCH("pin", s_meta.pin, "(none: built outside a psxrecomp git checkout)");
+    else if (strcmp(pin, s_meta.pin)) MISMATCH("pin", s_meta.pin, pin);
+    if (strcmp(s_meta.disc_serial, s_product_serial))
+        MISMATCH("disc", s_meta.disc_serial, s_product_serial[0] ? s_product_serial : "(none)");
+    if (!stem_equal(s_meta.bios_stem, s_product_bios_stem))
+        MISMATCH("bios", s_meta.bios_stem, s_product_bios_stem[0] ? s_product_bios_stem : "(none)");
+    if (strcmp(s_meta.boot_mode, boot)) MISMATCH("boot", s_meta.boot_mode, boot);
+    error = disc_digest(&kind, digest);
+    if (error) {
+        MISMATCH("disc hash", "(recorded)", error);
+    } else if (kind != s_meta.disc_digest_kind) {
+        char route_kind[24], product_kind[24];
+        snprintf(route_kind, sizeof(route_kind), "%s image", digest_kind_name(s_meta.disc_digest_kind));
+        snprintf(product_kind, sizeof(product_kind), "%s image", digest_kind_name(kind));
+        MISMATCH("disc hash", route_kind, product_kind);
+    } else if (memcmp(digest, s_meta.disc_digest, 32)) {
+        char want[65], have[65];
+        hex(s_meta.disc_digest, 32, want);
+        hex(digest, 32, have);
+        MISMATCH("disc hash", want, have);
+    }
+#undef MISMATCH
+    if (mismatches) return 0;
+    fprintf(stdout, "input_route_identity: match pin=%s disc=%s bios=%s boot=%s\n",
+            pin, s_product_serial, s_product_bios_stem, boot);
+    return 1;
+}
+
+int input_route_session_identity(InputRouteV3 *meta, int call_hle, int boot_skip,
+                                 char *why, size_t why_size)
+{
+    const char *pin = PSX_FRAMEWORK_PIN;
+    uint32_t kind = 0;
+    uint8_t digest[32];
+    const char *error = NULL;
+    if (!s_product_serial[0] || !s_product_bios_stem[0])
+        error = "a disc with a boot serial and a BIOS file are required";
+    else
+        error = replay_disc_digest(&kind, digest);   /* player replays only */
+    if (error) { snprintf(why, why_size, "%s", error); return 0; }
+    meta->has_identity = 1;
+    /* A product built outside a git checkout has no pin; replays still carry
+     * a (non-matching) placeholder so playback can warn. */
+    copy_text(meta->pin, sizeof(meta->pin),
+              valid_pin(pin) ? pin : "0000000000000000000000000000000000000000");
+    copy_text(meta->disc_serial, sizeof(meta->disc_serial), s_product_serial);
+    copy_text(meta->bios_stem, sizeof(meta->bios_stem), s_product_bios_stem);
+    copy_text(meta->boot_mode, sizeof(meta->boot_mode), boot_mode_name(call_hle, boot_skip));
+    meta->disc_digest_kind = kind;
+    memcpy(meta->disc_digest, digest, 32);
+    return 1;
+}
+
+int input_route_session_owns_ports(void)
+{
+    return s_owns_ports;
+}
+
+int input_route_session_armed(void)
+{
+    return s_route_armed || s_owns_ports || input_route_session_recording();
+}
+
+int input_route_session_preserves_ports_on_refresh(void)
+{
+#ifdef PSX_TEST_REFRESH_OWNER_DEFECT
+    return s_owns_ports;
+#else
+    return input_route_session_armed();
+#endif
+}
+
+/* ---- Per-vblank boundary ---- */
+
+static void record_marker_at_boundary(uint32_t frame);
+
+int input_route_session_boundary(void)
+{
+    if (!s_active) return -1;
+    const uint32_t frame = s_frame++;
+    if (s_recording) {
+        record_marker_at_boundary(frame);
+        return -1;
+    }
+    while (s_next_event < s_meta.event_count && s_meta.events[s_next_event].frame == frame) {
+        const InputRouteConsoleEvent *event = &s_meta.events[s_next_event];
+        const char *path = event->event == INPUT_ROUTE_EVENT_DISC_SELECT
+            ? s_disc_roster[event->disc_index - 1u] : NULL;
+        char why[160] = {0};
+        if (path) {
+            uint32_t kind = 0;
+            uint8_t digest[32];
+            const InputRouteDisc *admitted = &s_meta.discs[event->disc_index - 1u];
+            const char *error = disc_digest_path(path, &kind, digest, 0);
+            if (error || kind != admitted->kind || memcmp(digest, admitted->digest, 32)) {
+                fprintf(stderr,
+                        "input route event failed: frame=%u kind=%u disc=%u reason=disc changed after admission\n",
+                        (unsigned)frame, (unsigned)event->event,
+                        (unsigned)event->disc_index);
+                s_active = s_route_armed = s_owns_ports = 0;
+                return 2;
+            }
+        }
+        if (!s_event_executor(event->event, event->disc_index, path, why, sizeof(why))) {
+            fprintf(stderr,
+                    "input route event failed: frame=%u kind=%u disc=%u%s%s\n",
+                    (unsigned)frame, (unsigned)event->event,
+                    (unsigned)event->disc_index, why[0] ? " reason=" : "",
+                    why);
+            s_active = s_route_armed = s_owns_ports = 0;
+            return 2;
+        }
+        ++s_next_event;
+    }
+    int checked = 0;
+    while (s_next_marker < s_meta.marker_count && s_markers[s_next_marker].frame == frame) {
+        check_marker(&s_markers[s_next_marker++]);
+        checked = 1;
+    }
+    if (checked && s_next_marker == s_meta.marker_count) {
+        fprintf(stdout, "input_route_markers_complete: markers=%u result=%s\n",
+                (unsigned)s_meta.marker_count, s_all_matched ? "match" : "mismatch");
+        fflush(stdout);
+        if (s_exit_after_markers) return s_all_matched ? 0 : 3;
+    }
+    return -1;
+}
+
+/* ---- Release replay ---- */
+
+static int release_next_word(void)
+{
+    if (s_release_two_digital) {
+        uint16_t current = 0xffff;
+        s_release_port2 = 0xffff;
+        if (s_step_index < s_step_count) {
+            current = s_two_digital[s_step_index].buttons[0];
+            s_release_port2 = s_two_digital[s_step_index].buttons[1];
+            if (--s_step_remaining == 0 && ++s_step_index < s_step_count)
+                s_step_remaining = s_two_digital[s_step_index].frames;
+        }
+        return current;
+    }
+    if (s_release_dual) {
+        uint16_t current = 0xFFFF;
+        s_dual_mode_button = 0;
+        memset(s_dual_axes, 128, sizeof(s_dual_axes));
+        if (s_step_index < s_step_count) {
+            current = s_dual[s_step_index].buttons;
+            memcpy(s_dual_axes, s_dual[s_step_index].axes_ly_lx_ry_rx, 4);
+            s_dual_mode_button = s_dual[s_step_index].analog_button;
+            if (--s_step_remaining == 0 && ++s_step_index < s_step_count)
+                s_step_remaining = s_dual[s_step_index].frames;
+        }
+        return current;
+    }
+    /* A file route never releases P1 to physical input at its end. */
+    if (s_step_index >= s_step_count) return 0xFFFF;
+    const int current = s_digital[s_step_index].buttons;
+    if (--s_step_remaining == 0 && ++s_step_index < s_step_count)
+        s_step_remaining = s_digital[s_step_index].frames;
+    return current;
+}
+
+int input_route_session_release_override(void)
+{
+    if (!s_release_loaded) return -1;
+#ifdef PSX_NO_DEBUG_TOOLS
+    if (s_release_capture) {
+        /* The observer's order, as in the diagnostic product: the delivery of
+         * the last input, the boundary (which writes the picture and, at the
+         * route's end, exits the process with status 0), then the next input. */
+        s_release_in_observer = 1;
+        release_capture_delivered();
+        input_route_observer_boundary(s_release_consumed, s_frame_count);
+        if(input_route_observer_terminal_frame()){
+            s_release_in_observer=0;return (int)sio_get_pad_buttons_slot(0);
+        }
+        const int word = release_next_word();
+        if (s_release_dual) {
+            input_route_observer_source_frame(s_release_consumed+1u);
+            input_route_observer_dualshock_input((uint16_t)word, s_dual_axes, s_dual_mode_button);
+        }
+        else input_route_observer_input((uint16_t)word);
+        s_release_in_observer = 0;
+        ++s_release_consumed;
+        return word;
+    }
+#endif
+    return release_next_word();
+}
+
+int input_route_session_release_port2(uint16_t *buttons)
+{
+    if (!s_release_loaded || !s_release_two_digital || !buttons) return 0;
+    *buttons = s_release_port2;
+    return 1;
+}
+
+int input_route_session_release_dualshock(int buttons)
+{
+    if (!s_release_loaded || !s_release_dual) return 0;
+    input_dualshock_deliver_mode((uint16_t)buttons, s_dual_axes, s_dual_mode_button);
+    return 1;
+}
+
+/* ---- Recorder (diagnostic product) ---- */
+
+int input_route_session_recording(void)
+{
+    return s_recording;
+}
+
+#ifdef PSX_NO_DEBUG_TOOLS
+int input_route_session_record_begin(const char *path)
+{
+    fprintf(stderr, "input route recording refused: recording needs the diagnostic product (%s)\n",
+            path ? path : "");
+    return 0;
+}
+static void record_marker_at_boundary(uint32_t frame) { (void)frame; }
+void input_route_session_record_input(uint16_t buttons) { (void)buttons; }
+int input_route_session_request_marker(unsigned kind) { (void)kind; return 0; }
+void input_route_session_record_status(char *out, size_t size)
+{
+    snprintf(out, size, "\"recording\":false");
+}
+#else
+static int new_file_exclusive(const char *path, FILE **out)
+{
+#ifdef _WIN32
+    int fd = _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+    *out = fd < 0 ? NULL : _fdopen(fd, "wb");
+    if (!*out && fd >= 0) _close(fd);
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    *out = fd < 0 ? NULL : fdopen(fd, "wb");
+    if (!*out && fd >= 0) close(fd);
+#endif
+    return *out != NULL;
+}
+
+static void record_write(void)
+{
+    FILE *f;
+    const char *error;
+    if (!s_recording) return;
+    s_recording = 0;
+    if (!s_word_count) {
+        fprintf(stderr, "input route recording: no frames were recorded; %s not written\n", s_record_path);
+        return;
+    }
+    /* Markers requested but not yet at a boundary are dropped. */
+    s_meta.frames = s_word_count;
+    s_meta.record_size = 8;
+    if (!new_file_exclusive(s_record_path, &f)) {
+        fprintf(stderr, "input route recording: cannot create %s: %s\n", s_record_path, strerror(errno));
+        return;
+    }
+    error = input_route_v3_write_digital(f, &s_meta, s_words, s_word_count, s_markers, s_checkpoints);
+    if (fclose(f) && !error) error = "close error";
+    if (!error) {
+        /* The written file must pass the same reader replay uses. */
+        InputRouteV3 check;
+        InputRouteStep *steps = (InputRouteStep *)calloc(INPUT_ROUTE_STORAGE_STEPS, sizeof(*steps));
+        InputRouteMarker *markers = (InputRouteMarker *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof(*markers));
+        InputRouteCheckpoint *checkpoints = (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof(*checkpoints));
+        FILE *r = fopen(s_record_path, "rb");
+        error = !steps || !markers || !checkpoints || !r ? "cannot reopen the written route"
+              : input_route_v3_read(r, &check, steps, NULL, markers, checkpoints);
+        if (r) fclose(r);
+        if (!error && (check.frames != s_word_count || check.steps != s_record_steps ||
+                       check.marker_count != s_meta.marker_count))
+            error = "written route does not read back identically";
+        free(steps); free(markers); free(checkpoints);
+    }
+    if (error) {
+        fprintf(stderr, "input route recording: %s failed: %s\n", s_record_path, error);
+        return;
+    }
+    fprintf(stdout, "input_route_recorded: path=%s frames=%u steps=%u markers=%u truncated=%s\n",
+            s_record_path, (unsigned)s_word_count, (unsigned)s_record_steps,
+            (unsigned)s_meta.marker_count, s_record_truncated ? "true" : "false");
+    fflush(stdout);
+}
+
+int input_route_session_record_begin(const char *path)
+{
+    FILE *probe;
+    if (!path || !path[0] || strlen(path) >= sizeof(s_record_path)) {
+        fprintf(stderr, "input route recording refused: invalid path\n");
+        return 0;
+    }
+    if (s_active || s_release_loaded || s_meta.frames) {
+        fprintf(stderr, "input route recording refused: a route replay is armed\n");
+        return 0;
+    }
+    if ((probe = fopen(path, "rb")) != NULL) {
+        fclose(probe);
+        fprintf(stderr, "input route recording refused: %s already exists\n", path);
+        return 0;
+    }
+    s_words = (uint16_t *)malloc(INPUT_ROUTE_MAX_FRAMES * sizeof(*s_words));
+    s_checkpoints = s_checkpoints ? s_checkpoints
+                  : (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof(*s_checkpoints));
+    if (!s_words || !s_checkpoints) {
+        fprintf(stderr, "input route recording refused: out of memory\n");
+        return 0;
+    }
+    copy_text(s_record_path, sizeof(s_record_path), path);
+    memset(&s_meta, 0, sizeof(s_meta));
+    s_recording = s_active = s_owns_ports = 1;
+    s_frame = 0;
+    input_route_admit_cold_p1(0);
+    atexit(record_write);
+    return 1;
+}
+
+void input_route_session_record_input(uint16_t buttons)
+{
+    if (!s_recording || s_record_truncated) return;
+    const int new_step = !s_word_count || s_words[s_word_count - 1] != buttons;
+    if (s_word_count == INPUT_ROUTE_MAX_FRAMES ||
+        (new_step && s_record_steps == INPUT_ROUTE_MAX_STEPS)) {
+        s_record_truncated = 1;
+        fprintf(stderr, "input route recording: %s cap reached at frame %u; later input is not recorded\n",
+                s_word_count == INPUT_ROUTE_MAX_FRAMES ? "frame" : "step", (unsigned)s_word_count);
+        return;
+    }
+    s_record_steps += (uint32_t)new_step;
+    s_words[s_word_count++] = buttons;
+}
+
+static void record_marker_at_boundary(uint32_t frame)
+{
+    if (!s_pending_count) return;
+    const unsigned kind = s_pending[0];
+    memmove(s_pending, s_pending + 1, (--s_pending_count) * sizeof(s_pending[0]));
+    /* The boundary index equals the words recorded so far. */
+    if (frame != s_word_count || s_record_truncated) {
+        fprintf(stderr, "input route recording: %s marker dropped (recording truncated)\n",
+                marker_name(kind));
+        return;
+    }
+    if (s_meta.marker_count == INPUT_ROUTE_V3_MAX_MARKERS) {
+        fprintf(stderr, "input route recording: marker capacity reached; %s marker dropped\n",
+                marker_name(kind));
+        return;
+    }
+    InputRouteMarker *m = &s_markers[s_meta.marker_count++];
+    m->frame = frame;
+    m->kind = kind;
+    InputRouteCheckpoint *c = &s_checkpoints[s_meta.checkpoint_count++];
+    checkpoint_now(frame, c);
+    char sha[65];
+    hex(c->ram_sha256, 32, sha);
+    fprintf(stdout, "input_route_marker: frame=%u kind=%s cycle=%llu ram_sha256=%s checkpoint=recorded\n",
+            (unsigned)frame, marker_name(kind), (unsigned long long)c->cycle, sha);
+    fflush(stdout);
+}
+
+int input_route_session_request_marker(unsigned kind)
+{
+    if (!s_recording ||
+        (kind != INPUT_ROUTE_MARKER_MENU && kind != INPUT_ROUTE_MARKER_GAMEPLAY))
+        return 0;
+    if (s_pending_count == sizeof(s_pending) / sizeof(s_pending[0])) return 0;
+    s_pending[s_pending_count++] = kind;
+    return 1;
+}
+
+void input_route_session_record_status(char *out, size_t size)
+{
+    char path[2 * PATH_BYTES];
+    size_t n = 0;
+    for (const char *p = s_record_path; *p && n + 2 < sizeof(path); ++p) {
+        if (*p == '"' || *p == '\\') path[n++] = '\\';
+        path[n++] = (unsigned char)*p < 0x20 ? '?' : *p;
+    }
+    path[n] = 0;
+    snprintf(out, size,
+             "\"recording\":%s,\"path\":\"%s\",\"frames\":%u,\"steps\":%u,\"markers\":%u,"
+             "\"pending_markers\":%u,\"truncated\":%s",
+             s_recording ? "true" : "false", path,
+             (unsigned)s_word_count, (unsigned)s_record_steps, (unsigned)s_meta.marker_count,
+             (unsigned)s_pending_count, s_record_truncated ? "true" : "false");
+}
+#endif

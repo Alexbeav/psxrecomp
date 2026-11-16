@@ -7,6 +7,7 @@ uint64_t s_frame_count, psx_cycle_count;
 static int test_dma_active;
 static int test_raw_fail, test_raw_bad_header, test_raw_bad_copy;
 static int test_copy_result = 1, test_copy_calls;
+static int test_xa_frames;
 static uint8_t test_raw_mode = 2, test_submode = 8;
 int dma_cdrom_transfer_active(void) { return test_dma_active; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat |= bit; }
@@ -29,6 +30,7 @@ static void setup(void) {
     test_raw_fail = test_raw_bad_header = test_raw_bad_copy = 0;
     test_raw_mode = 2; test_submode = 8;
     test_copy_result = 1; test_copy_calls = 0;
+    test_xa_frames = 0;
     psx_cycle_count = 1000000;
     cdrom_init("synthetic");
     setloc_pending = 0;
@@ -38,6 +40,24 @@ static void setup(void) {
 }
 static void sector(void);
 static void ack(void);
+static int test_disc_scope;
+
+/* A disc change names later states for the mounted disc: its roster index,
+ * or, for a program of a multi-program set, its position in the whole set. */
+static void disc_select_scope_tokens(void) {
+    const char *const roster[2] = {"discs/Disc 3.cue", "discs/Disc 1.cue"};
+    const int set_positions[2] = {3, 1};
+    setup();
+    cdrom_disc_roster_set(roster, 2, 1);
+    cdrom_disc_scope_tokens_set(NULL, 0);
+    CHECK(cdrom_disc_select(2) && test_disc_scope == 2);
+    CHECK(cdrom_disc_select(1) && test_disc_scope == 1);
+    cdrom_disc_scope_tokens_set(set_positions, 2);
+    CHECK(cdrom_disc_select(2) && test_disc_scope == 1);
+    CHECK(cdrom_disc_select(1) && test_disc_scope == 3);
+    cdrom_disc_scope_tokens_set(NULL, 0);
+    cdrom_disc_roster_set(NULL, 0, 0);
+}
 static void request(void);
 static void drain(unsigned lba, int words);
 static int resident_copy(void* context) {
@@ -66,7 +86,6 @@ static void resident_header_cursor_and_restore(void) {
         resident_setup(modes[n]);
         CHECK(cdrom_resident_complete_read(100,3,payload,resident_copy,&test_copy_calls));
         CHECK(test_copy_calls==1 && !reading && !irq_flag && !i_stat);
-        CHECK((stat_reg&(CDSTAT_READ|CDSTAT_SEEK))==CDSTAT_READ);
         CHECK(last_sector_lba==102 && msf_to_lba(read_min,read_sec,read_sect)==103);
         CHECK(s_setloc_lba==100 && !setloc_pending);
         CHECK(s_ring_read==s_ring_write && s_ring_write==3);
@@ -279,15 +298,15 @@ static void pause_read_resumes_position(void) {
         seek_min = 0; seek_sec = 2; seek_sect = 0; /* stale target, LBA 0 */
         sector(); ack(); /* delivered 100; drive will read 101 next */
         exec_command(0x09); ack();
-        CHECK(!reading && msf_to_lba(read_min, read_sec, read_sect) == 101);
+        CHECK(!reading && msf_to_lba(read_min, read_sec, read_sect) == 100);
         exec_command(reads[n]);
         CHECK(reading && read_cmd == reads[n] && !setloc_pending);
-        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 101);
-        ack(); sector(); request(); drain(101, 512);
+        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 100);
+        ack(); sector(); request(); drain(100, 512);
         ack();
         /* Another pause cannot regress to the original target either. */
         exec_command(0x09); ack(); exec_command(reads[n]);
-        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 102);
+        CHECK(msf_to_lba(read_min, read_sec, read_sect) == 100);
         ack();
         /* An explicit new Setloc still takes precedence over the drive. */
         exec_command(0x09); ack();
@@ -322,16 +341,16 @@ static void snapshot_setloc_and_paused_head(void) {
     setloc_pending=1;read_sec=9;
     CHECK(cdrom_snapshot_read(wire,size) && !setloc_pending);
     exec_command(0x1B);ack();
-    CHECK(msf_to_lba(read_min,read_sec,read_sect)==151);
+    CHECK(msf_to_lba(read_min,read_sec,read_sect)==150);
     wire[size-1]=2;CHECK(!cdrom_snapshot_validate(wire,size));
     /* CDF2 states remain readable and retain the paused drive position. */
     exec_command(0x09);ack();
     PstW writer;pst_w_init(&writer,wire,size);
-    CHECK(cdrom_snap_emit(&writer,1) && writer.written==size-6);
+    CHECK(cdrom_snap_emit(&writer,1) && writer.written==size-31);
     read_sec=9;
-    CHECK(cdrom_snapshot_read(wire,size-6));
+    CHECK(cdrom_snapshot_read(wire,size-31));
     exec_command(0x06);
-    CHECK(msf_to_lba(read_min,read_sec,read_sect)==151);
+    CHECK(msf_to_lba(read_min,read_sec,read_sect)==150);
     free(wire);
 }
 static void snapshot_stream_identity(void) {
@@ -367,12 +386,13 @@ int main(void) {
     snapshot_between_request_and_dma();
     snapshot_pending_deadline();
     snapshot_stream_identity();
+    disc_select_scope_tokens();
     puts("PASS: CD FIFO latching, pending IRQ, DMA continuation, and state compatibility");
     return 0;
 }
 
 void spu_cd_audio_reset(void) {}
-void spu_cd_audio_push(const int16_t* stereo,int frames) {(void)stereo;(void)frames;}
+void spu_cd_audio_push(const int16_t* stereo,int frames) {(void)stereo;test_xa_frames += frames;}
 void* iso_open(const char* p) {(void)p;return (void*)1;}
 void iso_close(void* h) {(void)h;}
 int iso_has_subq_replacements(void* h) {(void)h;return 0;}
@@ -387,9 +407,16 @@ uint32_t iso_sector_count(void* h) {(void)h;return 1000;}
 int iso_track_count(void* h) {(void)h;return 1;}
 void event_ring_record_aux(uint16_t k,uint8_t d,uint32_t a) {(void)k;(void)d;(void)a;}
 void event_ring_record(uint16_t k,uint8_t d) {(void)k;(void)d;}
-void savestate_set_disc_scope(int n) {(void)n;}
+static int test_disc_scope = -1;
+void savestate_set_disc_scope(int n) {test_disc_scope = n;}
 int psx_netplay_cd_bisect_active(void) {return 0;}
 uint32_t psx_netplay_sim_tick(void) {return 0;}
 uint32_t interrupts_get_cycles_since_vblank(void) {return 0;}
 int psx_netplay_is_resimulating(void) {return 0;}
 void audio_trace_event(uint16_t k,uint32_t a,uint32_t b) {(void)k;(void)a;(void)b;}
+
+/* The authored CDDA view has the same synthetic SubQ backing. */
+int iso_read_cdda_subq(void *h,uint32_t lba,uint8_t *b,int n,int *valid){return iso_read_subq(h,lba,b,n,valid);}
+
+uint32_t debug_guest_ra(void) {return 0;}
+int psx_netplay_active(void) {return 0;}

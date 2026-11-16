@@ -13,6 +13,8 @@ test_cli_retail_bios_profile.py already covers the psxrecomp_cli.py half of
 this feature. This is the C host half, which had no coverage.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import os
 import shutil
@@ -71,6 +73,25 @@ def make_project(root: Path, bios_files: list[str], framework: str, descriptor: 
 
 
 def main() -> int:
+    # The CLI half regenerates whatever stem it is told; the host must tell it
+    # the stem CMake linked, on both process-launch routes, or a title pinned
+    # to SCPH5552 still gets an SCPH1001 pair and loops.
+    host_text = HOST_C.read_text(encoding="utf-8")
+    for needle in ("setup_retail_bios_stem", '--bios-stem \\"%s\\"', '"--bios-stem"'):
+        assert needle in host_text, f"host does not forward the linked BIOS stem: {needle}"
+    # Diagnostic mode: a diagnostic request must build the debug-tools product
+    # alone (--diagnostic-only) on both rebuild routes, the host must honour the
+    # marker / flag / env when forwarding, and the self-check must report it
+    # (docs/DIAGNOSTIC_MODE.md).
+    for needle in ('--diagnostic-only --diagnostic-dir \\"%%DIAG_DIR%%\\"', '"--diagnostic-only"',
+                   '"--diagnostic-dir"',
+                   'PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"', 'PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"',
+                   '"--collect-diagnostics"', 'diagnostic_build_present', 'diagnostic_mode_requested',
+                   'if (strcmp(argv[i], "--diagnostic") == 0)',
+                   # The forward path must start the helper itself: relaunch_or_exit takes the
+                   # launcher UI's path, which no launcher has set there.
+                   'host_start_helper_and_exit(built)'):
+        assert needle in host_text, f"host lacks the diagnostic-mode contract: {needle}"
     ui = find_recomp_ui()
     if ui is None:
         print("SKIP: recomp-ui not found (set RECOMP_UI_ROOT)")
@@ -86,14 +107,15 @@ def main() -> int:
         probe_c.write_text(PROBE, encoding="utf-8")
         exe = tmp / ("probe.exe" if os.name == "nt" else "probe")
         framework = "framework checkout"
+        # The host uses POSIX APIs whose declarations strict C11 hides on glibc.
         build = subprocess.run(
-            [cc, "-std=c11", "-o", str(exe), str(probe_c), str(HOST_C),
+            [cc, "-std=gnu11", "-o", str(exe), str(probe_c), str(HOST_C), str(ROOT / "runtime/src/start_refusal.c"),
              '-DPSX_SETUP_BIOS_STEMS="OpenBIOS|SCPH5552"',
              f'-DPSX_SETUP_FRAMEWORK_REL="{framework}"',
              "-I", str(ROOT / "host"),
              "-I", str(ROOT / "runtime" / "include"),
              "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if build.returncode != 0:
             print("FAIL: could not build probe\n" + build.stderr[-2000:])
             return 1
@@ -120,7 +142,8 @@ def main() -> int:
             project = tmp / f"case{index}"
             make_project(project, artefacts, framework, descriptor)
             env = dict(os.environ, PSXRECOMP_PROJECT_ROOT=str(project))
-            run = subprocess.run([str(exe)], capture_output=True, text=True, env=env)
+            run = subprocess.run([str(exe)], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", env=env)
             got = run.stdout.strip()
             if got != str(expected):
                 print("FAIL: %s\n  artefacts=%s expected=%s got=%r"

@@ -98,13 +98,14 @@ static void test_snapshot_keeps_clock_phase(void) {
     const uint32_t n = spu_snapshot_bytes();
     uint8_t *snap = (uint8_t *)malloc(n);
     spu_snapshot_write(snap);
-    CHECK(spu_snapshot_len_ok(n) && spu_snapshot_len_ok(n - 4u) && !spu_snapshot_len_ok(n - 1u),
-          "current and pre-clock snapshot lengths validate, others do not");
+    CHECK(spu_snapshot_len_ok(n) && !spu_snapshot_len_ok(n - 4u) && !spu_snapshot_len_ok(n - 1u),
+          "current layout validates; truncated clock tails do not");
 
     g_cycle = 768u * 5000u + 400u;               /* restored guest clock, same phase */
     CHECK(spu_snapshot_read(snap, n) == 1, "snapshot with clock phase loads");
-    spu_catch_up();
     CHECK(spu_output_available() == 0u, "no samples owed right after restore");
+    /* The first catch-up must happen AFTER guest execution resumes. An
+     * immediate catch-up masks the old deferred-phase anchoring defect. */
     g_cycle += 367u;
     spu_catch_up();
     CHECK(spu_output_available() == 0u, "one cycle short of the next sample boundary");
@@ -113,11 +114,16 @@ static void test_snapshot_keeps_clock_phase(void) {
     CHECK(spu_output_available() == 1u, "phase carried: next sample lands on the boundary");
 
     g_cycle = 768u * 9000u + 123u;
-    CHECK(spu_snapshot_read(snap, n - 4u) == 1, "pre-clock snapshot loads (phase 0)");
     spu_catch_up();
-    g_cycle += 767u;
-    spu_catch_up();
-    CHECK(spu_output_available() == 0u, "pre-clock snapshot anchors the clock at load");
+    uint8_t *before = (uint8_t *)malloc(n), *after = (uint8_t *)malloc(n);
+    if (!before || !after) abort();
+    spu_snapshot_write(before);
+    const uint32_t queued = spu_output_available();
+    CHECK(spu_snapshot_read(snap, n - 4u) == 0, "truncated current clock tail rejects");
+    spu_snapshot_write(after);
+    CHECK(!memcmp(before, after, n) && queued == spu_output_available(),
+          "clock-tail rejection preserves state and queued output");
+    free(before); free(after);
     free(snap);
 }
 

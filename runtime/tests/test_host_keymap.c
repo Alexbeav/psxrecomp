@@ -13,8 +13,8 @@ static void check(int cond, const char *what) {
     }
 }
 
-static int mod_ctrl(void) { return (int)KMOD_CTRL; }
-static int mod_alt(void) { return (int)KMOD_ALT; }
+static int mod_ctrl(void) { return (int)KMOD_LCTRL; }
+static int mod_alt(void) { return (int)KMOD_LALT; }
 
 int main(int argc, char **argv) {
     uint8_t keys[SDL_NUM_SCANCODES];
@@ -26,15 +26,12 @@ int main(int argc, char **argv) {
 
     memset(keys, 0, sizeof(keys));
     host_keymap_load(NULL);
-    check(host_keymap_match(HOST_KEYMAP_QUICK_SAVE, (int)SDLK_F5, 0),
-          "F5 quick saves by default");
-    check(!host_keymap_match(HOST_KEYMAP_QUICK_SAVE, (int)SDLK_F5, KMOD_LSHIFT),
-          "Shift+F5 cannot overwrite the quick save");
-    check(host_keymap_match(HOST_KEYMAP_QUICK_LOAD, (int)SDLK_F5, KMOD_LSHIFT) &&
-          host_keymap_match(HOST_KEYMAP_QUICK_LOAD, (int)SDLK_F5, KMOD_RSHIFT),
-          "either Shift+F5 quick loads");
-    check(!host_keymap_match(HOST_KEYMAP_QUICK_LOAD, (int)SDLK_F5, 0),
-          "plain F5 cannot load");
+    check(host_keymap_match(HOST_KEYMAP_QUICK_SAVE,SDLK_F5,0),"F5 quick save default");
+    check(!host_keymap_match(HOST_KEYMAP_QUICK_SAVE,SDLK_F5,KMOD_LSHIFT),"Shift F5 cannot overwrite quick save");
+    check(host_keymap_match(HOST_KEYMAP_QUICK_LOAD,SDLK_F5,KMOD_LSHIFT) &&
+          host_keymap_match(HOST_KEYMAP_QUICK_LOAD,SDLK_F5,KMOD_RSHIFT),"either Shift F5 quick loads");
+    check(!host_keymap_match(HOST_KEYMAP_QUICK_LOAD,SDLK_F5,0),"plain F5 cannot load");
+
     check(host_keymap_match(HOST_KEYMAP_ANALOG_MODE, (int)SDLK_F3, 0),
           "Analog button defaults to F3");
     check(host_keymap_match(HOST_KEYMAP_OPEN_LAUNCHER, (int)SDLK_l, mod_ctrl()),
@@ -54,6 +51,13 @@ int main(int argc, char **argv) {
           "default capture mark is Ctrl+M");
     check(!host_keymap_match(HOST_KEYMAP_CAPTURE_MARK, (int)SDLK_m, 0),
           "plain M does not trigger the capture mark");
+    check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS, (int)SDLK_F6,
+                            (int)KMOD_LCTRL),
+          "default port swap is Ctrl+F6");
+    check(!host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS, (int)SDLK_F6, 0) &&
+          host_keymap_match(HOST_KEYMAP_SCANLINES, (int)SDLK_F6, 0) &&
+          !host_keymap_match(HOST_KEYMAP_SCANLINES, (int)SDLK_F6, (int)KMOD_LCTRL),
+          "plain F6 stays scanlines and does not swap ports");
     keys[SDL_SCANCODE_TAB] = 1;
     check(host_keymap_down(HOST_KEYMAP_TURBO, keys, 0),
           "default turbo is held by Tab");
@@ -68,7 +72,12 @@ int main(int argc, char **argv) {
                                   (int)SDLK_UNKNOWN,
                                   (int)SDL_SCANCODE_F, 0),
           "default display perf accepts its physical scancode");
+    check(host_keymap_match(HOST_KEYMAP_MOUSE_CAPTURE, (int)SDLK_F10, mod_ctrl()), "mouse capture is Ctrl+F10");
 
+    check(host_keymap_match(HOST_KEYMAP_MOUSE_CAPTURE, SDLK_F10, KMOD_LCTRL),
+          "native Mouse capture uses Ctrl+F10");
+    check(!host_keymap_match(HOST_KEYMAP_MOUSE_CAPTURE, SDLK_F10, 0),
+          "plain F10 remains the launcher hotkey");
     f = fopen(cfg, "wb");
     check(f != NULL, "create temporary config.ini");
     if (!f) return 1;
@@ -79,8 +88,10 @@ int main(int argc, char **argv) {
           "VolumeDown = Down\n"
           "DisplayPerf = F10\n"
           "OpenLauncher = Ctrl+O\n"
+          "MouseCapture = Ctrl+M\n"
           "QuickSave = Ctrl+F3\n"
-          "QuickLoad = F4\n",
+          "QuickLoad = F4\n"
+          "MouseCapture = Ctrl+M\n",
           f);
     fclose(f);
 
@@ -124,6 +135,9 @@ int main(int argc, char **argv) {
                                   (int)SDLK_UNKNOWN,
                                   (int)SDL_SCANCODE_F10, 0),
           "display perf rebind accepts the F10 scancode");
+    check(host_keymap_match(HOST_KEYMAP_MOUSE_CAPTURE, (int)SDLK_m, mod_ctrl()) &&
+          !host_keymap_match(HOST_KEYMAP_MOUSE_CAPTURE, (int)SDLK_F10, 0),
+          "mouse capture rebind uses Ctrl+M and drops F10");
 
     f = fopen(cfg, "wb");
     check(f != NULL, "create temporary explicit-unbind config.ini");
@@ -154,6 +168,34 @@ int main(int argc, char **argv) {
                             mod_alt()),
           "missing fullscreen line still keeps default after explicit unbind");
 
+    host_keymap_load(NULL);
+    check(host_keymap_match(HOST_KEYMAP_FULLSCREEN,SDLK_F11,0),"F11 fullscreen default");
+    check(!host_keymap_match(HOST_KEYMAP_REPLAY_RECORD,SDLK_F11,0),"F11 is not recorder");
+    check(!host_keymap_match(HOST_KEYMAP_FULLSCREEN,SDLK_F11,KMOD_LSHIFT),"Shift F11 is marker only");
+    check(!host_keymap_match(HOST_KEYMAP_REPLAY_RECORD,SDLK_F12,KMOD_LSHIFT),"Shift F12 is marker only");
+    check(!strcmp(host_keymap_label(HOST_KEYMAP_REPLAY_RECORD,label,sizeof label),"F12"),"F12 recorder label");
+    check(host_keymap_match(HOST_KEYMAP_REPLAY_RECORD,(int)SDLK_F12,0),"recorder default F12");
+    f=fopen(cfg,"wb");if(!f)return 2;
+    fputs("[KeyMap]\nReplayRecord=Ctrl+F12\n",f);fclose(f);
+    host_keymap_load(cfg);
+    check(host_keymap_match(HOST_KEYMAP_REPLAY_RECORD,(int)SDLK_F12,mod_ctrl()) &&
+          !host_keymap_match(HOST_KEYMAP_REPLAY_RECORD,(int)SDLK_F11,0),"saved recorder binding replaces default");
+    f=fopen(cfg,"wb");if(!f)return 2;
+    fputs("[KeyMap]\nReplayRecord=None\n",f);fclose(f);
+    host_keymap_load(cfg);
+    check(!host_keymap_match(HOST_KEYMAP_REPLAY_RECORD,(int)SDLK_F11,0),"explicit recorder unbind remains unbound");
+
+    f=fopen(cfg,"wb");if(!f)return 2;
+    fputs("[KeyMap]\nQuickSave=Ctrl+F3\nQuickLoad=F4\n",f);fclose(f);
+    host_keymap_load(cfg);
+    check(host_keymap_match_event(HOST_KEYMAP_QUICK_SAVE,SDLK_UNKNOWN,SDL_SCANCODE_F3,KMOD_RCTRL),"quick-save physical modified rebind");
+    check(host_keymap_match(HOST_KEYMAP_QUICK_LOAD,SDLK_F4,0) &&
+          !host_keymap_match(HOST_KEYMAP_QUICK_SAVE,SDLK_F5,0),"quick rebinds replace defaults");
+    f=fopen(cfg,"wb");if(!f)return 2;
+    fputs("[KeyMap]\nQuickSave=None\nQuickLoad=None\n",f);fclose(f);
+    host_keymap_load(cfg);
+    check(!host_keymap_match(HOST_KEYMAP_QUICK_SAVE,SDLK_F5,0) &&
+          !host_keymap_match(HOST_KEYMAP_QUICK_LOAD,SDLK_F5,KMOD_SHIFT),"quick unbind survives reload");
     remove(cfg);
     if (failures) {
         fprintf(stderr, "host_keymap_test: %d failure(s)\n", failures);
@@ -162,3 +204,4 @@ int main(int argc, char **argv) {
     printf("PASS: host keymap defaults and rebinds\n");
     return 0;
 }
+

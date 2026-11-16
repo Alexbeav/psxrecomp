@@ -466,6 +466,21 @@ int main(void) {
     CHECK(psx_pgxp_session_env_flag("1") == 1);
     CHECK(psx_pgxp_session_env_flag("yes") == 1);
 
+    /* Explicit player axes can turn off one correction under an enabled mod.
+     * Environment overrides still win and netplay still forbids culling. */
+    PSXPgxpSessionInputs axes{};
+    axes.mod_enabled=1; axes.mod_culling=1;
+    axes.env_geometry=axes.env_texture=axes.env_cpu_mode=axes.env_culling=-1;
+    axes.player_texture_set=1; axes.video_texture=0;
+    auto choice=psx_pgxp_session_resolve(&axes);
+    CHECK(choice.geometry && !choice.texture && choice.culling);
+    axes.player_geometry_set=1; axes.video_geometry=0;
+    choice=psx_pgxp_session_resolve(&axes);
+    CHECK(!choice.geometry && !choice.texture && !choice.culling);
+    axes.env_geometry=1; axes.env_texture=1; axes.netplay=1;
+    choice=psx_pgxp_session_resolve(&axes);
+    CHECK(choice.geometry && choice.texture && !choice.culling);
+
     if (g_failures) {
         std::fprintf(stderr, "test_pgxp_session: %d FAILURES\n", g_failures);
         return 1;

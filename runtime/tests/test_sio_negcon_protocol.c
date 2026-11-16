@@ -59,6 +59,7 @@ int memcard_write_sector(int card, int sector, const uint8_t *buf) {
     (void)card; (void)sector; (void)buf; return -1;
 }
 void memcard_flush(int card) { (void)card; }
+int memcard_last_flush_result(int card) { (void)card; return -1; }
 
 #define SIO_TX_DATA 0x1F801040u
 #define SIO_RX_DATA 0x1F801040u
@@ -363,8 +364,10 @@ int main(void) {
     return 0;
 }
 
+/* These protocol fixtures supply their own pad words; no debug route overrides them. */
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
+}
 /* Standalone device test: not executing a render-only checkpoint. */
 int g_psx_render_pass_active;
 
-/* Match the current SIO flush-status query in this no-file fixture. */
-int memcard_last_flush_result(int card) { (void)card;return 0; }

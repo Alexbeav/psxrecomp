@@ -20,8 +20,21 @@
 #include <string.h>
 #include "cpu_state.h"
 
-/* No mod hooks are active in this interpreter fixture. */
+/* No function replacement is active; instruction hooks are observed below. */
 uint32_t g_psx_mod_instruction_hooks = 0;
+uint32_t g_psx_mod_function_entry_hooks = 0;
+int (*g_psx_func_override_hook)(CPUState *, uint32_t);
+int g_psx_mod_immediate_live = 0;
+uint32_t g_psx_gcs_recip_q16 = 65536u;
+uint32_t g_psx_gcs_frac = 0u;
+uint32_t g_dma_cpu_read_wait; /* No source DMA is selected in this fixture. */
+int source_gpu_runtime_active(void) { return 0; }
+int g_input_instruction_histogram_active, g_psx_gcs_batch;
+/* No instruction observer or cache is selected; device charging stays real. */
+void psx_cpu_step_boundary_fn(CPUState *cpu, uint32_t pc) { (void)cpu; (void)pc; }
+int psx_mod_try_function_replacement(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address; return 0;
+}
 
 int interp_test_step(CPUState *cpu, uint32_t pc, uint32_t insn, uint32_t *next);
 
@@ -58,6 +71,17 @@ static int failures;
     } while (0)
 
 enum { A1 = 5, CAUSE = 13 };
+static uint32_t s_hook_values[3];
+static unsigned s_hook_calls;
+void psx_mod_instruction(CPUState *cpu, uint32_t pc, uint32_t instruction) {
+    CHECK(cpu == s_device_cpu, "instruction hook received wrong CPU");
+    CHECK(pc == 0x80020000u + 4u * s_hook_calls, "instruction hook PC/order mismatch");
+    CHECK(s_hook_calls < 3, "duplicate instruction hook");
+    if (s_hook_calls < 3) s_hook_values[s_hook_calls] = cpu->gpr[A1];
+    ++s_hook_calls;
+    (void)instruction;
+}
+
 #define CAUSE_SYSCALL 0x20u   /* ExcCode 8 */
 #define CAUSE_IP2     0x400u
 
@@ -67,26 +91,35 @@ static unsigned s_pgxp_calls;
 static uint32_t s_pgxp_instr, s_pgxp_result;
 void psx_pgxp_alu(CPUState *cpu, uint32_t instr, uint32_t result,
                   uint32_t s1, uint32_t s2) {
+    CHECK(cpu == s_device_cpu, "PGXP received the wrong CPU");
+    if (instr == 0u) {
+        CHECK(result == 0u && s1 == 0u && s2 == 0u,
+              "NOP successor carried nonzero provenance");
+        return;
+    }
     ++s_pgxp_calls;
     s_pgxp_instr = instr;
     s_pgxp_result = result;
-    CHECK(cpu == s_device_cpu, "PGXP received the wrong CPU");
-    CHECK(result == cpu->gpr[A1], "PGXP did not receive the written GPR");
+    CHECK(result == (cpu->load_value_rt == A1 ? cpu->load_value : cpu->gpr[A1]),
+          "PGXP did not receive the COP0 destination value");
     CHECK(s1 == 0u && s2 == 0u, "COP0 read inherited ALU source provenance");
 }
 
-/* Runs `insn` (MFC0/CFC0 a1,$13) once and returns what it read. The device
- * deadline falls on the instruction's own cycle, or never. */
+/* Sample on the read's own cycle, then retire the value through its two
+ * architectural successor boundaries. The deadline assertions stay at the
+ * read itself, before those successors can service any additional event. */
 static uint32_t read_cause(uint32_t insn, int due_on_own_cycle, int raised_before) {
     static CPUState cpu;
     memset(&cpu, 0, sizeof cpu);
-    cpu.pc = 0x80020000u;               /* outside the BIOS load-delay window */
+    cpu.pc = 0x80020000u;
     cpu.read_fudge = 32;
     cpu.ld_which_t = 32;
     cpu.cop0[CAUSE] = CAUSE_SYSCALL | (raised_before ? CAUSE_IP2 : 0u);
     s_device_cpu = &cpu;
     s_services = 0;
     s_pgxp_calls = 0;
+    s_hook_calls = 0;
+    g_psx_mod_instruction_hooks = 1;
     psx_cycle_count = 100000u;
     psx_next_service_cycle = due_on_own_cycle ? psx_cycle_count + 1u : UINT64_MAX;
 
@@ -102,9 +135,15 @@ static uint32_t read_cause(uint32_t insn, int due_on_own_cycle, int raised_befor
           "0x%08X: CAUSE after the instruction is 0x%08X", (unsigned)insn,
           (unsigned)cpu.cop0[CAUSE]);
     CHECK(s_pgxp_calls == 1u && s_pgxp_instr == insn &&
-          s_pgxp_result == cpu.gpr[A1],
+          s_pgxp_result == (cpu.load_value_rt == A1 ? cpu.load_value : cpu.gpr[A1]),
           "0x%08X: missing/duplicate/wrong COP0 destination invalidation",
           (unsigned)insn);
+    CHECK(interp_test_step(&cpu, cpu.pc + 4u, 0u, &next) == 0, "COP0 successor slot transfers");
+    CHECK(interp_test_step(&cpu, cpu.pc + 8u, 0u, &next) == 0, "COP0 successor transfers");
+    CHECK(s_hook_calls == 3 && s_hook_values[0] == 0u &&
+          s_hook_values[1] == (((insn >> 21) & 31u) == 0u ? 0u : cpu.gpr[A1]) && s_hook_values[2] == cpu.gpr[A1],
+          "hook must see old value in load slot and retired value at next instruction");
+    g_psx_mod_instruction_hooks = 0;
     return cpu.gpr[A1];
 }
 

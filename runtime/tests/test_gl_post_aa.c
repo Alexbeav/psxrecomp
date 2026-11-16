@@ -35,6 +35,7 @@ void psx_host_sleep_micros(unsigned us) { SDL_Delay((us + 999u) / 1000u); }
 int present_shot_take(char* out,int n) { (void)out; (void)n; return 0; }
 int host_osd_image(const uint32_t** p,int* w,int* h) { (void)p; (void)w; (void)h; return 0; }
 int host_osd_volume_image(const uint32_t** p,int* w,int* h) { return host_osd_image(p,w,h); }
+int host_osd_rec_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
 void host_osd_present_done(void) {}
 int psx_rewind_overlay_image(const uint32_t** p,int* w,int* h) { return host_osd_image(p,w,h); }
 float psx_rewind_slide(void) { return 0; }

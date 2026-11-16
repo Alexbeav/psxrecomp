@@ -13,7 +13,7 @@
  * overrides such as PSX_VSYNC, and the launcher are resolved by then -- and
  * writes nothing back, so the first session keeps exactly what the player
  * configured. Later calls write that record back over the live values.
- * VSync now has a launcher control: its Apply path updates the stored
+ * VSync and interpolation have launcher controls: their Apply path updates the stored
  * preference before a subsequent session restore, independently of any
  * temporary mod-forced swap mode.
  */
@@ -56,6 +56,13 @@ static inline int psx_mod_session_baseline_apply(PSXModSessionBaseline* base,
         live->frame_period_ms = base->values.frame_period_ms;
     }
     return 0;
+}
+
+/* Commit the launcher preference independently of temporary plugin effects. */
+static inline void psx_mod_session_baseline_set_frame_interpolation(
+        PSXModSessionBaseline* base,int enabled,int fps) {
+    base->values.frame_interpolation=enabled?1:0;
+    base->values.frame_interpolation_fps=fps;
 }
 
 #endif

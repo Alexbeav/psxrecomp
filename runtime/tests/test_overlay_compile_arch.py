@@ -120,7 +120,7 @@ def fixture():
     return _FIXTURE
 
 
-def shard_command(compiler='gcc', gcc='gcc'):
+def shard_command(compiler='gcc', gcc='gcc', flavor=0):
     root = fixture()
     src = os.path.join(root, 'shard.c')
     with open(src, 'w') as f:
@@ -130,16 +130,20 @@ def shard_command(compiler='gcc', gcc='gcc'):
          contextlib.redirect_stdout(io.StringIO()):
         co._compile_dll_direct(src, os.path.join(root, 'out.so'),
                                [os.path.join(root, 'inc')],
-                               gcc=gcc, flavor=0, compiler=compiler, tcc='tcc')
+                               gcc=gcc, flavor=flavor, compiler=compiler, tcc='tcc')
     return ran.cmds[-1]
 
 
-def bios_module_command(gcc='gcc'):
+def bios_module_command(gcc='gcc', flavor=0, compiler='gcc'):
     ran = _Ran()
     with mock.patch.object(bmb.subprocess, 'run', ran), \
          contextlib.redirect_stdout(io.StringIO()):
-        bmb.compile_module(['/x/a.c'], '/x/m.so', ['/x/inc'],
-                           'SCPH1001', 0, 'gcc', gcc, 'tcc')
+        root=fixture()
+        src=os.path.join(root,'bios.c')
+        with open(src,'w') as stream:
+            stream.write('int authored_module(void){return 0;}\n')
+        bmb.compile_module([src], '/x/m.so', [os.path.join(root,'inc')],
+                           'SCPH1001', flavor, 0x12345678, compiler, gcc, 'tcc')
     return ran.cmds[-1]
 
 
@@ -170,6 +174,16 @@ MAIN_ARGV = ['--game-toml', '/nonexistent/game.toml', '--recompiler', '/nonexist
 
 class ToolTargetsRuntimeArch(unittest.TestCase):
     """compile_overlays.py / bios_module_build.py, with the host mocked."""
+
+    def test_source_bus_flavor_keeps_instruction_boundary_in_both_compilers(self):
+        with host('Windows','AMD64','windows-x64'):
+            for compiler in ('gcc','tcc'):
+                for flavor in range(8):
+                    for cmd in (shard_command(compiler,flavor=flavor),
+                                bios_module_command(flavor=flavor,compiler=compiler)):
+                        self.assertEqual('-DPSX_SOURCE_BUS_BOUNDARY=1' in cmd,bool(flavor&4))
+                        self.assertEqual('-DPSX_PGXP=1' in cmd,bool(flavor&2))
+                        self.assertIn('-DPSX_OVERLAY_FLAVOR='+str(flavor),cmd)
 
     def test_rosetta_x64_runtime_gets_x86_64_shards(self):
         # The reported case: x86_64 runtime, x86_64 Python (Rosetta).

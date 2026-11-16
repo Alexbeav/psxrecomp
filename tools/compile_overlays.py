@@ -20,6 +20,8 @@ Each DLL exports:
   func_XXXXXXXX(CPUState*)   — one export per compiled function entry point
 """
 
+from __future__ import annotations
+
 import argparse
 import array
 import itertools
@@ -52,8 +54,7 @@ except ImportError:
     try:
         import tomli as tomllib
     except ImportError:
-        print("ERROR: need tomllib (Python 3.11+) or 'pip install tomli'")
-        sys.exit(1)
+        tomllib = None  # TOML parsing is needed by main, not import-only staging.
 
 import json
 import platform
@@ -99,21 +100,160 @@ def overlay_candidate_cap(runtime_include: str) -> int:
     return value
 
 
-def codegen_hash(runtime_include: str) -> int:
-    """Parse PSX_OVERLAY_CODEGEN_HASH from the build-generated overlay_codegen_hash.h
-    (next to overlay_api.h). Folded into the cache path as cg<N>_<hash> so ANY
-    emitter change auto-invalidates the cache (no stale-but-cgN reuse). Falls back
-    to 0 when the header is absent (a tree not yet built) — matching overlay_api.h's
-    __has_include fallback, so the loader and compiler still agree on the path."""
-    hdr = os.path.join(runtime_include, 'overlay_codegen_hash.h')
-    try:
-        with open(hdr) as f:
-            m = re.search(r'#define\s+PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]+)', f.read())
-        if m:
-            return int(m.group(1), 16)
-    except FileNotFoundError:
-        pass
+def codegen_hash(runtime_include: str, recompiler: str = None) -> int:
+    """Read the hash owned by the exact emitter build when available.
+
+    A development build writes the header below the recompiler build directory.
+    Multi-config generators put the executable one directory lower. A packaged
+    SDK has no emitter-adjacent build header, so it falls back to the staged
+    runtime include directory. This prevents an ignored source-tree header from
+    overriding the exact recompiler binary while preserving package use.
+    """
+    candidates = []
+    if recompiler:
+        binary_dir = os.path.dirname(os.path.abspath(recompiler))
+        candidates.extend([
+            os.path.join(binary_dir, 'runtime', 'include',
+                         'overlay_codegen_hash.h'),
+            os.path.join(os.path.dirname(binary_dir), 'runtime', 'include',
+                         'overlay_codegen_hash.h'),
+        ])
+    candidates.append(os.path.join(runtime_include, 'overlay_codegen_hash.h'))
+
+    seen = set()
+    for hdr in candidates:
+        normalized = os.path.normcase(os.path.abspath(hdr))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            with open(hdr, encoding='utf-8') as f:
+                m = re.search(
+                    r'#define\s+PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]+)',
+                    f.read())
+            if m:
+                return int(m.group(1), 16)
+        except FileNotFoundError:
+            continue
     return 0
+
+
+# Windows puts an NTSTATUS in the exit code when an image cannot start: a DLL
+# was missing, or was found but lacked an entry point the binary needs (a GCC
+# 16 build against an older libstdc++-6.dll earlier on PATH, say). The process
+# never runs, so both streams come back empty -- which is indistinguishable, to
+# a caller checking only the return code and the output, from a binary that
+# does not understand the flag it was asked about. Reporting that as staleness
+# sends people to rebuild a binary that was never the problem.
+_LOADER_STATUS = {
+    0xC0000135: 'a required DLL was not found',
+    0xC0000139: 'a required DLL was found but lacks an entry point it needs',
+    0xC0000142: 'a required DLL failed to initialise',
+}
+
+
+def _pe_imported_dlls(path: str) -> list:
+    """DLL names from a PE import table. Stdlib only: the diagnosis must not
+    depend on objdump, which need not exist wherever this tool is run."""
+    try:
+        with open(path, 'rb') as fh:
+            data = fh.read()
+    except OSError:
+        return []
+    if len(data) < 0x40 or data[:2] != b'MZ':
+        return []
+    pe = int.from_bytes(data[0x3C:0x40], 'little')
+    if len(data) < pe + 24 or data[pe:pe + 4] != b'PE\0\0':
+        return []
+    nsections = int.from_bytes(data[pe + 6:pe + 8], 'little')
+    opt_size = int.from_bytes(data[pe + 20:pe + 22], 'little')
+    opt = pe + 24
+    magic = int.from_bytes(data[opt:opt + 2], 'little')
+    # DataDirectory starts here; entry [0] is exports, [1] is the import table.
+    dd = opt + (112 if magic == 0x20B else 96) + 8
+    if len(data) < dd + 4:
+        return []
+    imp_rva = int.from_bytes(data[dd:dd + 4], 'little')
+    if not imp_rva:
+        return []
+    sections = []
+    sec = opt + opt_size
+    for i in range(nsections):
+        s = sec + i * 40
+        if len(data) < s + 40:
+            return []
+        sections.append((int.from_bytes(data[s + 12:s + 16], 'little'),
+                         int.from_bytes(data[s + 8:s + 12], 'little'),
+                         int.from_bytes(data[s + 20:s + 24], 'little')))
+
+    def to_off(rva):
+        for va, vsz, raw in sections:
+            if va <= rva < va + max(vsz, 1):
+                return raw + (rva - va)
+        return None
+
+    names = []
+    off = to_off(imp_rva)
+    while off is not None and off + 20 <= len(data):
+        name_rva = int.from_bytes(data[off + 12:off + 16], 'little')
+        if not name_rva:
+            break
+        n = to_off(name_rva)
+        if n is None:
+            break
+        end = data.find(b'\0', n)
+        if end < 0:
+            break
+        names.append(data[n:end].decode('ascii', 'replace'))
+        off += 20
+    return names
+
+
+def _resolve_dll(exe: str, dll: str) -> str:
+    """Where the loader would find `dll`: the image's own directory first, then
+    PATH. shutil.which is wrong here -- it applies PATHEXT rules and reports a
+    DLL that is plainly on PATH as missing."""
+    roots = [os.path.dirname(os.path.abspath(exe))]
+    roots += os.environ.get('PATH', '').split(os.pathsep)
+    for root in roots:
+        if not root:
+            continue
+        candidate = os.path.join(root, dll)
+        if os.path.isfile(candidate):
+            return candidate
+    return 'NOT FOUND'
+
+
+def loader_failure_detail(exe: str, result) -> str:
+    """Non-empty when `exe` failed to start rather than failing to answer.
+
+    Names each non-system DLL it imports and the file PATH actually resolves
+    it to, because the usual cause is a second toolchain earlier on PATH
+    shadowing the runtime the binary was built against -- which is invisible
+    from the exit code alone."""
+    if os.name != 'nt' or (result.stdout or '') or (result.stderr or ''):
+        return ''
+    reason = _LOADER_STATUS.get(result.returncode & 0xFFFFFFFF)
+    if reason is None:
+        return ''
+    out = ['  The process never started: %s (exit 0x%08X).'
+           % (reason, result.returncode & 0xFFFFFFFF),
+           '  This is a launcher problem, NOT a stale or outdated binary;'
+           ' rebuilding will not change it.']
+    rows = []
+    for dll in _pe_imported_dlls(exe):
+        low = dll.lower()
+        if low.startswith('api-ms-') or low in (
+                'kernel32.dll', 'ntdll.dll', 'msvcrt.dll', 'user32.dll',
+                'advapi32.dll', 'shell32.dll', 'ole32.dll'):
+            continue
+        rows.append('    %s -> %s' % (dll, _resolve_dll(exe, dll)))
+    if rows:
+        out.append('  Non-system DLLs it imports, and what PATH resolves them to:')
+        out.extend(rows)
+        out.append('  A DLL from a different toolchain earlier on PATH shadows'
+                   ' the one it needs.')
+    return '\n'.join(out)
 
 
 def verify_recompiler_matches_tag(recompiler: str, tag_hash: int) -> None:
@@ -170,7 +310,7 @@ def cache_tag(runtime_include: str, recompiler: str, game_toml: str,
     """
     return 'cg%d_%08x_gc%08x_f%d' % (
         codegen_ver(runtime_include),
-        codegen_hash(runtime_include),
+        codegen_hash(runtime_include, recompiler),
         overlay_config_hash(recompiler, game_toml),
         int(flavor))
 
@@ -6228,21 +6368,34 @@ def _compile_dll_tcc(c_path: str, out_dll: str, include_dirs, flavor: int,
            # PGXP flavor bit (overlay_api.h PSX_OVERLAY_FLAVOR_PGXP): arm the
            # PGXP_*() hook macros the emitter writes into every overlay C.
            *(['-DPSX_PGXP=1'] if int(flavor) & 2 else []),
+        *(['-DPSX_SOURCE_BUS_BOUNDARY=1'] if int(flavor) & 4 else []),
            native_path(c_path), '-o', native_path(out_dll)]
     for d in include_dirs:
         cmd.append('-I' + native_path(_bom_free_incdir(d)))
     cmd += _tcc_bundle_args(tcc)
     print(f'  compile (tcc): {" ".join(cmd)}')
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         print(f'  TCC COMPILE ERROR (exit {r.returncode}):\n{r.stderr or r.stdout}')
         return False
     return True
 
 
+def _validate_overlay_optimization(optimization: str, compiler: str) -> None:
+    if optimization not in ('-O0', '-O2'):
+        raise ValueError('overlay optimization must be -O0 or -O2')
+    if compiler == 'tcc' and optimization != '-O2':
+        raise ValueError('TinyCC does not support proof optimization overrides')
+
 def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
                         gcc: str = 'gcc', flavor: int = 0,
-                        compiler: str = 'gcc', tcc: str = 'tcc') -> bool:
+                        compiler: str = 'gcc', tcc: str = 'tcc',
+                        optimization: str = '-O2') -> bool:
+    try:
+        _validate_overlay_optimization(optimization, compiler)
+    except ValueError as exc:
+        print(f'  COMPILE ERROR: {exc}')
+        return False
     import platform
     # Absolute paths (interpreter flavor) for EVERY path the native compiler
     # touches — see native_path's docstring for the two rules and the
@@ -6257,7 +6410,7 @@ def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
     # that conflicts with the host process. Use -shared without -fPIC.
     pic_flag = [] if is_windows() else ['-fPIC']
     cmd = [
-        gcc, '-shared', *pic_flag, *target_arch_flags('gcc'), '-O2',
+        gcc, '-shared', *pic_flag, *target_arch_flags('gcc'), optimization,
         '-DPSX_OVERLAY_DLL_BUILD',
         # Overlays mirror the runtime's no-debug-tools build: the emitter guards
         # debug_server_cyc_observe (and friends) behind PSX_NO_DEBUG_TOOLS, and the
@@ -6280,6 +6433,7 @@ def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
         # PGXP flavor bit (overlay_api.h PSX_OVERLAY_FLAVOR_PGXP): arm the
         # PGXP_*() hook macros the emitter writes into every overlay C.
         *(['-DPSX_PGXP=1'] if int(flavor) & 2 else []),
+        *(['-DPSX_SOURCE_BUS_BOUNDARY=1'] if int(flavor) & 4 else []),
         c_path,
         '-o', out_dll,
         *includes,
@@ -6289,7 +6443,7 @@ def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
         print('  WARNING: no gcc toolchain dir found (PSX_MINGW_BIN / --gcc dir / '
               'PATH / common locations); compile will likely fail silently.')
     print(f'  compile: {" ".join(cmd)}')
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', env=env)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or '').strip()
         if not msg:
@@ -6314,7 +6468,8 @@ def compile_dll(c_path: str, out_dll: str, include_dirs: list[str],
                 expected_existing_abi: int | None = None,
                 publication_result: dict | None = None,
                 candidate_cap: int | None = None,
-                manifest_provenance: str | None = None) -> bool:
+                manifest_provenance: str | None = None,
+                optimization: str = '-O2') -> bool:
     """Publish a shard only after all of its artifacts are complete.
 
     GCC and tcc write their output incrementally. If the process is interrupted
@@ -6328,6 +6483,11 @@ def compile_dll(c_path: str, out_dll: str, include_dirs: list[str],
     The pair ID additionally lets a pair-aware loader reject the only filesystem
     TOCTOU left: an old manifest parsed immediately before the DLL rename.
     """
+    try:
+        _validate_overlay_optimization(optimization, compiler)
+    except ValueError as exc:
+        print(f'  COMPILE ERROR: {exc}')
+        return False
     final_out = os.path.abspath(out_dll)
     out_dir = os.path.dirname(final_out)
     os.makedirs(out_dir, exist_ok=True)
@@ -6360,7 +6520,7 @@ def compile_dll(c_path: str, out_dll: str, include_dirs: list[str],
     try:
         if not _compile_dll_direct(
                 c_path, staged, include_dirs, gcc=gcc, flavor=flavor,
-                compiler=compiler, tcc=tcc):
+                compiler=compiler, tcc=tcc, optimization=optimization):
             return False
         if not os.path.isfile(staged) or os.path.getsize(staged) == 0:
             print('  COMPILE ERROR: compiler reported success but emitted no DLL')
@@ -7518,7 +7678,7 @@ def _static_capture_job_in_segment(cap, args, toml, forced_interiors,
         sub_env = dict(os.environ)
         if args.cps:
             sub_env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
-        r = subprocess.run(cmd, capture_output=True, text=True,
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                            cwd=toml_dir, env=sub_env)
         if r.returncode != 0:
             print(f'  RECOMPILER ERROR:\n{r.stderr or r.stdout}')
@@ -7724,6 +7884,9 @@ def write_static_outputs(static_out: str, parts: list, variants: list,
 
 
 def main():
+    if tomllib is None:
+        print("ERROR: need tomllib (Python 3.11+) or tomli for overlay compilation", file=sys.stderr)
+        raise SystemExit(1)
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--captures',        default=None,
@@ -7922,7 +8085,7 @@ def main():
 
     # Stale-recompiler-binary guard — BOTH modes (static overlays are just as
     # wrong when emitted by a stale binary; they simply have no tag to hide in).
-    verify_recompiler_matches_tag(args.recompiler, codegen_hash(args.runtime_include))
+    verify_recompiler_matches_tag(args.recompiler, codegen_hash(args.runtime_include, args.recompiler))
 
     if args.static:
         static_out = os.path.join(args.out_dir, 'overlays_static.c')
@@ -7937,7 +8100,7 @@ def main():
         # build never reuses a stale DLL, old versions coexist). MUST match
         # overlay_loader.c scan_cache_dir(). Pre-1.0: no legacy fallback.
         cg = codegen_ver(args.runtime_include)
-        ch = codegen_hash(args.runtime_include)
+        ch = codegen_hash(args.runtime_include, args.recompiler)
         gh = overlay_config_hash(args.recompiler, args.game_toml)
         cache_dir = os.path.join(args.out_dir, game_id, args.compiler, cache_arch_abi(),
                                  cache_tag(args.runtime_include, args.recompiler,
@@ -8213,7 +8376,7 @@ def main():
             sub_env = dict(os.environ)
             if args.cps:
                 sub_env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
-            r = subprocess.run(cmd, capture_output=True, text=True,
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                                cwd=toml_dir, env=sub_env)
             if r.returncode != 0:
                 print(f'  RECOMPILER ERROR:\n{r.stderr or r.stdout}')

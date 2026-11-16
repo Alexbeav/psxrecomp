@@ -28,6 +28,13 @@ typedef struct {
     uint32_t body_hi;  /* exclusive */
 } PsxKernelBody;
 
+/* Rows the runtime's bless verify-state array holds (memory.c). A table with
+ * more rows cannot be blessed, so it is refused at configure time, at
+ * start-up and in the bless latch, never silently run without bless: a
+ * 4,096 cap did exactly that once T110 grew the retail tables to 5,054-5,083
+ * rows, and every kernel routine interpreted on every title (PS1B-306). */
+#define PSX_KBLESS_MAX_ENTRIES 16384u
+
 /* Kernel-RAM ranges the guest is EXPECTED to overwrite at runtime: the Psy-Q
  * libapi patchers (_patch_gte / _patch_card / _patch_card2 / _patch_pad) and
  * the BIOS's own install stubs rewrite words inside compiled kernel bodies at

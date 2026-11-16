@@ -3,7 +3,7 @@
  *
  * Port of the snesrecomp audio-campaign measurement harness (audio_trace.{c,h},
  * commit 67ead27 lineage) to the PSX pipeline, following the cross-system tap
- * model in F:/Projects/_audio_round2/ROUND2_PLAN.md: debug-tool builds keep
+ * model of post-event capture: debug-tool builds keep
  * always-on ring buffers recording from process start, dumped AFTER the fact via
  * TCP debug commands — never arm-then-reproduce.
  *

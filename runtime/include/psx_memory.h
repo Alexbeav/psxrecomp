@@ -47,6 +47,18 @@ extern uint32_t g_psx_ram_size;
 extern uint32_t g_psx_ram_mask;
 
 uint32_t memory_get_ram_bytes(void);
+
+/* Checkpoint resume (MEMCTRL section): the 16 memory-control words
+ * 0x1F801000..0x1F80103C, RAM_SIZE (0x1F801060) and CACHE_CTRL (0xFFFE0130),
+ * in that order. */
+#define PSX_MEMORY_CONTROL_WORDS 18u
+void memory_control_get(uint32_t out[PSX_MEMORY_CONTROL_WORDS]);
+void memory_control_set(const uint32_t in[PSX_MEMORY_CONTROL_WORDS]);
+/* Legacy replay observation only: guest RAM is never substituted or cleared. */
+void memory_note_game_entry(void);
+void memory_set_low_ram_view_old(int on);
+const uint8_t *memory_low_ram_view(void);
+int memory_low_ram_at_entry(uint8_t out[16]);
 int      psx_ram_8mb_active(void);
 void     psx_ram_reset_size_request(void);
 /* memory_init(): latch the requested geometry for this boot. */
@@ -86,6 +98,11 @@ static inline int psx_ram_resolve(uint32_t address, uint32_t width,
     return 1;
 }
 
+/* Complete observable memory-control register bank; fixed 72-byte LE wire. */
+uint32_t memory_control_snapshot_bytes(void);
+void memory_control_snapshot_write(uint8_t *out);
+int memory_control_snapshot_read(const uint8_t *in, uint32_t len);
+
 /* Stores made by the host rather than the guest CPU (mods, FMV skip, debug
  * pokes, enhancement fills). They take the psx_write_* path but are never
  * cache-isolated: while SR.IsC is set they still reach memory, as DMA does,
@@ -97,6 +114,8 @@ void psx_host_write_byte(uint32_t addr, uint8_t val);
 /* Side-effect-free aligned word peek (RAM / scratchpad / BIOS ROM only), for
  * the debug path. Returns 0 (and leaves *out alone) for anything else. */
 int psx_peek_word(uint32_t addr, uint32_t *out);
+/* Instruction inspection: no MMIO, observer, device service or cycle charge. */
+int memory_peek_instruction_word(uint32_t address, uint32_t *value);
 
 #ifdef __cplusplus
 }

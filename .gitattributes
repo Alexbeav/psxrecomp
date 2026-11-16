@@ -1,0 +1,25 @@
+# Source admission hashes this tool's exact bytes; retain the canonical Git blob.
+tools/tasreplays/nymashock_admission.py text eol=lf
+tools/tasreplays/megamanx5_admission.py text eol=lf
+tools/tasreplays/octoshock2x_admission.py text eol=lf
+tools/tasreplays/octoshock2x_admission_bizhawk210.py text eol=lf
+tools/tasreplays/megamanx4_admission.py text eol=lf
+tools/tasreplays/redc_admission.py text eol=lf
+tools/tasreplays/nymashock28_movie.py text eol=lf
+tools/tasreplays/medievil_admission.py text eol=lf
+tools/tasreplays/spyro_admission.py text eol=lf
+tools/tasreplays/spyro2_admission.py text eol=lf
+
+*.sh text eol=lf
+
+# Staging checks this licence text's exact bytes before it copies it beside a
+# product (PS1B-345); a line-ending conversion would fail that check.
+tools/licenses/LGPL-2.1.txt text eol=lf
+
+# git archive writes the commit here, so a snapshot with no .git still knows
+# its framework pin (runtime/framework_identity.cmake).
+runtime/FRAMEWORK_PIN export-subst text eol=lf
+runtime/FRAMEWORK_TREE export-subst text eol=lf
+
+# Studio checks the bundled licence against its canonical byte hash.
+tools/public_studio/pin_builder/licenses/LGPL-2.1.txt text eol=lf

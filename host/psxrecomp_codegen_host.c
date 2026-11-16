@@ -1,6 +1,8 @@
 /* Portable generate → rebuild (--no-pgo from setup) → relaunch host. */
 
 #include "psxrecomp_codegen_host.h"
+#include "psx_setup_refusal.h"
+#include "start_refusal.h"
 
 #include "psx_bios_known_images.h"
 
@@ -16,6 +18,7 @@
 #  include <dirent.h>
 #  include <errno.h>
 #  include <fcntl.h>
+#  include <signal.h>
 #  include <spawn.h>
 #  include <strings.h>
 #  include <sys/stat.h>
@@ -35,6 +38,9 @@ static int toolchain_bin_is_healthy(const char* bin);
 static void heal_broken_toolchain_pointers(void);
 static void clear_project_toolchain_stamp(void);
 static int host_paths_same_file(const char* a, const char* b);
+static int restore_dir_aside(const char* aside, const char* path);
+static int pack_root_has_cmake_direct(const char* path);
+static int host_self_exe_path(char* out, size_t cap);
 static void prune_old_toolchain_tags(const char* keep_pack);
 #if defined(_WIN32)
 static int junction_dir(const char* link_path, const char* target_path);
@@ -58,10 +64,22 @@ static char g_toolchain_bin[1400];
 static char g_cli_toolchain_bin[1400];
 static int g_ready;
 static int g_relaunch_is_helper;
+static long g_cli_last_exit_code;
+static int g_cli_refused_given_disc;
+static char g_refused_disc[1024];
+static int (*g_inner_disc_verify)(const char*, RecompLauncherCDiscVerify*);
 /* Wizard BIOS pick (survives cwd-relative bios.cfg misses on Windows). */
 static char g_wizard_bios[1100];
 /* Set when heal removes a broken latest/ / stamp at wizard open. */
 static char g_tc_repair_note[320];
+static long g_tc_aside_error;
+static const char* g_tc_check_step = "";
+#define TC_STEP_CMAKE "cmake does not run"
+#define TC_STEP_MISSING "clang or the linker is missing from the pack"
+#define TC_STEP_CLANG "clang does not run"
+#define TC_STEP_TEMP "a test file could not be written to the temporary folder"
+#define TC_STEP_LINK "a one-line test program did not compile and link"
+#define PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"
 /* Set when host_persist_setup receives an explicit bios_path (including ""
  * for OpenBIOS). Distinguishes intentional OpenBIOS clear from "unset". */
 static int g_wizard_bios_explicit;
@@ -528,8 +546,101 @@ static int find_python(char* out, size_t cap) {
     return 0;
 }
 
+/* Pack bin folders that did not pass their check in this process. A pack that
+ * fails its check is not removed and not renamed (PS1B-410): one failed check
+ * is not proof that it is broken, and it may be in use by a running build. It
+ * is passed over for the rest of this process instead, so that the lookup can
+ * find another pack. An install clears the list. */
+static char g_tc_rejected[8][1400];
+static const char* g_tc_rejected_step[8];   /* the step each one failed at */
+static int g_tc_rejected_n = 0;
+
+static int toolchain_bin_is_rejected(const char* bin) {
+    int i;
+    if (!bin || !bin[0])
+        return 0;
+    for (i = 0; i < g_tc_rejected_n; ++i) {
+#if defined(_WIN32)
+        if (_stricmp(g_tc_rejected[i], bin) == 0)
+#else
+        if (strcmp(g_tc_rejected[i], bin) == 0)
+#endif
+            return 1;
+    }
+    return 0;
+}
+
+static void toolchain_bin_reject(const char* bin) {
+    if (!bin || !bin[0] || toolchain_bin_is_rejected(bin))
+        return;
+    if (g_tc_rejected_n < (int)(sizeof(g_tc_rejected) / sizeof(g_tc_rejected[0]))) {
+        g_tc_rejected_step[g_tc_rejected_n] = g_tc_check_step;
+        snprintf(g_tc_rejected[g_tc_rejected_n++], sizeof(g_tc_rejected[0]), "%s", bin);
+    }
+}
+
+/* The step a passed-over pack failed at, "" for a pack that is not on the list. */
+static const char* toolchain_bin_rejected_step(const char* bin) {
+    int i;
+    if (!bin || !bin[0])
+        return "";
+    for (i = 0; i < g_tc_rejected_n; ++i) {
+#if defined(_WIN32)
+        if (_stricmp(g_tc_rejected[i], bin) == 0)
+#else
+        if (strcmp(g_tc_rejected[i], bin) == 0)
+#endif
+            return g_tc_rejected_step[i] ? g_tc_rejected_step[i] : "";
+    }
+    return "";
+}
+
+/* What a player reads about the toolchain (Alex, 2026-10-02, item A13). Each
+ * says only what the program knows. tools/toolchain_pack.py holds the second
+ * and the third word for word. */
+static void toolchain_text_check_failed(char* out, size_t cap, const char* step) {
+    snprintf(out, cap,
+             "The portable toolchain did not pass its check: %s. It was not "
+             "removed. Download the latest pack to replace it.", step);
+}
+
+static void toolchain_text_new_pack_failed(char* out, size_t cap, const char* step) {
+    snprintf(out, cap,
+             "The new toolchain pack did not pass its check: %s. The installed "
+             "toolchain was not changed.", step);
+}
+
+/* `error` is GetLastError() on Windows and errno elsewhere, from the rename. */
+static void toolchain_text_rename_failed(char* out, size_t cap, long error) {
+#if defined(_WIN32)
+    if (error == 32) {
+        snprintf(out, cap,
+                 "Another program holds the installed toolchain folder open "
+                 "(Windows error 32). The toolchain was not changed. Close the "
+                 "programs that use it, for example a running build, and try again.");
+        return;
+    }
+    if (error == 5) {
+        snprintf(out, cap,
+                 "Windows refused to rename the installed toolchain folder (error "
+                 "5, access denied). The toolchain was not changed. A file in it "
+                 "may be open in another program, or the folder may be protected.");
+        return;
+    }
+#endif
+    snprintf(out, cap,
+             "The installed toolchain folder could not be renamed (system error "
+             "%ld). The toolchain was not changed.", error);
+}
+
+static void toolchain_rejects_clear(void) {
+    g_tc_rejected_n = 0;
+}
+
 static int toolchain_bin_has_cmake(const char* bin, char* out, size_t cap) {
     char cmake[1200];
+    if (toolchain_bin_is_rejected(bin))
+        return 0;
 #if defined(_WIN32)
     if (join_path(cmake, sizeof(cmake), bin, "cmake.exe") && path_is_file(cmake)) {
         snprintf(out, cap, "%s", bin);
@@ -572,7 +683,8 @@ static int resolve_toolchain_bin_under(const char* wrap, char* out, size_t cap) 
             continue;
         if (!join_path(nbin, sizeof(nbin), nested, "bin"))
             continue;
-        if (join_path(cmake, sizeof(cmake), nbin, "cmake.exe") && path_is_file(cmake)) {
+        if (!toolchain_bin_is_rejected(nbin) &&
+            join_path(cmake, sizeof(cmake), nbin, "cmake.exe") && path_is_file(cmake)) {
             snprintf(out, cap, "%s", nbin);
             found = 1;
             break;
@@ -596,7 +708,8 @@ static int resolve_toolchain_bin_under(const char* wrap, char* out, size_t cap) 
             continue;
         if (!join_path(nbin, sizeof(nbin), nested, "bin"))
             continue;
-        if (join_path(cmake, sizeof(cmake), nbin, "cmake") && path_is_file(cmake)) {
+        if (!toolchain_bin_is_rejected(nbin) &&
+            join_path(cmake, sizeof(cmake), nbin, "cmake") && path_is_file(cmake)) {
             snprintf(out, cap, "%s", nbin);
             found = 1;
             break;
@@ -796,6 +909,129 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
     return 0;
 }
 
+#if !defined(_WIN32)
+/* True when retcomm-toolchain.json says the pack was built for this OS
+ * ("os": "macos-universal" / "linux-x64"). A Windows pack can sit in the shared
+ * cache (older kits downloaded only that one); it must never reach PATH here. */
+static int pack_is_for_this_host(const char* pack_root) {
+    char manifest[1500], buf[4096];
+    const char* p;
+    FILE* f;
+    size_t n;
+#if defined(__APPLE__)
+    const char* want = "macos";
+#else
+    const char* want = "linux";
+#endif
+    if (!pack_root || !pack_root[0] ||
+        !join_path(manifest, sizeof(manifest), pack_root, "retcomm-toolchain.json"))
+        return 0;
+    f = fopen(manifest, "rb");
+    if (!f)
+        return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    p = strstr(buf, "\"os\"");
+    if (!p || !(p = strchr(p + 4, ':')) || !(p = strchr(p, '"')))
+        return 0;
+    return strncmp(p + 1, want, strlen(want)) == 0;
+}
+#endif
+
+/* Two PATH entries name the same folder: case and the two slashes do not
+ * matter on Windows, a trailing slash does not matter anywhere. */
+static int path_entry_is(const char* entry, size_t len, const char* folder) {
+    size_t flen = strlen(folder), i;
+    while (len > 1 && (entry[len - 1] == '/' || entry[len - 1] == '\\'))
+        --len;
+    while (flen > 1 && (folder[flen - 1] == '/' || folder[flen - 1] == '\\'))
+        --flen;
+    if (len != flen)
+        return 0;
+    for (i = 0; i < len; ++i) {
+        char a = entry[i], b = folder[i];
+#if defined(_WIN32)
+        if (a == '/') a = '\\';
+        if (b == '/') b = '\\';
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+#endif
+        if (a != b)
+            return 0;
+    }
+    return 1;
+}
+
+/* Put `first` and `second` (either may be empty) once at the head of PATH and
+ * take their other copies out. Calling it again changes nothing.
+ *
+ * It used to prepend both at every call into a buffer of 8,192 characters. A
+ * host that relaunched itself grew PATH by three folders a generation (two
+ * activations and the rebuild helper), and a PATH longer than the buffer was
+ * cut off in the middle of an entry. On 2026-10-02 that growth took PATH past
+ * what the readiness check could take, a whole pack was judged unusable and a
+ * new one was installed over it (PS1B-406, PS1B-410). */
+static void path_put_in_front(const char* first, const char* second) {
+#if defined(_WIN32)
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    const char* old = getenv("PATH");
+    const char* front[2];
+    size_t cap, pos = 0;
+    char* neu;
+    int k;
+    front[0] = (first && first[0]) ? first : NULL;
+    front[1] = (second && second[0] && !(front[0] && path_entry_is(second, strlen(second), front[0])))
+                   ? second : NULL;
+    if (!front[0] && !front[1])
+        return;
+    cap = (old ? strlen(old) : 0) + (front[0] ? strlen(front[0]) : 0) +
+          (front[1] ? strlen(front[1]) : 0) + 4;
+    neu = (char*)malloc(cap);
+    if (!neu)
+        return;
+    for (k = 0; k < 2; ++k) {
+        if (!front[k])
+            continue;
+        if (pos)
+            neu[pos++] = sep;
+        memcpy(neu + pos, front[k], strlen(front[k]));
+        pos += strlen(front[k]);
+    }
+    if (old) {
+        const char* p = old;
+        while (*p) {
+            const char* end = strchr(p, sep);
+            size_t len = end ? (size_t)(end - p) : strlen(p);
+            if (!(front[0] && path_entry_is(p, len, front[0])) &&
+                !(front[1] && path_entry_is(p, len, front[1]))) {
+                neu[pos++] = sep;
+                memcpy(neu + pos, p, len);
+                pos += len;
+            }
+            if (!end)
+                break;
+            p = end + 1;
+        }
+    }
+    neu[pos] = '\0';
+    if (!old || strcmp(old, neu) != 0) {
+#if defined(_WIN32)
+        if (_putenv_s("PATH", neu) != 0)
+#else
+        if (setenv("PATH", neu, 1) != 0)
+#endif
+            fprintf(stderr,
+                    "psxrecomp-codegen: PATH could not be set with the toolchain "
+                    "folders in front (%u characters); it stays as it is\n",
+                    (unsigned)pos);
+    }
+    free(neu);
+}
+
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
@@ -808,6 +1044,12 @@ static void activate_toolchain_path(void) {
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
     pack_root[0] = '\0';
     (void)dirname_copy(pack_root, sizeof(pack_root), g_toolchain_bin);
+#if !defined(_WIN32)
+    if (!pack_is_for_this_host(pack_root)) {
+        g_toolchain_bin[0] = '\0';
+        return;
+    }
+#endif
 
     /* Prepend pack python/ (Windows) or python/bin (Unix), then bin/. */
     char py_path_dir[1400];
@@ -829,29 +1071,11 @@ static void activate_toolchain_path(void) {
         }
     }
 
-    const char* old = getenv("PATH");
+    path_put_in_front(py_path_dir, g_toolchain_bin);
 #if defined(_WIN32)
-    char neu[8192];
-    if (py_path_dir[0])
-        snprintf(neu, sizeof(neu), "%s;%s%s%s", py_path_dir, g_toolchain_bin,
-                 old ? ";" : "", old ? old : "");
-    else
-        snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ";" : "",
-                 old ? old : "");
-    _putenv_s("PATH", neu);
-    if (py_exe[0])
-        _putenv_s("RETCOMM_PYTHON", py_exe);
+    if (py_exe[0]) _putenv_s("RETCOMM_PYTHON", py_exe);
 #else
-    char neu[8192];
-    if (py_path_dir[0])
-        snprintf(neu, sizeof(neu), "%s:%s%s%s", py_path_dir, g_toolchain_bin,
-                 old ? ":" : "", old ? old : "");
-    else
-        snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ":" : "",
-                 old ? old : "");
-    setenv("PATH", neu, 1);
-    if (py_exe[0])
-        setenv("RETCOMM_PYTHON", py_exe, 1);
+    if (py_exe[0]) setenv("RETCOMM_PYTHON", py_exe, 1);
 #endif
     if (pack_root[0]) {
 #if defined(_WIN32)
@@ -1173,6 +1397,61 @@ static int resolve_build_paths(void) {
 #define PSX_SETUP_FRAMEWORK_REL "psxrecomp"
 #endif
 
+#define PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"
+#define PSX_DIAGNOSTIC_ENV "PSXRECOMP_DIAGNOSTIC"
+
+static int argv_has(int argc, char** argv, const char* flag) {
+    int i;
+    for (i = 1; i < argc; ++i)
+        if (argv && argv[i] && strcmp(argv[i], flag) == 0)
+            return 1;
+    return 0;
+}
+
+static int diagnostic_marker_present(void) {
+    char marker[1200];
+    return g_project_root[0] &&
+           join_path(marker, sizeof(marker), g_project_root, PSX_DIAGNOSTIC_MARKER) &&
+           path_is_file(marker);
+}
+
+static int diagnostic_requested(int argc, char** argv) {
+    const char* env = getenv(PSX_DIAGNOSTIC_ENV);
+    if (argv_has(argc, argv, "--diagnostic"))
+        return 1;
+    if (env && env[0] && env[0] != '0')
+        return 1;
+    return diagnostic_marker_present();
+}
+
+/* build-diagnostic/<exe>, honouring the name runtime.cmake published there. */
+static int resolve_diagnostic_exe_path(char* out, size_t cap) {
+    char dir[1100], basename[256], exe_name[300];
+    if (!g_project_root[0] ||
+        !join_path(dir, sizeof(dir), g_project_root, PSX_DIAGNOSTIC_DIR_NAME))
+        return 0;
+    snprintf(basename, sizeof(basename), "%s", g_exe_basename);
+    if (g_cfg && g_cfg->cmake_target && g_cfg->cmake_target[0]) {
+        char marker[1200], published[256];
+        snprintf(published, sizeof(published), "psxrecomp_exe_name-%s.txt",
+                 g_cfg->cmake_target);
+        if (join_path(marker, sizeof(marker), dir, published) &&
+            read_first_line(marker, published, sizeof(published)) && published[0])
+            snprintf(basename, sizeof(basename), "%s", published);
+    }
+#if defined(_WIN32)
+    snprintf(exe_name, sizeof(exe_name), "%s.exe", basename);
+#else
+    snprintf(exe_name, sizeof(exe_name), "%s", basename);
+#endif
+    return join_path(out, cap, dir, exe_name);
+}
+
+static int diagnostic_build_present(void) {
+    char exe[1300];
+    return resolve_diagnostic_exe_path(exe, sizeof(exe)) && path_is_file(exe);
+}
+
 /* Match runtime.cmake: a requested pair with its backend descriptor. A stale
  * pre-descriptor pair or unrelated game dispatch cannot complete BIOS setup. */
 static int generated_bios_backend_linkable(const char* dir, const char* stem) {
@@ -1220,6 +1499,25 @@ static int generated_has_bios_backend(const char* dir) {
         next = end + 1;
     }
     return 0;
+}
+
+static const char* setup_retail_bios_stem(void) {
+    static char stem[512];
+    const char* next = PSX_SETUP_BIOS_STEMS;
+    stem[0] = 0;
+    while (*next) {
+        const char* end = strchr(next, '|');
+        size_t len = end ? (size_t)(end - next) : strlen(next);
+        if (len && len < sizeof(stem) &&
+            !(len == 8 && strncmp(next, "OpenBIOS", 8) == 0)) {
+            memcpy(stem, next, len);
+            stem[len] = 0;
+            return stem;
+        }
+        if (!end) break;
+        next = end + 1;
+    }
+    return stem;
 }
 
 static int bios_backends_missing(void) {
@@ -1669,6 +1967,93 @@ static int host_persist_setup_discs(void* ctx, const char* const* disc_paths,
     return 0;
 }
 
+/* Give the product the disc set the wizard recorded, when it has none.
+ *
+ * The wizard writes disc.cfg at the project root and tries build-release/ too,
+ * but on a fresh kit build-release/ does not exist yet, so that copy fails
+ * silently. The runtime reads disc.cfg only beside its own exe, so the first
+ * start asked for the disc again while the BIOS (which has a project-root
+ * fallback below) was remembered. The whole file is copied, so a multi-disc
+ * set keeps one path per line. An existing product-side disc.cfg is a pick
+ * the player made in the product and is left alone. */
+static void sync_project_disc_cfg_to_product(const char* near_exe) {
+    char dir[1100], dst[1200], src[1200];
+    char body[PSX_HOST_MAX_DISCS * 1030];
+    size_t n;
+    FILE* f;
+
+    if (!near_exe || !near_exe[0] || !g_project_root[0])
+        return;
+    if (!dirname_copy(dir, sizeof(dir), near_exe) ||
+        !join_path(dst, sizeof(dst), dir, "disc.cfg") ||
+        !join_path(src, sizeof(src), g_project_root, "disc.cfg"))
+        return;
+    if (host_paths_same_file(src, dst))
+        return;
+    f = fopen(dst, "rb");
+    if (f) {
+        int c = fgetc(f);
+        fclose(f);
+        if (c != EOF && c != '\n' && c != '\r')
+            return;
+    }
+    f = fopen(src, "rb");
+    if (!f)
+        return;
+    n = fread(body, 1, sizeof(body) - 1, f);
+    fclose(f);
+    body[n] = '\0';
+    while (n && (body[n - 1] == '\n' || body[n - 1] == '\r' ||
+                 body[n - 1] == ' ' || body[n - 1] == '\t'))
+        body[--n] = '\0';
+    if (!n)
+        return;
+    write_line_file(dst, body);
+}
+
+/* Seed a product's settings only when it has none. Preserve every byte;
+ * publish a completely written temporary without replacing a player's file. */
+static void sync_project_settings_to_product(const char *near_exe) {
+    char dir[1100],src[1200],dst[1200],tmp[1250];
+    if(!near_exe || !g_project_root[0] || !dirname_copy(dir,sizeof dir,near_exe) ||
+       !join_path(src,sizeof src,g_project_root,"settings.toml") ||
+       !join_path(dst,sizeof dst,dir,"settings.toml") || host_paths_same_file(src,dst)) return;
+    FILE *in=fopen(src,"rb"); if(!in)return;
+    FILE *existing=fopen(dst,"rb"); if(existing){fclose(existing);fclose(in);return;}
+    if(snprintf(tmp,sizeof tmp,"%s.setup.tmp",dst)>=(int)sizeof tmp){fclose(in);return;}
+#if defined(_WIN32)
+    HANDLE out=CreateFileA(tmp,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(out==INVALID_HANDLE_VALUE){fclose(in);return;}
+#else
+    int out=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0666);
+    if(out<0){fclose(in);return;}
+#endif
+    unsigned char bytes[16384];size_t n;int ok=1;
+    while((n=fread(bytes,1,sizeof bytes,in))!=0 && ok) {
+        size_t done=0;
+        while(done<n) {
+#if defined(_WIN32)
+            DWORD written=0;
+            if(!WriteFile(out,bytes+done,(DWORD)(n-done),&written,NULL)||!written){ok=0;break;}
+#else
+            ssize_t written=write(out,bytes+done,n-done);
+            if(written<=0){if(written<0&&errno==EINTR)continue;ok=0;break;}
+#endif
+            done+=(size_t)written;
+        }
+    }
+    if(ferror(in))ok=0;fclose(in);
+#if defined(_WIN32)
+    if(!CloseHandle(out))ok=0;
+    if(ok)ok=MoveFileExA(tmp,dst,0)!=0;
+    if(!ok)DeleteFileA(tmp);
+#else
+    if(close(out)!=0)ok=0;
+    if(ok)ok=link(tmp,dst)==0;
+    unlink(tmp); /* Only the exclusive temporary created above is ours. */
+#endif
+}
+
 static void persist_relaunch_sidecars(const char* near_exe,
                                       const char* disc_path) {
     char bios_line[1100];
@@ -1682,7 +2067,10 @@ static void persist_relaunch_sidecars(const char* near_exe,
             join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
                       "disc.cfg"))
             write_line_file(project_sidecar, disc_path);
+    } else {
+        sync_project_disc_cfg_to_product(near_exe);
     }
+    sync_project_settings_to_product(near_exe);
 
     bios_line[0] = '\0';
     if (g_wizard_bios[0] &&
@@ -1726,25 +2114,7 @@ static void persist_relaunch_sidecars(const char* near_exe,
     }
 }
 
-static int json_get_string(const char* line, const char* key, char* out,
-                           size_t out_cap) {
-    char pattern[96];
-    snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-    const char* p = strstr(line, pattern);
-    if (!p) return 0;
-    p += strlen(pattern);
-    size_t i = 0;
-    while (*p && *p != '"' && i + 1 < out_cap) {
-        if (*p == '\\' && p[1]) {
-            ++p;
-            out[i++] = *p++;
-            continue;
-        }
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return i > 0;
-}
+#include "psx_json_text.h"
 
 static int json_get_number(const char* line, const char* key, double* out) {
     char pattern[96];
@@ -1812,61 +2182,15 @@ static void handle_progress_line(const char* line,
  * as-is, and the most recent error-looking line is appended to err_msg. This
  * is what turns "psxrecomp rebuild failed (exit 1)" into "… failed (exit 1):
  * Could NOT find OpenGL (missing: OPENGL_INCLUDE_DIR)". */
-typedef struct {
-    char last[480];
-    char last_err[480];
-} CliTail;
-
-static int cli_tail_line_is_error(const char* s) {
-    return strstr(s, "rror") != NULL || strstr(s, "ailed") != NULL ||
-           strstr(s, "FAILED") != NULL || strstr(s, "Traceback") != NULL ||
-           strstr(s, "fatal") != NULL || strstr(s, "Fatal") != NULL;
-}
-
-static void cli_tail_note(CliTail* t, const char* line) {
-    char msg[480];
-    const char* rec = line;
-    int is_error_event = 0;
-    if (line[0] == '{') {
-        /* sdk_progress emits compact JSON: {"event":"error","message":…}. */
-        is_error_event = strstr(line, "\"event\":\"error\"") != NULL;
-        if (!json_get_string(line, "message", msg, sizeof(msg)))
-            return; /* structured row without text (e.g. result) */
-        rec = msg;
-    }
-    if (!rec[0])
-        return;
-    snprintf(t->last, sizeof(t->last), "%s", rec);
-    if (is_error_event || cli_tail_line_is_error(rec))
-        snprintf(t->last_err, sizeof(t->last_err), "%s", rec);
-}
-
-static void cli_fail_msg(char* err_msg, size_t err_cap, const char* fail_label,
-                         long code, const CliTail* t) {
-    const char* why = t->last_err[0] ? t->last_err : t->last;
-    if (code == 3) {
-        /* The CLI names the failing check (a digest mismatch, or a .chd it
-         * cannot read) and cli_tail_note has captured that line. A flat
-         * "wrong dump" contradicts it and sends players hunting a bad rip
-         * when the dump is fine. Keep the reason when there is one. */
-        if (why[0])
-            snprintf(err_msg, err_cap, "Disc verification failed: %s", why);
-        else
-            snprintf(err_msg, err_cap, "Disc verification failed (wrong dump).");
-        return;
-    }
-    if (why[0])
-        snprintf(err_msg, err_cap, "%s failed (exit %ld): %s", fail_label,
-                 code, why);
-    else
-        snprintf(err_msg, err_cap, "%s failed (exit %ld).", fail_label, code);
-}
+#include "psx_cli_tail.h"
 
 #if defined(_WIN32)
 static int run_cli_win(const char* cmdline,
                        RecompLauncherCPrepareProgressFn on_progress,
                        void* progress_ctx, char* err_msg, size_t err_cap,
                        const char* fail_label) {
+    g_cli_last_exit_code = -1;
+    g_cli_refused_given_disc = 0;
     SECURITY_ATTRIBUTES sa;
     memset(&sa, 0, sizeof(sa));
     sa.nLength = sizeof(sa);
@@ -1934,6 +2258,8 @@ static int run_cli_win(const char* cmdline,
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
+    g_cli_refused_given_disc = tail.refused_given_disc;
+    g_cli_last_exit_code = (long)code;
     if (code == 0) return 1;
     cli_fail_msg(err_msg, err_cap, fail_label, (long)code, &tail);
     return 0;
@@ -1943,6 +2269,8 @@ static int run_cli_posix(char* const argv[],
                          RecompLauncherCPrepareProgressFn on_progress,
                          void* progress_ctx, char* err_msg, size_t err_cap,
                          const char* fail_label) {
+    g_cli_last_exit_code = -1;
+    g_cli_refused_given_disc = 0;
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         snprintf(err_msg, err_cap, "pipe() failed: %s", strerror(errno));
@@ -1994,6 +2322,8 @@ static int run_cli_posix(char* const argv[],
         return 0;
     }
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    g_cli_refused_given_disc = tail.refused_given_disc;
+    g_cli_last_exit_code = (long)code;
     if (code == 0) return 1;
     cli_fail_msg(err_msg, err_cap, fail_label, (long)code, &tail);
     return 0;
@@ -2170,6 +2500,253 @@ static int rmtree_path(const char* path) {
     return system(cmd) == 0 || !path_is_dir(path);
 }
 
+/* PSXRECOMP_TOOLCHAIN_READONLY=1: this process never deletes, renames, prunes
+ * or installs a toolchain pack and never moves a pointer to one (the `latest`
+ * link, the project's toolchain link and stamp). It still finds and uses a
+ * pack that is there. Tests and gates that start a setup host set it: on
+ * 2026-10-02 a host started by a test installed a pack over the build host's
+ * own and emptied it under running builds (PS1B-406, PS1B-410). Every function
+ * below that changes a pack or a pointer asks toolchain_readonly_skip() first;
+ * tools/toolchain_pack.py honours the same variable. */
+static int toolchain_readonly(void) {
+    const char* e = getenv("PSXRECOMP_TOOLCHAIN_READONLY");
+    return e && e[0] && e[0] != '0';
+}
+
+/* True under the switch, after saying on stderr what was left undone. */
+static int toolchain_readonly_skip(const char* what, const char* path) {
+    if (!toolchain_readonly())
+        return 0;
+    fprintf(stderr,
+            "psxrecomp-codegen: toolchain read-only (PSXRECOMP_TOOLCHAIN_READONLY): "
+            "not done: %s%s%s\n",
+            what, (path && path[0]) ? ": " : "", (path && path[0]) ? path : "");
+    return 1;
+}
+
+/* The order of every change to an installed pack (PS1B-410). A pack that is in
+ * use is never removed first: on 2026-10-02 an install over the installed tag
+ * removed that pack before the new one was in place, under running builds; the
+ * files that were open survived and the rest went.
+ *
+ *   - a new pack is unpacked beside the installed one and checked there;
+ *   - the installed folder is then renamed aside (set_dir_aside). A folder with
+ *     an open file cannot be renamed on Windows: the installed pack then stays
+ *     and the new one is dropped;
+ *   - the new pack takes the name, the pointer follows, and only then the
+ *     folder that was set aside is removed. What cannot be removed whole stays
+ *     under its dot-name (no lookup reads dot-names) and goes on a later pass;
+ *   - a pack that fails its check is reported, never removed or renamed.
+ * tools/toolchain_pack.py follows the same order. */
+#define TOOLCHAIN_ASIDE_PREFIX ".old-"
+
+static int path_exists_any(const char* path) {
+#if defined(_WIN32)
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat st;
+    return lstat(path, &st) == 0;
+#endif
+}
+
+/* A symlink or a Windows junction: a pointer, not a pack. */
+static int path_is_link(const char* path) {
+#if defined(_WIN32)
+    DWORD a = GetFileAttributesA(path);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#else
+    struct stat st;
+    return lstat(path, &st) == 0 && S_ISLNK(st.st_mode);
+#endif
+}
+
+/* Remove a link itself, never what it points at. */
+static int remove_pointer_only(const char* path) {
+    if (!path_is_link(path))
+        return 0;
+#if defined(_WIN32)
+    return RemoveDirectoryA(path) || DeleteFileA(path);
+#else
+    return unlink(path) == 0;
+#endif
+}
+
+/* Rename a folder to a dot-name beside it. 0 when it cannot be renamed (a file
+ * in it is open): nothing has changed then. */
+static int set_dir_aside(const char* path, char* aside, size_t cap) {
+    char parent[1400], name[300];
+    const char* base = path_base_name(path);
+    int n;
+    aside[0] = '\0';
+    if (!base || !base[0] || !dirname_copy(parent, sizeof(parent), path))
+        return 0;
+    for (n = 0; n < 100; ++n) {
+#if defined(_WIN32)
+        unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+        unsigned long pid = (unsigned long)getpid();
+#endif
+        /* .old-<pid>[.<n>]-<name>: the owner's process id first, so that the
+         * name of the folder can be read back whatever characters it has. */
+        if (n)
+            snprintf(name, sizeof(name), TOOLCHAIN_ASIDE_PREFIX "%lu.%d-%s", pid, n, base);
+        else
+            snprintf(name, sizeof(name), TOOLCHAIN_ASIDE_PREFIX "%lu-%s", pid, base);
+        if (!join_path(aside, cap, parent, name))
+            break;
+        if (path_exists_any(aside))
+            continue;
+#if defined(_WIN32)
+        if (MoveFileExA(path, aside, 0))
+            return 1;
+        g_tc_aside_error = (long)GetLastError();
+#else
+        if (rename(path, aside) == 0)
+            return 1;
+        g_tc_aside_error = (long)errno;
+#endif
+        break;
+    }
+    aside[0] = '\0';
+    return 0;
+}
+
+/* Read ".old-<pid>[.<n>]-<name>". 1 and the two parts when the entry is one. */
+static int aside_entry_parse(const char* entry, unsigned long* pid, const char** name) {
+    const char* p = entry;
+    unsigned long v = 0;
+    size_t plen = sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1;
+    if (strncmp(p, TOOLCHAIN_ASIDE_PREFIX, plen) != 0)
+        return 0;
+    p += plen;
+    if (*p < '0' || *p > '9')
+        return 0;
+    while (*p >= '0' && *p <= '9')
+        v = v * 10 + (unsigned long)(*p++ - '0');
+    if (*p == '.') {
+        ++p;
+        if (*p < '0' || *p > '9')
+            return 0;
+        while (*p >= '0' && *p <= '9')
+            ++p;
+    }
+    if (*p != '-' || !p[1])
+        return 0;
+    *pid = v;
+    *name = p + 1;
+    return 1;
+}
+
+/* Is the process that set a folder aside still running? This process counts
+ * as not running: what it set aside and did not put back is its own to handle. */
+static int aside_owner_is_running(unsigned long pid) {
+#if defined(_WIN32)
+    HANDLE h;
+    DWORD code = 0;
+    int running;
+    if (pid == (unsigned long)GetCurrentProcessId())
+        return 0;
+    h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!h)
+        return GetLastError() == ERROR_ACCESS_DENIED;   /* there, and not ours to read */
+    running = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+    CloseHandle(h);
+    return running;
+#else
+    if (pid == (unsigned long)getpid())
+        return 0;
+    return kill((pid_t)pid, 0) == 0 || errno == EPERM;
+#endif
+}
+
+/* What to do with one set-aside folder of a cache base.
+ *   0  leave it: its owner is still running (it may be in the middle of an
+ *      install and need the folder to put back);
+ *   1  put it back: the folder it was taken from is missing, so an install
+ *      was interrupted between the rename aside and the arrival of the new
+ *      pack. The whole old pack is in it;
+ *   2  remove it: the replacement is in place and nobody needs it. */
+static int aside_entry_fate(const char* base, const char* entry, char* target, size_t cap) {
+    unsigned long pid = 0;
+    const char* name = NULL;
+    if (!aside_entry_parse(entry, &pid, &name))
+        return 0;
+    if (aside_owner_is_running(pid))
+        return 0;
+    if (!join_path(target, cap, base, name))
+        return 0;
+    return path_exists_any(target) ? 2 : 1;
+}
+
+/* Put back, in every cache base, the folders an interrupted install left set
+ * aside (their name is missing). Nothing reads a dot-name, so without this the
+ * pack would be lost to every lookup and removed by the next prune. Called
+ * before a check of the pointers and before a prune. */
+static void toolchain_put_back_set_aside(void) {
+    char bases[12][1400];
+    int n = collect_toolchain_cache_bases(bases, 12), i;
+    for (i = 0; i < n; ++i) {
+        char names[16][300];
+        int count = 0, k;
+#if defined(_WIN32)
+        WIN32_FIND_DATAA fd;
+        char pattern[1500];
+        HANDLE h;
+        snprintf(pattern, sizeof(pattern), "%s\\" TOOLCHAIN_ASIDE_PREFIX "*", bases[i]);
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE)
+            continue;
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && count < 16)
+                snprintf(names[count++], sizeof(names[0]), "%s", fd.cFileName);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+#else
+        DIR* d = opendir(bases[i]);
+        struct dirent* ent;
+        if (!d)
+            continue;
+        while ((ent = readdir(d)) != NULL) {
+            if (strncmp(ent->d_name, TOOLCHAIN_ASIDE_PREFIX, sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1) == 0 && count < 16)
+                snprintf(names[count++], sizeof(names[0]), "%s", ent->d_name);
+        }
+        closedir(d);
+#endif
+        for (k = 0; k < count; ++k) {
+            char aside[1800], target[1800];
+            if (aside_entry_fate(bases[i], names[k], target, sizeof(target)) != 1)
+                continue;
+            if (!join_path(aside, sizeof(aside), bases[i], names[k]) || !pack_root_has_cmake_direct(aside))
+                continue;   /* not a pack: nothing to put back */
+            if (toolchain_readonly_skip("put back a pack an interrupted install left set aside", aside))
+                continue;
+            if (restore_dir_aside(aside, target))
+                fprintf(stderr,
+                        "psxrecomp-codegen: an install was interrupted; the toolchain pack "
+                        "it had set aside is put back: %s\n", target);
+        }
+    }
+}
+
+/* Put a folder that was set aside back under its name. */
+static int restore_dir_aside(const char* aside, const char* path) {
+    if (!aside || !aside[0] || path_exists_any(path))
+        return 0;
+#if defined(_WIN32)
+    return MoveFileExA(aside, path, 0) != 0;
+#else
+    return rename(aside, path) == 0;
+#endif
+}
+
+/* Remove a folder that was set aside. 1 when it is gone whole. */
+static int remove_dir_aside(const char* aside) {
+    if (!aside || !aside[0])
+        return 1;
+    rmtree_path(aside);
+    return !path_exists_any(aside);
+}
+
 #if defined(_WIN32)
 static int run_cmdline_wait(const char* cmdline, DWORD* out_code) {
     STARTUPINFOA si;
@@ -2325,32 +2902,59 @@ static int set_toolchain_latest_pointer(const char* cache_root,
         if (strcmp(latest, resolved_pack) == 0)
             return 1;
     }
-    rmtree_path(latest);
+    if (toolchain_readonly_skip("move the latest pointer", latest))
+        return pack_root_has_cmake_direct(latest);
+    {
+        char aside[1500];
+        int made = 0;
+        aside[0] = '\0';
+        if (path_is_link(latest)) {
+            remove_pointer_only(latest);
+        } else if (path_is_dir(latest)) {
+            /* A real folder: an older layout's pack, or the copy made below
+             * when a link could not be made. Out of use first, removed after
+             * the new pointer is there. A folder in use stays as it is. */
+            if (!set_dir_aside(latest, aside, sizeof(aside)))
+                return pack_root_has_cmake_direct(latest);
+        }
 #if defined(_WIN32)
-    if (junction_dir(latest, resolved_pack))
-        return 1;
-    {
-        char cmd[3200];
-        DWORD code = 1;
-        mkdir_p(latest);
-        snprintf(cmd, sizeof(cmd),
-                 "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /nc "
-                 "/ns /np",
-                 resolved_pack, latest);
-        if (run_cmdline_wait(cmd, &code) && code <= 7 &&
-            pack_root_has_cmake_direct(latest))
-            return 1;
-    }
+        if (junction_dir(latest, resolved_pack)) {
+            made = 1;
+        } else {
+            char cmd[3200];
+            DWORD code = 1;
+            mkdir_p(latest);
+            snprintf(cmd, sizeof(cmd),
+                     "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /nc "
+                     "/ns /np",
+                     resolved_pack, latest);
+            if (run_cmdline_wait(cmd, &code) && code <= 7 &&
+                pack_root_has_cmake_direct(latest))
+                made = 1;
+        }
 #else
-    if (symlink(resolved_pack, latest) == 0)
-        return 1;
-    {
-        char cmd[3200];
-        snprintf(cmd, sizeof(cmd), "cp -a \"%s\" \"%s\"", resolved_pack, latest);
-        if (system(cmd) == 0 && pack_root_has_cmake_direct(latest))
-            return 1;
-    }
+        if (symlink(resolved_pack, latest) == 0) {
+            made = 1;
+        } else {
+            char cmd[3200];
+            snprintf(cmd, sizeof(cmd), "cp -a \"%s\" \"%s\"", resolved_pack, latest);
+            if (system(cmd) == 0 && pack_root_has_cmake_direct(latest))
+                made = 1;
+        }
 #endif
+        if (made) {
+            remove_dir_aside(aside);
+            return 1;
+        }
+        /* No pointer could be made: the folder that was there goes back. */
+        if (aside[0]) {
+            if (path_is_link(latest))
+                remove_pointer_only(latest);
+            else if (path_is_dir(latest) && !pack_root_has_cmake_direct(latest))
+                rmtree_path(latest);   /* the copy that did not finish; ours */
+            restore_dir_aside(aside, latest);
+        }
+    }
     return pack_root_has_cmake_direct(latest);
 }
 
@@ -2360,6 +2964,8 @@ static int write_project_toolchain_stamp(const char* bin_dir) {
     if (!g_project_root[0] || !bin_dir || !bin_dir[0])
         return 0;
     if (!join_path(tc_dir, sizeof(tc_dir), g_project_root, "toolchain"))
+        return 0;
+    if (toolchain_readonly_skip("write the project's toolchain stamp", tc_dir))
         return 0;
     mkdir_p(tc_dir);
     if (!join_path(stamp, sizeof(stamp), tc_dir, ".psxrecomp-bin"))
@@ -2491,6 +3097,8 @@ static int harvest_store_python_toolchain(int allow_copy) {
     char cache_root[1400], real_latest[1400], proj_tc[1200];
     if (!find_store_localcache_pack_root(cache_root, sizeof(cache_root)))
         return 0;
+    if (allow_copy && toolchain_readonly_skip("copy or link a pack into the shared cache", cache_root))
+        allow_copy = 0;
     if (!allow_copy)
         return activate_installed_pack_root(cache_root);
     if (!shared_toolchain_latest_dir(real_latest, sizeof(real_latest)))
@@ -2503,7 +3111,11 @@ static int harvest_store_python_toolchain(int allow_copy) {
         if (!dirname_copy(parent, sizeof(parent), real_latest))
             return activate_installed_pack_root(cache_root);
         mkdir_p(parent);
-        rmtree_path(real_latest);
+        /* junction_dir took an unusable folder out of the way. What is still
+         * there is in use: it stays, and this process uses the pack where it
+         * is. */
+        if (path_exists_any(real_latest))
+            return activate_installed_pack_root(cache_root);
         mkdir_p(real_latest);
         snprintf(cmd, sizeof(cmd),
                  "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /nc "
@@ -2679,6 +3291,8 @@ static int link_or_stamp_project_toolchain(const char* pack_root) {
         return 0;
     if (!join_path(bin, sizeof(bin), root, "bin"))
         return 0;
+    if (toolchain_readonly_skip("link the pack into the project", g_project_root))
+        return 0;
 #if defined(_WIN32)
     if (g_project_root[0] &&
         join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
@@ -2728,7 +3342,14 @@ static int path_is_under_dir(const char* child, const char* parent) {
         free(rp);
     }
 #endif
+    /* GetFullPathName preserves a trailing separator. Directory equality
+     * must not depend on the caller spelling `_scratch` or `_scratch/`. */
+    n = strlen(ca);
+    while (n > 1 && (ca[n-1] == '/' || ca[n-1] == '\\') &&
+           !(n == 3 && ca[1] == ':')) ca[--n] = '\0';
     n = strlen(pa);
+    while (n > 1 && (pa[n-1] == '/' || pa[n-1] == '\\') &&
+           !(n == 3 && pa[1] == ':')) pa[--n] = '\0';
 #if defined(_WIN32)
     if (_strnicmp(ca, pa, (int)n) != 0)
         return 0;
@@ -2739,6 +3360,23 @@ static int path_is_under_dir(const char* child, const char* parent) {
     if (ca[n] == '\0')
         return 1;
     return ca[n] == '/' || ca[n] == '\\';
+}
+
+/* One older install: a link is removed as a link; a folder is set aside and
+ * then removed. A folder with an open file cannot be set aside on Windows: it
+ * is in use and stays whole. */
+static int prune_one_toolchain_child(const char* child) {
+    char aside[1500];
+    if (path_is_link(child))
+        return remove_pointer_only(child);
+    if (!set_dir_aside(child, aside, sizeof(aside))) {
+        fprintf(stderr,
+                "psxrecomp-codegen: older toolchain is in use by another program; "
+                "kept: %s\n", child);
+        return 0;
+    }
+    remove_dir_aside(aside);
+    return 1;
 }
 
 /* After a successful install into the managed cache, drop other versioned
@@ -2757,6 +3395,9 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
     if (!path_is_under_dir(keep_pack, cache_root) &&
         !host_paths_same_file(keep_pack, cache_root))
         return;
+    if (toolchain_readonly_skip("prune older toolchain installs", cache_root))
+        return;
+    toolchain_put_back_set_aside();   /* a pack an interrupted install left aside is not pruned */
 
 #if defined(_WIN32)
     {
@@ -2771,6 +3412,16 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
             char child[1400];
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
                 continue;
+            if (strncmp(fd.cFileName, TOOLCHAIN_ASIDE_PREFIX,
+                        sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1) == 0) {
+                /* Only what nobody needs: its owner has ended and the folder
+                 * it was taken from is there again. */
+                char target[1800];
+                if (aside_entry_fate(cache_root, fd.cFileName, target, sizeof(target)) == 2 &&
+                    join_path(child, sizeof(child), cache_root, fd.cFileName))
+                    remove_dir_aside(child);
+                continue;
+            }
             if (fd.cFileName[0] == '.')
                 continue;
             if (_stricmp(fd.cFileName, "latest") == 0)
@@ -2781,7 +3432,7 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
                 host_paths_same_file(keep_pack, child) ||
                 path_is_under_dir(child, keep_pack))
                 continue;
-            if (rmtree_path(child))
+            if (prune_one_toolchain_child(child))
                 removed = 1;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
@@ -2795,6 +3446,14 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
         while ((ent = readdir(d)) != NULL) {
             char child[1400];
             struct stat st;
+            if (strncmp(ent->d_name, TOOLCHAIN_ASIDE_PREFIX,
+                        sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1) == 0) {
+                char target[1800];
+                if (aside_entry_fate(cache_root, ent->d_name, target, sizeof(target)) == 2 &&
+                    join_path(child, sizeof(child), cache_root, ent->d_name))
+                    remove_dir_aside(child);
+                continue;
+            }
             if (ent->d_name[0] == '.')
                 continue;
             if (strcmp(ent->d_name, "latest") == 0)
@@ -2809,7 +3468,7 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
                 host_paths_same_file(keep_pack, child) ||
                 path_is_under_dir(child, keep_pack))
                 continue;
-            if (rmtree_path(child))
+            if (prune_one_toolchain_child(child))
                 removed = 1;
         }
         closedir(d);
@@ -2826,9 +3485,16 @@ static int host_install_toolchain_from_zip(
      *   …/cmake-clang-v1/latest → <tag>   (pointer only)
      * Never extract the zip *into* latest/ — resolvers expect latest/bin. */
     char cache_root[1400], staging[1400], pack[1400], ver[64], tag[80];
-    char dest[1400], latest[1400];
+    char dest[1400], latest[1400], aside[1500];
+    aside[0] = '\0';
     if (!preferred_toolchain_cache_root(cache_root, sizeof(cache_root))) {
         snprintf(err_msg, err_cap, "Cannot resolve shared toolchain directory.");
+        return 0;
+    }
+    if (toolchain_readonly_skip("install a toolchain pack", cache_root)) {
+        snprintf(err_msg, err_cap,
+                 "The toolchain is read-only for this start "
+                 "(PSXRECOMP_TOOLCHAIN_READONLY). Nothing was installed.");
         return 0;
     }
     mkdir_p(cache_root);
@@ -2845,6 +3511,18 @@ static int host_install_toolchain_from_zip(
         rmtree_path(staging);
         return 0;
     }
+    /* The new pack is checked where it was unpacked, before the installed one
+     * is touched (PS1B-410). */
+    {
+        char staged_bin[1500];
+        g_tc_check_step = TC_STEP_CMAKE;   /* no bin folder to run cmake from */
+        if (!join_path(staged_bin, sizeof(staged_bin), pack, "bin") ||
+            !toolchain_bin_is_healthy(staged_bin)) {
+            toolchain_text_new_pack_failed(err_msg, err_cap, g_tc_check_step);
+            rmtree_path(staging);
+            return 0;
+        }
+    }
     read_toolchain_pack_version(pack, ver, sizeof(ver));
     sanitize_toolchain_tag(ver[0] ? ver : "offline", tag, sizeof(tag));
     /* Never use "latest" as a tag directory name — reserved for the pointer. */
@@ -2857,7 +3535,16 @@ static int host_install_toolchain_from_zip(
     }
     if (on_progress)
         on_progress(progress_ctx, 0.7f, "Installing into shared toolchain cache…");
-    rmtree_path(dest);
+    /* The installed pack of this tag goes out of use by a rename, not by a
+     * delete. A folder with an open file cannot be renamed on Windows: a build
+     * is using it, so it stays whole and the new pack is dropped. */
+    if (path_is_link(dest)) {
+        remove_pointer_only(dest);
+    } else if (path_exists_any(dest) && !set_dir_aside(dest, aside, sizeof(aside))) {
+        toolchain_text_rename_failed(err_msg, err_cap, g_tc_aside_error);
+        rmtree_path(staging);
+        return 0;
+    }
     mkdir_p(cache_root);
     /* Move usable pack to <tag>/ (flat bin/ at dest). */
     if (strcmp(pack, staging) == 0) {
@@ -2912,8 +3599,15 @@ static int host_install_toolchain_from_zip(
     }
     if (!unwrap_toolchain_pack_root(dest, pack, sizeof(pack))) {
         snprintf(err_msg, err_cap, "Installed toolchain missing bin/cmake.");
+        /* The move did not arrive: the pack that was installed goes back. */
+        if (aside[0]) {
+            rmtree_path(dest);
+            restore_dir_aside(aside, dest);
+        }
+        rmtree_path(staging);
         return 0;
     }
+    toolchain_rejects_clear();   /* a new pack is at this path now */
     if (!set_toolchain_latest_pointer(cache_root, pack)) {
         /* Pointer is best-effort — pack at <tag>/ is still usable. */
     }
@@ -2923,15 +3617,35 @@ static int host_install_toolchain_from_zip(
     if (activate_installed_pack_root(pack) ||
         (join_path(latest, sizeof(latest), cache_root, "latest") &&
          activate_installed_pack_root(latest))) {
+        /* Only now, with the new pack checked in its place, the old one and
+         * the older installs are removed. What cannot be removed whole stays
+         * under its dot-name and goes on a later pass. */
+        remove_dir_aside(aside);
         if (on_progress)
             on_progress(progress_ctx, 0.92f,
                         "Removing older toolchain installs…");
         prune_old_toolchain_tags(pack);
         return 1;
     }
-    snprintf(err_msg, err_cap,
-             "Extracted toolchain but cmake.exe is missing or will not run "
-             "(bin\\cmake.exe --version failed).");
+    /* The new pack passed its check where it was unpacked and fails it in its
+     * place. The pack that was installed goes back under its name. */
+    {
+        int back = 1;   /* nothing was installed before, or it is back under its name */
+        if (aside[0]) {
+            rmtree_path(dest);
+            back = restore_dir_aside(aside, dest);
+            if (back && unwrap_toolchain_pack_root(dest, pack, sizeof(pack)))
+                set_toolchain_latest_pointer(cache_root, pack);
+        }
+        /* The check's own sentence when the check named a step and the installed
+         * pack is what it was; the older text otherwise. */
+        if (g_tc_check_step[0] && back)
+            toolchain_text_new_pack_failed(err_msg, err_cap, g_tc_check_step);
+        else
+            snprintf(err_msg, err_cap,
+                     "Extracted toolchain but cmake.exe is missing or will not run "
+                     "(bin\\cmake.exe --version failed).");
+    }
     return 0;
 }
 
@@ -2940,6 +3654,12 @@ static int host_download_and_install_toolchain(
     char* err_msg, size_t err_cap) {
     char url[512], zip_path[1400], tmp_dir[1100];
     const char* asset = toolchain_zip_asset_name();
+    if (toolchain_readonly_skip("download a toolchain pack", asset)) {
+        snprintf(err_msg, err_cap,
+                 "The toolchain is read-only for this start "
+                 "(PSXRECOMP_TOOLCHAIN_READONLY). Nothing was downloaded.");
+        return 0;
+    }
     snprintf(url, sizeof(url),
              "https://github.com/%s/releases/latest/download/%s", k_tc_repo,
              asset);
@@ -3008,6 +3728,8 @@ static int migrate_legacy_psxrecomp_toolchain(void) {
         return 0;
     if (pack_root_has_cmake(dest))
         return 1;
+    if (toolchain_readonly_skip("promote the legacy toolchain cache", dest))
+        return 0;
     if (!dirname_copy(parent, sizeof(parent), dest))
         return 0;
     mkdir_p(parent);
@@ -3118,12 +3840,16 @@ static int toolchain_bin_compiler_works(const char* bin) {
     if (!bin || !bin[0])
         return 0;
 #if defined(_WIN32)
-    if (!join_path(clang, sizeof(clang), bin, "clang.exe") || !path_is_file(clang))
+    if (!join_path(clang, sizeof(clang), bin, "clang.exe") || !path_is_file(clang)) {
+        g_tc_check_step = TC_STEP_MISSING;
         return 0;
+    }
     if (!join_path(lld, sizeof(lld), bin, "ld.lld.exe") || !path_is_file(lld)) {
         /* Some Windows packs only ship lld.exe — accept either. */
-        if (!join_path(lld, sizeof(lld), bin, "lld.exe") || !path_is_file(lld))
+        if (!join_path(lld, sizeof(lld), bin, "lld.exe") || !path_is_file(lld)) {
+            g_tc_check_step = TC_STEP_MISSING;
             return 0;
+        }
     }
 #else
     if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang)) {
@@ -3134,43 +3860,87 @@ static int toolchain_bin_compiler_works(const char* bin) {
          * A pack without clang is the normal macOS layout, not a broken one. */
         return 1;
 #  else
+        g_tc_check_step = TC_STEP_MISSING;
         return 0;
 #  endif
     }
-    if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld))
+    if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld)) {
+        g_tc_check_step = TC_STEP_MISSING;
         return 0;
+    }
 #endif
-    if (!cmake_path_runs(clang))
+    if (!cmake_path_runs(clang)) {
+        g_tc_check_step = TC_STEP_CLANG;
         return 0;
+    }
 
 #if defined(_WIN32)
     {
         char tdir[512];
         DWORD tn = GetTempPathA(sizeof(tdir), tdir);
-        if (tn == 0 || tn >= sizeof(tdir))
+        if (tn == 0 || tn >= sizeof(tdir)) {
+            g_tc_check_step = TC_STEP_TEMP;
             return 0;
+        }
         snprintf(src, sizeof(src), "%spsxrecomp-tc-probe-%lu.c", tdir,
                  (unsigned long)GetCurrentProcessId());
         snprintf(exe, sizeof(exe), "%spsxrecomp-tc-probe-%lu.exe", tdir,
                  (unsigned long)GetCurrentProcessId());
     }
 #else
-    snprintf(src, sizeof(src), "/tmp/psxrecomp-tc-probe-%d.c", (int)getpid());
-    snprintf(exe, sizeof(exe), "/tmp/psxrecomp-tc-probe-%d", (int)getpid());
+    {
+        /* TMPDIR when it is set, as other programs do; /tmp otherwise. */
+        const char* tdir = getenv("TMPDIR");
+        if (!tdir || !tdir[0])
+            tdir = "/tmp";
+        snprintf(src, sizeof(src), "%s/psxrecomp-tc-probe-%d.c", tdir, (int)getpid());
+        snprintf(exe, sizeof(exe), "%s/psxrecomp-tc-probe-%d", tdir, (int)getpid());
+    }
 #endif
 
     f = fopen(src, "wb");
-    if (!f)
+    if (!f) {
+        g_tc_check_step = TC_STEP_TEMP;
         return 0;
+    }
     fputs("int main(void){return 0;}\n", f);
     fclose(f);
 
 #if defined(_WIN32)
-    /* Prepend pack bin so clang picks this tree's lld, not a system linker. */
-    snprintf(cmd, sizeof(cmd),
-             "cmd.exe /C \"set \"PATH=%s;%%PATH%%\" && \"%s\" \"%s\" -o \"%s\" "
-             ">NUL 2>&1\"",
-             bin, clang, src, exe);
+    /* Pack bin in front of PATH so clang picks this tree's lld, not a system
+     * linker. The child gets that PATH from this process's environment, for
+     * the time of the check. It used to be written into the command
+     * (set "PATH=<bin>;%PATH%" && ...): cmd expands %PATH% inside the line and
+     * a cmd line holds 8,191 characters, so with a PATH over about 7,600
+     * characters the line was refused ("The input line is too long."), the
+     * compile "failed" and a whole pack was judged unusable (PS1B-410). */
+    {
+        const char* old = getenv("PATH");
+        char* saved = old ? _strdup(old) : NULL;
+        size_t need = strlen(bin) + 1 + (old ? strlen(old) : 0) + 1;
+        char* with_bin = (char*)malloc(need);
+        int in_front = 0;
+        if (with_bin) {
+            snprintf(with_bin, need, "%s%s%s", bin, (old && old[0]) ? ";" : "",
+                     old ? old : "");
+            in_front = (_putenv_s("PATH", with_bin) == 0);
+        }
+        if (!in_front)
+            /* One variable holds 32,767 characters at most. clang still finds
+             * its own linker beside itself; the check runs with PATH as it is. */
+            fprintf(stderr,
+                    "psxrecomp-codegen: PATH is too long to put the pack's bin "
+                    "folder in front for the toolchain check; the check runs "
+                    "with PATH as it is\n");
+        snprintf(cmd, sizeof(cmd),
+                 "cmd.exe /C \"\"%s\" \"%s\" -o \"%s\" >NUL 2>&1\"",
+                 clang, src, exe);
+        ok = run_cmd_exit_zero(cmd);
+        if (in_front)
+            _putenv_s("PATH", saved ? saved : "");
+        free(with_bin);
+        free(saved);
+    }
 #else
     /* Prefer the pack linker explicitly so PATH cannot hide a broken lld. */
     (void)lld; /* used via -fuse-ld when present; path already validated */
@@ -3178,8 +3948,8 @@ static int toolchain_bin_compiler_works(const char* bin) {
              "env PATH=\"%s:$PATH\" \"%s\" -fuse-ld=lld \"%s\" -o \"%s\" "
              ">/dev/null 2>&1",
              bin, clang, src, exe);
-#endif
     ok = run_cmd_exit_zero(cmd);
+#endif
 #if defined(_WIN32)
     DeleteFileA(src);
     DeleteFileA(exe);
@@ -3187,6 +3957,8 @@ static int toolchain_bin_compiler_works(const char* bin) {
     unlink(src);
     unlink(exe);
 #endif
+    if (!ok)
+        g_tc_check_step = TC_STEP_LINK;
     return ok;
 }
 
@@ -3236,6 +4008,7 @@ static int host_system_compiler_ready(void) {
 
 static int toolchain_bin_is_healthy(const char* bin) {
     char cmake[1200];
+    g_tc_check_step = TC_STEP_CMAKE;   /* until cmake has run */
     if (!bin || !bin[0])
         return 0;
 #if defined(_WIN32)
@@ -3246,6 +4019,7 @@ static int toolchain_bin_is_healthy(const char* bin) {
     if (!join_path(cmake, sizeof(cmake), bin, "cmake") || !cmake_path_runs(cmake))
         return 0;
 #endif
+    g_tc_check_step = "";
     return toolchain_bin_compiler_works(bin);
 }
 
@@ -3255,6 +4029,9 @@ static void clear_project_toolchain_stamp(void) {
         return;
     if (!join_path(stamp, sizeof(stamp), g_project_root,
                    "toolchain/.psxrecomp-bin"))
+        return;
+    if (path_is_file(stamp) &&
+        toolchain_readonly_skip("remove the project's toolchain stamp", stamp))
         return;
 #if defined(_WIN32)
     DeleteFileA(stamp);
@@ -3304,80 +4081,59 @@ static int path_is_toolchain_latest_leaf(const char* path) {
 static void heal_broken_toolchain_pointers(void) {
     char bases[12][1400];
     int n = collect_toolchain_cache_bases(bases, 12);
-    int removed = 0;
+    int failed = 0;
+    const char* failed_step = "";
+    toolchain_put_back_set_aside();   /* first: a pack an interrupted install left aside */
     for (int i = 0; i < n; ++i) {
         char latest[1400], root[1400], bin[1400];
-        int present = 0;
         if (!join_path(latest, sizeof(latest), bases[i], "latest"))
             continue;
-#if defined(_WIN32)
-        present = path_is_dir(latest) || path_is_file(latest);
-#else
-        {
-            struct stat st;
-            present = (lstat(latest, &st) == 0);
+        if (!path_exists_any(latest))
+            continue;
+        if (!unwrap_toolchain_pack_root(latest, root, sizeof(root))) {
+            /* No pack behind it. A link is removed as a link; a real folder
+             * without a pack is not looked at by any lookup and stays. */
+            if (path_is_link(latest) &&
+                !toolchain_readonly_skip("remove a latest pointer that points at nothing",
+                                         latest))
+                remove_pointer_only(latest);
+            continue;
         }
-#endif
-        if (!present)
+        if (!join_path(bin, sizeof(bin), root, "bin"))
             continue;
-        if (unwrap_toolchain_pack_root(latest, root, sizeof(root)) &&
-            join_path(bin, sizeof(bin), root, "bin") &&
-            toolchain_bin_is_healthy(bin))
-            continue;
-        rmtree_path(latest);
-#if !defined(_WIN32)
-        unlink(latest); /* dangling symlink after rmtree no-op */
-#endif
-        removed = 1;
+        if (!toolchain_bin_is_rejected(bin)) {
+            if (toolchain_bin_is_healthy(bin))
+                continue;
+            toolchain_bin_reject(bin);
+        }
+        failed = 1;   /* said again at each check, as long as the pack is there */
+        failed_step = toolchain_bin_rejected_step(bin);
+        if (!failed_step[0])
+            failed_step = g_tc_check_step;   /* the list was full: this check's own step */
     }
-    if (removed) {
+    if (failed) {
         clear_project_toolchain_stamp();
         g_toolchain_bin[0] = '\0';
         g_cli_toolchain_bin[0] = '\0';
         g_cmake[0] = '\0';
-        snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
-                 "Removed a broken portable toolchain cache (compiler/linker "
-                 "failed a smoke test). Download the latest pack to continue.");
+        toolchain_text_check_failed(g_tc_repair_note, sizeof(g_tc_repair_note), failed_step);
     }
 }
 
 /* If the active resolution points at an unhealthy pack, drop stamp / latest
  * (or quarantine a versioned <tag>/ so resolve cannot keep re-selecting it). */
 static void discard_unhealthy_active_toolchain(void) {
-    char pack[1400];
     if (!g_toolchain_bin[0])
         return;
     if (toolchain_bin_is_healthy(g_toolchain_bin))
         return;
-    if (pack_root_from_bin(g_toolchain_bin, pack, sizeof(pack))) {
-        if (path_is_toolchain_latest_leaf(pack) ||
-            path_is_toolchain_latest_leaf(g_toolchain_bin)) {
-            rmtree_path(pack);
-#if !defined(_WIN32)
-            unlink(pack);
-#endif
-        } else if (path_is_dir(pack)) {
-            char quarantine[1500];
-            snprintf(quarantine, sizeof(quarantine), "%s.broken", pack);
-            rmtree_path(quarantine);
-#if defined(_WIN32)
-            if (!MoveFileExA(pack, quarantine, MOVEFILE_REPLACE_EXISTING))
-                rmtree_path(pack);
-#else
-            if (rename(pack, quarantine) != 0)
-                rmtree_path(pack);
-#endif
-        }
-    }
+    toolchain_bin_reject(g_toolchain_bin);
     clear_project_toolchain_stamp();
     g_toolchain_bin[0] = '\0';
     g_cli_toolchain_bin[0] = '\0';
     g_cmake[0] = '\0';
-    if (!g_tc_repair_note[0]) {
-        snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
-                 "Portable toolchain is installed but cannot compile/link "
-                 "(path or library error). Redownload the latest pack.");
-    }
+    if (!g_tc_repair_note[0])
+        toolchain_text_check_failed(g_tc_repair_note, sizeof(g_tc_repair_note), g_tc_check_step);
 }
 
 static int active_toolchain_meets_min(void) {
@@ -3961,6 +4717,26 @@ static int host_preflight_project_root(char* err_msg, size_t err_cap) {
     return 1;
 }
 
+static int host_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
+    const int answered = g_inner_disc_verify ? g_inner_disc_verify(disc_path, out) : 0;
+    if (answered && out && disc_path && disc_path[0] &&
+        psx_setup_refusal_at_check(g_refused_disc, disc_path)) {
+        out->verdict = 3;
+        /* The inner check recorded its verdict before this override. Keep
+         * the run report consistent with the final panel (PS1B-415). */
+        char row[PSX_START_LAUNCHER_ROW_CAP];
+        const char* expected = "";
+#if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)
+        expected = out->expected_serials;
+#endif
+        snprintf(row, sizeof(row),
+                 "verdict=refused serial=%s expected=%s tracks=%d; setup refused the selected disc",
+                 out->serial, expected, out->track_count);
+        psx_start_note_launcher("disc", row);
+    }
+    return answered;
+}
+
 static int host_prepare_generate(const char* source_path, char* out_path,
                                  size_t out_cap, char* err_msg, size_t err_cap,
                                  RecompLauncherCPrepareProgressFn on_progress,
@@ -4039,12 +4815,17 @@ static int host_prepare_generate(const char* source_path, char* out_path,
 #if defined(_WIN32)
     char cmdline[4096];
     if (have_bios) {
+        const char* stem = setup_retail_bios_stem();
+        char stem_arg[600];
+        stem_arg[0] = 0;
+        if (stem[0])
+            snprintf(stem_arg, sizeof(stem_arg), " --bios-stem \"%s\"", stem);
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
-                 "--disc \"%s\" --bios \"%s\" --gen-marker \"%s\" "
+                 "--disc \"%s\" --bios \"%s\"%s --gen-marker \"%s\" "
                  "--json-progress",
                  g_python, g_cli_path, g_project_root, g_game_toml, source_path,
-                 bios_path, marker_name);
+                 bios_path, stem_arg, marker_name);
     } else {
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
@@ -4053,10 +4834,14 @@ static int host_prepare_generate(const char* source_path, char* out_path,
                  marker_name);
     }
     if (!run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
-                     "psxrecomp generate"))
+                     "psxrecomp generate")) {
+        psx_setup_refusal_after_prepare(g_refused_disc, sizeof(g_refused_disc),
+                                        source_path, g_cli_last_exit_code,
+                                        g_cli_refused_given_disc);
         return 0;
+    }
 #else
-    char* argv[16];
+    char* argv[20];
     int argc = 0;
     argv[argc++] = g_python;
     argv[argc++] = g_cli_path;
@@ -4068,17 +4853,30 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     argv[argc++] = "--disc";
     argv[argc++] = (char*)source_path;
     if (have_bios) {
+        const char* stem = setup_retail_bios_stem();
         argv[argc++] = "--bios";
         argv[argc++] = bios_path;
+        if (stem[0]) {
+            argv[argc++] = "--bios-stem";
+            argv[argc++] = (char*)stem;
+        }
     }
     argv[argc++] = "--gen-marker";
     argv[argc++] = (char*)marker_name;
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
     if (!run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
-                       "psxrecomp generate"))
+                       "psxrecomp generate")) {
+        psx_setup_refusal_after_prepare(g_refused_disc, sizeof(g_refused_disc),
+                                        source_path, g_cli_last_exit_code,
+                                        g_cli_refused_given_disc);
         return 0;
+    }
 #endif
+    /* The disc was accepted: a refusal remembered for it (the player replaced
+     * the file in place and pressed Generate again) is over. */
+    psx_setup_refusal_after_prepare(g_refused_disc, sizeof(g_refused_disc),
+                                    source_path, 0, 0);
 
     /* Stamp the success so apply() can tell "generate worked but the
      * launcher still cannot see its output" apart from a plain first run. */
@@ -4103,19 +4901,42 @@ static void bat_write_set(FILE* f, const char* name, const char* value) {
 
 /* force_pgo: Settings Optimize FMV (instrument → train → use). Else setup
  * rebuild with --no-pgo. disc_path required when force_pgo. */
-static int write_windows_deferred_rebuild_helper(int force_pgo,
+static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnostic,
                                                  const char* disc_path,
                                                  char* err_msg,
                                                  size_t err_cap) {
-    if (!join_path(g_helper_path, sizeof(g_helper_path), g_build_dir,
-                   "recomp_deferred_rebuild.cmd")) {
+    /* A diagnostic request writes nothing into the normal product's directory,
+     * not even this helper. */
+    char diag_dir[1200];
+    if (!join_path(diag_dir, sizeof(diag_dir), g_project_root,
+                   PSX_DIAGNOSTIC_DIR_NAME)) {
+        snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
+        return 0;
+    }
+    /* Configure may replace either build directory while cmd.exe reads its
+     * helper. Keep both helpers in private scratch, outside those directories. */
+    char helper_dir[1200];
+    if (!join_path(helper_dir, sizeof(helper_dir), g_project_root, "_scratch")) {
+        snprintf(err_msg, err_cap, "Failed to form the helper directory.");
+        return 0;
+    }
+    if (path_is_under_dir(helper_dir, g_build_dir) ||
+        path_is_under_dir(helper_dir, diag_dir)) {
+        snprintf(err_msg, err_cap,
+                 "The build directory overlaps the rebuild helper directory. "
+                 "Choose a build directory outside _scratch.");
+        return 0;
+    }
+    const char* helper_name = want_diagnostic ? "recomp_diagnostic_rebuild.cmd"
+                                             : "recomp_deferred_rebuild.cmd";
+    if (!join_path(g_helper_path, sizeof(g_helper_path), helper_dir,
+                   helper_name)) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
         return 0;
     }
-    /* Setup zips omit build-release/; create it before writing the .cmd. */
-    if (!mkdir_p(g_build_dir)) {
-        snprintf(err_msg, err_cap, "Failed to create build dir: %s",
-                 g_build_dir);
+    if (!mkdir_p(helper_dir)) {
+        snprintf(err_msg, err_cap, "Failed to create helper dir: %s",
+                 helper_dir);
         return 0;
     }
     FILE* f = fopen(g_helper_path, "wb");
@@ -4130,7 +4951,9 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     fprintf(f, "@echo off\r\n");
     fprintf(f, "setlocal EnableExtensions\r\n");
     fprintf(f, "title %s - %s\r\n", g_display,
-            force_pgo ? "PGO optimize" : "rebuilding");
+            force_pgo ? "PGO optimize"
+                      : want_diagnostic ? "building the diagnostic product"
+                                        : "rebuilding");
     bat_write_set(f, "PARENT_PID", pid_buf);
     bat_write_set(f, "PYTHON", g_python);
     bat_write_set(f, "CLI", g_cli_path);
@@ -4141,6 +4964,14 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     bat_write_set(f, "EXE_BASE", g_exe_basename);
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
+    if (want_diagnostic) {
+        char self_exe[1100];
+        bat_write_set(f, "DIAG_DIR", diag_dir);
+        /* Relaunch through the setup exe afterwards: it forwards to the
+         * diagnostic product now that one exists. */
+        if (host_self_exe_path(self_exe, sizeof(self_exe)))
+            bat_write_set(f, "SELF", self_exe);
+    }
     {
         /* Post-build sanity: the dispatch file the launcher will gate on. */
         char marker_abs[1200];
@@ -4151,8 +4982,6 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     }
     if (force_pgo && disc_path && disc_path[0])
         bat_write_set(f, "DISC", disc_path);
-    if (g_toolchain_bin[0])
-        bat_write_set(f, "TC_BIN", g_toolchain_bin);
     fprintf(f,
             "echo Waiting for %%DISPLAY%% to exit...\r\n"
             ":waitloop\r\n"
@@ -4164,7 +4993,11 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
             ")\r\n"
             "echo Ensuring toolchain...\r\n"
             "cd /d \"%%ROOT%%\"\r\n"
-            "if defined TC_BIN set \"PATH=%%TC_BIN%%;%%PATH%%\"\r\n"
+            /* No set "PATH=%TC_BIN%;%PATH%" here. This helper inherits PATH
+             * from the host, which has just put the pack's folders at its head
+             * (activate_toolchain_path). The line added the folder a second
+             * time at every relaunch, and cmd refuses a line that passes 8,191
+             * characters once %PATH% is expanded in it (PS1B-410). */
             "\"%%PYTHON%%\" \"%%CLI%%\" ensure-toolchain --project-root \"%%ROOT%%\"\r\n"
             "if errorlevel 1 (\r\n"
             "  echo.\r\n"
@@ -4179,22 +5012,47 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--disc \"%%DISC%%\" --force-pgo --pgo-video\r\n");
+                "--disc \"%%DISC%%\" --force-pgo --pgo-video");
+    } else if (want_diagnostic) {
+        /* Wave-5 F10: the diagnostic product is built on first request, not at
+         * setup. --diagnostic-only leaves the normal product alone: setup pruned
+         * its intermediates and it may be a PGO build. */
+        fprintf(f,
+                "echo Building the diagnostic product (first request)...\r\n"
+                "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
+                "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
+                "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
+                "--diagnostic-only --diagnostic-dir \"%%DIAG_DIR%%\"");
     } else {
         fprintf(f,
                 "echo Building...\r\n"
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--no-pgo --prune-after build-intermediates\r\n");
+                "--no-pgo --prune-after build-intermediates");
     }
+    fprintf(f, "\r\n");
+    if (want_diagnostic)
+        /* The normal product is untouched, so a failed diagnostic build starts
+         * it instead: relaunching the setup exe with --diagnostic would only
+         * request the same failing build again. */
+        fprintf(f,
+                "if errorlevel 1 (\r\n"
+                "  echo.\r\n"
+                "  echo The diagnostic build failed; see the errors above.\r\n"
+                "  echo Starting the normal build instead.\r\n"
+                "  pause\r\n"
+                "  set \"SELF=\"\r\n"
+                ")\r\n");
+    else
+        fprintf(f,
+                "if errorlevel 1 (\r\n"
+                "  echo.\r\n"
+                "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
+                "  pause\r\n"
+                "  exit /b 1\r\n"
+                ")\r\n");
     fprintf(f,
-            "if errorlevel 1 (\r\n"
-            "  echo.\r\n"
-            "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
             /* %EXE% was guessed before the build; runtime.cmake publishes the
              * OUTPUT_NAME it really used, which wins the moment a title is
              * renamed. Then verify game code + exe exist before relaunching,
@@ -4211,8 +5069,26 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
              * such as "... (1)" would close the block early. */
             "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" goto no_gen\r\n"
             "if not exist \"%%EXE_FINAL%%\" goto no_exe\r\n"
+            /* PS1B-684: on a first install the exe folder did not exist when
+             * setup recorded the picks, so they sit at the project root only,
+             * and the runtime reads bios.cfg and disc.cfg beside its own exe.
+             * Hand them over now; a pick already made in the product stays. */
+            "rem sidecar-handover-begin\r\n"
+            "for %%%%I in (\"%%EXE_FINAL%%\") do set \"EXE_DIR=%%%%~dpI\"\r\n"
+            "if exist \"%%ROOT%%\\bios.cfg\" if not exist \"%%EXE_DIR%%bios.cfg\" "
+            "copy /y \"%%ROOT%%\\bios.cfg\" \"%%EXE_DIR%%bios.cfg\" >NUL\r\n"
+            "if exist \"%%ROOT%%\\disc.cfg\" if not exist \"%%EXE_DIR%%disc.cfg\" "
+            "copy /y \"%%ROOT%%\\disc.cfg\" \"%%EXE_DIR%%disc.cfg\" >NUL\r\n"
+            "rem sidecar-handover-end\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
+            /* The diagnostic product relaunches itself; a plain build starts
+             * the game executable. Labels again, not ( ) blocks. */
+            "if defined SELF goto start_self\r\n"
             "start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
+            "endlocal\r\n"
+            "exit /b 0\r\n"
+            ":start_self\r\n"
+            "start \"\" /D \"%%ROOT%%\" \"%%SELF%%\" --diagnostic --launcher\r\n"
             "endlocal\r\n"
             "exit /b 0\r\n"
             ":no_gen\r\n"
@@ -4236,6 +5112,7 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
 #endif
 
 static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
+                                int want_diagnostic,
                                 char* out_exe_path, size_t out_cap,
                                 char* err_msg, size_t err_cap,
                                 RecompLauncherCPrepareProgressFn on_progress,
@@ -4275,8 +5152,8 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         on_progress(progress_ctx, 0.4f,
                     force_pgo ? "Scheduling Windows PGO optimize after exit…"
                               : "Scheduling Windows rebuild after exit…");
-    if (!write_windows_deferred_rebuild_helper(force_pgo, disc_path, err_msg,
-                                               err_cap))
+    if (!write_windows_deferred_rebuild_helper(force_pgo, want_diagnostic,
+                                               disc_path, err_msg, err_cap))
         return 0;
     g_relaunch_is_helper = 1;
     snprintf(out_exe_path, out_cap, "%s", g_helper_path);
@@ -4293,6 +5170,7 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
                               : "Starting rebuild (cmake)…");
 
     char disc_arg_storage[1100];
+    char diag_dir_storage[1200];
     char* argv[40];
     int argc = 0;
     argv[argc++] = g_python;
@@ -4313,7 +5191,19 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         argv[argc++] = "--disc";
         argv[argc++] = disc_arg_storage;
     }
-    if (force_pgo) {
+    if (want_diagnostic) {
+        /* Wave-5 F10: only on request; setup builds one product. The request
+         * builds the diagnostic product alone and leaves the normal one (pruned
+         * at setup, possibly PGO-optimised) as it is. */
+        if (!join_path(diag_dir_storage, sizeof(diag_dir_storage),
+                       g_project_root, PSX_DIAGNOSTIC_DIR_NAME)) {
+            snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
+            return 0;
+        }
+        argv[argc++] = "--diagnostic-only";
+        argv[argc++] = "--diagnostic-dir";
+        argv[argc++] = diag_dir_storage;
+    } else if (force_pgo) {
         argv[argc++] = "--force-pgo";
         argv[argc++] = "--pgo-video";
     } else {
@@ -4345,16 +5235,16 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
                              size_t out_cap, char* err_msg, size_t err_cap,
                              RecompLauncherCPrepareProgressFn on_progress,
                              void* progress_ctx) {
-    return host_rebuild_game_ex(disc_path, 0, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
+    return host_rebuild_game_ex(disc_path, 0, 0, out_exe_path, out_cap,
+                                err_msg, err_cap, on_progress, progress_ctx);
 }
 
 static int host_pgo_optimize(const char* disc_path, char* out_exe_path,
                              size_t out_cap, char* err_msg, size_t err_cap,
                              RecompLauncherCPrepareProgressFn on_progress,
                              void* progress_ctx) {
-    return host_rebuild_game_ex(disc_path, 1, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
+    return host_rebuild_game_ex(disc_path, 1, 0, out_exe_path, out_cap,
+                                err_msg, err_cap, on_progress, progress_ctx);
 }
 
 /* Settings → VIDEO → Apply FMV Timing Opt: regenerate C (picks up
@@ -4368,9 +5258,76 @@ static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
     if (!host_prepare_generate(disc_path, gen_out, sizeof(gen_out), err_msg,
                                err_cap, on_progress, progress_ctx))
         return 0;
-    return host_rebuild_game_ex(disc_path, 0, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
+    return host_rebuild_game_ex(disc_path, 0, 0, out_exe_path, out_cap,
+                                err_msg, err_cap, on_progress, progress_ctx);
 }
+
+#if defined(_WIN32)
+/* Start a deferred rebuild helper bat in its own console and exit: the helper
+ * waits for this process before it touches a build tree. */
+static void host_start_helper_and_exit(const char* helper) {
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char cmd[1536];
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    fprintf(stderr, "psxrecomp-codegen: starting deferred rebuild helper\n");
+    /* cmd /C strips the first and last quote of the command line when it
+     * holds special characters such as the parentheses in
+     * "r4-1.0-windows-x64 (1)"; the doubled outer pair keeps the path's own
+     * quotes intact. */
+    snprintf(cmd, sizeof(cmd), "cmd.exe /C \"\"%s\"\"", helper);
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                        g_project_root, &si, &pi)) {
+        fprintf(stderr, "psxrecomp-codegen: CreateProcess failed\n");
+        exit(1);
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    ExitProcess(0);
+}
+#endif
+
+#if !defined(PSX_HAS_GAME_DISPATCH)
+/* Wave-5 F10: the diagnostic product on first request. Runs from the forward
+ * path, before the wizard state exists, so it wires the little it needs. On
+ * Windows the build is deferred to the helper bat (the setup exe must exit
+ * before its build tree is touched); the helper relaunches this exe with
+ * --diagnostic when done. On POSIX the build runs inline and the diagnostic
+ * exe is returned. */
+static int host_build_diagnostic_on_demand(char* out_exe_path, size_t out_cap,
+                                           char* err_msg, size_t err_cap) {
+    if (!g_cli_path[0] &&
+        !resolve_cli_path(g_project_root, g_cli_path, sizeof(g_cli_path))) {
+        snprintf(err_msg, err_cap, "psxrecomp_cli.py not found under %s",
+                 g_project_root);
+        return 0;
+    }
+    if (!g_game_toml[0] &&
+        (!join_path(g_game_toml, sizeof(g_game_toml), g_project_root,
+                    cfg_or(g_cfg->game_toml_relpath, "game.toml")) ||
+         !path_is_file(g_game_toml))) {
+        snprintf(err_msg, err_cap, "game.toml not found under %s",
+                 g_project_root);
+        return 0;
+    }
+    g_ready = 1;
+    if (!host_rebuild_game_ex(NULL, 0, 1, out_exe_path, out_cap, err_msg,
+                              err_cap, NULL, NULL))
+        return 0;
+#if !defined(_WIN32)
+    if (!resolve_diagnostic_exe_path(out_exe_path, out_cap) ||
+        !path_is_file(out_exe_path)) {
+        snprintf(err_msg, err_cap, "build finished but %s/ has no product",
+                 PSX_DIAGNOSTIC_DIR_NAME);
+        return 0;
+    }
+#endif
+    return 1;
+}
+
+#endif /* !PSX_HAS_GAME_DISPATCH: on-demand diagnostic build */
 
 static int host_self_exe_path(char* out, size_t cap) {
     if (!out || cap < 2)
@@ -4495,6 +5452,14 @@ static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
     printf(",\n  \"game_dispatch_present\": %s", game_ok ? "true" : "false");
     printf(",\n  \"bios_backends_present\": %s", bios_ok ? "true" : "false");
     printf(",\n  \"sources_missing\": %s", missing ? "true" : "false");
+    printf(",\n  \"diagnostic_dir\": ");
+    host_json_str(PSX_DIAGNOSTIC_DIR_NAME);
+    printf(",\n  \"diagnostic_build_present\": %s",
+           diagnostic_build_present() ? "true" : "false");
+    printf(",\n  \"diagnostic_marker\": ");
+    host_json_str(PSX_DIAGNOSTIC_MARKER);
+    printf(",\n  \"diagnostic_mode_requested\": %s",
+           diagnostic_requested(argc, argv) ? "true" : "false");
     /* Wave-5 F4: overlay_cache is the switch that makes the runtime initialise the
      * overlay loader at all; without it every streamed overlay is interpreted. CI
      * asserts this field so a title cannot ship silently without it again. */
@@ -4540,10 +5505,69 @@ static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
     exit(missing ? 2 : 0);
 }
 
+/* Match the product's explicit non-launcher start modes at setup handoff. */
+#if !defined(PSX_HAS_GAME_DISPATCH)
+static int handover_adds_launcher(int argc, char** argv) {
+    const char* headless = getenv("PSX_HEADLESS");
+    int i;
+    for (i = 1; i < argc && argv && argv[i]; ++i) {
+        if (strcmp(argv[i], "--launcher") == 0 ||
+            strcmp(argv[i], "--no-launcher") == 0 ||
+            strcmp(argv[i], "--headless") == 0 ||
+            (strcmp(argv[i], "--replay") == 0 && i + 1 < argc && argv[i + 1]))
+            return 0;
+    }
+    if (getenv("PSX_NO_LAUNCHER")) return 0;
+    if (headless && headless[0] && headless[0] != '0') return 0;
+    return 1;
+}
+#endif
+
 /* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
+static void host_collect_diagnostics_or_return(
+    const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
+    char python[1100], cli[1200], cmd[4096];
+    int status;
+    if (!argv_has(argc, argv, "--collect-diagnostics"))
+        return;
+    if (!cfg) {
+        fprintf(stderr, "psxrecomp-codegen: no codegen host config linked\n");
+        exit(1);
+    }
+    g_cfg = cfg;
+    if (!g_project_root[0] &&
+        !discover_project_root(g_project_root, sizeof(g_project_root))) {
+        fprintf(stderr, "psxrecomp-codegen: project root not found\n");
+        exit(1);
+    }
+    activate_toolchain_path();
+    if (!find_python(python, sizeof(python))) {
+        fprintf(stderr,
+                "psxrecomp-codegen: no usable Python; install Python 3 or the "
+                "portable toolchain, then rerun --collect-diagnostics\n");
+        exit(1);
+    }
+    if (!join_path(cli, sizeof(cli), g_project_root,
+                   cfg_or(cfg->psxrecomp_cli_relpath, "psxrecomp/psxrecomp_cli.py"))) {
+        fprintf(stderr, "psxrecomp-codegen: CLI path too long\n");
+        exit(1);
+    }
+#if defined(_WIN32)
+    /* cmd.exe drops the outer quotes of a quoted command line; wrap once more. */
+    snprintf(cmd, sizeof(cmd), "\"\"%s\" \"%s\" diagnostics --project-root \"%s\"\"",
+             python, cli, g_project_root);
+#else
+    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" diagnostics --project-root \"%s\"",
+             python, cli, g_project_root);
+#endif
+    status = system(cmd);
+    exit(status == 0 ? 0 : 1);
+}
+
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
     host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
+    host_collect_diagnostics_or_return(cfg, argc, argv); /* exits when requested */
 #if defined(PSX_HAS_GAME_DISPATCH)
     /* Full game binary — already the product tree. */
     (void)cfg;
@@ -4582,6 +5606,44 @@ void psxrecomp_codegen_host_forward_if_built(
         return;
     if (!resolve_build_paths())
         return;
+    if (diagnostic_requested(argc, argv)) {
+        char diag_exe[1300];
+        if (resolve_diagnostic_exe_path(diag_exe, sizeof(diag_exe)) &&
+            path_is_file(diag_exe)) {
+            snprintf(g_exe_path, sizeof(g_exe_path), "%s", diag_exe);
+            fprintf(stderr,
+                    "psxrecomp-codegen: diagnostic mode requested (%s / --diagnostic / %s):\n"
+                    "  reports land under %s\n",
+                    PSX_DIAGNOSTIC_MARKER, PSX_DIAGNOSTIC_ENV, PSX_DIAGNOSTIC_DIR_NAME);
+        } else {
+            char built[1300], err[512];
+            fprintf(stderr,
+                    "psxrecomp-codegen: diagnostic mode requested but %s/ has no "
+                    "product yet; building it now (the diagnostic product is "
+                    "built on first request, not at setup).\n",
+                    PSX_DIAGNOSTIC_DIR_NAME);
+            err[0] = '\0';
+            if (host_build_diagnostic_on_demand(built, sizeof(built), err,
+                                                sizeof(err))) {
+#if defined(_WIN32)
+                /* Deferred: hand over to the helper bat (built holds its
+                 * path), which relaunches this exe with --diagnostic once the
+                 * product exists. Not psxrecomp_codegen_host_relaunch_or_exit:
+                 * that takes the launcher UI's relaunch path, and no launcher
+                 * has run on this forward path. */
+                host_start_helper_and_exit(built);
+#else
+                snprintf(g_exe_path, sizeof(g_exe_path), "%s", built);
+#endif
+            } else {
+                fprintf(stderr,
+                        "psxrecomp-codegen: diagnostic build failed (%s); starting "
+                        "the normal build. Run the CLI rebuild with "
+                        "--diagnostic-only --diagnostic-dir to create it by hand.\n",
+                        err[0] ? err : "unknown error");
+            }
+        }
+    }
     if (!g_exe_path[0] || !path_is_file(g_exe_path))
         return;
     if (!host_self_exe_path(self, sizeof(self)))
@@ -4592,6 +5654,8 @@ void psxrecomp_codegen_host_forward_if_built(
     fprintf(stderr,
             "psxrecomp-codegen: setup host forwarding to product build:\n  %s\n",
             g_exe_path);
+    sync_project_disc_cfg_to_product(g_exe_path);
+    sync_project_settings_to_product(g_exe_path);
 
 #if defined(_WIN32)
     {
@@ -4606,19 +5670,19 @@ void psxrecomp_codegen_host_forward_if_built(
         pos += (size_t)snprintf(cmd + pos, sizeof(cmd) - pos, "\"%s\"",
                                 g_exe_path);
         /* Preserve caller argv (skip argv[0]); ensure --launcher so skip_launcher
-         * in the product tree cannot hide the UI on first handoff. */
+         * in the product tree cannot hide the UI on first handoff, unless the
+         * caller asked for a start without a window (handover_adds_launcher). */
         {
-            int has_launcher = 0;
             for (i = 1; i < argc && argv && argv[i]; ++i) {
                 int n;
-                if (strcmp(argv[i], "--launcher") == 0)
-                    has_launcher = 1;
+                if (strcmp(argv[i], "--diagnostic") == 0)
+                    continue; /* host-only switch; the runtime does not take it */
                 n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"", argv[i]);
                 if (n <= 0 || (size_t)n >= sizeof(cmd) - pos)
                     break;
                 pos += (size_t)n;
             }
-            if (!has_launcher && pos + 12 < sizeof(cmd))
+            if (handover_adds_launcher(argc, argv) && pos + 12 < sizeof(cmd))
                 snprintf(cmd + pos, sizeof(cmd) - pos, " --launcher");
         }
         if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
@@ -4638,22 +5702,21 @@ void psxrecomp_codegen_host_forward_if_built(
         char** args;
         int i;
         int narg = (argc > 0) ? argc : 1;
-        int has_launcher = 0;
-        for (i = 1; i < argc && argv && argv[i]; ++i) {
-            if (strcmp(argv[i], "--launcher") == 0) {
-                has_launcher = 1;
-                break;
-            }
-        }
         args = (char**)calloc((size_t)narg + 2, sizeof(char*));
         if (!args)
             return;
         args[0] = g_exe_path;
-        for (i = 1; i < argc && argv && argv[i]; ++i)
-            args[i] = argv[i];
-        if (!has_launcher)
-            args[i++] = "--launcher";
-        args[i] = NULL;
+        {
+            int n = 1;
+            for (i = 1; i < argc && argv && argv[i]; ++i) {
+                if (strcmp(argv[i], "--diagnostic") == 0)
+                    continue; /* host-only switch; the runtime does not take it */
+                args[n++] = argv[i];
+            }
+            if (handover_adds_launcher(argc, argv))
+                args[n++] = "--launcher";
+            args[n] = NULL;
+        }
         if (g_project_root[0] && chdir(g_project_root) != 0) {
             fprintf(stderr, "psxrecomp-codegen: chdir(%s) failed: %s\n",
                     g_project_root, strerror(errno));
@@ -4808,6 +5871,10 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->discs = g_disc_roster;
         gi->num_discs = g_num_discs;
         gi->persist_setup_discs = host_persist_setup_discs;
+    }
+    if (gi->disc_verify && gi->disc_verify != host_disc_verify) {
+        g_inner_disc_verify = gi->disc_verify;
+        gi->disc_verify = host_disc_verify;
     }
     gi->prepare_with_progress = host_prepare_generate;
     gi->prepare_use_selected_rom = 1;

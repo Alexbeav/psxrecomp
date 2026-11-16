@@ -18,6 +18,9 @@
 #define SYSCALL_PC 0x00000650u
 
 static uint32_t ram[0x10000u / 4u];
+uint32_t g_psx_cyc_batch;
+uint32_t g_psx_cyc_batch_limit = 0;
+uint32_t *g_psx_cyc_local_acc;
 static unsigned same_thread_events, other_thread_events;
 
 static uint32_t read_word(uint32_t address) {

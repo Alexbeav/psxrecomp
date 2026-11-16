@@ -127,6 +127,13 @@ respective files.
 | `discs` | game (multi-disc) | array of .cue paths; `disc` is sugar for `discs = [disc]` |
 | `disc_serials` | game (multi-disc, optional) | array parallel to `discs`: the serial each disc carries (`["SCUS-94163", "SCUS-94164", "SCUS-94165"]`). Without it every disc is checked against `[game] id` — the BOOT disc's serial — so selecting disc 2 reports "wrong disc". A disc with no entry here is not serial-gated; the ISO-header check still applies. |
 
+Multi-disc metadata uses the declared roster order. Disc paths include their
+directories, so separate cache folders can both contain `disc.cue`. A CUE and
+same-directory BIN with the same stem resolve to the same roster entry. A
+relocated image is matched by filename stem only when that stem is unique in
+the roster. The one-based persisted `disc.selected` index wins over a path
+that identifies another disc or has an ambiguous relocated name.
+
 ### Multi-disc selection
 
 Relative paths in executable-side `settings.toml` (`[disc] path`, `[bios] path`,
@@ -146,10 +153,39 @@ selected = 2                               # 1-based index into [game] discs
 ```
 
 `selected` names the disc and `path` only survives when it *is* that disc
-(same file-name stem), so writing `selected` alone — from an external launcher
+(see the roster identity rule above), so writing `selected` alone — from an external launcher
 or by hand — switches discs even though `path` still points at the previous
 one. That is what makes disc choice manageable like any other setting. Both
 keys are written only for multi-disc titles.
+
+### Several programs in one set
+
+Some sets put a different program on each disc (Resident Evil 2: Leon on disc
+1, Claire on disc 2). Each program is its own build. The builds can share one
+folder, one `settings.toml`, one set of key binds and one `saves` folder:
+
+- **A config per exe.** If `<exe name>.game.toml` exists beside the
+  executable, it is that executable's game config. Otherwise the build's
+  default config name applies, as for every single-program folder.
+- **`[game] program_discs`.** Every program's config lists the whole set in
+  `discs` and `disc_serials`. `program_discs` holds the 1-based positions the
+  program boots:
+
+  ```toml
+  [game]
+  id            = "SLUS-00756"
+  discs         = ["Game (Disc 1).chd", "Game (Disc 2).chd"]
+  disc_serials  = ["SLUS-00748", "SLUS-00756"]
+  program_discs = [2]
+  ```
+
+  The program mounts only its own discs. When the shared settings remember
+  the other program's disc, the program mounts its own disc instead. Save
+  states take the disc's position in the set (`_disc2`), so two programs with
+  the same entry point never share a state file. Absent, the key means "every
+  disc".
+- **One at a time.** The programs share the memory cards, so a second program
+  started from the same folder is refused while the first runs.
 
 ## Recompiler block
 
@@ -717,8 +753,8 @@ buffer_ms = 60
 `buffer_ms` accepts 30–500 milliseconds and defaults to 180. Lower values
 reduce audible input-to-sound delay, but leave less reserve for frames where a
 game temporarily produces no audio and can therefore crackle on affected
-titles. This is deliberately a per-game developer choice; it is not read from
-the player's `settings.toml`.
+titles. The title supplies the default; the General Settings audio-buffer
+preference can override it in the player's `settings.toml`.
 
 ## Video Block
 
@@ -741,12 +777,15 @@ Vulkan after validating their visuals and stability.
 
 These `[video]` / `[audio]` keys are the title's **baseline**: what a player
 sees and hears with the matching built-in mod at Game default (or off, except
-Internal Resolution, whose disabled state is native 1x). They are not player
-settings any more (no `settings.toml` key, no launcher Settings row, no
-in-game menu row); a player changes them through the framework's built-in
-mods on the Mods page, whose "Game default" option values keep the baseline
+Internal Resolution, whose disabled state is native 1x). A player changes these
+through the framework's built-in mods, whose "Game default" option values keep the baseline
 (`runtime/include/host_enhancements.h`, docs/MOD_PACKAGES.md "Built-in host
 enhancements"):
+
+The paired compact Settings UI also exposes the existing built-in resolution
+and image-filtering controls. Explicit player vertex/perspective preferences
+can override those PGXP visual choices independently of the mod's CPU/culling
+options. See [Player Settings](PLAYER_SETTINGS.md) for persistence and presets.
 
 | `game.toml` key | Built-in mod (option) |
 |---|---|
@@ -763,20 +802,22 @@ Local rewind has no `game.toml` key; it is the Rewind mod
 
 A `settings.toml` written before this change may still carry `antialiasing`,
 `texture_filtering`, `fmv_filter`, `crt_filter`, `scanlines`,
-`scanline_strength`, `geometry_correction`, `perspective_texturing`, `rewind`,
+`scanline_strength`, `rewind`,
 `rewind_depth`, `rewind_interval`, `supersampling`, `internal_resolution`,
-`supersample`, `dynamic_resolution`, `dynamic_resolution_min`, `[audio]
+`dynamic_resolution`, `[audio]
 spu_hq`, `[audio] frequency` or the `quality_*` keys. They are ignored, never
-an error, and the next save drops them (an empty `[audio]` table included).
+an error, and the next save drops them. Current volume and buffer preferences
+remain supported.
 
 **Audio sample rate.** The host audio device opens at the runtime's built-in
 rate (44.1 kHz, the SPU's own). It is not a player setting: the launcher has no
 Sample rate row for PSX and `settings.toml` has no `[audio] frequency`. Volume
 stays a launcher setting.
 
-**Graphics presets were removed.** A `game.toml` that still has a `[quality]`
+**Legacy title quality tables were removed.** A `game.toml` that still has a `[quality]`
 table (`[quality.low]` .. `[quality.ultra]`) fails to load with an error naming
-the table; delete it. No title shipped one.
+the table; delete it. No title shipped one. The player-facing Faithful / Best
+choices use current built-in features and preferences, not this legacy table.
 
 ### Internal resolution (`internal_resolution`, `supersampling`)
 
@@ -963,6 +1004,25 @@ are never affected. It pairs with the existing `fmv_filter` upscale choice
 (`nearest`, `bilinear`, `sharp`, `bicubic`). OpenGL only.
 `PSX_FMV_CHROMA=0|1` overrides it for one run and the `fmv_chroma` TCP
 command switches it live.
+
+### Crop movies to the picture (`fmv_crop_to_picture`)
+
+```toml
+[video]
+fmv_crop_to_picture = false   # default
+```
+
+A 24-bit (movie) frame is staged into the PAL (288-line) or NTSC (240-line)
+active-video canvas. A movie whose GP1(07h) range is shorter than the canvas
+then shows black bars above and below it, and the last
+`depth24_trailing_margin` columns (8 by default) are blanked. With
+`fmv_crop_to_picture = true` the visible source rows are the whole presented
+frame, as for 15-bit frames, and the fixed margin is dropped: only columns
+that a known upload span leaves uncovered are blanked. A title that writes
+`depth24_trailing_margin` itself keeps that margin. `false`, the default,
+keeps the canvas. The player setting "Crop movies to the picture" (Display) overrides
+the title, and `PSX_FMV_CROP=0|1` overrides both for one run. `gpu_state`
+reports `screen_height`, `screen_origin_y`, `d24_crop` and `d24_rgb_limit`.
 
 ### Texture LOD and anisotropic filtering (`texture_lod`, `anisotropic_filtering`)
 
@@ -1404,3 +1464,59 @@ single bless window) are enforced at load; violations refuse to build.
 Immediate selector choices are fixed during offline mod activation until the
 next session restart. Non-stock choices isolate savestate slots through the
 existing content scope; live setter calls and nonzero online selection fail.
+
+### `settings_format` in the player's `settings.toml`
+
+The launcher writes a top-level `settings_format = 2` line into `settings.toml`
+at every save. The line says that `[video] fast_boot` and `[video] bios_hle` in
+that file are the player's own lines.
+
+An older launcher had no control for the two keys and still wrote them at every
+save, with whatever value was in force. That echo then pinned the value: a kit
+that later changed `bios_hle` never reached a player who had started an older
+build once, and two netplay peers of one build could boot in different BIOS
+modes. So in a file without `settings_format = 2` the runtime ignores both
+keys, uses the game's own values, and drops the lines at the next save.
+
+For a person or a tool that writes `settings.toml`:
+
+```toml
+settings_format = 2
+
+[video]
+fast_boot = true     # honoured only with the line above
+bios_hle  = false
+```
+
+Without the first line the two keys have no effect. The runtime then says so
+in one stdout line and in the run report (`psx_last_run_report.json`):
+
+```json
+"settings": {"file_format": 0, "current_format": 2, "boot_keys_ignored": 1,
+             "notice": "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. ..."}
+```
+
+`fast_boot` can only turn the BIOS boot-skip on. With `bios_hle` on (the
+default) the BIOS intro is skipped whatever `fast_boot` says, so
+`fast_boot = false` alone does not bring the intro back. To see the intro,
+set `bios_hle = false` here, or `[runtime] bios_hle_keep_intro = true` in the
+game's `game.toml`. When `fast_boot = false` is written in either file and the
+intro is still skipped, the start says so in one stdout line and in the run
+report (PS1B-354):
+
+```json
+"boot": {"boot_skip": 1, "fast_boot_ignored": 1,
+         "notice": "fast_boot = false has no effect while bios_hle is on: ..."}
+```
+
+`boot_skip` is 1 when the BIOS intro is skipped, 0 when it plays, and -1 when
+the start ended before the boot was decided.
+
+`file_format` is 0 when the file or the line is absent. A start that ends
+before the settings are read (a game config that cannot be read, for example)
+reports 0 for both formats. Every other key of `settings.toml` is read the
+same way in both formats.
+
+`turbo_audio_sink` is meaningful only while load acceleration is active. It keeps
+the guest SPU timeline advancing but discards accelerated samples before host
+playback, then fades normal output back in.

@@ -4,7 +4,7 @@
 
 static int effects;
 void dirty_ram_clear_image_baseline(void) { ++effects; }
-void memory_clear_low_boot_scratch(void) { ++effects; }
+void memory_note_game_entry(void) { ++effects; }
 void cdrom_notify_game_started(void) { ++effects; }
 void boot_state_trigger_capture(const CPUState* cpu) { (void)cpu; ++effects; }
 static void check(int ok, const char* message) {
@@ -25,3 +25,6 @@ int main(void) {
     puts("restored handoff checks passed");
     return 0;
 }
+
+/* Report-only accounting is outside this fixture's hardware seams. */
+void dirty_ram_pc_table_game_load(void) {}

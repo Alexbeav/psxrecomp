@@ -8,10 +8,9 @@
  *
  *   1. both default OFF (the faithful floor) when game.toml says nothing;
  *   2. game.toml [video] turns them on -- the title's baseline;
- *   3. settings.toml no longer carries them, nor any other look the built-in
- *      mods own (CRT Filter, Image Filtering, PGXP Precision, Internal
- *      Resolution), nor the audio sample rate: old keys are ignored, not
- *      errors, and a save drops them;
+ *   3. settings.toml retains the restored explicit preferences, while obsolete
+ *      aliases and the retired audio sample rate are dropped. Existing
+ *      built-in providers still own their feature state;
  *   4. game.toml internal_resolution "auto" (dynamic resolution), the title's
  *      baseline the Internal Resolution mod resolves over;
  *   5. a game.toml with the retired [quality.*] presets fails to load.
@@ -66,8 +65,8 @@ static fs::path write_game_toml(const std::string& name,
 
 /* BOTH default off — the faithful floor — but for different reasons, and the
  * distinction matters if anyone reconsiders these later. geometry_correction is
- * off because it is BROKEN at the coverage the runtime can reach (it moves
- * vertices and splits shared edges) and has no launcher control at all.
+ * off because the base flavor lacks full dataflow coverage. Hook builds use
+ * the existing PGXP session resolver; neither flavor enables it by default.
  * perspective_texturing is off because it is a deliberate departure from hardware
  * output validated on only one title and renderer; it is structurally safe and
  * players opt in from the launcher. See docs/ENHANCEMENTS.md G1.8/G1.9. */
@@ -191,13 +190,22 @@ static void test_retired_player_look_keys() {
     check(PSXRecompV4::save_user_settings(out, us), "save_user_settings writes");
     const std::string text = read_text(out);
     for (const char* key : {"antialiasing", "texture_filtering", "fmv_filter", "crt_filter",
-                            "scanlines", "scanline_strength", "geometry_correction",
-                            "perspective_texturing", "quality_", "rewind =", "rewind_depth",
-                            "rewind_interval", "spu_hq", "dynamic_resolution",
-                            "supersampling", "internal_resolution", "supersample",
+                            "scanlines", "scanline_strength", "quality_", "rewind =", "rewind_depth",
+                            "rewind_interval", "spu_hq", "dynamic_resolution =",
+                            "supersampling", "internal_resolution",
                             "frequency", "[audio]"})
         check(text.find(key) == std::string::npos,
               (std::string("a save drops the retired key ") + key).c_str());
+    // These four player preferences were restored by the Settings GUI scope.
+    // Match complete TOML keys: dynamic_resolution_min is a separate floor.
+    for (const char* key : {"geometry_correction", "perspective_texturing",
+                            "dynamic_resolution_min", "supersample"})
+        check(text.find(key) != std::string::npos,
+              (std::string("a save preserves the restored preference ") + key).c_str());
+    auto restored = PSXRecompV4::load_user_settings(out);
+    check(restored.extra_player_settings.at("video.supersample") == "1.5" &&
+          restored.extra_player_settings.at("video.dynamic_resolution_min") == "1080p",
+          "restored typed preferences retain their actual values");
     check(text.find("renderer") != std::string::npos &&
           text.find("window_width      = 1600") != std::string::npos, "a save keeps the rest");
     fs::remove(out);
@@ -650,7 +658,28 @@ static void test_fractional_fast_forward() {
     }
 }
 
+static void test_player_display_aspect() {
+    auto p = write_temp("psxrecomp_player_aspect.toml", "[video]\n");
+    auto prefs = PSXRecompV4::load_user_settings(p);
+    check(!prefs.has_aspect_ratio && prefs.aspect_num == 4 && prefs.aspect_den == 3,
+          "absent player aspect retains native 4:3 default");
+    for (const auto* ratio : {"16:9", "21:9"}) {
+        p = write_temp("psxrecomp_player_aspect.toml",
+                       std::string("[video]\naspect_ratio = \"") + ratio + "\"\n");
+        prefs = PSXRecompV4::load_user_settings(p);
+        check(prefs.has_aspect_ratio && prefs.aspect_den == 9 &&
+              prefs.aspect_num == (std::string(ratio) == "16:9" ? 16 : 21),
+              "explicit player aspect loads without native clamping");
+        check(PSXRecompV4::save_user_settings(p, prefs), "selected aspect saves");
+        auto loaded = PSXRecompV4::load_user_settings(p);
+        check(loaded.has_aspect_ratio && loaded.aspect_num == prefs.aspect_num &&
+              loaded.aspect_den == prefs.aspect_den, "selected aspect survives relaunch roundtrip");
+    }
+    fs::remove(p);
+}
+
 int main() {
+    test_player_display_aspect();
     {
         auto p = write_game_toml("ves_player_pipeline.toml", "[video]\noffer_render_pipeline = false\n");
         check(!PSXRecompV4::load_game_config(p).runtime.video_offer_render_pipeline,

@@ -1,0 +1,14 @@
+{
+  "header_source": "https://retroportingtoolkit.com/assets/index-BfOeW5hl.js",
+  "logo": {
+    "url": "https://retroportingtoolkit.com/navbar-icon.png",
+    "bytes": 9150,
+    "sha256": "1125cd92990d6771a4d37594d2536a1f1106b33aa3bf095e9fab42f9e341a091"
+  },
+  "metadata_source": "https://retroportingtoolkit.com/assets/site-CnIUDaH-.js",
+  "links": {
+    "github": "https://github.com/RetroPortingToolKit",
+    "website": "https://retroportingtoolkit.com/",
+    "discord": "https://discord.gg/Jn6ZgtC85u"
+  }
+}

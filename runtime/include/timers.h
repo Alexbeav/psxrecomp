@@ -10,6 +10,19 @@ extern "C" {
 #define TIMER_BASE 0x1F801100
 
 void timers_init(void);
+/* BS_SEC_TIMER_SRC: full source-timer state (write + read-side rewrite that
+ * targets source_timer1/source_timer2, not the normal timer array). */
+uint32_t timers_source_wire_bytes(void);
+int timers_source_active(void);
+int timers_source_perturb(const char *field);
+void timers_source_wire_write(uint8_t *out);
+int timers_source_wire_read(const uint8_t *in, uint32_t len);
+int timers_source_raster_enabled(void);
+/* HBlank-driven counter reads see GPU events before the final bus wait.
+ * CPU-clock counter modes still sample after that wait. Physical address. */
+int timers_source_hblank_counter_read(uint32_t addr);
+void timers_source_raster_event(void *context, uint64_t cycle, unsigned event, int blank);
+void timers_source_raster_finish(uint64_t cycle);
 /* Snapshot mode bits 0..12 are guest mode; bit 16 is the one-shot latch and
  * bits 17..18 are the post-target dwell. Pass complete words back on restore.
  * Guest mode reads never expose these snapshot-only bits. */

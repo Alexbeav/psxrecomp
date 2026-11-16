@@ -11,6 +11,10 @@
  */
 
 #include "gpu.h"
+#include "mdec.h"
+#include "interrupts.h"
+#include "source_gpu_runtime.h"
+#include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
 #include "mod_texture_banks.h"
 #include "display_scanout.h"
@@ -21,6 +25,7 @@
 #include "gpu_sw_renderer.h"
 #include "gpu_vram_dirty.h"
 #include "gpu_render.h"
+#include "gpu_interlace.h"
 #include "ws_view_anchor.h"
 #include "text_xlate.h"
 #include "crash_trace.h"
@@ -81,12 +86,50 @@ typedef enum {
 } Gp0State;
 
 static Gp0State gp0_state;
+static unsigned source_ll_polyline_vertices;
+static int source_ll_incomplete_terminator;
 static uint64_t gp0_write_count;
 static uint64_t gp0_nop_count, gp0_fill_count, gp0_draw_count, gp0_env_count, gp0_copy_count;
 static uint32_t gp0_cmd_buf[16];   /* max fixed-length command is 12 words */
 static int      gp0_words_collected;
 static int      gp0_words_needed;
 static uint32_t gp0_next_source_addr = 0xFFFFFFFFu;
+static int source_gpu_queue_enabled;
+static uint32_t source_gpu_config;
+static int gpu_source_dispatch(const SourceGPUCommandDispatch *);
+static struct {
+    uint32_t words[16], sources[16], ranks[16], count;
+    int32_t credit;
+    uint64_t cycle;
+} gpu_queue;
+/* Pending second triangle and its queue-credit readiness frontier.
+ * All three fields are carried by the configured source snapshot tail. */
+static int gpu_walk_quad_pending;
+static int32_t gpu_walk_quad_floor;
+static int32_t gpu_queue_quad_second;
+/* Ordinary renderer drawing time (PS1G-160). Commands still execute when their
+ * last word arrives; this only times when the GPU would start each one, so the
+ * GPU DMA request can drop while it draws. Credit is in half CPU clocks, as in
+ * source_gpu_command_timing.h. Not in the snapshot: a restore starts idle. */
+static int      gpu_draw_timing_on;  /* player setting; host preference, not guest state */
+void gpu_set_draw_timing(int on) { gpu_draw_timing_on = on != 0; }
+int  gpu_draw_timing(void) { return gpu_draw_timing_on; }
+static int32_t  gpu_draw_credit;
+static uint64_t gpu_draw_cycle;       /* credit is valid from this cycle on */
+static uint64_t gpu_dma_resume_at;    /* last command waits in the FIFO until here */
+static void gpu_draw_time_reset(void) {
+    gpu_draw_credit = 0;
+    gpu_draw_cycle = gpu_dma_resume_at = psx_get_cycle_count();
+}
+static void gpu_queue_reset(void) {
+    gpu_draw_time_reset();
+    gpu_walk_quad_pending = 0;
+    gpu_walk_quad_floor = 0;
+    gpu_queue_quad_second = 0;
+    memset(&gpu_queue, 0, sizeof gpu_queue);
+    if(!source_gpu_runtime_active()) gpu_queue.cycle = psx_get_cycle_count();
+}
+
 static uint32_t gp0_cmd_source_addr  = 0xFFFFFFFFu;
 static uint16_t gp0_ot_rank = 0xFFFFu;
 
@@ -3780,7 +3823,43 @@ static int      s_d24_present_hold = 0; /* vblanks to skip Swap after GP1(07h) *
  * present-ticked hold stuck at 3 in headless live play and was zeroed by a
  * rollback load, so replay != live). */
 static int      s_d24_present_skip = 0;
+/* [video] fmv_crop_to_picture: present a depth24 frame at its visible source
+ * height instead of inside the PAL/NTSC active-video canvas, and blank only
+ * the trailing columns an upload span leaves uncovered. Host presentation
+ * choice: never reset with the GPU, never in a snapshot. */
+static int      s_d24_crop = 0;
 static uint32_t s_d24_prev_disp_h = 0;  /* last GP1(07h) band height */
+static uint8_t s_d24_rows[512];
+static int s_d24_streaming;
+static void depth24_reset_rows(void) {
+    memset(s_d24_rows, 0, sizeof(s_d24_rows));
+    s_d24_streaming = 0;
+}
+
+static int depth24_update_stream(void) {
+    int active = mdec_recently_active(10);
+    if (active && !s_d24_streaming)
+        memset(s_d24_rows, 0, sizeof(s_d24_rows));
+    s_d24_streaming = active;
+    return active;
+}
+
+/* A GP0(80h) VRAM-to-VRAM copy carries coverage with its pixels: a row it
+ * writes holds this session's movie pixels when its source row did. Titles
+ * that decode into an off-screen strip and copy it into the displayed buffer
+ * (The X-Files: CPU uploads at y 256..383, copies to y 40..167 and
+ * 296..423) otherwise present the copied movie rows as black (PS1G-163). */
+static void depth24_note_copy(uint32_t src_y, uint32_t dst_y, uint32_t h) {
+    if (!gpu_display_is_depth24() || !depth24_update_stream())
+        return;
+    uint8_t src[512];
+    for (uint32_t row = 0; row < h && row < 512u; row++)
+        src[row] = s_d24_rows[(src_y + row) & 511u];
+    for (uint32_t row = 0; row < h && row < 512u; row++)
+        if (src[row])
+            s_d24_rows[(dst_y + row) & 511u] = 1;
+}
+
 static void depth24_note_upload(uint32_t x, uint32_t w);
 
 static void gp0_commit_cpu_to_vram(void) {
@@ -3791,6 +3870,10 @@ static void gp0_commit_cpu_to_vram(void) {
                      ((vram_write_x + col) & 1023u)];
     gr_vram_upload_commit(vram_write_x, vram_write_y,
                           vram_write_w, vram_write_h, vram_write_pixels);
+    /* Mark only rows uploaded in this movie session; guest VRAM is unchanged. */
+    if (gpu_display_is_depth24() && depth24_update_stream())
+        for (uint32_t row = 0; row < vram_write_h; row++)
+            s_d24_rows[(vram_write_y + row) & 511u] = 1;
     depth24_note_upload(vram_write_x, vram_write_w);
     gp0_state = GP0_IDLE;
     vram_write_remaining = 0;
@@ -3800,6 +3883,15 @@ static void gp0_commit_cpu_to_vram(void) {
 
 /* VRAM read transfer state (VRAM→CPU, command 0xC0) */
 static int      vram_read_active;
+uint32_t gpu_dma_vram_upload_words(void){return vram_write_remaining;}
+int gpu_dma_source_ll_ready(void){
+ int projected=source_gpu_runtime_ready();if(projected!=-2)return projected;
+ if(source_ll_incomplete_terminator||vram_read_active)return -1;
+ if(gp0_state==GP0_IDLE)return 1;
+ if(gp0_state==GP0_POLYLINE_MONO&&polyline_has_prev>=2)return 0;
+ return -1;
+}
+
 static uint16_t vram_read_x, vram_read_y;
 static uint16_t vram_read_w, vram_read_h;
 static uint16_t vram_read_col, vram_read_row;
@@ -4119,6 +4211,9 @@ static uint32_t v_display_y2;
 
 /* GPUREAD latch (GP1(10h) get-info result, or VRAM read data) */
 static uint32_t gpuread_latch;
+/* Last word on the GPUREAD bus (a VRAM read word or an info result); its
+ * upper bits survive in the partial GP1(10h) fields. */
+static uint32_t gpuread_data_last;
 
 /* C0 (VRAM→CPU) history: an always-on ring of the most recent reads
  * (it used to keep only the first 32 since boot, so gameplay readbacks were
@@ -4167,6 +4262,7 @@ static void gpu_reset_state(int clear_vram) {
         gpu_vram_dirty_mark_all();
     }
     gr_init(vram);
+    gpu_queue_reset();
 
     /* Reset GP0 state machine (+ leftover cmd/xfer crumbs that survive in
      * gpu_snapshot and fork av digests on rematch). */
@@ -4191,6 +4287,7 @@ static void gpu_reset_state(int clear_vram) {
     polyline_prev_c = 0;
     polyline_semi_trans = 0;
     polyline_has_prev = 0;
+    source_ll_polyline_vertices = source_ll_incomplete_terminator = 0;
     vram_write_x = vram_write_y = 0;
     vram_write_w = vram_write_h = 0;
     vram_write_col = vram_write_row = 0;
@@ -4249,6 +4346,7 @@ static void gpu_reset_state(int clear_vram) {
     v_display_y2 = 0x100;
 
     gpuread_latch = 0;
+    gpuread_data_last = 0;
     gpustat_poll_count = 0;
     s_ws_fmv_frame_cache = 0xFFFFFFFFu;
     s_ws_fmv_cached = 0;
@@ -4258,9 +4356,18 @@ static void gpu_reset_state(int clear_vram) {
     s_d24_present_hold = 0;
     s_d24_present_skip = 0;
     s_d24_prev_disp_h = 0;
+    gr_display_mode_changed();
+    depth24_reset_rows();
 }
 
 void gpu_init(void) {
+    const char *source_model=getenv("PSX_GPU_DMA_MODEL");
+    source_gpu_queue_enabled=source_model && *source_model;
+    source_gpu_config=source_gpu_queue_enabled?(!strcmp(source_model,"octoshock-2.2.2-vram-upload")?1u:!strcmp(source_model,"octoshock-2.2.2-bounded-linked-list")?2u:!strcmp(source_model,"octoshock-2.2.2-bounded-quad")?3u:0u):0u;
+    if(source_gpu_queue_enabled && (!source_gpu_config || !getenv("PSX_INPUT_ROUTE_FILE")))psx_fatal_halt("invalid source GPU configuration");
+    gpu_queue_reset();source_ll_polyline_vertices=0;source_ll_incomplete_terminator=0;
+    source_gpu_runtime_set_dispatch_sink(gpu_source_dispatch);
+    gr_source_texture_control(0,0);
     gpu_reset_state(1);
     video_mode = s_power_on_video_mode;
     (void)psx_video_timing_set_pal((int)video_mode);
@@ -4362,9 +4469,29 @@ uint32_t gpu_read_gpustat(void) {
     /* Bits 29-30: DMA direction */
     stat |= (dma_direction & 3) << 29;
 
-    /* Bit 31: LCF — drawing even/odd lines in interlace mode */
-    stat |= (lcf & 1) << 31;
+    /* Keep the drawing-line bit clear in vertical blanking. This uses the
+     * existing whole-field clock approximation; reading it advances no time. */
+    uint32_t line_bit = lcf & 1u;
+    if (vertical_interlace && vres) {
+        const uint32_t lines = video_mode ? 314u : 263u;
+        const uint32_t start = v_display_y1 < lines ? v_display_y1 : lines;
+        const uint32_t end = v_display_y2 < lines ? v_display_y2 : lines;
+        const uint32_t active = end > start ? end - start : 0u;
+        const uint64_t phase = interrupts_get_cycles_since_vblank();
+        if (phase * lines < (uint64_t)(lines - active) * g_psx_vblank_cycles)
+            line_bit = 0;
+    }
+    stat |= line_bit << 31;
 
+    uint32_t raster_bits;if(interrupts_raster_gpu_status(&raster_bits))stat=(stat&~0x80002000u)|raster_bits;
+    if(source_gpu_queue_enabled && !source_gpu_runtime_active()){
+        stat&=~0x1e000000u;
+        int idle=!gpu_queue.count && gpu_queue.credit>=0 && gp0_state==GP0_IDLE;
+        int ready=!gpu_queue.count && (gp0_state==GP0_IDLE || gp0_state==GP0_VRAM_WRITE);
+        if(idle)stat|=1u<<26;if(ready)stat|=1u<<28;if(vram_read_active)stat|=1u<<27;
+        if((dma_direction==1 && gpu_queue.count<16)||(dma_direction==2 && ready)||(dma_direction==3 && vram_read_active))stat|=1u<<25;
+    }
+    if(source_gpu_runtime_active())stat=(stat&~0x1e000000u)|source_gpu_runtime_status_bits();
     return stat;
 }
 
@@ -4385,12 +4512,10 @@ uint32_t gpu_read_gpuread(void) {
         value |= (uint32_t)gr_vram_read((int)rx, (int)ry) << (i * 16);
 
         if (++vram_read_col == vram_read_w) {
-            vram_read_col = 0;
-            if (++vram_read_row == vram_read_h) {
-                /* Transfer complete */
-                vram_read_active = 0;
-                break;
-            }
+            /* Complete both halves of an odd-width final word; its high half
+             * is the next X on the final row, not another row. */
+            if (vram_read_row + 1 == vram_read_h) vram_read_active = 0;
+            else { ++vram_read_row; vram_read_col = 0; }
         }
     }
 
@@ -4403,7 +4528,10 @@ uint32_t gpu_read_gpuread(void) {
             c0_capture_slot_fwd = -1;  /* transfer complete */
     }
 
-    gpuread_latch = value;
+    /* Partial GP1 fields retain high bits from the last bus word, separately
+     * from the info latch returned by idle reads. */
+    gpuread_data_last = value;
+    if(source_gpu_runtime_active())source_gpu_runtime_read();
     return value;
 }
 
@@ -4585,7 +4713,7 @@ const uint16_t* gpu_get_vram(void) {
  * Only FB-class A0s (w >= 256 halfwords) grow the span; texture uploads must
  * not collapse it. During present-hold, ignore updates entirely. */
 static void depth24_note_upload(uint32_t x, uint32_t w) {
-    if (!(display_depth & 1u) || w < 256u) return;
+    if (!(display_depth & 1u) || w == 0u) return;
     if (s_d24_present_hold > 0) return;
     uint32_t x1 = x + w;
     if (x1 > 1024u) x1 = 1024u;
@@ -4620,6 +4748,7 @@ void gpu_depth24_on_savestate_loaded(void) {
      * Upload span / prev_h were restored from the GPU snap. */
     s_d24_present_hold = 0;
     s_d24_present_skip = 0;
+    depth24_reset_rows();
 }
 
 /* ---- Present-time screen-colour LUT (verified-enhancement, opt-in) -------
@@ -4736,6 +4865,10 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
 void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
                              uint32_t count) {
     uint32_t vy = (di->display_y + y) & 511u;
+    if (depth24_update_stream() && !s_d24_rows[vy]) {
+        for (uint32_t x = 0; x < count; x++) out[x] = 0xFF000000u;
+        return;
+    }
     uint32_t base_byte_x = (di->display_x & 1023u) * 2u;
     const uint16_t* row = vram + (size_t)vy * 1024u;
     uint32_t valid = 0u;
@@ -4786,7 +4919,11 @@ uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
     for (uint32_t y = 0; y < rows; y++)
         gpu_depth24_present_row(di, di->screen_source_skip_y + y,
                                 source + (size_t)y * w, w);
-    if (rows == 0u || w < 8u || margin == 0u || margin >= w)
+    if (rows == 0u || w < 8u || margin >= w)
+        return rows;
+    /* A zero margin keeps every column on the canvas. Cropped to the picture
+     * it still blanks what a known upload span leaves uncovered. */
+    if (margin == 0u && !s_d24_crop)
         return rows;
     uint32_t start = w - margin;
     uint32_t lim = gpu_depth24_rgb_limit(di->display_x, w);
@@ -4800,6 +4937,14 @@ uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
 
 int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
+}
+
+void gpu_set_depth24_crop_to_picture(int on) {
+    s_d24_crop = on ? 1 : 0;
+}
+
+int gpu_depth24_crop_to_picture(void) {
+    return s_d24_crop;
 }
 
 /* Visible horizontal pixel width (GP1(08h) mode + GP1(06h) range). Shared by
@@ -4875,6 +5020,13 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
             screen_origin_y = screen_h;
         h = psx_display_clip_source_height(
             1, h, screen_h, screen_origin_y);
+        /* Cropped to the picture: the visible source rows are the whole
+         * frame, as for 15-bit. Rows clipped above active video stay skipped.
+         * A range with no visible row keeps the black canvas. */
+        if (s_d24_crop && h != 0u) {
+            screen_h = h;
+            screen_origin_y = 0u;
+        }
     } else {
         /* The active canvas is a depth24 staging contract. Keep direct 15-bit
          * source rectangles independent from its origin and 576-row limit. */
@@ -6484,7 +6636,14 @@ static void gp0_exec_draw_mode(void) {
      * Bits 7-8: texture color mode
      * Bit 9: dither
      * Bit 10: draw to display area
-     * Bit 11: texture disable (when allowed by GP1) */
+     * Bit 11: texture disable, latched only after GP1(09h) allowed it.
+     *
+     * GP1(09h) is not modelled here: it reaches psx_fatal_halt in
+     * gpu_write_gp1, so in every run that continues the allow switch is in
+     * its reset state (off) and bit 11 is ignored. GPUSTAT bit 15 therefore
+     * stays 0. Crash Bandicoot Warped sends E1 with bit 11 set and stores
+     * GPUSTAT to RAM (0x8000E2E4); latching it made native read A21Ah where
+     * the reference reads 221Ah (PS1B-109, TAS 3496, return 1181). */
     uint32_t param = gp0_cmd_buf[0] & 0x00FFFFFFu;
     texpage_x         = param & 0xF;
     texpage_y         = (param >> 4) & 1;
@@ -6493,7 +6652,6 @@ static void gp0_exec_draw_mode(void) {
     dither_enabled    = (param >> 9) & 1;
     gr_set_dither((int)dither_enabled);
     draw_to_display   = (param >> 10) & 1;
-    /* GP1(09h) is unsupported and halts, so permission stays reset. */
     texture_disable   = 0;
     /* Sync semi-transparency to SW renderer — actual blending is per-primitive */
 }
@@ -7868,6 +8026,7 @@ static void gp0_dispatch_command(uint8_t opcode) {
             if (w == 0) w = 0x400;
             if (h == 0) h = 0x200;
             gr_copy_rect(src_x, src_y, dst_x, dst_y, w, h);
+            depth24_note_copy((uint32_t)src_y, (uint32_t)dst_y, (uint32_t)h);
             break;
         }
 
@@ -8138,11 +8297,18 @@ static void gpu_write_gp0_body(uint32_t val) {
  * rasterization / batching / VRAM transfer work on the emu thread — as its
  * own phase so it is separable from the guest code that issued the write.
  * Covers both the MMIO store chokepoint and DMA channel-2 feeds. */
+#include "gpu_source_dispatch.inc"
+
 void gpu_write_gp0(uint32_t val) {
     extern int g_exec_phase;
     int prev_phase = g_exec_phase;
     g_exec_phase = 4;
-    gpu_write_gp0_body(val);
+    if(source_gpu_runtime_active())source_gpu_runtime_gp0(val);
+    else if(source_gpu_queue_enabled){
+        gpu_queue_service();if(!gpu_queue_has_space())psx_fatal_halt("source GPU FIFO overflow");
+        unsigned at=gpu_queue.count++;gpu_queue.words[at]=val;gpu_queue.sources[at]=gp0_next_source_addr;gpu_queue.ranks[at]=gp0_ot_rank;gpu_queue_consume();psx_next_service_cycle=0;
+    }else if(gpu_draw_timing_on) gpu_draw_timed_gp0(val);
+    else gpu_write_gp0_body(val);
     g_exec_phase = prev_phase;
 }
 
@@ -8162,6 +8328,8 @@ static void gp1_reset_command_buffer(void) {
     gp0_words_collected = 0;
     gp0_words_needed = 0;
     vram_write_remaining = 0;
+    if (source_gpu_queue_enabled) gpu_queue_reset();
+    else gpu_draw_time_reset();
 }
 
 static void gp1_ack_irq1(void) {
@@ -8241,8 +8409,10 @@ static void gp1_display_mode(uint32_t val) {
     /* VBlank rate, Timer 1 HBlank clock and host pacing follow the live
      * standard, whatever the disc region (psx_video_timing.h). */
     (void)psx_video_timing_set_pal((int)video_mode);
-    if (new_depth != display_depth)
+    if (new_depth != display_depth) {
         s_d24_upload_x1 = 0; /* rising/falling: drop stale coverage */
+        depth24_reset_rows();
+    }
     display_depth = new_depth;
     vertical_interlace = (val >> 5) & 1;
     /* GPUSTAT.13 holds the legacy constant 0 in progressive (see the vblank
@@ -8252,6 +8422,7 @@ static void gp1_display_mode(uint32_t val) {
         interlace_field = 0;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;
+    gr_display_mode_changed();
 }
 
 static void gp1_get_info(uint32_t val) {
@@ -8264,17 +8435,23 @@ static void gp1_get_info(uint32_t val) {
      * the wrong value here lands the game on a no-draw branch. */
     uint32_t which = val & 0x0F;
     switch (which) {
+        /* 02h-04h return a 20-bit field and 05h a 22-bit field under the
+         * upper bits of the last word on the GPUREAD bus. */
         case 2: /* texture window */
-            gpuread_latch = texture_window_value;
+            gpuread_latch = (gpuread_data_last & 0xFFF00000u) |
+                            (texture_window_value & 0xFFFFFu);
             break;
         case 3: /* draw area top-left */
-            gpuread_latch = draw_area_left | (draw_area_top << 10);
+            gpuread_latch = (gpuread_data_last & 0xFFF00000u) |
+                            draw_area_left | (draw_area_top << 10);
             break;
         case 4: /* draw area bottom-right */
-            gpuread_latch = draw_area_right | (draw_area_bottom << 10);
+            gpuread_latch = (gpuread_data_last & 0xFFF00000u) |
+                            draw_area_right | (draw_area_bottom << 10);
             break;
         case 5: /* draw offset */
-            gpuread_latch = ((uint32_t)draw_offset_x & 0x7FFu) |
+            gpuread_latch = (gpuread_data_last & 0xFFC00000u) |
+                            ((uint32_t)draw_offset_x & 0x7FFu) |
                             (((uint32_t)draw_offset_y & 0x7FFu) << 11);
             break;
         case 7: /* GPU version: PSX-SPX gives 1 or 2; this models 2 */
@@ -8285,15 +8462,19 @@ static void gp1_get_info(uint32_t val) {
             break;
         default:
             /* N=0,1,6,9..15: leave latch unchanged */
-            break;
+            return;
     }
+    gpuread_data_last = gpuread_latch;
 }
 
 void gpu_write_gp1(uint32_t val) {
+    source_gpu_runtime_gp1(val);
+    interrupts_raster_gp1(val);
+    if(source_gpu_queue_enabled && ((val>>24)&0x3f)<=1)gpu_queue_reset();
     uint32_t cmd = (val >> 24) & 0x3F;
 
     switch (cmd) {
-        case 0x00: gp1_reset(); break;
+        case 0x00: gp1_reset(); if(source_gpu_runtime_active())gr_source_texture_control(4,0); break;
         case 0x01: gp1_reset_command_buffer(); break;
         case 0x02: gp1_ack_irq1(); break;
         case 0x03: gp1_display_enable(val); break;
@@ -8328,7 +8509,7 @@ void gpu_write_gp1(uint32_t val) {
     X(display_disabled) X(irq1_flag) X(dma_direction) X(lcf) \
     X(display_area_x) X(display_area_y) \
     X(h_display_x1) X(h_display_x2) X(v_display_y1) X(v_display_y2) \
-    X(gpuread_latch) \
+    X(gpuread_latch) X(gpuread_data_last) \
     X(gp0_state) \
     X(gp0_cmd_buf) X(gp0_words_collected) X(gp0_words_needed) \
     X(gp0_next_source_addr) X(gp0_cmd_source_addr) \
@@ -8349,7 +8530,7 @@ void gpu_write_gp1(uint32_t val) {
     X(display_disabled) X(irq1_flag) X(dma_direction) X(lcf) \
     X(display_area_x) X(display_area_y) \
     X(h_display_x1) X(h_display_x2) X(v_display_y1) X(v_display_y2) \
-    X(gpuread_latch) \
+    X(gpuread_latch) X(gpuread_data_last) \
     X(gp0_state) \
     X(gp0_cmd_buf) X(gp0_words_collected) X(gp0_words_needed) \
     X(polyline_color) X(polyline_prev_x) X(polyline_prev_y) X(polyline_prev_c) \
@@ -8389,6 +8570,7 @@ static int gpu_snap_emit(PstW *w) {
     /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
     WU(s_d24_upload_x1); WI(s_d24_present_hold | 0x200 | (s_d24_present_skip ? 0x100 : 0));
     WU(s_d24_prev_disp_h);
+    WU(0x31525047u); WU(gpuread_data_last); /* GPR1: separate read-data owner */
 #undef WU
 #undef WI
 #undef WH
@@ -8410,6 +8592,8 @@ static int gpu_snap_parse(PstR *r) {
     RU(display_area_x); RU(display_area_y);
     RU(h_display_x1); RU(h_display_x2); RU(v_display_y1); RU(v_display_y2);
     RU(gpuread_latch);
+    /* The snapshot keeps the info latch only; take it as the last bus word. */
+    gpuread_data_last = gpuread_latch;
     if (!pst_r_u32(r, &u)) return 0;
     gp0_state = (Gp0State)u;
     for (int k = 0; k < 16; k++) RU(gp0_cmd_buf[k]);
@@ -8422,6 +8606,8 @@ static int gpu_snap_parse(PstR *r) {
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
     RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
+    if (!pst_r_u32(r, &u) || u != 0x31525047u) return 0;
+    RU(gpuread_data_last);
     /* Bit 9 marks an explicit skip flag (bit 8). GP1 can arm a positive
      * count before VBlank, when skip is still false: that state must round
      * trip exactly. Older snaps without the marker infer skip from count. */
@@ -8435,15 +8621,50 @@ static int gpu_snap_parse(PstR *r) {
     return 1;
 }
 
+/* Explicit source tail follows the current prefix and its GPR1 extension. The stage
+ * used separate DMA/GPU-service/raster sections and a different GPU prefix;
+ * those anchors are not interchangeable with this configured native wire. */
+static uint32_t gpu_source_tail_bytes(void){return (source_gpu_queue_enabled?236u+source_gpu_runtime_snapshot_bytes()+(source_gpu_runtime_active()?sw_source_texture_snapshot_bytes():0u):0u)+interrupts_source_snapshot_bytes();}
+static void gpu_source_tail_write(uint8_t *p){
+ if(!source_gpu_queue_enabled){interrupts_source_snapshot_write(p);return;}PstW w;pst_w_init(&w,p,236);
+ pst_w_u32(&w,0x31515347u);pst_w_u32(&w,source_gpu_config|(source_gpu_runtime_active()?32u:0u));
+ for(unsigned i=0;i<16;++i)pst_w_u32(&w,gpu_queue.words[i]);for(unsigned i=0;i<16;++i)pst_w_u32(&w,gpu_queue.sources[i]);for(unsigned i=0;i<16;++i)pst_w_u32(&w,gpu_queue.ranks[i]);
+ pst_w_u32(&w,gpu_queue.count);pst_w_i32(&w,gpu_queue.credit);pst_w_u64(&w,gpu_queue.cycle);pst_w_u32(&w,(uint32_t)gpu_walk_quad_pending);pst_w_i32(&w,gpu_walk_quad_floor);pst_w_i32(&w,gpu_queue_quad_second);pst_w_u32(&w,source_ll_polyline_vertices);pst_w_u32(&w,(uint32_t)source_ll_incomplete_terminator);
+ source_gpu_runtime_snapshot_write(p+236);
+ if(source_gpu_runtime_active())sw_source_texture_snapshot_write(p+236+source_gpu_runtime_snapshot_bytes());
+ interrupts_source_snapshot_write(p+gpu_source_tail_bytes()-interrupts_source_snapshot_bytes());
+}
+static int gpu_source_tail_read(const uint8_t *p,uint32_t n,int apply){
+ if(n!=gpu_source_tail_bytes())return 0;if(!n)return 1;if(!p)return 0;
+ if(!source_gpu_queue_enabled)return interrupts_source_snapshot_read(p,n,apply);
+ uint32_t irq_bytes=interrupts_source_snapshot_bytes();if(!interrupts_source_snapshot_read(p+n-irq_bytes,irq_bytes,0))return 0;
+ PstR r;uint32_t magic,config,words[16],sources[16],ranks[16],count,pending,vertices,terminator;int32_t credit,floor,second;uint64_t cycle;pst_r_init(&r,p,236);
+ if(!pst_r_u32(&r,&magic)||magic!=0x31515347u||!pst_r_u32(&r,&config)||config!=(source_gpu_config|(source_gpu_runtime_active()?32u:0u)))return 0;
+ for(unsigned i=0;i<16;++i)if(!pst_r_u32(&r,&words[i]))return 0;for(unsigned i=0;i<16;++i)if(!pst_r_u32(&r,&sources[i]))return 0;for(unsigned i=0;i<16;++i)if(!pst_r_u32(&r,&ranks[i])||ranks[i]>65535)return 0;
+ if(!pst_r_u32(&r,&count)||count>16||!pst_r_i32(&r,&credit)||credit>SOURCE_GPU_T_CREDIT_LIMIT||!pst_r_u64(&r,&cycle)||!pst_r_u32(&r,&pending)||pending>1||!pst_r_i32(&r,&floor)||!pst_r_i32(&r,&second)||second<0||!pst_r_u32(&r,&vertices)||vertices>2||!pst_r_u32(&r,&terminator)||terminator>1)return 0;
+ if(!source_gpu_runtime_snapshot_read(p+236,source_gpu_runtime_snapshot_bytes(),0))return 0;
+ if(source_gpu_runtime_active()&&!sw_source_texture_snapshot_read(p+236+source_gpu_runtime_snapshot_bytes(),sw_source_texture_snapshot_bytes(),0))return 0;
+ if(apply){(void)interrupts_source_snapshot_read(p+n-irq_bytes,irq_bytes,1);memcpy(gpu_queue.words,words,sizeof words);memcpy(gpu_queue.sources,sources,sizeof sources);memcpy(gpu_queue.ranks,ranks,sizeof ranks);gpu_queue.count=count;gpu_queue.credit=credit;gpu_queue.cycle=cycle;gpu_walk_quad_pending=(int)pending;gpu_walk_quad_floor=floor;gpu_queue_quad_second=second;source_ll_polyline_vertices=vertices;source_ll_incomplete_terminator=(int)terminator;
+  (void)source_gpu_runtime_snapshot_read(p+236,source_gpu_runtime_snapshot_bytes(),1);
+  if(source_gpu_runtime_active())(void)sw_source_texture_snapshot_read(p+236+source_gpu_runtime_snapshot_bytes(),sw_source_texture_snapshot_bytes(),1);
+ }return 1;
+}
+static uint32_t gpu_snapshot_base_bytes(void){PstW w;pst_w_init(&w,0,0);(void)gpu_snap_emit(&w);return (uint32_t)w.written;}
+void gpu_snapshot_mask_present_helpers(uint8_t *p, uint32_t len) {
+    /* The first 288 bytes retain their field positions; only 276..287 are
+     * presentation helpers. GPR1 and any source/raster tail are guest state. */
+    if (p && len >= gpu_snapshot_base_bytes()) memset(p + 276, 0, 12);
+}
 uint32_t gpu_snapshot_bytes(void) {
     PstW w; pst_w_init(&w, NULL, 0);
     (void)gpu_snap_emit(&w);
-    return (uint32_t)w.written;
+    return (uint32_t)w.written+gpu_source_tail_bytes();
 }
 void gpu_snapshot_write(uint8_t *p) {
     PstW w; uint32_t n = gpu_snapshot_bytes();
     pst_w_init(&w, p, n);
     (void)gpu_snap_emit(&w);
+    gpu_source_tail_write(p+gpu_snapshot_base_bytes());
 }
 uint32_t gpu_cosim_snapshot_bytes(void) { return gpu_snapshot_bytes(); }
 void gpu_cosim_snapshot_write(uint8_t *p) { gpu_snapshot_write(p); }
@@ -8469,7 +8690,7 @@ void gpu_cosim_dump(char *out, int cap) {
     X(display_disabled) X(irq1_flag) X(dma_direction) X(lcf)
     X(display_area_x) X(display_area_y)
     X(h_display_x1) X(h_display_x2) X(v_display_y1) X(v_display_y2)
-    X(gpuread_latch)
+    X(gpuread_latch) X(gpuread_data_last)
     X(gp0_state)
     for (int i = 0; i < 16; i++) {
         APPEND(" gp0_cmd_buf%d %08x", i, gp0_cmd_buf[i]);
@@ -8486,11 +8707,40 @@ void gpu_cosim_dump(char *out, int cap) {
     APPEND("%s", "\n");
 #undef APPEND
 }
+/* Source contexts must validate their modern prefix too: a corrupted packet
+ * cursor must never reach a future GP0 array write. The default reader retains
+ * its existing compatibility policy. All reads here are into local scalars. */
+static int gpu_source_prefix_valid(const uint8_t *p){
+ if(gpu_snapshot_base_bytes()!=296u)return 0;
+ PstR extra;uint32_t marker,last;pst_r_init(&extra,p+288,8);
+ if(!pst_r_u32(&extra,&marker)||marker!=0x31525047u||!pst_r_u32(&extra,&last))return 0;
+ if(!source_gpu_queue_enabled && !interrupts_source_snapshot_bytes())return 1;
+ PstR r;uint32_t u[56],remaining,read_active,depth[3];uint16_t color,prev_color,write[6],read[6];int32_t px,py,semi,vertices;
+ pst_r_init(&r,p,288);
+ for(unsigned j=0;j<56;++j)if(!pst_r_u32(&r,&u[j]))return 0;
+ if(!pst_r_u16(&r,&color)||!pst_r_i32(&r,&px)||!pst_r_i32(&r,&py)||!pst_r_u16(&r,&prev_color)||!pst_r_i32(&r,&semi)||!pst_r_i32(&r,&vertices))return 0;
+ for(unsigned j=0;j<6;++j)if(!pst_r_u16(&r,&write[j]))return 0;
+ if(!pst_r_u32(&r,&remaining)||!pst_r_u32(&r,&read_active))return 0;
+ for(unsigned j=0;j<6;++j)if(!pst_r_u16(&r,&read[j]))return 0;
+ for(unsigned j=0;j<3;++j)if(!pst_r_u32(&r,&depth[j]))return 0;
+ if(depth[0]>1024 || depth[2]>1023 || !(depth[1]&0x200u) || (depth[1]&~0x303u))return 0;
+ if(r.p!=r.end || u[0]>15 || u[1]>1 || u[2]>3 || u[3]>3 || u[7]>0xfffffu || u[12]>1023 || u[13]>1023 || u[14]>1023 || u[15]>1023 || (int32_t)u[16]<-1024 || (int32_t)u[16]>1023 || (int32_t)u[17]<-1024 || (int32_t)u[17]>1023 || u[18]>3 || u[26]>3 || u[28]>1023 || u[29]>511 || u[30]>4095 || u[31]>4095 || u[32]>1023 || u[33]>1023 || u[35]>GP0_POLYLINE_SHADED || u[52]>16 || u[53]>16 || semi<0 || semi>1 || vertices<0 || vertices>3 || px< -2048 || px>2047 || py< -2048 || py>2047 || remaining>262144 || read_active>1)return 0;
+ const unsigned booleans[]={4,5,6,8,9,10,11,19,20,21,22,23,24,25,27};
+ for(unsigned j=0;j<sizeof booleans/sizeof *booleans;++j)if(u[booleans[j]]>1)return 0;
+ if(u[35]==GP0_COLLECTING && (!u[52] || u[53]<2 || u[52]>=u[53]))return 0;
+ if(write[0]>1023 || write[1]>511 || write[2]>1024 || write[3]>512 || read[0]>1023 || read[1]>511 || read[2]>1024 || read[3]>512)return 0;
+ if(u[35]==GP0_VRAM_WRITE && (!write[2] || !write[3] || write[4]>=write[2] || write[5]>=write[3] || !remaining))return 0;
+ if(read_active && (!read[2] || !read[3] || read[4]>=read[2] || read[5]>=read[3]))return 0;
+ return 1;
+}
+int gpu_snapshot_validate(const uint8_t *p,uint32_t len){return p && len==gpu_snapshot_bytes() && gpu_source_tail_read(p+gpu_snapshot_base_bytes(),len-gpu_snapshot_base_bytes(),0) && gpu_source_prefix_valid(p);}
 int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
-    if (len != gpu_snapshot_bytes()) return 0;
+    if (!gpu_snapshot_validate(p,len)) return 0;
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
+    if (!gpu_source_tail_read(p+gpu_snapshot_base_bytes(),len-gpu_snapshot_base_bytes(),1)) return 0;
+    gpu_draw_time_reset();
     (void)psx_video_timing_set_pal((int)video_mode);
     ws_reset_scene_history();
     ws_scene_hold_reset(&s_ws_scene_hold);
@@ -8513,6 +8763,12 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
      * learns it from E1, so push it now (else dithering keeps the pre-load
      * setting until the game's next E1). */
     gr_set_dither((int)dither_enabled);
+    if(source_gpu_queue_enabled){
+        gr_set_mask_bits((int)set_mask_bit,(int)check_mask_bit);
+        gr_set_texture_window(texture_window_value);
+        gr_set_draw_offset((int)draw_offset_x,(int)draw_offset_y);
+        gr_set_semi_transparency(0,(int)semi_transparency);
+    }
     /* A state saved mid-A0 resumes streaming its payload into the array. */
     gr_vram_upload_set_open(gp0_state == GP0_VRAM_WRITE);
     ws_nw_sync_target();
@@ -8699,3 +8955,22 @@ uint64_t gpu_pass_state_hash(void) {
 
 uint16_t* gpu_get_vram_ptr(void){ return vram; }
 uint32_t  gpu_get_vram_bytes(void){ return (uint32_t)sizeof(vram); }
+
+int gpu_video_standard_is_pal(void) {
+    return (int)(video_mode & 1u);
+}
+
+int gpu_display_is_interlaced(void) {
+    return (int)(vertical_interlace & 1u);
+}
+int gpu_raster_skipped_row(void) {
+    return psx_gpu_raster_skipped_row(vertical_interlace, vres,
+        draw_to_display, display_area_y, lcf);
+}
+
+void gpu_observer_video_state(uint32_t *out) {
+    out[0]=(hres1&3u)|((vres&1u)<<2)|((video_mode&1u)<<3)|
+           ((display_depth&1u)<<4)|((vertical_interlace&1u)<<5)|((hres2&1u)<<6);
+    out[1]=v_display_y1; out[2]=v_display_y2;
+    out[3]=(uint32_t)interlace_field; out[4]=(uint32_t)lcf;
+}

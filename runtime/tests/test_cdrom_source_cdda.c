@@ -1,0 +1,161 @@
+/* Authored disc/command transcript driver. Includes production controller.
+ * Source oracle and declared projection are bound in the adjacent JSON.
+ * Opcodes: 0 update absolute clock, 1 MMIO write, 2 read and emit, 3 emit
+ * 13-field projection, 4 warm-up read without comparison, 5 emit fresh PCM.
+ * Input/output are little-endian. Warm-up uses ordinary Reset/GetStat;
+ * initial tray/spin image and downstream SPU mixing are not unit claims. */
+/* Controller-level regression. Synthetic sectors only; no BIOS/game data.
+ * Include the production unit to seed the laser position without reading an
+ * entire synthetic disc. All commands and advancement use its real MMIO API.
+ */
+#include "../src/cdrom.c"
+/* Exclusive create without C11 fopen "x", which msvcrt rejects. */
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = _open(p, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, 0644);
+    return fd < 0 ? NULL : _fdopen(fd, "wb");
+}
+#else
+#include <unistd.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    return fd < 0 ? NULL : fdopen(fd, "wb");
+}
+#endif
+
+uint64_t psx_cycle_count, s_frame_count;
+uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
+uint32_t debug_guest_ra(void) { return 0; }
+static int reads, failures, irq_raises;
+void psx_irq_raise(uint32_t a, uint32_t b) { (void)b; i_stat |= 1u << a; irq_raises++; }
+void event_ring_record(uint16_t a, uint8_t b) { (void)a; (void)b; }
+void event_ring_record_aux(uint16_t a, uint8_t b, uint32_t c) { (void)a; (void)b; (void)c; }
+void audio_trace_event(uint16_t a, uint32_t b, uint32_t c) { (void)a; (void)b; (void)c; }
+uint32_t interrupts_get_cycles_since_vblank(void) { return 0; }
+int dma_cdrom_transfer_active(void) { return 0; }
+static int16_t last_pcm[1176];static uint64_t audio_frames;static uint32_t audio_hash=2166136261u;
+void spu_cd_audio_push(const int16_t *a,int n){if(n!=588)abort();memcpy(last_pcm,a,sizeof(last_pcm));for(int i=0;i<n*2;i++){uint16_t v=(uint16_t)a[i];audio_hash=(audio_hash^(v&255))*16777619u;audio_hash=(audio_hash^(v>>8))*16777619u;}audio_frames+=n;}
+void spu_cd_audio_reset(void){}
+int psx_netplay_active(void) { return 0; }
+int psx_netplay_cd_bisect_active(void) { return 0; }
+int psx_netplay_is_resimulating(void) { return 0; }
+uint32_t psx_netplay_sim_tick(void) { return 0; }
+void *iso_open(const char *p) { (void)p; return (void *)1; }
+void iso_close(void *p) { (void)p; }
+int iso_read_sector(void *p, uint32_t lba, uint8_t *b, int n) {
+    (void)p; memset(b, (int)(lba & 255u), (size_t)n); reads++; return 1;
+}
+
+static void q_msf(unsigned n,uint8_t *b);
+int iso_read_raw_sector(void *p,uint32_t lba,uint8_t *b,int n){(void)p;if(n!=2352)return 0;for(unsigned i=0;i<588;i++){uint16_t l=(uint16_t)(lba*17+i*3),r=(uint16_t)(lba*31-i*7);b[i*4]=l;b[i*4+1]=l>>8;b[i*4+2]=r;b[i*4+3]=r>>8;}if(lba<90){q_msf(lba+150,b+12);b[15]=1;}return 1;}
+static const unsigned starts[]={0,0,240,600,960};
+static void q_msf(unsigned n,uint8_t *b){b[0]=bin_to_bcd(n/4500);b[1]=bin_to_bcd(n/75%60);b[2]=bin_to_bcd(n%75);}
+int iso_read_subq(void *p,uint32_t lba,uint8_t *q,int n,int *v){(void)p;if(n!=12)return 0;int track=lba<90?1:lba<450?2:lba<960?3:100;int index=track==100||lba>=starts[track];memset(q,0,12);q[0]=track==1?0x41:1;q[1]=track==100?0xaa:bin_to_bcd(track);q[2]=index;q_msf(track==100?0:abs((int)lba-(int)starts[track]),q+3);q_msf(lba+150,q+7);unsigned crc=0;for(int i=0;i<10;i++){crc^=(unsigned)q[i]<<8;for(int j=0;j<8;j++)crc=((crc<<1)^((crc&0x8000)?0x1021:0))&65535;}q[10]=(~crc)>>8;q[11]=~crc;*v=1;return 1;}
+int iso_has_subq_replacements(void *p){(void)p;return 0;}
+uint32_t iso_sector_count(void *p){(void)p;return 960;}
+static int fixture_tracks=3;
+int iso_track_count(void *p){(void)p;return fixture_tracks;}
+uint32_t iso_track_start_lba(void *p,int t){(void)p;if(t<0||t>3)abort();return t==0?960:starts[t];}
+uint32_t iso_track_pregap_lba(void *p,int t){(void)p;return t==2?90:t==3?450:0;}
+int iso_track_is_audio(void *p,int t){(void)p;return t==2||t==3;}
+static void env(const char *k,const char *v){
+#ifdef _WIN32
+_putenv_s(k,v);
+#else
+setenv(k,v,1);
+#endif
+}
+static void out(FILE *f,uint32_t v){uint8_t b[]={v,v>>8,v>>16,v>>24};if(fwrite(b,1,4,f)!=4)exit(3);}
+
+/* Scope report. Where the source profile is not qualified the controller
+ * stops the process with exit status 2. The status does not say which
+ * statement stopped it, and a stop during setup has the same status. For a
+ * scope case the fixture therefore writes, when the process ends, the step
+ * that was running and the controller values before that step and at the
+ * end. The contract driver reads the file; nothing is read from stderr. */
+enum { SCOPE_VALUES = 11 };
+static const char *const scope_names[SCOPE_VALUES] = {
+    "draws", "tape_cursor", "status", "mode", "cdda_playing", "cdda_seeking",
+    "reading", "irq_flag", "irq_raises", "response_bytes", "command_pending"};
+static const char *scope_path;
+static int scope_step; /* 0 setup, 1 the step under test, 2 the step returned */
+static uint32_t scope_before[SCOPE_VALUES];
+static void scope_values(uint32_t *v) {
+    v[0] = s_source_clock_calls; v[1] = s_source_clock_tape.cursor;
+    v[2] = stat_reg; v[3] = mode_reg;
+    v[4] = (uint32_t)cdda_playing; v[5] = (uint32_t)source_cdda.seeking;
+    v[6] = (uint32_t)reading; v[7] = irq_flag; v[8] = (uint32_t)irq_raises;
+    v[9] = (uint32_t)(response_count - response_read); v[10] = (uint32_t)queued_cmd.pending;
+}
+static void scope_report(void) {
+    uint32_t now[SCOPE_VALUES];
+    FILE *f = fixture_create_new(scope_path);
+    if (!f) return;
+    scope_values(now);
+    fprintf(f, "step %d\n", scope_step);
+    for (int i = 0; i < SCOPE_VALUES; i++)
+        fprintf(f, "%s %u %u\n", scope_names[i], (unsigned)scope_before[i], (unsigned)now[i]);
+    fclose(f);
+}
+/* One scope case, from the state cdrom_init leaves. Each refused case has an
+ * accepted twin that differs in the one condition only. */
+static int scope_case(const char *name) {
+    int play = 0; /* named audio track2 or data track1 */
+    uint8_t command = 0;
+    if (!strcmp(name, "single-speed")) play = 2;                           /* accepted */
+    else if (!strcmp(name, "fifty-seven-tracks")) { fixture_tracks=57; play=2; }
+    else if (!strcmp(name, "data-track")) play = 1;
+    else if (!strcmp(name, "double-speed")) { play = 2; mode_reg = 0x80; } /* refused */
+    else if (!strcmp(name, "active-read")) { play = 2; reading = 1; }      /* refused */
+    else if (!strcmp(name, "getstat")) command = 0x01;                     /* accepted */
+    else if (!strcmp(name, "scan-forward")) command = 0x04;                /* refused */
+    else if (!strcmp(name, "scan-backward")) command = 0x05;               /* refused */
+    else return 6;
+    scope_values(scope_before);
+    scope_step = 1;
+    if (play) start_source_cdda(play);
+    else cdrom_write(0x1f801801, command);
+    scope_step = 2;
+    return 0;
+}
+static int scope_requested(const char *name) {
+    return strcmp(name, "capture") && strcmp(name, "write-state") && strcmp(name, "restore");
+}
+
+int main(int argc,char **argv){if(argc!=4 && argc!=5)return 2;
+if(argc==5 && scope_requested(argv[4])){scope_path=argv[3];atexit(scope_report);}
+env("PSX_CD_EXPLICIT_SEEK_MODEL","octoshock-2.2.2");env("PSX_CD_TOC_SEEK_MODEL","octoshock-2.2.2");env("PSX_CD_READ_START_MODEL","octoshock-2.2.2-pipeline");env("PSX_CD_COLD_STATUS_MODEL","octoshock-2.2.2");env("PSX_CD_SOURCE_CLOCK_TAPE",argv[1]);env("PSX_CD_CDDA_MODEL","octoshock-2.3");
+cdrom_init("authored");
+/* Match the isolated oracle's explicit powered, disc-poked STOPPED head.
+ * This unit precondition is not the runtime's production cold-boot image. */
+if(argc==5){if(!strcmp(argv[4],"capture"))cdrom_snapshot_bytes();else if(!strcmp(argv[4],"write-state"))cdrom_snapshot_write(NULL);else if(!strcmp(argv[4],"restore"))return cdrom_snapshot_read(NULL,0)?1:0;else return scope_case(argv[4]);return 1;}
+stat_reg=CDSTAT_SHELL;s_source_seek_paused=0;read_sec=2;setloc_pending=1;s_setloc_lba=0;
+FILE *in=fopen(argv[2],"rb"),*f=fixture_create_new(argv[3]);if(!in||!f)return 3;uint8_t bytes[16];
+while(fread(bytes,1,16,in)==16){uint32_t o[4];for(int i=0;i<4;i++)o[i]=cd_tape_le32(bytes+i*4);
+if(o[0]==0){if(o[1]<psx_cycle_count)return 4;uint32_t delta=o[1]-psx_cycle_count;psx_cycle_count=o[1];cdrom_advance(delta);}
+else if(o[0]==1)cdrom_write(0x1f801800+o[2],o[3]);
+else if(o[0]==2)out(f,cdrom_read(0x1f801800+o[2]));
+else if(o[0]==4)(void)cdrom_read(0x1f801800+o[2]);
+else if(o[0]==5){for(unsigned i=0;i<588;i++)out(f,(uint16_t)last_pcm[i*2]|((uint32_t)(uint16_t)last_pcm[i*2+1]<<16));}
+else if(o[0]==3){out(f,stat_reg);out(f,source_cdda.seeking?1:cdda_playing?4:!(stat_reg&2)?0:s_source_seek_paused?~0u:~1u);out(f,(uint32_t)msf_to_lba(read_min,read_sec,read_sect));out(f,source_cdda.sectors_read);out(f,cdda_playing?cdda_delay:0);out(f,mode_reg);out(f,irq_flag);out(f,source_cdda.pipe_count);out(f,source_cdda.report_last_tens);out(f,source_cdda.play_track_match);out(f,source_cdda.async_type);out(f,source_cdda.async_type?source_cdda.async_count:0);out(f,response_count-response_read);}
+else return 5;
+if(getenv("PSX_TEST_ROUNDTRIP")) {
+ unsigned n=cdrom_snapshot_bytes();uint8_t *wire=malloc(n);if(!wire)abort();
+ cdrom_snapshot_write(wire);memset(&source_cdda,0,sizeof source_cdda);source_cdda.enabled=1;
+ if(!cdrom_snapshot_read(wire,n))abort();free(wire);
+}}
+fclose(in);fclose(f);return 0;}
+
+/* Modern bridge adapter for the same authored synthetic geometry. */
+uint32_t iso_cdda_sector_count(void *p){return iso_sector_count(p);}
+int iso_read_cdda_sector(void *p,uint32_t lba,uint8_t *b,int n){return iso_read_raw_sector(p,lba,b,n);}
+int iso_cdda_track_count(void *p){return iso_track_count(p);}
+uint32_t iso_cdda_track_start_lba(void *p,int t){return iso_track_start_lba(p,t);}
+uint32_t iso_cdda_track_pregap_lba(void *p,int t){return iso_track_pregap_lba(p,t);}
+int iso_cdda_track_is_audio(void *p,int t){return iso_track_is_audio(p,t);}
+void savestate_set_disc_scope(int n){(void)n;}
+
+/* The authored CDDA view has the same synthetic SubQ backing. */
+int iso_read_cdda_subq(void *h,uint32_t lba,uint8_t *b,int n,int *valid){return iso_read_subq(h,lba,b,n,valid);}

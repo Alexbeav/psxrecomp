@@ -838,7 +838,20 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
                         os.path.join(toolchain, 'tcc'), dirs_exist_ok=True)
         stage_tcc_notice(os.path.join(toolchain, 'tcc'), pins)
     elif pins.get('tcc_source_url'):
-        stage_linux_tcc(toolchain, dl_cache, pins, log=log)
+        # tcc is the fallback compiler. A host that cannot build it (no make:
+        # Steam Deck, a minimal Ubuntu or Fedora) still gets the interpreter,
+        # the recompiler, compile_overlays.py and the headers below, so shards
+        # compile with the compiler named in compiler.txt. Abandoning the whole
+        # toolchain here left every overlay interpreted on such a host.
+        try:
+            if shutil.which('make') is None:
+                _die('the program make is not installed')
+            stage_linux_tcc(toolchain, dl_cache, pins, log=log)
+        except (StageError, OSError) as exc:
+            shutil.rmtree(os.path.join(toolchain, 'tcc'), ignore_errors=True)
+            log('TinyCC was not built: %s. The rest of the overlay toolchain is staged; '
+                'overlays compile with the compiler the build already uses.'
+                % str(exc).splitlines()[0])
 
     recompiler = TOOLCHAIN_RECOMPILER[platform_tag]
     src_recompiler = os.path.join(recomp_dir, recompiler)
@@ -952,10 +965,133 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
             total += st.st_size
     log('Bundled overlay toolchain (pinned python%s + recompiler + BIOS emitter + headers): '
         '~%d MB in %d file(s) + %d symlink(s)'
-        % (' + tcc' if (pins['tcc_url'] or pins.get('tcc_source_url')) else '',
+        % (' + tcc' if os.path.isdir(os.path.join(toolchain, 'tcc')) else '',
            total // (1 << 20),
            sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))
+    if os.path.isdir(os.path.join(toolchain, 'tcc')):
+        for name in TCC_LEFT_OUT:
+            shutil.rmtree(os.path.join(toolchain, 'tcc', name), ignore_errors=True)
+        stage_tcc_notices(stage, pins, log=log)
+    warn_bundled_notices(stage, log=log)
     return toolchain
+
+
+LGPL_21_TEXT = os.path.join(_TOOLS_DIR, 'licenses', 'LGPL-2.1.txt')
+LGPL_21_SHA256 = '20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95'
+TCC_LICENCE_REL = os.path.join('licenses', 'toolchain', 'tcc-COPYING.txt')
+TCC_NOTICE_REL = os.path.join('licenses', 'toolchain', 'tcc-NOTICE.txt')
+# The archive's own example programs: five .c files nothing reads. Left out so
+# that "no source file in a product" is a rule a script can check.
+TCC_LEFT_OUT = ('examples',)
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tcc_notice(pins):
+    """What a staged product says about the tcc it holds: which release, where its source is.
+
+    One wording for both cases: the archive is unpacked on the build host for a
+    playable product, and on the player's machine, after a download, for a setup
+    package. Our setup package does not contain the tcc binaries.
+    """
+    url = pins.get('tcc_url') or ''
+    archive = url.rsplit('/', 1)[-1]
+    releases = url[:len(url) - len(archive)]
+    version = pins.get('tcc_version') or 'unknown version'
+    return ('TinyCC (tcc) %s\n\n'
+            'This product holds the TinyCC compiler in overlay_toolchain/tcc. The game starts it as a\n'
+            'separate program to compile code on this machine; the game does not link it.\n\n'
+            'Binaries: unmodified, unpacked from %s\n'
+            '  (SHA-256 %s),\n'
+            '  %s\n'
+            '  The archive was unpacked when this product was built, or by its setup on this machine,\n'
+            "  which downloads it from that address. The archive's examples folder is not kept.\n"
+            'Source:   tcc-%s.tar.bz2, at the same address.\n'
+            'Licence:  GNU Lesser General Public License, version 2.1. The text is tcc-COPYING.txt in this folder.\n'
+            % (version, archive, pins.get('tcc_sha256'), releases, version))
+
+
+def stage_tcc_notices(stage, pins, log=print):
+    """Write the LGPL-2.1 text and the notice for a staged tcc. Never raises.
+
+    The text is carried in the tree, so it is missing only when the tree is
+    damaged. That is said in plain words and staging goes on: the toolchain is
+    still usable, and bundled_notice_gaps() reports the missing file.
+    """
+    try:
+        ok = os.path.isfile(LGPL_21_TEXT) and _sha256(LGPL_21_TEXT) == LGPL_21_SHA256
+    except OSError:
+        ok = False
+    if not ok:
+        log('WARNING: this package is damaged: %s is missing or changed, so the licence text of the '
+            'bundled tcc was not written beside the product. Restore the file from the release and '
+            'stage again.' % LGPL_21_TEXT)
+        return False
+    folder = _mkdirs(os.path.join(stage, os.path.dirname(TCC_LICENCE_REL)))
+    shutil.copyfile(LGPL_21_TEXT, os.path.join(stage, TCC_LICENCE_REL))
+    with open(os.path.join(stage, TCC_NOTICE_REL), 'w', encoding='utf-8', newline='\n') as f:
+        f.write(tcc_notice(pins))
+    log('tcc licence staged: %s and %s in %s'
+        % (os.path.basename(TCC_LICENCE_REL), os.path.basename(TCC_NOTICE_REL), folder))
+    return True
+
+
+def _python_licence(python_dir):
+    """The interpreter's own licence file, wherever its distribution keeps it, or None.
+
+    python.org's embeddable zip has LICENSE.txt at its root; a relocatable
+    CPython keeps it below lib/. Found by name rather than by a fixed path.
+    """
+    base = python_dir.rstrip(os.sep).count(os.sep)
+    for dirpath, dirs, files in os.walk(python_dir):
+        if dirpath.count(os.sep) - base >= 3:
+            dirs[:] = []
+        for name in files:
+            if name.lower() in ('license.txt', 'license'):
+                return os.path.join(dirpath, name)
+    return None
+
+
+def bundled_notice_gaps(stage):
+    """Bundled programs under `stage` whose licence file is absent or wrong, as text lines."""
+    toolchain = os.path.join(stage, 'overlay_toolchain')
+    gaps = []
+    if any(os.path.isfile(os.path.join(toolchain, 'tcc', name)) for name in ('tcc.exe', 'tcc')):
+        licence = os.path.join(stage, TCC_LICENCE_REL)
+        rel = TCC_LICENCE_REL.replace(os.sep, '/')
+        if not os.path.isfile(licence) or os.path.getsize(licence) == 0:
+            gaps.append('TinyCC (overlay_toolchain/tcc) needs %s (LGPL-2.1)' % rel)
+        elif _sha256(licence) != LGPL_21_SHA256:
+            gaps.append('TinyCC: %s is not the LGPL-2.1 text' % rel)
+    python_dir = os.path.join(toolchain, 'python')
+    if os.path.isdir(python_dir) and _python_licence(python_dir) is None:
+        gaps.append('the bundled Python (overlay_toolchain/python) has no LICENSE file of its own')
+    return gaps
+
+
+def warn_bundled_notices(stage, log=print):
+    """Say, for each bundled program without its licence file, which file is missing. A warning.
+
+    Not a stop (PS1B-345, 2026-10-01): the same step that stages a program
+    writes its licence file, so a miss means a damaged tree, and a release that
+    wants to enforce it runs `check-bundled-notices --strict`.
+    """
+    gaps = bundled_notice_gaps(stage)
+    for gap in gaps:
+        log('WARNING: bundled program without its licence file: %s' % gap)
+    return gaps
+
+def cmd_check_bundled_notices(args):
+    gaps = warn_bundled_notices(args.stage)
+    if not gaps:
+        print('bundled programs: every one under %s has its licence file' % args.stage)
+    return 1 if (gaps and args.strict) else 0
 
 
 def cmd_fetch_pinned(args):
@@ -1261,6 +1397,14 @@ def main(argv=None):
     p.add_argument('--mingw-bin', default=None, help='Windows only')
     p.set_defaults(func=cmd_stage_toolchain)
 
+    p = sub.add_parser('check-bundled-notices',
+                       help='warn about a bundled program (tcc, Python) under a '
+                            'stage that has no licence file')
+    p.add_argument('--stage', required=True, help='payload staging directory')
+    p.add_argument('--strict', action='store_true',
+                   help='exit 1 when a licence file is missing (default: warn, exit 0)')
+    p.set_defaults(func=cmd_check_bundled_notices)
+
     p = sub.add_parser('stage-mods', help='stage and verify the mod catalog')
     p.add_argument('--build-path', required=True,
                    help='directory holding the built mods/bundled tree')
@@ -1283,6 +1427,113 @@ def main(argv=None):
         sys.stderr.write('\nrelease_stage: %s\n\n' % e)
         return 1
 
+
+# Restored first-party replay-base owners used by the composed CLI.
+NOTICE_NAME_PREFIXES = ('LICENSE', 'COPYING', 'NOTICE', 'THIRD_PARTY')
+
+NOTICE_SKIPPED_FOLDERS = ('.git', 'build', 'build-release')
+
+PROJECT_FOREIGN_FOLDERS = ('psxrecomp', 'recomp-ui', 'licenses', 'programs', 'generated', 'disc',
+                           'prepared_disc', 'dist', 'toolchain', 'saves', 'cache', '.cache',
+                           'build-setup', 'build-diagnostic')
+
+PACKAGE_TOOLCHAIN_NOTICES = os.path.join('licenses', 'toolchain')
+
+def _below(folder, root):
+    """`folder` as a path relative to `root` when it lies strictly below it, else ''.
+
+    Links are resolved on both sides, so a root reached through a junction
+    (a project's psxrecomp folder) compares by where it really is.
+    """
+    try:
+        relative = os.path.relpath(os.path.realpath(folder), os.path.realpath(root))
+    except ValueError:                                  # another drive: not below
+        return ''
+    if relative in (os.curdir, os.pardir) or relative.startswith(os.pardir + os.sep):
+        return ''
+    return os.path.normcase(relative)
+
+def notice_files(root, skip_top=(), exclude=()):
+    """The licence and notice files below `root`: relative paths, '/' separated, folder by folder.
+
+    A file counts when its name starts with LICENSE, COPYING, NOTICE or
+    THIRD_PARTY, in any case. Nothing under a .git, build or build-release
+    folder counts, nor under a top-level folder named in `skip_top`, nor under
+    a folder named in `exclude` (full paths; one that is not below `root`
+    changes nothing).
+    """
+    barred = set(b for b in (_below(folder, root) for folder in exclude if folder) if b)
+    found = []
+    for dirpath, dirs, files in os.walk(root):
+        relative = os.path.relpath(dirpath, root)
+        parts = [] if relative == '.' else relative.split(os.sep)
+        dirs[:] = sorted(d for d in dirs
+                         if d not in NOTICE_SKIPPED_FOLDERS and not (not parts and d in skip_top)
+                         and os.path.normcase(os.path.join(*(parts + [d]))) not in barred)
+        for name in sorted(files):
+            if name.upper().startswith(NOTICE_NAME_PREFIXES):
+                found.append('/'.join(parts + [name]))
+    return found
+
+def _copy_notices(names, source, dest):
+    for name in names:
+        target = os.path.join(dest, *name.split('/'))
+        _mkdirs(os.path.dirname(target))
+        shutil.copyfile(os.path.join(source, *name.split('/')), target)
+    return len(names)
+
+def stage_product_notices(stage, framework, ui=None, project=None, package=None, log=print):
+    """Write a product's licence texts into <stage>/licenses. Never raises.
+
+      licenses/kit/        the project's own licence files (`project`: the folder with game.toml)
+      licenses/framework/  the framework's, plus every file of its runtime/licenses folder
+      licenses/ui/         the launcher's
+      licenses/toolchain/  the texts the package carries in its licenses/toolchain folder
+                           (`package`: the package's root; the project itself when not given)
+
+    The tcc texts in licenses/toolchain are stage_tcc_notices' and are left alone.
+    Returns the number of files written per folder. A package without a
+    licenses/toolchain folder is said in plain words: the product then has no
+    text for SDL3, zlib or the compiler's runtime, which it links.
+
+    The step never reads what it writes. The folder it writes, and the product
+    folder when that lies inside a tree it scans, are left out of every scan:
+    a product folder is not always named build-release, and one test had it at
+    the framework's own root, where each run copied the previous run's copies
+    one level deeper (PS1B-333). So a second run writes the same files.
+    """
+    licenses = os.path.join(stage, 'licenses')
+    own = (stage, licenses)
+    counts = {'kit': 0, 'framework': 0, 'ui': 0, 'toolchain': 0}
+    try:
+        for label, root, skip in (('kit', project, PROJECT_FOREIGN_FOLDERS),
+                                  ('framework', framework, ()), ('ui', ui, ())):
+            if root and os.path.isdir(root):
+                counts[label] = _copy_notices(notice_files(root, skip, exclude=own), root,
+                                              os.path.join(licenses, label))
+        linked = os.path.join(framework, 'runtime', 'licenses') if framework else ''
+        if linked and os.path.isdir(linked):
+            names = sorted(n for n in os.listdir(linked) if os.path.isfile(os.path.join(linked, n)))
+            counts['framework'] += _copy_notices(
+                names, linked, os.path.join(licenses, 'framework', 'runtime', 'licenses'))
+        carried = os.path.join(package or project or '', PACKAGE_TOOLCHAIN_NOTICES)
+        if (package or project) and os.path.isdir(carried):
+            names = sorted(n for n in os.listdir(carried) if os.path.isfile(os.path.join(carried, n)))
+            target = os.path.join(licenses, 'toolchain')
+            if os.path.normcase(os.path.realpath(carried)) == os.path.normcase(os.path.realpath(target)):
+                counts['toolchain'] = len(names)        # the product folder is the package: already there
+            else:
+                counts['toolchain'] = _copy_notices(names, carried, target)
+    except OSError as exc:
+        log('WARNING: the licence texts were not all written beside the product (%s). The game is '
+            'unaffected; the texts are in the package folder.' % exc)
+        return counts
+    if not counts['toolchain']:
+        log('note: this package carries no licence texts for its toolchain libraries '
+            '(licenses/toolchain), so none were written beside the product')
+    log('licence texts staged in %s: kit %d, framework %d, ui %d, toolchain %d'
+        % (licenses, counts['kit'], counts['framework'], counts['ui'], counts['toolchain']))
+    return counts
 
 if __name__ == '__main__':
     raise SystemExit(main())

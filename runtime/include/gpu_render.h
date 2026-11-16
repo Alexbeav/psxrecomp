@@ -13,9 +13,15 @@
 
 #include <stdint.h>
 
+#include "source_gpu_texture.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+int gr_draw_source_triangle(const int *,const int *,const uint32_t *,int,int,int,unsigned,const SourceGPUTexture *,int *);
+int gr_draw_source_block(const SourceGPUBlock *,int *);
+void gr_source_texture_control(unsigned,uint32_t);
+
 
 typedef enum {
     GR_BACKEND_SOFTWARE = 0,
@@ -29,6 +35,7 @@ void      gr_refresh_backend(void);           /* re-fetch the GL table (render t
 
 /* Lifecycle / global state */
 void gr_init(uint16_t *vram);
+void gr_display_mode_changed(void);
 void gr_set_scale(int scale);
 int  gr_scale(void);
 
@@ -176,6 +183,9 @@ typedef struct GpuRenderBackend {
                                  int32_t x2, int32_t y2);
     void (*set_perspective_triangle)(int enabled, float q0, float q1, float q2);
     void (*set_dither)(int enabled);   /* optional: GP0(E1h) bit 9 */
+    /* optional: native VRAM row parity GP0 primitives must leave unchanged
+     * (480i, drawing to the displayed field prohibited), -1 = none. */
+    void (*set_skip_field)(int row_parity);
     void (*fill_rect)(int x, int y, int w, int h, uint16_t color);
     void (*copy_rect)(int src_x, int src_y, int dst_x, int dst_y, int w, int h);
     void (*draw_flat_triangle)(int x0, int y0, int x1, int y1, int x2, int y2,
@@ -247,6 +257,7 @@ typedef struct GpuRenderBackend {
     void (*wide_feedback_rect)(int src_base, int src_x, int src_y, int dst_x,
                                int dst_y, int w, int h, int r, int g, int b,
                                int raw, int semi);
+    void (*display_mode_changed)(void); /* optional: ordered 15/24-bit ownership transition */
 } GpuRenderBackend;
 
 enum { GR_HD_NOTE_INVALIDATE = 0, GR_HD_NOTE_TRACK_UPLOAD = 1,

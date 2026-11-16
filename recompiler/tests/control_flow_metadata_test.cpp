@@ -100,6 +100,22 @@ static void live_analyzer() {
     f.alias_walk_lo = 0; f.start_addr = base; f.alias_group_entries.clear();
     cfg = ControlFlowAnalyzer(exe).analyze_function(f);
     check(cfg.blocks.at(base+8).predecessors == std::vector<uint32_t>{base}, "duplicate branch edges duplicated predecessor");
+    // Guest handlers return to the instruction after a synchronous trap.
+    // It must be a real dispatch entry, not just bytes inside the owner's range.
+    exe.header.file_size = 0x1c; exe.code_data.assign(0x1c, 0);
+    f.end_addr = base+0x1c; f.size = 0x1c;
+    word(0x00, 0x24082468); word(0x04, 0x8e080000);
+    word(0x0c, 0x24021357); word(0x10, 0xae220000); word(0x14, 0x03e00008);
+    for (uint32_t trap : {0x0000000cu, 0x003ed08du, 0x0007000du, 0x0006000du}) {
+        word(0x08, trap);
+        cfg = ControlFlowAnalyzer(exe).analyze_function(f);
+        check(cfg.blocks.count(base+0x0c) == 1, "post-trap resume is not a block leader");
+        check(cfg.blocks.at(base).end_addr == base+0x08,
+              "trap block includes instructions after BREAK");
+    }
+    word(0x08, 0);
+    cfg = ControlFlowAnalyzer(exe).analyze_function(f);
+    check(cfg.blocks.count(base+0x0c) == 0, "NOP acquired a trap continuation");
 }
 int main() {
     try {

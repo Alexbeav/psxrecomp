@@ -108,11 +108,32 @@ For both, PSXRecomp includes a **small MIPS interpreter** that runs the guest's
   recompiling. If the interpreter is running something, that's a signal to
   capture-and-compile it (Tier 2), not to leave it interpreted.
 
+The default native profile validates compiled code against the current RAM
+image. Its interpreted continuations use that same image, including after an
+overlay replaces code at an existing address. Selecting older held instructions
+only for the interpreted part would mix code versions. Instruction-cache refill
+and timing remain enabled; held-word execution remains on the opt-in source
+profile.
+
 Crucially, this is **not** high-level emulation (HLE). The interpreter executes
 the program's real instructions, exactly as the game's authors wrote them — the
 *only* difference from static recompilation is where the instructions came from
 (RAM-at-runtime vs disc-at-build-time). We never synthesize "the answer the code
 would have produced."
+
+A `break` that the interpreter or compiled game executes raises exception code 9 through the
+guest's exception vector when the guest has installed its own stub there
+(`runtime/include/psx_break_vector.h`); a `break` in a branch delay
+slot or under the BIOS's own vector, and a `break` in compiled BIOS code, ends
+the run with a report. Compiled game code returns to the dispatcher immediately
+after entering the vector; the handler runs before the instruction after BREAK
+(PS1B-412). Native overlays forward this operation through ABI 27, with their
+pending cycles flushed first; codegen 15 prevents reuse of the old no-op output.
+The run report counts the vector entries
+(`break_guest_vector`).
+The recompiler starts a new control-flow block after BREAK, as it does after
+SYSCALL. The generated entry switch can therefore resume at EPC+4 when the
+exception handler returns.
 
 ## The guiding rule: precision over recall
 
@@ -144,6 +165,14 @@ The frontier of the project is pushing Tier-2 coverage up (so the interpreter
 goes idle) and, eventually, handling the self-modifying corner by baking in the
 relocation pattern at build time. Until then, that corner stays correctly
 interpreted — a narrow, accepted cost, not a wall.
+
+## Interrupt returns and pending loads
+
+A load can still be pending when an interrupt arrives. The runtime completes
+that load before saving the interrupted register image. Otherwise, a
+same-thread return could restore the old register value after the handler has
+already completed the load. `irq_pending_load_test` checks this transport
+through the production interrupt delivery and return paths.
 
 ## Where this lives in the code
 

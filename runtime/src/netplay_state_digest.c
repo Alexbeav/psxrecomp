@@ -13,6 +13,7 @@
 #include <string.h>
 
 extern uint8_t* memory_get_ram_ptr(void);
+extern const uint8_t* memory_low_ram_view(void);
 extern uint32_t memory_get_ram_bytes(void);
 extern uint32_t i_stat;
 extern uint32_t i_mask;
@@ -94,12 +95,9 @@ uint32_t netplay_av_digest(void)
             gcap = gn;
         }
         gpu_snapshot_write(gbuf);
-        /* The last 12 bytes are depth-24 present helpers (upload span,
-         * present hold, previous display height): host presentation state
-         * that a suppressed-present replay leaves different from Live. Not
-         * guest-visible; keep them out of the av comparison. */
-        if (gn >= 12u)
-            memset(gbuf + gn - 12u, 0, 12u);
+        /* The producer owns the positions of the depth-24 presentation
+         * helpers; guest read latches and source tails remain in the hash. */
+        gpu_snapshot_mask_present_helpers(gbuf, gn);
         crc = crc32_update(crc, gbuf, gn);
     }
     if (vram)
@@ -164,8 +162,11 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     crc_tim = crc32_update(crc_tim, (const uint8_t*)frac, sizeof(frac));
 
     ram = memory_get_ram_ptr();
-    if (ram)
-        crc_ram = crc32_update(crc_ram, ram, memory_get_ram_bytes());
+    if (ram) {
+        /* The selected legacy comparison view never changes guest RAM. */
+        crc_ram = crc32_update(crc_ram, memory_low_ram_view(), 16u);
+        crc_ram = crc32_update(crc_ram, ram + 16u, memory_get_ram_bytes() - 16u);
+    }
 
     wc = dirty_ram_get_bitmap_word_count();
     for (i = 0; i < wc; i++) {
