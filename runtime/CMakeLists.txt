@@ -365,21 +365,21 @@ if(BUILD_TESTING)
         target_compile_options(ws_backdrop_scene_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections)
         target_link_options(ws_backdrop_scene_test PRIVATE -flto -Wl,--gc-sections)
         add_test(NAME ws_backdrop_scene_test COMMAND ws_backdrop_scene_test)
-        add_executable(boot_state_handoff_test tests/test_boot_state_handoff.c src/mod_snapshot.c)
+        add_executable(boot_state_handoff_test tests/test_boot_state_handoff.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_handoff_test PRIVATE include src)
         target_compile_definitions(boot_state_handoff_test PRIVATE PSX_COSIM=1)
         target_compile_options(boot_state_handoff_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
         target_link_options(boot_state_handoff_test PRIVATE -flto -Wl,--gc-sections)
         target_link_libraries(boot_state_handoff_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_handoff_test COMMAND boot_state_handoff_test)
-        add_executable(boot_state_resume_sections_test tests/test_boot_state_resume_sections.c src/mod_snapshot.c)
+        add_executable(boot_state_resume_sections_test tests/test_boot_state_resume_sections.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_resume_sections_test PRIVATE include src)
         target_compile_definitions(boot_state_resume_sections_test PRIVATE PSX_COSIM=1)
         target_compile_options(boot_state_resume_sections_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
         target_link_options(boot_state_resume_sections_test PRIVATE -flto -Wl,--gc-sections)
         target_link_libraries(boot_state_resume_sections_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_resume_sections_test COMMAND boot_state_resume_sections_test)
-        add_executable(boot_state_resume_sections_nodebug_test tests/test_boot_state_resume_sections.c src/mod_snapshot.c)
+        add_executable(boot_state_resume_sections_nodebug_test tests/test_boot_state_resume_sections.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_resume_sections_nodebug_test PRIVATE include src)
         target_compile_definitions(boot_state_resume_sections_nodebug_test PRIVATE PSX_COSIM=1 PSX_NO_DEBUG_TOOLS=1)
         target_compile_options(boot_state_resume_sections_nodebug_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -387,7 +387,8 @@ if(BUILD_TESTING)
         target_link_libraries(boot_state_resume_sections_nodebug_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_resume_sections_nodebug_test COMMAND boot_state_resume_sections_nodebug_test)
         add_executable(tas_checkpoint_roundtrip_test tests/test_tas_checkpoint_roundtrip.c src/mod_snapshot.c
-            src/tas_checkpoint.c src/source_stateio_identity.c src/psx_sha256.c)
+            src/tas_checkpoint.c src/source_stateio_identity.c src/psx_sha256.c
+            src/boot_state_replace.c)
         target_include_directories(tas_checkpoint_roundtrip_test PRIVATE include src)
         target_compile_definitions(tas_checkpoint_roundtrip_test PRIVATE PSX_COSIM=1)
         target_compile_options(tas_checkpoint_roundtrip_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -395,21 +396,22 @@ if(BUILD_TESTING)
         target_link_libraries(tas_checkpoint_roundtrip_test PRIVATE ZLIB::ZLIB)
         add_test(NAME tas_checkpoint_roundtrip_test COMMAND tas_checkpoint_roundtrip_test)
         add_executable(tas_checkpoint_roundtrip_nodebug_test tests/test_tas_checkpoint_roundtrip.c src/mod_snapshot.c
-            src/tas_checkpoint.c src/source_stateio_identity.c src/psx_sha256.c)
+            src/tas_checkpoint.c src/source_stateio_identity.c src/psx_sha256.c
+            src/boot_state_replace.c)
         target_include_directories(tas_checkpoint_roundtrip_nodebug_test PRIVATE include src)
         target_compile_definitions(tas_checkpoint_roundtrip_nodebug_test PRIVATE PSX_COSIM=1 PSX_NO_DEBUG_TOOLS=1)
         target_compile_options(tas_checkpoint_roundtrip_nodebug_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
         target_link_options(tas_checkpoint_roundtrip_nodebug_test PRIVATE -flto -Wl,--gc-sections)
         target_link_libraries(tas_checkpoint_roundtrip_nodebug_test PRIVATE ZLIB::ZLIB)
         add_test(NAME tas_checkpoint_roundtrip_nodebug_test COMMAND tas_checkpoint_roundtrip_nodebug_test)
-        add_executable(boot_state_native_capture_test tests/test_capture_writer.c src/mod_snapshot.c)
+        add_executable(boot_state_native_capture_test tests/test_capture_writer.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_native_capture_test PRIVATE include src)
         target_compile_definitions(boot_state_native_capture_test PRIVATE PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=1)
         target_compile_options(boot_state_native_capture_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
         target_link_options(boot_state_native_capture_test PRIVATE -flto -Wl,--gc-sections)
         target_link_libraries(boot_state_native_capture_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_native_capture_test COMMAND boot_state_native_capture_test)
-        add_executable(boot_state_reference_capture_test tests/test_capture_writer.c src/mod_snapshot.c)
+        add_executable(boot_state_reference_capture_test tests/test_capture_writer.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_reference_capture_test PRIVATE include src)
         target_compile_definitions(boot_state_reference_capture_test PRIVATE PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=0)
         target_compile_options(boot_state_reference_capture_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -418,7 +420,7 @@ if(BUILD_TESTING)
         add_test(NAME boot_state_reference_capture_test COMMAND boot_state_reference_capture_test)
         foreach(_native IN ITEMS 0 1)
             set(_capture_test "boot_state_capture_o0_${_native}_test")
-            add_executable(${_capture_test} tests/test_capture_writer.c src/mod_snapshot.c)
+            add_executable(${_capture_test} tests/test_capture_writer.c src/mod_snapshot.c src/boot_state_replace.c)
             target_include_directories(${_capture_test} PRIVATE include src)
             target_compile_definitions(${_capture_test} PRIVATE PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=${_native})
             target_compile_options(${_capture_test} PRIVATE -O0 -ffunction-sections -fdata-sections -UNDEBUG)
@@ -435,6 +437,7 @@ if(BUILD_TESTING)
                 set(_ring_test "netplay_capture_ring_${_native}_test")
                 add_executable(${_ring_test} tests/test_netplay_capture_ring.c
                     src/mod_snapshot.c
+                    src/boot_state_replace.c
                     src/netplay_snap_ring.c
                     "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c")
                 if(_native)
@@ -451,7 +454,8 @@ if(BUILD_TESTING)
             endforeach()
         endif()
         add_executable(mod_snapshot_boot_state_test
-            tests/test_mod_snapshot_boot_state.c src/mod_snapshot.c)
+            tests/test_mod_snapshot_boot_state.c src/mod_snapshot.c
+            src/boot_state_replace.c)
         target_include_directories(mod_snapshot_boot_state_test PRIVATE include src)
         target_compile_definitions(mod_snapshot_boot_state_test PRIVATE
             PSX_COSIM=1 PSX_NATIVE_CAPTURE_JOBS=1)
@@ -460,7 +464,7 @@ if(BUILD_TESTING)
         target_link_options(mod_snapshot_boot_state_test PRIVATE -flto -Wl,--gc-sections)
         target_link_libraries(mod_snapshot_boot_state_test PRIVATE ZLIB::ZLIB)
         add_test(NAME mod_snapshot_boot_state_test COMMAND mod_snapshot_boot_state_test)
-        add_executable(boot_state_impl_tag_test tests/test_boot_state_handoff.c src/mod_snapshot.c)
+        add_executable(boot_state_impl_tag_test tests/test_boot_state_handoff.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_impl_tag_test PRIVATE include src)
         target_compile_definitions(boot_state_impl_tag_test PRIVATE PSX_COSIM=1 PSX_SAVESTATE_IMPL_TAG=0x54474801u)
         target_compile_options(boot_state_impl_tag_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -468,7 +472,7 @@ if(BUILD_TESTING)
         target_link_libraries(boot_state_impl_tag_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_impl_tag_test COMMAND boot_state_impl_tag_test)
 
-        add_executable(boot_state_execution_test tests/test_boot_state_handoff.c src/mod_snapshot.c)
+        add_executable(boot_state_execution_test tests/test_boot_state_handoff.c src/mod_snapshot.c src/boot_state_replace.c)
         target_include_directories(boot_state_execution_test PRIVATE include src)
         target_compile_definitions(boot_state_execution_test PRIVATE PSX_COSIM=1)
         target_compile_options(boot_state_execution_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
@@ -1002,6 +1006,7 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
+            src/boot_state_replace.c
             src/mod_snapshot.c
             src/psx_ram_geometry.c)
         target_include_directories(psx_ram_runtime_map_test PRIVATE include src)
@@ -1024,6 +1029,7 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
+            src/boot_state_replace.c
             src/mod_snapshot.c
             src/psx_icache.c
             src/psx_ram_geometry.c)
@@ -1048,6 +1054,7 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
+            src/boot_state_replace.c
             src/mod_snapshot.c
             src/pgxp.cpp
             src/psx_ram_geometry.c)
@@ -2870,6 +2877,19 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             PSX_ENABLE_BLOCK_CYCLES=1 PSX_NO_DEBUG_TOOLS=1)
         target_compile_options(data_shard_exec_mark_test PRIVATE -O2 -fwhole-program)
         add_test(NAME data_shard_exec_mark_test COMMAND data_shard_exec_mark_test)
+    endif()
+
+    # A state save goes through a temporary and replaces the old file only
+    # when complete; a failed or uncreatable save keeps it byte for byte.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_executable(boot_state_replace_test tests/test_boot_state_replace.c
+            src/boot_state_replace.c)
+        target_include_directories(boot_state_replace_test PRIVATE include)
+        target_compile_definitions(boot_state_replace_test PRIVATE
+            PSX_ENABLE_BLOCK_CYCLES=1 PSX_NO_DEBUG_TOOLS=1)
+        target_compile_options(boot_state_replace_test PRIVATE -O2)
+        add_test(NAME boot_state_replace_test COMMAND boot_state_replace_test
+            ${CMAKE_CURRENT_BINARY_DIR})
     endif()
 
     add_executable(psx_video_timing_test
