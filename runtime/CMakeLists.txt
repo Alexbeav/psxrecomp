@@ -2332,6 +2332,14 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
     endif()
     add_test(NAME sw_faithful_authority_test COMMAND sw_faithful_authority_test)
 
+    # Bilinear neighbours clamp inside the base texel's 256-texel page.
+    add_executable(sw_bilinear_page_edge_test tests/test_sw_bilinear_page_edge.c)
+    target_include_directories(sw_bilinear_page_edge_test PRIVATE include src)
+    if(NOT WIN32)
+        target_link_libraries(sw_bilinear_page_edge_test PRIVATE m)
+    endif()
+    add_test(NAME sw_bilinear_page_edge_test COMMAND sw_bilinear_page_edge_test)
+
     add_executable(gpu_vk_upload_alignment_test
         tests/test_gpu_vk_upload_alignment.c)
     target_include_directories(gpu_vk_upload_alignment_test PRIVATE src)
