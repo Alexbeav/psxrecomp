@@ -566,6 +566,15 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kseg2_inline_load.py"
                 --cc "${CMAKE_C_COMPILER}")
         endif()
+        # A disc of a multi-disc set can carry the program with a per-disc
+        # code byte. The page where the loaded executable differs from the
+        # generated-from image is refused native dispatch by the real
+        # memory.c guard, so its code runs from RAM.
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            add_test(NAME text_source_guard_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_text_source_guard.py"
+                --cc "${CMAKE_C_COMPILER}")
+        endif()
         if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
             add_test(NAME dma_mdec_jobs_test COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dma_mdec_jobs.py"
@@ -1016,6 +1025,8 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             tests/test_psx_ram_runtime_map.c
             tests/psx_ram_runtime_map_stubs.c
             src/memory.c
+            src/text_source_guard.c
+            src/crc32.c
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
@@ -1039,6 +1050,8 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             tests/test_isc_store.c
             tests/psx_ram_runtime_map_stubs.c
             src/memory.c
+            src/text_source_guard.c
+            src/crc32.c
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
@@ -1064,6 +1077,8 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             tests/test_pgxp_untracked_store.c
             tests/psx_ram_runtime_map_stubs.c
             src/memory.c
+            src/text_source_guard.c
+            src/crc32.c
             src/dma.c
             src/gpu_timeline.c
             src/boot_state.c
