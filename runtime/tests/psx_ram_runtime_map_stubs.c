@@ -68,6 +68,7 @@ int  fntrace_is_game_started(void) { return 0; }
 void fntrace_restore_game_started(int started) { (void)started; }
 void overlay_loader_note_code_write(void) {}
 void overlay_loader_resync_validation_after_restore(void) {}
+void dirty_ram_pc_table_game_load(void) {}
 /* Checkpoint resume seams (memory.c is real here). */
 void dirty_ram_ld_delay_save(DirtyRamLoadDelay *out) { memset(out, 0, sizeof *out); }
 void dirty_ram_ld_delay_restore_from_state(const DirtyRamLoadDelay *in) { (void)in; }

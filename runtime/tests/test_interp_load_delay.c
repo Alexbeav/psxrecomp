@@ -110,6 +110,7 @@ void psx_bail_record(uint32_t ra, uint32_t sp, uint32_t pc, uint32_t gsp) {
     (void)ra; (void)sp; (void)pc; (void)gsp;
 }
 void psx_break(CPUState *cpu, uint32_t code, uint32_t pc) { (void)cpu; (void)code; (void)pc; }
+int psx_break_enter_guest_vector(CPUState *cpu, uint32_t pc) { (void)cpu; (void)pc; return 0; }
 void psx_check_interrupts(struct CPUState *cpu) { (void)cpu; }
 /* Compiled callee: records what it was entered with. */
 static uint32_t call_target, call_a0; static int call_n;

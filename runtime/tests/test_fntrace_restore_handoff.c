@@ -4,6 +4,7 @@
 
 static int effects;
 void dirty_ram_clear_image_baseline(void) { ++effects; }
+void dirty_ram_pc_table_game_load(void) {}
 void memory_clear_low_boot_scratch(void) { ++effects; }
 void cdrom_notify_game_started(void) { ++effects; }
 void boot_state_trigger_capture(const CPUState* cpu) { (void)cpu; ++effects; }

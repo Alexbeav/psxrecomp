@@ -28,6 +28,7 @@ static int gl_renderer_fbo_peek_deferred(int x,int y,int w,int h,uint16_t *p) {
     for (unsigned i=0;i<1024u*512u;++i) p[i]=0x7fff;
     return 1;
 }
+static int gl_renderer_render_thread_active(void) { return 0; } /* synchronous renderer: ring stays on */
 static void gl_renderer_render_thread_sync(const char *s) { check(!strcmp(s,"display_ring")); ++sync_calls; }
 static int json_get_int(const char *j,const char *key,int fallback) { (void)j;(void)fallback;check(!strcmp(key,"frame"));return requested_frame; }
 static int json_get_str(const char *j,const char *key,char *p,size_t n) { (void)j;check(!strcmp(key,"path"));snprintf(p,n,"ring-fixture-output.bin");return 1; }

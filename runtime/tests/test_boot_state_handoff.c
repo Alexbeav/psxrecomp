@@ -36,6 +36,7 @@ uint8_t* memory_get_scratchpad_ptr(void) { return spad; }
 int psx_ram_8mb_active(void) { return ram_bytes == sizeof ram; }
 void memory_clear_low_boot_scratch(void) { ++boot_clears; memset(ram,0,sizeof ram); }
 void dirty_ram_clear_image_baseline(void) { ++boot_clears; }
+void dirty_ram_pc_table_game_load(void) {}
 void cdrom_notify_game_started(void) { ++cd_handoffs; }
 uint32_t dirty_ram_get_bitmap_word_count(void) { return 16; }
 uint32_t dirty_ram_get_bitmap_word(uint32_t i) { (void)i; return 0; }

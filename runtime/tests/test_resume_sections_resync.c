@@ -28,7 +28,7 @@ static int timing_equal(const PsxIrqResumeTiming *a, const PsxIrqResumeTiming *b
 int main(void) {
     static CPUState cpu;
     PsxIrqResumeTiming in, out;
-    DirtyRamLoadDelay ld = {9, 0x12345678u, 0, 1}, got;
+    DirtyRamLoadDelay ld = {9, 0x12345678u, 0, 1, 0, 0, 0}, got;
 
     psx_cycle_count = 5000;
     memset(&in, 0, sizeof in);

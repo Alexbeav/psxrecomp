@@ -46,6 +46,8 @@ struct Identity {
 };
 struct Companion { bool ready = true; std::string message; };
 static const std::string identity_error;
+// A disc judged wrong for the set (disc_roster_wrong_disc) is not one of these controls.
+static const bool set_wrong_disc = false;
 static const char* reason(const Identity& id, const Companion& companion) {
     return ''' + match[1] + ''';
 }
