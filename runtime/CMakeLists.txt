@@ -523,6 +523,7 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_irq_context.py --cc ${CMAKE_C_COMPILER})
             add_test(NAME rfe_syscall_depth_test COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_syscall_depth.py --cc ${CMAKE_C_COMPILER})
             add_test(NAME changethread_in_handler_test COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
+            add_test(NAME deferred_switch_interp_spin_test COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_deferred_switch_interp_spin.py --cc ${CMAKE_C_COMPILER})
         endif()
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
             add_test(NAME display_ring_capture_test COMMAND "${Python3_EXECUTABLE}"
