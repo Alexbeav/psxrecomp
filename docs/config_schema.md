@@ -134,6 +134,14 @@ relocated image is matched by filename stem only when that stem is unique in
 the roster. The one-based persisted `disc.selected` index wins over a path
 that identifies another disc or has an ambiguous relocated name.
 
+### Disc set and settings at the first start
+
+The setup host records the disc set in `disc.cfg` and the launcher settings in
+`settings.toml` beside the setup executable. When it starts the built product,
+after a rebuild or on a later start, it copies each file beside the product
+only if the product has none. An existing product `settings.toml`, even an
+empty one, keeps its contents; an empty product `disc.cfg` is filled in.
+
 ### Multi-disc selection
 
 Relative paths in executable-side `settings.toml` (`[disc] path`, `[bios] path`,
