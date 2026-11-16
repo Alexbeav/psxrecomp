@@ -1530,6 +1530,7 @@ if(BUILD_TESTING)
                 netplay_early_input_idle_wiring
                 start_refusal_wiring
                 launcher_serial_status_wiring
+                netplay_lan_identity_wiring
                 jalr_link_register_guards
                 gl_internal_scale_guards
                 launcher_vulkan_option

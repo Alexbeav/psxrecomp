@@ -558,6 +558,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_exit_reason.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_lan_version.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_ice_hub.c
     ${PSXRECOMP_ROOT}/runtime/src/start_refusal.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp
