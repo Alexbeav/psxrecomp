@@ -708,6 +708,12 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             toml::find<bool>(runtime, "offer_turbo_loads");
         rt.has_offer_turbo_loads = true;
     }
+    if (runtime.contains("turbo_loads_window_reads")) {
+        const int64_t n = toml::find<int64_t>(runtime, "turbo_loads_window_reads");
+        if (n < 1 || n > 60)
+            throw std::runtime_error("runtime.turbo_loads_window_reads must be 1..60");
+        rt.turbo_loads_window_reads = (int)n;
+    }
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
     }

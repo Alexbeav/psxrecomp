@@ -40,6 +40,11 @@ int turbo_loads_gate_allowed(int mod_enabled, int netplay, int selfcheck_resim, 
 
 /* Data-read vblanks in the current window (for load telemetry). */
 int turbo_loads_gate_window_reads(const TurboLoadsGate *g);
+/* a title's engage threshold ([runtime] turbo_loads_window_reads,
+ * 1..TURBO_LOADS_WINDOW; anything else keeps TURBO_LOADS_WINDOW_READS). A game
+ * whose loads read fast and then compute (CMR2 with instant CD: a few read
+ * vblanks, then ~2 s of decompression) never reaches 40 of 60. */
+void turbo_loads_gate_set_window_reads(int n);
 
 #ifdef __cplusplus
 }

@@ -20228,6 +20228,7 @@ int main(int argc, char** argv) {
             g_frame_generation = gc.runtime.video_frame_generation ? 1 : 0;
             g_frame_generation_method = gc.runtime.video_frame_generation_method;
             gl_renderer_set_fg_ignore_near((float)gc.runtime.video_frame_generation_ignore_near);
+            turbo_loads_gate_set_window_reads(gc.runtime.turbo_loads_window_reads);
             /* [timing] guest_cycle_scale is a title constant from game.toml
              * (no player setting). PSX_GUEST_CYCLE_SCALE overrides it for
              * testing only. */

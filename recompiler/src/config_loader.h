@@ -377,6 +377,7 @@ struct RuntimeConfig {
     // through the `turbo_loads` TCP debug command.
     bool                  turbo_loads = false;
     bool                  has_turbo_loads = false;   // key present in game.toml
+    int                   turbo_loads_window_reads = 0;   // [runtime] Fast Loading engage threshold (data-read vblanks of 60); 0 = framework default
 
     // fast_loading_optout: true keeps the Fast Loading mod from accelerating
     // this title even when the player enables it, for a game whose in-play
