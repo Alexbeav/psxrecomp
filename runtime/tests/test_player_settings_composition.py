@@ -67,6 +67,7 @@ static int psx_vsync_from_launcher(int v,int){return v;}
 static void psx_smooth_60fps_set(int){}
 extern "C" void psx_pgxp_session_reset(void){}
 static std::filesystem::path anchor_on_exe_dir(const char*,const std::filesystem::path& p){return p;}
+static std::filesystem::path anchor_card_path(const char*,const std::filesystem::path& p){return p;}
 static void set_environment(const char* key,const char* value){
 #ifdef _WIN32
  _putenv_s(key,value);
