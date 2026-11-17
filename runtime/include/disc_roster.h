@@ -1,5 +1,7 @@
 #pragma once
 
+#define PSX_DISC_BOOT_SERIAL_VERSION 2
+
 #include <cctype>
 #include <filesystem>
 #include <string>
@@ -69,9 +71,9 @@ inline std::filesystem::path disc_roster_selected(
 enum class DiscSetSerial { NotJudged, Listed, NotListed };
 
 // A serial in the one form that compares: "SLUS-00594" for "SLUS-00594",
-// "slus_005.94" and "SLUS_005.94;1" alike (four letters, five digits; the
-// rule of normalize_serial in disc_identity.cpp, which gives the serial read
-// from a disc its form). A kit may list the boot file's spelling: in its own
+// "slus_005.94" and "SLUS_005.94;1" alike. A fifth boot-name letter is ignored
+// ("SLUSP012.06" becomes "SLUS-01206"). normalize_serial in disc_identity.cpp
+// uses this same key. A kit may list the boot file's spelling: in its own
 // slot the disc check finds that spelling on the disc, so a copy of the disc
 // under another name must not be refused for it. Text that is not a serial of
 // that shape compares as it is written, letter case aside.
@@ -79,11 +81,12 @@ inline std::string disc_roster_serial_key(const std::string& serial) {
     std::string s;
     for (char c : serial)
         if (std::isalnum((unsigned char)c)) s += (char)std::toupper((unsigned char)c);
-    bool shaped = s.size() >= 9;
-    for (size_t i = 0; shaped && i < 9; ++i)
-        shaped = i < 4 ? std::isalpha((unsigned char)s[i]) != 0
-                       : std::isdigit((unsigned char)s[i]) != 0;
-    return shaped ? s.substr(0, 4) + "-" + s.substr(4, 5) : disc_roster_fold(serial);
+    const size_t digits = s.size() > 4 && std::isalpha((unsigned char)s[4]) ? 5 : 4;
+    bool shaped = s.size() >= digits + 5;
+    for (size_t i = 0; shaped && i < digits + 5; ++i)
+        shaped = i < digits ? std::isalpha((unsigned char)s[i]) != 0
+                            : std::isdigit((unsigned char)s[i]) != 0;
+    return shaped ? s.substr(0, 4) + "-" + s.substr(digits, 5) : disc_roster_fold(serial);
 }
 
 inline DiscSetSerial disc_roster_judge_serial(const std::vector<std::string>& serials,
