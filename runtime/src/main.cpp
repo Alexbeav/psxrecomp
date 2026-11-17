@@ -19038,15 +19038,25 @@ int ovl_look_set(int setting, int value) {
     g_ovl_look_posted[setting] = value;
     return rc;
 }
-/* Main thread: the runtime [video] rows, applied live for this session (the
- * title's config.toml [video] keeps the default; settings.toml has no player
- * key for them). */
+/* Main thread: the runtime [video] rows, applied and saved to settings.toml
+ * [player] the way the launcher's Settings page saves them
+ * (player_startup_settings.inc reads the same keys at the next start). */
 void ovl_look_service(void) {
     const int aa = g_ovl_sess_aa.exchange(-1);
     const int dither = g_ovl_sess_dither.exchange(-1);
     if (aa < 0 && dither < 0) return;
     if (aa >= 0) { g_video_post_aa = aa; (void)gl_renderer_set_post_aa(aa); }
     if (dither >= 0) { g_video_dithering = dither; gl_renderer_set_dithering(dither); }
+    if (g_overlay_settings_path.empty()) return;
+    try {
+        PSXRecompV4::UserSettings us = PSXRecompV4::load_user_settings(g_overlay_settings_path);
+        if (aa >= 0)
+            us.extra_player_settings["video.antialiasing_mode"] = aa == 0 ? "off" : aa == 1 ? "fxaa" : "fxaa_hq";
+        if (dither >= 0)
+            us.extra_player_settings["video.dithering"] = dither == 0 ? "off" : dither == 1 ? "on" : "fine";
+        (void)PSXRecompV4::save_user_settings(g_overlay_settings_path, us);
+    } catch (...) {
+    }
 }
 
 int ovl_window_scale_now(void) {
