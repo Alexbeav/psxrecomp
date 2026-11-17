@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard that the host tells the launcher whether a disc's serial is listed.
+"""Guard that the host tells the launcher whether a disc's serial is listed (PS1B-403).
 
 A player gave a build made for SLES-03396 a disc of another release,
 SLES-03398. The launcher's disc panel showed "Serial  SLES-03398" with a tick,
@@ -69,18 +69,46 @@ judged = body.index("const PSXRecompV4::DiscSetSerial set_serial =")
 assert judged < guard, "the set judgement must not sit inside the launcher's #if"
 judgement = body[judged:guard]
 # The two decisions are functions of disc_roster.h, so that test_disc_roster.cpp
-# runs what the launcher runs, with the lists a real kit carries. A kit
-# built for a single-disc game has a disc list of ONE entry: it takes
-# this path for every other file the player selects. Before this judgement
-# the launcher ticked another game's disc.
+# runs what the launcher runs, with the lists a real kit carries. A kit that
+# Studio builds for a single-disc game has a disc list of ONE entry: it takes
+# this path for every other file the player selects. The first look-build of
+# PS1B-403 was made before this judgement existed and ticked another game's
+# disc (Alex's look, 2026-10-02).
 assert re.search(
     r"PSXRecompV4::disc_roster_outside_list\(\s*g_disc_metadata_roster, g_disc_serials,\s*"
     r"std::filesystem::path\(disc_path\), id\.expected_serial_given,\s*"
-    r"id\.opened && id\.has_header, id\.detected_serial\);",
+    r"id\.opened && id\.has_header, list_serial\);",
     judgement,
 ), "only an image outside the disc list, that opened, with no expected serial, is judged by the set"
-# Wrong disc: what was read is none of the list's serials, and that
-# includes a disc on which no serial was found.
+# The serial it is judged by: what was read, or, for a disc with no SYSTEM.CNF
+# (King's Field (Japan)), a listed serial whose text is on the disc. Without
+# this a copy of such a disc under another file name was "no serial found"
+# and refused (the A14 replay over the 164 kit discs found the one case).
+assert re.search(
+    r"const std::string list_serial =\s*serial_for_list_judgement\(std::filesystem::path\(disc_path\), id\);",
+    body[:judged],
+)
+helper = MAIN[MAIN.index("static std::string serial_for_list_judgement("):]
+helper = helper[: helper.index("\n}\n")]
+assert re.search(
+    r"if \(!id\.detected_serial\.empty\(\) \|\| id\.expected_serial_given \|\|\s*"
+    r"!id\.opened \|\| !id\.has_header \|\| g_disc_serials\.empty\(\) \|\|\s*"
+    r"PSXRecompV4::disc_roster_index\(g_disc_metadata_roster, disc\) >= 0\)\s*return id\.detected_serial;",
+    helper,
+), "a serial that was read, an image of the list, and a file that did not open are judged as before"
+assert re.search(
+    r"for \(const std::string& listed : g_disc_serials\) \{\s*if \(listed\.empty\(\)\) continue;\s*"
+    r"const PSXRecompV4::DiscIdentity probe = PSXRecompV4::identify_disc\(\s*disc, listed,.*?\);\s*"
+    r"if \(probe\.serial_matches\) return uppercase_ascii\(listed\);\s*\}\s*return std::string\(\);",
+    helper, re.S,
+), "each listed serial must be looked for on the disc as the slot's check looks for it"
+assert re.search(
+    r"if \(set_serial == PSXRecompV4::DiscSetSerial::Listed && id\.detected_serial\.empty\(\)\)\s*"
+    r"std::snprintf\(out->serial, sizeof\(out->serial\), \"%s\", list_serial\.c_str\(\)\);",
+    body,
+), "the row must show the listed serial that was found on such a disc"
+# Wrong disc (Alex, 2026-10-02): what was read is none of the list's serials
+# (A8), and that includes a disc on which no serial was found (A11).
 assert re.search(
     r"const bool set_wrong_disc = PSXRecompV4::disc_roster_wrong_disc\(set_serial\);",
     judgement,
@@ -124,7 +152,7 @@ assert verdict, "a set must refuse a disc whose serial is none of the set's"
 assert guard < verdict.start()
 assert body.count("PSXRecompV4::identify_disc(") == 1
 
-# The run report's line for the disc row (launcher_status) says the
+# The run report's line for the disc row (launcher_status, PS1G-63) says the
 # same as the panel. For an image outside the disc list there is no single
 # expected serial: the line names the list, and gives the serial as the reason
 # when that is why the disc is refused, not the online-play note.
@@ -138,10 +166,9 @@ assert re.search(
 )
 assert re.search(
     r": \(\(id\.expected_serial_given && !id\.serial_matches\) \|\| set_wrong_disc\)\s*"
-    # PR #905 adds the missing-SBI warning between the serial and the online-play note.
     r"\? \"the disc does not carry the expected serial\"\s*"
-    r"(?:: !id\.sbi_warning\.empty\(\) \? id\.sbi_warning\.c_str\(\)\s*)?"
-    r": id\.netplay_detail\.c_str\(\);",
+    r"(?::\s*!id\.sbi_warning\.empty\(\)\s*\? id\.sbi_warning\.c_str\(\)\s*)?"
+        r": id\.netplay_detail\.c_str\(\);",
     row,
 ), "a wrong disc outside the list must give the serial as the reason in the report"
 assert re.search(r"id\.detected_serial\.c_str\(\), expected_for_row\.c_str\(\),", row)
@@ -150,15 +177,16 @@ assert "expect_serial.c_str()" not in row
 # The start check (a start that skips the launcher: --disc on the command
 # line, a shortcut, a script). It used to warn only: "Disc Image Warning ...
 # The runtime will try to run it anyway.", and on a build with a list it did
-# not even warn for an image outside the disc list. Now
+# not even warn for an image outside the disc list. Alex, 2026-10-02 (A14):
 # a disc the panel refuses for its serial is refused here too, with the
 # panel's title and sentence. It holds on a build with a list and on one
-# without, and for a disc on which no serial was found.
+# without, and for a disc on which no serial was found (A11).
 check = MAIN[MAIN.index("static DiscValidation validate_disc_image("):]
 check = check[: check.index("\n}\n")]
 assert re.search(
     r"PSXRecompV4::disc_roster_outside_list\(\s*g_disc_metadata_roster, g_disc_serials, selected_path,\s*"
-    r"id\.expected_serial_given, id\.opened && id\.has_header, id\.detected_serial\);",
+    r"id\.expected_serial_given, id\.opened && id\.has_header,\s*"
+    r"serial_for_list_judgement\(selected_path, id\)\);",
     check,
 ), "the start check must judge an image outside the disc list as the panel does"
 assert "const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc(outside);" in check

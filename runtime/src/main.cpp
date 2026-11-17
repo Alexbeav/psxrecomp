@@ -3335,6 +3335,27 @@ static std::string expected_serial_for_disc(const std::filesystem::path& disc,
         g_disc_metadata_roster, g_disc_serials, g_program_discs, disc, fallback);
 }
 
+/* The serial an image outside the disc list is judged by: what was read, or,
+ * for a disc with no SYSTEM.CNF (King's Field (Japan)), a listed serial whose
+ * text is on the disc, looked for as the slot's own check looks for it.
+ * Without this a copy of such a disc under another file name was "no serial
+ * found" and refused (PS1B-403, A14). */
+static std::string serial_for_list_judgement(const std::filesystem::path& disc,
+                                             const PSXRecompV4::DiscIdentity& id) {
+    if (!id.detected_serial.empty() || id.expected_serial_given ||
+        !id.opened || !id.has_header || g_disc_serials.empty() ||
+        PSXRecompV4::disc_roster_index(g_disc_metadata_roster, disc) >= 0)
+        return id.detected_serial;
+    for (const std::string& listed : g_disc_serials) {
+        if (listed.empty()) continue;
+        const PSXRecompV4::DiscIdentity probe = PSXRecompV4::identify_disc(
+            disc, listed, /*expected_crc*/0, /*has_expected_crc*/false,
+            /*compute_crc*/false);
+        if (probe.serial_matches) return uppercase_ascii(listed);
+    }
+    return std::string();
+}
+
 /* True when `disc` is an image that another program of the set boots: a set
  * roster entry this build does not own, or a relocated image whose serial is
  * one of the other programs' serials. The programs of a set share
@@ -3535,7 +3556,8 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
      * should be refused is not decided here: it is not. */
     const PSXRecompV4::DiscSetSerial outside = PSXRecompV4::disc_roster_outside_list(
         g_disc_metadata_roster, g_disc_serials, selected_path,
-        id.expected_serial_given, id.opened && id.has_header, id.detected_serial);
+        id.expected_serial_given, id.opened && id.has_header,
+        serial_for_list_judgement(selected_path, id));
     const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc(outside);
     DiscValidation v;
     v.opened     = id.opened;
@@ -13029,11 +13051,17 @@ namespace {
          * another game's disc was called verified and PLAY was lit. It is
          * judged by its serial against every serial of the set. An image
          * that IS in the disc list is judged by its own entry, as before. */
+        const std::string list_serial =
+            serial_for_list_judgement(std::filesystem::path(disc_path), id);
         const PSXRecompV4::DiscSetSerial set_serial =
             PSXRecompV4::disc_roster_outside_list(
                 g_disc_metadata_roster, g_disc_serials,
                 std::filesystem::path(disc_path), id.expected_serial_given,
-                id.opened && id.has_header, id.detected_serial);
+                id.opened && id.has_header, list_serial);
+        /* A disc with no SYSTEM.CNF that carries a listed serial's text: the
+         * row shows that serial, as it does for the same disc in its slot. */
+        if (set_serial == PSXRecompV4::DiscSetSerial::Listed && id.detected_serial.empty())
+            std::snprintf(out->serial, sizeof(out->serial), "%s", list_serial.c_str());
         /* Wrong disc: what was read is none of the list's serials, and
          * that includes a disc on which no serial was found. */
         const bool set_wrong_disc = PSXRecompV4::disc_roster_wrong_disc(set_serial);
