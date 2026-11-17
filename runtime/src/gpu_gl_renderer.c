@@ -12022,7 +12022,23 @@ static uint16_t rth_prim_flags(void) {
     return f;
 }
 
+static float s_fg_ignore_near_cfg = 0.0f;
+void gl_renderer_set_fg_ignore_near(float v) { s_fg_ignore_near_cfg = v > 0.0f ? v : 0.0f; }
+static int gl_rth_eligible_base(void);
 static int gl_rth_eligible(void) {
+    /* while presentation is fast-forwarded (turbo through loads, FMV
+     * skip, manual fast-forward) the guest runs as fast as it can and 29 of 30
+     * frames are never shown. On the render thread every one of them still has to
+     * be drawn before the guest may run two frames ahead (CMR2 arcade load 2.4 s
+     * -> 3.4 s); drawing them directly, as without the render thread, does not
+     * wait. Smooth motion has nothing to generate in a load anyway. */
+    extern int psx_presentation_fast_forward(void);
+    if (psx_presentation_fast_forward()) return 0;
+    return gl_rth_eligible_base();
+}
+/* Everything but the fast-forward rule: the render thread is started only once,
+ * at the first VBlank, which is often inside the boot load. */
+static int gl_rth_eligible_base(void) {
     extern int psx_netplay_active(void);
     return s_raster_ok && s_ctx && !s_cpu_auth_dual && !s_depth24_skip_up &&
            !(s_hd_native_authority && s_rth_a0_open) &&
@@ -14517,6 +14533,20 @@ static int fg_on_present(uint16_t op, const uint8_t *p, uint32_t bytes, int stal
                 }
         }
         if (k == s_fg_nbuf) {
+            /* an older buffer this one overlaps is from another
+             * display mode (CMR2: the 640x472 menu at 0,2 covers the race's
+             * 512x236 buffer at 0,256). Looked up first, it would claim every
+             * draw into the new buffer and no list would ever match its flip.
+             * Forget it (buffers are relearned at each flip). */
+            int w = 0;
+            for (int j = 0; j < s_fg_nbuf; j++) {
+                const int *b = s_fg_buf[j];
+                const int over = b[0] < disp[0] + disp[2] && disp[0] < b[0] + b[2] &&
+                                 b[1] < disp[1] + disp[3] && disp[1] < b[1] + b[3];
+                if (!over) { if (w != j) memcpy(s_fg_buf[w], b, sizeof s_fg_buf[w]); w++; }
+            }
+            if (w != s_fg_nbuf) { s_fg_nbuf = w; s_fg_cur_buf = -1; }
+            k = s_fg_nbuf;
             if (s_fg_nbuf == 4) { memmove(s_fg_buf[0], s_fg_buf[1], sizeof s_fg_buf[0] * 3); s_fg_nbuf = 3; s_fg_cur_buf = -1; }
             memcpy(s_fg_buf[s_fg_nbuf++], disp, sizeof s_fg_buf[0]);
         }
@@ -14643,6 +14673,12 @@ static int fg_on_present(uint16_t op, const uint8_t *p, uint32_t bytes, int stal
     /* Reprojection redraws whatever moves on its own (a rival car filling
      * half of a split-screen view), so a third of the pairs is enough. */
     if (s_fg_reproject) cp.min_inliers = 0.3f;
+    {   /* game.toml [video] frame_generation_ignore_near (CMR2: 0.5), see frame_gen.h;
+         * PSX_FG_IGNORE_NEAR overrides it for one run. */
+        static float ign = -1.0f;
+        if (ign < 0.0f) { const char *e = getenv("PSX_FG_IGNORE_NEAR"); ign = e ? (float)atof(e) : s_fg_ignore_near_cfg; }
+        cp.ignore_near = ign;
+    }
     FgList *src = A;
     if (s_fg_reproject) {   /* the newer frame's image is warped: fit for it */
         src = B;
@@ -14997,7 +15033,36 @@ static int rtb_render_display_hires(uint32_t *o, int p, int dx, int dy, int dw, 
     GL_RT_SYNC("render_display_hires"); return glb_render_display_hires(o, p, dx, dy, dw, dh); }
 static void rtb_vram_write(int x, int y, uint16_t px) {
     RTH_DIRECT_OR(RTH_REC(RTH_VRAM_WRITE, 0, x, y, px)); glb_vram_write(x, y, px); }
-static uint16_t rtb_vram_read(int x, int y) { GL_RT_SYNC("vram_read"); return glb_vram_read(x, y); }
+/* a tiny GPUREAD transfer (<= 64 pixels; CMR2 reads one pixel every game
+ * frame) is answered by the render thread itself: queue a peek at this point of the
+ * command stream and wait until it has run (rt_drain keeps the context there). The
+ * value is the same pixel the sync path reads; taking the context instead marks
+ * Smooth motion's lists broken every frame (gl_rth_ctx) and nothing is generated.
+ * PSX_PEEK_CHECK=1 also takes the old path and counts differences (testing). */
+static uint16_t rtb_vram_read(int x, int y) {
+    extern int gpu_read_transfer_area(void);
+    const int area = gpu_read_transfer_area();
+    if (area > 0 && area <= 64 && s_rth_on && !rt_on_render_thread() && !rt_held()) {
+        static uint16_t px;
+        static int check = -1;
+        if (check < 0) { const char *e = getenv("PSX_PEEK_CHECK"); check = e && e[0] == '1'; }
+        px = 0;
+        if (gl_renderer_fbo_peek_deferred(x, y, 1, 1, &px)) {
+            rt_drain();
+            if (check) {
+                static unsigned long n, bad;
+                GL_RT_SYNC("vram_read_check");
+                const uint16_t ref = glb_vram_read(x, y);
+                n++; if (ref != px) bad++;
+                if (n % 100 == 0) fprintf(stderr, "PSX-PEEK-CHECK reads=%lu different=%lu\n", n, bad);
+                return ref;
+            }
+            return px;
+        }
+    }
+    GL_RT_SYNC("vram_read");
+    return glb_vram_read(x, y);
+}
 static void rtb_vram_transfer_in(int x, int y, int w, int h, const uint16_t *d) {
     if (rth_record_mode()) {
         size_t n = (w > 0 && h > 0) ? (size_t)w * (size_t)h : 0;
@@ -15315,7 +15380,7 @@ extern void gr_refresh_backend(void);   /* gpu_render.c */
 
 int gl_renderer_render_thread_start(int max_frames) {
     if (s_rth_on) return 1;
-    if (!s_ctx || !s_raster_ok || !s_vram || !gl_rth_eligible()) return 0;
+    if (!s_ctx || !s_raster_ok || !s_vram || !gl_rth_eligible_base()) return 0;
     uint16_t *priv = (uint16_t *)malloc((size_t)VRAM_W * VRAM_H * sizeof(uint16_t));
     if (!priv) return 0;
     /* Cocoa: a background thread's swap must not wait on the main thread,

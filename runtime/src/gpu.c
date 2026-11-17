@@ -4496,6 +4496,7 @@ uint32_t gpu_read_gpustat(void) {
 }
 
 /* ---- GPUREAD (0x1F801810 read) ---- */
+static int s_gpuread_word_area;   /* area of the transfer the GPUREAD word being read belongs to (gpu_read_transfer_area) */
 
 uint32_t gpu_read_gpuread(void) {
     if (!vram_read_active)
@@ -4506,6 +4507,7 @@ uint32_t gpu_read_gpuread(void) {
      * framebuffer is authoritative and must be synced down before the CPU
      * array is read (no-op cost on the software backend). */
     uint32_t value = 0;
+    s_gpuread_word_area = (int)vram_read_w * (int)vram_read_h;
     for (int i = 0; i < 2; i++) {
         uint16_t rx = (vram_read_x + vram_read_col) % 1024;
         uint16_t ry = (vram_read_y + vram_read_row) % 512;
@@ -4518,6 +4520,7 @@ uint32_t gpu_read_gpuread(void) {
             else { ++vram_read_row; vram_read_col = 0; }
         }
     }
+    s_gpuread_word_area = 0;
 
     /* Capture first words for C0 debug */
     if (c0_capture_slot_fwd >= 0 && c0_capture_slot_fwd < C0_HISTORY_CAP_FWD) {
@@ -8090,6 +8093,15 @@ void gpu_get_draw_area(GpuDrawArea* out) {
     out->bottom = draw_area_bottom;
     out->offset_x = draw_offset_x;
     out->offset_y = draw_offset_y;
+}
+
+/* pixels in the VRAM->CPU transfer being read (0 = no transfer). The GL
+ * render-thread backend answers tiny reads (CMR2: 1x1 every game frame) without
+ * taking the GL context, so Smooth motion's lists survive. */
+int gpu_read_transfer_area(void) {
+    /* The word's second half can follow the transfer's end (a 1x1 read
+     * reads two pixels): it still belongs to that transfer. */
+    return vram_read_active ? (int)vram_read_w * (int)vram_read_h : s_gpuread_word_area;
 }
 
 uint16_t gpu_vram_peek(int x, int y) {

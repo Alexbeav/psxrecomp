@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 /* Frame generation: matching, interpolation, planning (include/frame_gen.h,
  * docs/FRAME_GENERATION.md). */
 #include "frame_gen.h"
@@ -41,6 +43,7 @@ void fg_cam_defaults(FgCamParams *p) {
     p->iters = 64;
     p->tol_px = 1.0f;
     p->min_inliers = 0.5f;
+    p->ignore_near = 0.0f;
     p->min_pairs = 24;
     p->max_angle = 0.35f;
     p->max_shift = 0.5f;
@@ -266,7 +269,20 @@ static int fit_view(const FgPrimList *older, const FgPrimList *newer, const FgCa
         const double ang = 2.0 * acos(fmin(1.0, fabs(best_r.q[0])));
         const double mz = median_z(sb, nb);
         const double sh = sqrt(best_r.t[0] * best_r.t[0] + best_r.t[1] * best_r.t[1] + best_r.t[2] * best_r.t[2]);
-        if ((float)c < p->min_inliers * (float)np || c < p->min_pairs) v->why = "few inliers";
+        /* with ignore_near set, the share is taken over the pairs at
+         * least that share of the mean depth away: a chase camera's own car
+         * (CMR2: a third of all pairs, all near, none on the world's motion)
+         * is an object, not evidence against the camera. The count still
+         * needs min_pairs inliers. */
+        uint32_t share_n = np, share_c = c;
+        if (p->ignore_near > 0.0f && np) {
+            double zs = 0;
+            for (uint32_t i = 0; i < np; i++) zs += b[i][2];
+            const double zcut = p->ignore_near * zs / np;
+            share_n = share_c = 0;
+            for (uint32_t i = 0; i < np; i++) if (b[i][2] >= zcut) { share_n++; share_c += in[i]; }
+        }
+        if ((float)share_c < p->min_inliers * (float)share_n || c < p->min_pairs) v->why = "few inliers";
         else if (ang > p->max_angle) v->why = "camera turned too far";
         else if (mz > 0 && sh > p->max_shift * mz) v->why = "camera moved too far";
         else ok = 1;

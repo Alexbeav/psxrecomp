@@ -717,6 +717,7 @@ struct RuntimeConfig {
     // title: the newer real frame warped; tuned on R4). PSX_FRAME_GEN_METHOD
     // overrides. docs/FRAME_GENERATION.md.
     int                   video_frame_generation_method = 0;
+    double                video_frame_generation_ignore_near = 0.0; /* [video] frame_generation_ignore_near */
 
     // [timing] guest_cycle_scale (1 = faithful, 1..64) and its gate; title
     // constants from game.toml only. See config_loader.cpp.

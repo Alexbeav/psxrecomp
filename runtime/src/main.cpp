@@ -1667,6 +1667,7 @@ static int           g_render_thread_frames = 2;
 /* [video] frame_generation (docs/FRAME_GENERATION.md), with the render thread. */
 static int           g_frame_generation = 0;
 static int           g_frame_generation_method = 0;   /* [video] frame_generation_method: 0 redraw, 1 reprojection */
+extern "C" void gl_renderer_set_fg_ignore_near(float);   /* gpu_gl_renderer.c */
 /* [video] present_thread (docs/RENDER_THREAD.md), with the render thread. */
 static int           g_present_thread = 0;
 /* The player's persisted pipeline choice (game.toml default < settings.toml),
@@ -20226,6 +20227,7 @@ int main(int argc, char** argv) {
             g_launcher_quick_controls = gc.runtime.launcher_quick_controls;
             g_frame_generation = gc.runtime.video_frame_generation ? 1 : 0;
             g_frame_generation_method = gc.runtime.video_frame_generation_method;
+            gl_renderer_set_fg_ignore_near((float)gc.runtime.video_frame_generation_ignore_near);
             /* [timing] guest_cycle_scale is a title constant from game.toml
              * (no player setting). PSX_GUEST_CYCLE_SCALE overrides it for
              * testing only. */

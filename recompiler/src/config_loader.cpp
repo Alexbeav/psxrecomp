@@ -1151,6 +1151,12 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             else throw std::runtime_error(fmt::format(
                 "[video] frame_generation_method must be \"redraw\"|\"reprojection\": {}", m));
         }
+        /* Smooth motion leaves pairs nearer than this share of the mean
+         * depth (a chase camera's own car) out of the camera's inlier share; 0 = off. */
+        if (video.contains("frame_generation_ignore_near")) {
+            const auto& v = toml::find(video, "frame_generation_ignore_near");
+            rt.video_frame_generation_ignore_near = v.is_integer() ? (double)v.as_integer() : v.as_floating();
+        }
         if (video.contains("vsync")) {
             const auto mode = toml::find<std::string>(video, "vsync");
             if      (mode == "on"  || mode == "vsync")     rt.video_vsync = 1;
