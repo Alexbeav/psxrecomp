@@ -79,6 +79,7 @@ typedef struct FgCamParams {
     int      iters;          /* RANSAC samples per view */
     float    tol_px;         /* inlier: |D a - b| within this many screen px at b's depth */
     float    min_inliers;    /* share of pairs the camera must explain */
+    float    ignore_near;    /* pairs nearer than this share of the mean depth (a followed car) leave the share; 0 = off */
     uint32_t min_pairs;      /* pairs a view with projections needs */
     float    max_angle;      /* radians the camera may turn between frames */
     float    max_shift;      /* camera travel, as a share of the median depth */

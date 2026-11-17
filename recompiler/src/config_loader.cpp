@@ -708,6 +708,12 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             toml::find<bool>(runtime, "offer_turbo_loads");
         rt.has_offer_turbo_loads = true;
     }
+    if (runtime.contains("turbo_loads_window_reads")) {
+        const int64_t n = toml::find<int64_t>(runtime, "turbo_loads_window_reads");
+        if (n < 1 || n > 60)
+            throw std::runtime_error("runtime.turbo_loads_window_reads must be 1..60");
+        rt.turbo_loads_window_reads = (int)n;
+    }
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
     }
@@ -1150,6 +1156,16 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             else if (m == "reprojection") rt.video_frame_generation_method = 1;
             else throw std::runtime_error(fmt::format(
                 "[video] frame_generation_method must be \"redraw\"|\"reprojection\": {}", m));
+        }
+        /* Smooth motion leaves pairs nearer than this share of the mean
+         * depth (a chase camera's own car) out of the camera's inlier share; 0 = off. */
+        if (video.contains("frame_generation_ignore_near")) {
+            const auto& v = toml::find(video, "frame_generation_ignore_near");
+            const double ign = v.is_integer() ? (double)v.as_integer() : v.as_floating();
+            if (!(ign >= 0.0))
+                throw std::runtime_error(fmt::format(
+                    "[video] frame_generation_ignore_near must be 0 (off) or a positive share of the mean depth: {}", ign));
+            rt.video_frame_generation_ignore_near = ign;
         }
         if (video.contains("vsync")) {
             const auto mode = toml::find<std::string>(video, "vsync");

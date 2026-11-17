@@ -477,6 +477,19 @@ static void test_frame_generation() {
     auto gq = PSXRecompV4::load_game_config(q);
     check(gq.runtime.video_frame_generation, "[video] frame_generation = true is honoured");
     fs::remove(q);
+    fs::path n = write_game_toml("psxrecomp_fg_ignore_near.toml",
+        "[video]\n"
+        "frame_generation_ignore_near = 0.5\n");
+    auto gn = PSXRecompV4::load_game_config(n);
+    check(gn.runtime.video_frame_generation_ignore_near == 0.5, "frame_generation_ignore_near = 0.5 parses");
+    fs::remove(n);
+    fs::path r = write_game_toml("psxrecomp_fg_ignore_near_neg.toml",
+        "[video]\n"
+        "frame_generation_ignore_near = -0.5\n");
+    bool rejected = false;
+    try { (void)PSXRecompV4::load_game_config(r); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "negative frame_generation_ignore_near is rejected");
+    fs::remove(r);
 }
 
 /* PGXP title tuning retains base values here; presence flags distinguish

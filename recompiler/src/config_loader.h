@@ -377,6 +377,7 @@ struct RuntimeConfig {
     // through the `turbo_loads` TCP debug command.
     bool                  turbo_loads = false;
     bool                  has_turbo_loads = false;   // key present in game.toml
+    int                   turbo_loads_window_reads = 0;   // [runtime] Fast Loading engage threshold (data-read vblanks of 60); 0 = framework default
 
     // fast_loading_optout: true keeps the Fast Loading mod from accelerating
     // this title even when the player enables it, for a game whose in-play
@@ -717,6 +718,7 @@ struct RuntimeConfig {
     // title: the newer real frame warped; tuned on R4). PSX_FRAME_GEN_METHOD
     // overrides. docs/FRAME_GENERATION.md.
     int                   video_frame_generation_method = 0;
+    double                video_frame_generation_ignore_near = 0.0; /* [video] frame_generation_ignore_near */
 
     // [timing] guest_cycle_scale (1 = faithful, 1..64) and its gate; title
     // constants from game.toml only. See config_loader.cpp.

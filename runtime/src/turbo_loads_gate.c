@@ -22,11 +22,17 @@ int turbo_loads_gate_window_reads(const TurboLoadsGate *g)
     return n;
 }
 
+static int s_window_reads = TURBO_LOADS_WINDOW_READS;
+void turbo_loads_gate_set_window_reads(int n)
+{
+    s_window_reads = (n >= 1 && n <= TURBO_LOADS_WINDOW) ? n : TURBO_LOADS_WINDOW_READS;
+}
+
 int turbo_loads_gate_step(TurboLoadsGate *g, int data_read, int load_hold, int release_frames)
 {
     g->history = ((g->history << 1) | (data_read ? 1u : 0u)) & WINDOW_MASK;
     if (!g->engaged) {
-        if (turbo_loads_gate_window_reads(g) < TURBO_LOADS_WINDOW_READS)
+        if (turbo_loads_gate_window_reads(g) < s_window_reads)
             return 0;
         g->engaged = 1;
     }
