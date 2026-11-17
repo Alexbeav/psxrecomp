@@ -34,6 +34,17 @@ which only the player sees, may show the full path. Text that is not UTF-8 (a
 Windows file name in the system code page) is written as `\u00XX`, so the
 report always loads as UTF-8 JSON.
 
+## Network addresses
+
+The report holds **no network address**: players send this file to other
+people, and the other player's address is another person's. A failed netplay
+start (`netplay_start`) is the one refusal whose sentence names an address.
+The report gets the same sentence with each address as the fixed word
+`(address)`: the listen address, the other player's address, and a listen
+text that is not an address at all. The listen port stays when it is a plain
+number ("UDP port 47810 on (address)"). The box and the log line keep the full
+sentence.
+
 ## Kinds
 
 | `kind` | When |
@@ -50,17 +61,24 @@ report always loads as UTF-8 JSON.
 | `bios_mismatch` | The BIOS could not be made active when the session started. |
 | `disc_not_mounted` | The image verified but the drive cannot mount it. |
 | `video_init` | The video system, the window or the picture output cannot be created. |
+| `build_defect` | The build's table of BIOS routines is larger than the program holds. |
 | `netplay_session_bios` | A match from the launcher needs a retail BIOS that is not on this computer. |
 | `netplay_disc` | The disc image is not valid for online play, or none is verified. |
 | `netplay_address` | A match was started with no address to listen on. |
+| `netplay_seat` | A command-line match was started from a seat that is not a pad. |
+| `netplay_start` | A command-line match could not be started: the port is in use or not allowed, the address is not valid, or the build has no netplay. The message is the sentence the start itself gives (PS1B-386), with each address as `(address)`. |
 
-Not recorded: a failed netplay start (it has its own sentence) and the
-developer gates that exit with code 2 (input routes, TAS state files).
+A match started from the lobby that fails in one of the last two ways is not a
+refused start: the player returns to the room, where the status line shows the
+sentence.
+
+Not recorded: the developer gates that exit with code 2 (input routes, TAS
+state files).
 
 ## Boxes
 
 The refusals that printed only a line (no disc or BIOS after a cancelled
-picker, mods, the cache, the window, the netplay refusals
+picker, mods, the cache, the window, a faulty build, the netplay refusals
 above) open a box when a person started the game. A scripted start gets no
 new box: `--headless`, `PSX_HEADLESS`, `--no-launcher`, `PSX_NO_LAUNCHER`, a
 replay launch, or `[launcher] skip_launcher = true` in `settings.toml`. It

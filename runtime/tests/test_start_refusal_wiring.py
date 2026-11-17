@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard that a start a player makes says why it was refused.
+"""Guard that a start a player makes says why it was refused (PS1G-63).
 
 test_start_refusal.c proves what the module records and prints. This proves
 the refusals of main() reach it and the report writer prints it. The report
@@ -11,11 +11,10 @@ left psx_last_run_report.json with reason "atexit", exit_origin "unknown" and
 frame 0: a player's report could not say why the game did not start.
 
 Scope. Covered: the refusals a player can meet before the first frame, listed
-in SITES below. Not covered, and still untagged:
-  * the failed netplay start ("netplay start failed"), which has its own
-    sentence;
-  * the developer gates that exit with code 2 (input routes, TAS state files,
-    the GPU work model): no player starts those.
+in SITES below. The failed netplay start carries the sentence PS1B-386 wrote
+for it. Not covered, and still untagged: the developer gates that exit with
+code 2 (input routes, TAS state files, the GPU work model): no player starts
+those.
 """
 
 import re
@@ -25,7 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MAIN = (ROOT / "runtime" / "src" / "main.cpp").read_text(encoding="utf-8")
 REPORT = (ROOT / "runtime" / "src" / "crash_trace.c").read_text(encoding="utf-8")
 CMAKE = (ROOT / "runtime" / "runtime.cmake").read_text(encoding="utf-8")
-DOC = (ROOT / "docs" / "RUN_REPORT_START.md").read_text(encoding="utf-8")
+DOC_PATH = ROOT / "docs" / "RUN_REPORT_START.md"
+DOC = DOC_PATH.read_text(encoding="utf-8") if DOC_PATH.is_file() else None
 
 # The module is part of every runtime build.
 assert "runtime/src/start_refusal.c" in CMAKE
@@ -87,12 +87,12 @@ SITES = [
     ('"psxrecomp: overlay cache init failed: %s\\n"', "overlay_cache"),
     ('"psxrecomp: no disc image selected; exiting.\\n"', "no_disc"),
     ("if (resolved_disc.empty() && !s_wrong_disc_sentence.empty()) {", "wrong_disc"),
-    ('launcher_warning("Already running",', "already_running"),
     ('"psxrecomp: cannot clear mods for netplay: %s\\n"', "mods"),
     ('"psxrecomp: cannot launch with selected mods: %s\\n"', "mods"),
     ('"psxrecomp: no BIOS selected; exiting.\\n"', "no_bios"),
     ('"psxrecomp: BIOS activate failed for %s%s\\n"', "bios_mismatch"),
     ('launcher_warning("Disc Could Not Be Mounted", detail);', "disc_not_mounted"),
+    ('launcher_warning("Already running",', "already_running"),
     ('"SDL_Init failed: %s\\n"', "video_init"),
     ('"SDL_CreateWindow failed: %s\\n"', "video_init"),
     ('"SDL_CreateRenderer failed: %s\\n"', "video_init"),
@@ -101,13 +101,16 @@ SITES = [
     ('"psxrecomp: netplay refused — disc mount not valid for "', "netplay_disc"),
     ('"psxrecomp: netplay refused — no verified disc TOC "', "netplay_disc"),
     ('"psxrecomp: netplay refused — empty bind "', "netplay_address"),
+    ('"psxrecomp: netplay refused — %s\\n", netplay_seat_why);', "netplay_seat"),
+    ("const char* const why = netplay_start_failure(nrc, net_cfg);", "netplay_start"),
+    ('"psxrecomp: FATAL: kernel-bless table of %s has %u rows; "', "build_defect"),
 ]
 for line, kind in SITES:
     at = before_frame.index(line)
     tail = before_frame[at : at + 1400]
     stop = re.search(r"\breturn\b[^;]*;", tail)
     assert stop, f"no return after {line}"
-    through_helper = re.match(r"return refuse_start\(", stop.group(0))
+    through_helper = re.match(r"return refuse_start(_reported)?\(", stop.group(0))
     # One site closes SDL between the refusal and the return.
     held = re.search(r'const int refused = refuse_start\("' + kind + '"', tail[: stop.start()])
     assert through_helper or (held and stop.group(0) == "return refused;"), (
@@ -116,6 +119,51 @@ for line, kind in SITES:
     assert f'"{kind}"' in stop.group(0) or held or kind == "no_bios", (
         f"the exit after {line} must be of kind {kind}"
     )
+
+# A seat that is not a pad stops a command-line match only; a match from the
+# lobby goes on and ends with the sentence in the room.
+seat = before_frame[before_frame.index('"psxrecomp: netplay refused — %s\\n", netplay_seat_why);'):][:300]
+assert re.search(r"if \(!g_netplay_from_lobby\)\s*return refuse_start\(\"netplay_seat\"", seat)
+
+# A failed netplay start is the same: a command-line match stops with the
+# sentence PS1B-386 wrote; a match from the lobby returns to the room with it.
+failed = before_frame[before_frame.index("const char* const why = netplay_start_failure(nrc, net_cfg);"):]
+failed = failed[:failed.index("\n        } else {")]
+assert re.search(
+    r'if \(!g_netplay_from_lobby\)\s*return refuse_start_reported\("netplay_start", "Match could not start",\s*why, s_netplay_start_report\);',
+    failed,
+)
+# The run report holds no address: players send that file to other people, and
+# the other player's address is another person's. The box and the log get the
+# sentence; the report gets the same words with each address as one fixed word
+# (netplay_start_failure_report_text, run by test_netplay_exit_reason.c).
+reported = MAIN[MAIN.index("static int refuse_start_reported(const char* kind, const char* title,"):]
+reported = reported[: reported.index("\n}\n") + 3]
+assert "psx_start_refusal_set(kind, title, report_sentence.c_str());" in reported
+assert "psx_start_refusal_set(kind, title, sentence.c_str());" not in reported, (
+    "the sentence with the address must not be what the report stores"
+)
+assert re.search(r"if \(s_start_interactive && !g_headless\)\s*SDL_ShowSimpleMessageBox\(SDL_MESSAGEBOX_WARNING, title,\s*sentence\.c_str\(\), NULL\);", reported)
+assert 'psx_crash_trace_set_exit_origin("start_refused");' in reported
+failure = MAIN[MAIN.index("static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {"):]
+failure = failure[: failure.index("\n}\n")]
+assert re.search(
+    r"netplay_start_failure_report_text\(nrc, netplay_built,\s*tried\[0\] \? tried : cfg\.bind_hostport,\s*"
+    r"cfg\.peer_hostport, bind_probe, sys_error, sys_text,\s*s_netplay_start_report,",
+    failure,
+), "the report's sentence must be built from the same failure as the box's"
+# No other refusal takes its sentence from an address: the listen and peer
+# texts appear in main() only on stderr lines and in this one call.
+assert before_frame.count("refuse_start_reported(") == 1
+
+# The second netplay_disc sentence names both forms a verified disc can have:
+# a .chd of the right disc passes the online rule too.
+assert re.search(
+    r'"so the match cannot start\. Select the disc image this build "\s*"needs: its \.cue file, or a \.chd\."',
+    before_frame,
+)
+assert "with its .cue file" not in MAIN
+assert 'netplay_soft_exit("netplay_start_failed");' in failed
 
 # A setup program links no game and no BIOS code. Its refusal has its own
 # kind, so a report from the kit's own exe is told from a product's.
@@ -161,10 +209,15 @@ assert re.search(r"psx_start_refusal_reset\(\);\s*/\* Execute\. \*/\s*std::fprin
     "psx_start_refusal_reset() must be the last statement before the game executes"
 )
 
-# The document names the keys, the kinds and the rule for file names.
-for word in ("start_refused", "launcher_status", "launcher_closed", "setup_relaunch", "base name"):
-    assert word in DOC, f"docs/RUN_REPORT_START.md must name {word}"
-for _, kind in SITES + [("", "config_unreadable"), ("", "setup_program")]:
-    assert f"`{kind}`" in DOC, f"docs/RUN_REPORT_START.md must list the kind {kind}"
+# The document names the keys, the kinds and the rule for file names. A private
+# checkout has no docs/RUN_REPORT_START.md; the check skips there (rule 21).
+if DOC is None:
+    print("SKIP: this checkout has no docs/RUN_REPORT_START.md (private replay checkout); "
+          "the document checks skipped")
+else:
+    for word in ("start_refused", "launcher_status", "launcher_closed", "setup_relaunch", "base name"):
+        assert word in DOC, f"docs/RUN_REPORT_START.md must name {word}"
+    for _, kind in SITES + [("", "config_unreadable"), ("", "setup_program")]:
+        assert f"`{kind}`" in DOC, f"docs/RUN_REPORT_START.md must list the kind {kind}"
 
 print("start refusal wiring: ok")
