@@ -282,7 +282,9 @@ static int fit_view(const FgPrimList *older, const FgPrimList *newer, const FgCa
             share_n = share_c = 0;
             for (uint32_t i = 0; i < np; i++) if (b[i][2] >= zcut) { share_n++; share_c += in[i]; }
         }
-        if ((float)share_c < p->min_inliers * (float)share_n || c < p->min_pairs) v->why = "few inliers";
+        /* No pair past the cut (ignore_near above 1, or every pair near)
+         * leaves no far-pair evidence: reject rather than pass 0 < 0. */
+        if (!share_n || (float)share_c < p->min_inliers * (float)share_n || c < p->min_pairs) v->why = "few inliers";
         else if (ang > p->max_angle) v->why = "camera turned too far";
         else if (mz > 0 && sh > p->max_shift * mz) v->why = "camera moved too far";
         else ok = 1;

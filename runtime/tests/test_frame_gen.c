@@ -188,6 +188,15 @@ static void test_verdict(void) {
     for (uint32_t j = 0; j < b.n; j += 2)
         for (int k = 0; k < 3; k++) { b.v[j].p[k][0] += 300.0f * (float)((j * 7 + k) % 5); b.v[j].p[k][2] += 150.0f; }
     check(!fg_cam_fit(&a, &b, &cp, &fit, v), "inconsistent motion: rejected");
+    fg_prims_reset(&b);
+    /* ignore_near: a share cut that keeps far pairs still finds the camera;
+     * a cut past every pair leaves no far-pair evidence and rejects it. */
+    stand(&b, &cn, 0, GH, 0);
+    cp.ignore_near = 0.5f;
+    check(fg_cam_fit(&a, &b, &cp, &fit, v) == 1 && fit.ok, "ignore_near 0.5: camera found");
+    cp.ignore_near = 1e6f;
+    check(!fg_cam_fit(&a, &b, &cp, &fit, v) && fit.why && strstr(fit.why, "few inliers"),
+          "ignore_near past every pair: rejected");
     fg_prims_free(&a); fg_prims_free(&b);
 }
 
