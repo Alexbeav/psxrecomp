@@ -8402,6 +8402,14 @@ static void gp1_display_mode(uint32_t val) {
      * bit 5: vertical interlace (0=off, 1=on)
      * bit 6: horizontal resolution 2 (0=normal, 1=368)
      * bit 7: "reverseflag" */
+    /* a rewrite of the same mode is not a transition. CMR2
+     * writes GP1(08h) with an unchanged value several times a second in a
+     * race; each one took the render thread's context and restarted Smooth
+     * motion's lists, so no in-between frame was ever made. */
+    const int same_mode = hres1 == (val & 3) && vres == ((val >> 2) & 1) &&
+        video_mode == (uint32_t)psx_gp1_display_mode_is_pal(val) &&
+        display_depth == ((val >> 4) & 1) && vertical_interlace == ((val >> 5) & 1) &&
+        hres2 == ((val >> 6) & 1) && reverse_flag == ((val >> 7) & 1);
     uint32_t new_depth = (val >> 4) & 1;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
@@ -8422,7 +8430,7 @@ static void gp1_display_mode(uint32_t val) {
         interlace_field = 0;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;
-    gr_display_mode_changed();
+    if (!same_mode) gr_display_mode_changed();
 }
 
 static void gp1_get_info(uint32_t val) {
