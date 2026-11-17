@@ -107,7 +107,7 @@ insert=r'''
     bool fast_boot=false,bios_hle=false;std::filesystem::path memcard_dir;
     const char* argv[]={"probe.exe"};
 '''+env_declaration+'\n'+apply+r'''
-    assert(fast_boot && bios_hle);
+    assert(fast_boot && bios_hle && settings_chose_fast_boot && settings_chose_bios_hle);
     assert(g_fov_scale==1.5 && !g_low_latency_input && g_mouse_sensitivity==2.5 && g_mouse_capture_wanted);
     assert(memcard_dir=="cards/test");
 '''+clamps+r'''
@@ -157,11 +157,14 @@ insert=r'''
     assert(renderer_arguments.at("dithering")=="2" && renderer_arguments.at("pgxp_color_perspective")=="1");
     assert(renderer_arguments.at("pgxp_seam")=="2" && renderer_arguments.at("pgxp_depth_threshold")=="2048.5");
     assert(renderer_arguments.at("frame_generation_method")=="1");
-    puts("PASS:41 functional controls composed through real startup/clamps/env/session reset/rematch;PGXP plugin/netplay/env precedence;no renderer-output claim");
+    puts("PASS:42 functional controls composed through real startup/clamps/env/session reset/rematch;PGXP plugin/netplay/env precedence;no renderer-output claim");
 '''
 if env_declaration:
  insert=insert.replace('reset_mod_owned_presentation();check_35();','reset_mod_owned_presentation();apply_player_presentation_environment();check_35();')
-fixture=fixture.replace('    puts("PASS:35 actual provider edits',insert+'\n    puts("PASS:35 actual provider edits')
+marker='    puts("PASS:36 actual provider edits'
+assert fixture.count(marker)==1,'provider PASS marker not found; composition checks would not be injected'
+fixture=fixture.replace(marker,insert+'\n'+marker)
+assert insert in fixture,'composition checks were not injected'
 fixture=fixture.replace('#include "../src/', '#include "'+(root/'runtime/src').as_posix()+'/')
 a.work.mkdir(parents=True,exist_ok=True);cpp=a.work/'composition.cpp';cpp.write_text(fixture,encoding='utf-8');exe=a.work/'composition.exe'
 command=[a.compiler,'-std=c++17','-O0','-UNDEBUG','-DRECOMP_LAUNCHER','-DFMT_HEADER_ONLY=1']
@@ -176,4 +179,6 @@ if a.expect_baseline_failure:
  assert result.returncode==1 and 'FAIL: saved interpolation discarded before session start' in result.stdout
  print('Measured expected baseline failure: saved interpolation clamp')
 else:
+ if result.returncode==0 and 'PASS:42 functional controls composed' not in result.stdout:
+  raise SystemExit('composition checks did not run')
  raise SystemExit(result.returncode)

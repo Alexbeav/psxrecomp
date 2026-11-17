@@ -1,6 +1,13 @@
-/* Native PS1 Mouse wire regression. Poll ID 0x12, active-low buttons,
- * signed movement, carry, ACK edges and multitap padding. Unsupported
- * commands remain high impedance; motion saturation is a host policy. */
+/* GunCon byte protocol on the production SIO device (PS1B-305).
+ *
+ * Expected bytes come from recomp-corpus references/ps1/PERIPHERAL-GUNCON-SPEC.md,
+ * which is written from PSX-SPX "Lightguns - Namco (GunCon)" only: ID 5A63h,
+ * the 42h reply 63h 5Ah <buttons lo> <buttons hi> <X lo> <X hi> <Y lo> <Y hi>,
+ * buttons active low (A bit 3, trigger bit 13, B bit 14, all others 1),
+ * "no light" = X 0001h / Y 000Ah, /ACK after every byte but the last, and a
+ * full 8-byte multitap seat. The hi-z answer to other commands is a runtime
+ * choice that the spec marks open; it is pinned here so a change is
+ * deliberate. */
 #include "sio.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,14 +121,6 @@ enum { BTN_A = 1u << 3, TRIGGER = 1u << 13, BTN_B = 1u << 14 };
 #define NOL_X SIO_GUNCON_NO_LIGHT_X
 #define NOL_Y SIO_GUNCON_NO_LIGHT_Y
 
-#ifndef SIO_DEVICE_GUNCON
-/* Control trees without the native device must fail at the actual wire ID. */
-int main(void) {
-    setup_bus(); sio_set_pad_connected(0,1); sio_set_pad_config_capable(0,0);
-    EXPECT(0,"native guncon wire ID",0xff,0x63,0x5a,0xff,0xff,1,0,10,0);
-    return 0;
-}
-#else
 int main(void) {
     setup_bus();
     sio_set_port_device(0,SIO_DEVICE_GUNCON);
@@ -163,8 +162,7 @@ int main(void) {
      * the neGcon setter is ignored for a GunCon. */
     sio_set_guncon_state(1,GB(TRIGGER),0x0100,0x0100);
     check(sio_get_port_device(1) == SIO_DEVICE_PAD,"slot 1 is still a pad");
-    sio_set_pad_type(0,SIO_PAD_NEGCON,0x00,0xFF,0xFF,0xFF);
-    sio_set_pad_state_slot(0,0x0000);
+    sio_set_negcon_state(0,0x0000,0x00,0xFF,0xFF,0xFF);
     EXPECT(0,"neGcon state does not reach a GunCon", 0xFF,0x63,0x5A,0xFF,0xFF,0x23,0x01,0x45,0x00);
 
     /* sio_init keeps the kind but returns the gun to idle (no light). */
@@ -200,14 +198,12 @@ int main(void) {
     /* A different plug starts idle: nothing carries over a kind change. */
     sio_set_port_device(1,SIO_DEVICE_GUNCON);
     sio_set_guncon_state(1,GB(TRIGGER|BTN_A|BTN_B),0x0111,0x0022);
-    sio_set_port_device(1,SIO_DEVICE_PAD);
-    sio_set_pad_type(1,SIO_PAD_NEGCON,0x80,0,0,0);
+    sio_set_port_device(1,SIO_DEVICE_NEGCON);
     sio_set_port_device(1,SIO_DEVICE_GUNCON);
     EXPECT(1,"switching kinds resets it",       0xFF,0x63,0x5A,0xFF,0xFF,0x01,0x00,0x0A,0x00);
 
     /* The neGcon keeps its own reply next to a GunCon. */
-    sio_set_port_device(0,SIO_DEVICE_PAD);
-    sio_set_pad_type(0,SIO_PAD_NEGCON,0x80,0,0,0);
+    sio_set_port_device(0,SIO_DEVICE_NEGCON);
     {
         static const uint8_t tx[9] = { 0x01,0x42,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
         uint8_t rx[9], ack[9];
@@ -258,5 +254,3 @@ int main(void) {
     printf("sio_guncon: %u checks passed (players=%d)\n",checks,PSX_MAX_PLAYERS);
     return 0;
 }
-
-#endif

@@ -1,8 +1,7 @@
-/* DualShock protocol rules on the production SIO device: a config command
- * outside config mode answers the ID byte and then gives no /ACK (P2), and
- * IRQ7 is raised only on the 0->1 edge of JOY_STAT bit 9 (P3). The expected
- * bytes and flags come from authored test programs run on a reference
- * emulator. */
+/* DualShock protocol rules on the production SIO device, per pad profile:
+ * config commands outside config mode [ORACLE FIXTURE P2], the power-on
+ * first-transaction address byte [ORACLE FIXTURE P2], and IRQ7 raised only
+ * on the 0->1 edge of JOY_STAT bit 9 [ORACLE FIXTURE P3]. */
 #include "../src/sio.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +33,8 @@ typedef struct { int n; PByte b[9]; } PTxn;
 typedef struct { uint8_t tx, rx; int js_b, is_b, js_c, is_c; } P3Byte;
 typedef struct { const char *name; int policy; P3Byte b[9]; } P3Case;
 
-/* P2: config commands outside config mode. Per step, each byte's tx, rx
- * and whether /ACK followed. */
+/* [ORACLE FIXTURE P2, Octoshock 2.3] P2-config-cmds-outside-config B rows:
+ * per step, each byte's tx, rx and whether /ACK followed. */
 static const PTxn p2_outside[] = {
     {5,{{0x01,0x00,1},{0x42,0x41,1},{0x00,0x5A,1},{0x00,0xFF,1},{0x00,0xFF,0}}},
     {2,{{0x01,0xFF,1},{0x45,0x41,0}}},
@@ -57,7 +56,7 @@ static const PTxn p2_outside[] = {
     {5,{{0x01,0xFF,1},{0x43,0x41,1},{0x00,0x5A,1},{0x00,0xFF,1},{0x00,0xFF,0}}},
     {5,{{0x01,0xFF,1},{0x42,0x41,1},{0x00,0x5A,1},{0x00,0xFF,1},{0x00,0xFF,0}}},
 };
-/* P3: tx, rx, then JOY_STAT
+/* [ORACLE FIXTURE P3, Octoshock 2.3] P3-digital-* Q rows: tx, rx, then JOY_STAT
  * bit 9 and I_STAT bit 7 at point B (after /ACK time) and point C (after the
  * acknowledge policy: 1 = I_STAT, 2 = JOY_CTRL bit 4, 3 = both). */
 static const P3Case p3_cases[] = {
@@ -67,14 +66,23 @@ static const P3Case p3_cases[] = {
     {"P3-digital-ack-neither",0,{{0x01,0x00,1,1,1,1},{0x42,0x41,1,1,1,1},{0x00,0x5A,1,1,1,1},{0x00,0xFF,1,1,1,1},{0x00,0xFF,1,1,1,1},{0x00,0xFF,1,1,1,1},{0x00,0xFF,1,1,1,1},{0x00,0xFF,1,1,1,1},{0x00,0xFF,1,1,1,1}}},
 };
 
+static const char *profile;
 static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; \
-    fprintf(stderr, "FAIL line %d: ", __LINE__); \
+    fprintf(stderr, "FAIL [%s] line %d: ", profile[0] ? profile : "default", __LINE__); \
     fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
 static void advance(unsigned n) { while (n--) { clock_now++; sio_advance(1); } }
 
-static void power_on(void) {
+static void power_on(const char *model) {
+    profile = model;
+#ifdef _WIN32
+    char env[96];
+    snprintf(env, sizeof env, "PSX_INPUT_ROUTE_PAD_ACK_MODEL=%s", model);
+    _putenv(env);
+#else
+    setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL", model, 1);
+#endif
     sio_init();
     sio_set_pad_connected(0, 1);
     sio_set_pad_config_capable(0, 1);
@@ -96,12 +104,11 @@ static unsigned byte_b(uint8_t tx, int *js_b, int *is_b) {
     return rx;
 }
 
-/* The reference answers 00 for the very first address byte after power-on;
- * the runtime answers FF there, which this test leaves as it is. */
-static uint8_t first_rx(void) { return 0xFF; }
+/* The power-on address byte reads 00 only for octoshock-2.2.2-digital. */
+static uint8_t first_rx(void) { return !strcmp(profile, "octoshock-2.2.2-digital") ? 0x00 : 0xFF; }
 
 static void run_p2_outside(void) {
-    power_on();
+    power_on(profile);
     for (size_t s = 0; s < sizeof p2_outside / sizeof p2_outside[0]; ++s) {
         const PTxn *t = &p2_outside[s];
         sio_write(0x1F80104A, 0);
@@ -122,7 +129,7 @@ static void run_p2_outside(void) {
 static void run_p3(void) {
     for (size_t c = 0; c < sizeof p3_cases / sizeof p3_cases[0]; ++c) {
         const P3Case *k = &p3_cases[c];
-        power_on();
+        power_on(profile);
         sio_write(0x1F80104A, 0);
         sio_write(0x1F80104A, 0x1003);
         unsigned raises0 = irq7_raises;
@@ -147,16 +154,70 @@ static void run_p3(void) {
     }
 }
 
+/* Only the first transaction after power-on carries the 00 address byte. */
+static void run_first_transaction(void) {
+    power_on(profile);
+    for (int t = 0; t < 3; ++t) {
+        int js, is;
+        sio_write(0x1F80104A, 0);
+        sio_write(0x1F80104A, 0x1003);
+        unsigned rx = byte_b(0x01, &js, &is);
+        CHECK(rx == (t == 0 ? first_rx() : 0xFF), "transaction %d address rx %02X", t, rx);
+        sio_write(0x1F80104A, 0x1013); i_stat &= ~0x80u;
+        rx = byte_b(0x42, &js, &is);
+        CHECK(rx == 0x41, "transaction %d id rx %02X", t, rx);
+        sio_write(0x1F80104A, 0);
+    }
+}
+
+/* One address byte on a fresh transaction; returns its rx. */
+static unsigned address_rx(void) {
+    int js, is;
+    sio_write(0x1F80104A, 0);
+    sio_write(0x1F80104A, 0x1003);
+    unsigned rx = byte_b(0x01, &js, &is);
+    sio_write(0x1F80104A, 0x1013); i_stat &= ~0x80u;
+    sio_write(0x1F80104A, 0);
+    return rx;
+}
+
+/* The power-on flag survives a snapshot round trip: a state saved before the
+ * first transaction replays the 00 address byte after a restore, and a state
+ * saved after it does not. */
+static void run_snapshot_round_trip(void) {
+    power_on(profile);
+    uint32_t n = sio_snapshot_bytes();
+    uint8_t *fresh = malloc(n), *used = malloc(n);
+    CHECK(n && fresh && used, "snapshot size %u", n);
+    if (!n || !fresh || !used) { free(fresh); free(used); return; }
+    sio_snapshot_write(fresh);
+    CHECK(address_rx() == first_rx(), "first transaction before save");
+    sio_snapshot_write(used);
+    CHECK(address_rx() == 0xFF, "second transaction");
+    CHECK(sio_snapshot_read(fresh, n), "restore the power-on state");
+    CHECK(address_rx() == first_rx(), "first transaction after restoring the power-on state");
+    CHECK(address_rx() == 0xFF, "later transaction after restoring the power-on state");
+    CHECK(sio_snapshot_read(used, n), "restore the used state");
+    CHECK(address_rx() == 0xFF, "transaction after restoring the used state");
+    free(fresh); free(used);
+}
+
 int main(void) {
-    run_p2_outside();
-    run_p3();
+    static const char *const profiles[] = { "", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock" };
+    for (size_t p = 0; p < 3; ++p) {
+        profile = profiles[p];
+        run_p2_outside();
+        run_p3();
+        run_first_transaction();
+        run_snapshot_round_trip();
+    }
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);
         return 1;
     }
-    puts("PASS: DualShock config commands outside config mode and the IRQ7 edge");
+    puts("PASS: DualShock P2 outside-config, first transaction and P3 IRQ7 edge in all pad profiles");
     return 0;
 }
 
-/* The fixture card flush succeeds. */
+/* The fixture card flush succeeds; refusal is exercised by the real-card protocol test. */
 int memcard_last_flush_result(int slot) { (void)slot; return 0; }

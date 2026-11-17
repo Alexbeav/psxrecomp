@@ -45,7 +45,7 @@ struct Identity {
     bool expected_serial_given = false, serial_matches = true;
 };
 struct Companion { bool ready = true; std::string message; };
-static const std::string identity_error;
+static std::string identity_error;
 /* A set disc that is none of its list's serials (disc_roster_wrong_disc). */
 static bool set_wrong_disc = false;
 static const char* reason(const Identity& id, const Companion& companion) {
@@ -75,6 +75,12 @@ int main() {
     id.sbi_warning.clear();
     id.netplay_detail = "ordinary retained reason";
     assert(!std::strcmp(reason(id, companion), id.netplay_detail.c_str()));
+    set_wrong_disc = true;
+    identity_error = "required original image does not match";
+    assert(!std::strcmp(reason(id, companion), identity_error.c_str())
+           && "an identity error must take precedence over the wrong-serial reason");
+    identity_error.clear();
+    set_wrong_disc = false;
 }
 '''
     with tempfile.TemporaryDirectory(prefix="missing_sbi_reason_", dir=scratch_root()) as scratch:
@@ -88,7 +94,7 @@ int main() {
             print(result.stderr, end="")
             if result.returncode:
                 raise RuntimeError(f"exit {result.returncode}: {command}")
-    print("MISSING_SBI_REASON_CONTROLS_PASS five actual expression controls")
+    print("MISSING_SBI_REASON_CONTROLS_PASS six actual expression controls")
 
 
 if __name__ == "__main__":

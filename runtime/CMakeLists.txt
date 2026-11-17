@@ -1369,6 +1369,12 @@ add_test(NAME sio_dualshock_dtr_session_test COMMAND sio_dualshock_dtr_session_t
         target_compile_definitions(sio_negcon_p${players}_test PRIVATE PSX_MAX_PLAYERS=${players})
         add_test(NAME sio_negcon_p${players}_test COMMAND sio_negcon_p${players}_test)
     endforeach()
+    # Mouse/method-2 checks also cover eight players, where both physical
+    # ports have a multitap.
+    add_executable(sio_mouse_p8_test tests/test_sio_mouse.c src/sio.c)
+    target_include_directories(sio_mouse_p8_test PRIVATE include)
+    target_compile_definitions(sio_mouse_p8_test PRIVATE PSX_MAX_PLAYERS=8)
+    add_test(NAME sio_mouse_p8_test COMMAND sio_mouse_p8_test)
     # Historical pin-F bytes are not the modern protocol baseline.
     add_executable(sio_port_device_identity_historical tests/test_sio_port_device_identity.c)
     target_include_directories(sio_port_device_identity_historical PRIVATE include)
