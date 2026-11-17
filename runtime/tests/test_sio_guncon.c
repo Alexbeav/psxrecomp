@@ -121,6 +121,14 @@ enum { BTN_A = 1u << 3, TRIGGER = 1u << 13, BTN_B = 1u << 14 };
 #define NOL_X SIO_GUNCON_NO_LIGHT_X
 #define NOL_Y SIO_GUNCON_NO_LIGHT_Y
 
+#ifndef SIO_DEVICE_GUNCON
+/* Control trees without the native device must fail at the actual wire ID. */
+int main(void) {
+    setup_bus(); sio_set_pad_connected(0,1); sio_set_pad_config_capable(0,0);
+    EXPECT(0,"native guncon wire ID",0xff,0x63,0x5a,0xff,0xff,1,0,10,0);
+    return 0;
+}
+#else
 int main(void) {
     setup_bus();
     sio_set_port_device(0,SIO_DEVICE_GUNCON);
@@ -254,3 +262,5 @@ int main(void) {
     printf("sio_guncon: %u checks passed (players=%d)\n",checks,PSX_MAX_PLAYERS);
     return 0;
 }
+
+#endif
