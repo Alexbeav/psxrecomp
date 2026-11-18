@@ -1523,6 +1523,7 @@ if(BUILD_TESTING)
                 netplay_boot_mode_wiring
                 launcher_pad_mode_wiring
                 netplay_start_failure_wiring
+                netplay_early_input_idle_wiring
                 netplay_lan_identity_wiring
                 start_refusal_wiring
                 launcher_serial_status_wiring
