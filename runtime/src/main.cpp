@@ -19681,6 +19681,7 @@ static bool cli_help_requested(int argc, char** argv) {
 
 #ifndef PSX_RUNTIME_EXTERNAL_MAIN
 int main(int argc, char** argv) {
+    psx_disc_warning_set("");
     /* Before any window, SDL, audio, regional hand-off or setup-host forward. */
     if (cli_help_requested(argc, argv)) {
         cli_output_to_parent_console();
@@ -19689,7 +19690,6 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         return 0;
     }
-    psx_disc_warning_set("");
 #if defined(RECOMP_LAUNCHER_MODULE_HOST)
     if (argc == 2 && std::strcmp(argv[1],"--launcher-module-check") == 0) {
         const auto root = exe_dir_from_argv(argv[0]);

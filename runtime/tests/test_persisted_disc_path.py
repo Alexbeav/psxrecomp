@@ -17,8 +17,8 @@ def main():
     for name in ('normalize_disc_path_for_launch', 'resolve_persisted_disc_path'):
         start = text.index('static std::filesystem::path ' + name + '(')
         adapters.append(text[start:text.index('\n}\n', start) + 2])
-    assert 'resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]))' in text
-    assert 'cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0))' in text
+    assert 'resolved_disc = resolve_persisted_disc_path(us.disc_path, user_dir_from_argv(argv[0]))' in text
+    assert 'cached = resolve_persisted_disc_path(cached, user_dir_from_argv(argv0))' in text
     with tempfile.TemporaryDirectory(prefix='persisted disc spaces ') as tmp:
         base = Path(tmp)
         product, cwd = base / 'moved product', base / 'unrelated cwd'
