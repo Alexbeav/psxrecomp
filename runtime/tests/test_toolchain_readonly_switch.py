@@ -51,6 +51,9 @@ def cli_child(case: str) -> int:
     """Runs one operation of tools/toolchain_pack.py on a made-up cache and prints what it saw."""
     calls: list[str] = []
     tp, sandbox = support.load_cli(calls)
+    # The login PATH write is opt-in since PS1B-687 (--persist-env). Asked for here, so the
+    # control shows it is real and the switch still stops it.
+    tp.set_persist_env(True)
     cache = Path(os.environ["RETCOMM_TOOLCHAIN_CACHE"])
     stub = Path(os.environ["TEST_STUB"]) if os.environ.get("TEST_STUB") else None
     project = sandbox / "project"

@@ -3748,6 +3748,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_safe_install.py
                          --compiler ${CMAKE_C_COMPILER})
+        # PS1B-687: a fresh toolchain install goes into the project's own
+        # toolchain folder and writes nothing under LOCALAPPDATA or TEMP; the
+        # older shared cache is still read.
+        add_test(NAME toolchain_portable_install_test
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_portable_install.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_portable_install_test PROPERTIES SKIP_RETURN_CODE 77)
         # PS1B-410: the toolchain check does not depend on the length of PATH
         # (it failed past about 7,600 characters), and activating a pack does
         # not grow PATH.

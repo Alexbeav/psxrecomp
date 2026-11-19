@@ -1,13 +1,23 @@
 """Resolve / download / unpack portable cmake-clang-v1 toolchain packs.
 
-Shared cache matches Retro / retcomm-toolchains install.sh:
+A fresh install goes into the project's own toolchain folder, beside the setup
+program (PS1B-687: the setup is portable and writes nothing to the user's
+profile or %TEMP%):
+
+  <project>/toolchain/<tag>/   plus latest → current <tag> (pointer only;
+                               never a pack extract target)
+
+The download and the unpack happen in dot-folders inside that folder and are
+removed after use. Lookup order: RETCOMM_TOOLCHAIN_DIR (and its aliases), then
+RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME (which also take the install when
+set), then the project's toolchain folder, then the older shared caches that
+earlier setup programs and retcomm-toolchains install.sh used, read only:
 
   Windows: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/<tag>/
   Linux/macOS: $XDG_DATA_HOME/retcomm/… and ~/.local/share/retcomm/…
-  plus latest → current <tag> (pointer only; never a pack extract target)
+  legacy …/psxrecomp/toolchains/…
 
-Overrides: RETCOMM_TOOLCHAIN_CACHE, RETCOMM_DATA_HOME, RETCOMM_TOOLCHAIN_DIR.
-Legacy …/psxrecomp/toolchains/… is still searched and migrated on ensure.
+Only a call that names no project installs into the first of those caches.
 """
 
 from __future__ import annotations
@@ -43,6 +53,53 @@ _ASSET = {
 # it under running builds (PS1B-406, PS1B-410). host/psxrecomp_codegen_host.c
 # honours the same variable.
 READONLY_ENV = "PSXRECOMP_TOOLCHAIN_READONLY"
+
+# The project whose toolchain folder takes a fresh install (PS1B-687). Set by
+# the public calls that are given a project root; None for a call that names
+# none, which keeps the older shared cache as its install root.
+_PROJECT_ROOT: Optional[Path] = None
+
+
+# Write the user's login PATH and RETCOMM_TOOLCHAIN_DIR (registry / shell profile)?
+# Off by default (PS1B-687): the pack lives in one game's folder.
+_PERSIST_ENV = False
+
+
+def set_persist_env(on: bool) -> None:
+    """Opt in to the persistent user environment write (ensure-toolchain --persist-env)."""
+    global _PERSIST_ENV
+    _PERSIST_ENV = bool(on)
+
+
+def use_project_root(project_root) -> None:
+    """Make <project_root>/toolchain the install root and a lookup root."""
+    global _PROJECT_ROOT
+    if project_root is not None:
+        _PROJECT_ROOT = Path(project_root).expanduser()
+
+
+def project_cache_root() -> Optional[Path]:
+    """<project>/toolchain, where a fresh pack is installed; None without a project."""
+    return _PROJECT_ROOT / "toolchain" if _PROJECT_ROOT is not None else None
+
+
+def _scratch_dir() -> Optional[str]:
+    """Where the toolchain check writes its test program: the project's toolchain
+    folder (a dot-folder in it, removed after use), not %TEMP%. The system
+    temporary folder as before without a project, when RETCOMM_TOOLCHAIN_CACHE or
+    RETCOMM_DATA_HOME moves the install elsewhere, when the folder is a link into
+    a pack, or with the read-only switch (which then changes nothing in the
+    project)."""
+    root = project_cache_root()
+    overridden = any((os.environ.get(name) or "").strip()
+                     for name in ("RETCOMM_TOOLCHAIN_CACHE", "RETCOMM_DATA_HOME"))
+    if root is None or overridden or toolchain_readonly() or _is_link(root):
+        return None
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return str(root)
 
 
 def toolchain_readonly() -> bool:
@@ -317,7 +374,7 @@ def toolchain_bin_check(bin_dir: Path, log=None) -> str:
     if ran.returncode != 0:
         return "clang does not run"
     try:
-        work = Path(tempfile.mkdtemp(prefix="psxrecomp-tc-probe-"))
+        work = Path(tempfile.mkdtemp(prefix=".psxrecomp-tc-probe-", dir=_scratch_dir()))
         (work / "probe.c").write_text("int main(void){return 0;}\n", encoding="utf-8")
     except OSError:
         return "a test file could not be written to the temporary folder"
@@ -491,7 +548,8 @@ def resolve_embedded_bin(project_root: Path) -> Optional[Path]:
     if bin_looks_usable(direct):
         return direct
     try:
-        kids = [p for p in root.iterdir() if p.is_dir()]
+        # Dot-folders are staging, downloads and packs set aside: never a pack in use.
+        kids = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")]
     except OSError:
         return None
     if len(kids) == 1:
@@ -558,13 +616,20 @@ def shared_cache_roots() -> list[Path]:
     Layout matches retcomm-toolchains install.sh:
       …/retcomm/toolchains/cmake-clang-v1/<tag>/   plus latest → current
 
-    Retro (`retcomm`) is preferred; legacy `psxrecomp` remains a read/migrate
-    fallback. Honors RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME.
+    Order: RETCOMM_TOOLCHAIN_CACHE, RETCOMM_DATA_HOME, the project's toolchain
+    folder (PS1B-687), then the older shared caches — Retro (`retcomm`) first,
+    legacy `psxrecomp` after — which are read where they are.
     """
     roots: list[Path] = []
     cache = (os.environ.get("RETCOMM_TOOLCHAIN_CACHE") or "").strip()
     if cache:
         roots.append(Path(cache).expanduser())
+    data_env = (os.environ.get("RETCOMM_DATA_HOME") or "").strip()
+    if data_env:
+        roots.append(Path(data_env).expanduser() / "toolchains" / PACK_ID)
+    project = project_cache_root()
+    if project is not None:
+        roots.append(project)
     for data in retcomm_data_homes():
         roots.append(data / "toolchains" / PACK_ID)
     # Legacy psxrecomp mirrors beside each retcomm root's parent share.
@@ -579,12 +644,23 @@ def shared_cache_roots() -> list[Path]:
 
 
 def preferred_install_root() -> Path:
-    """Where newly downloaded / offline-unpacked packs land (Retro shared)."""
+    """Where newly downloaded / offline-unpacked packs land: RETCOMM_TOOLCHAIN_CACHE,
+    else RETCOMM_DATA_HOME, else the project's toolchain folder (PS1B-687). Only a
+    call that names no project falls back to the older shared cache."""
     cache = (os.environ.get("RETCOMM_TOOLCHAIN_CACHE") or "").strip()
     if cache:
         r = Path(cache).expanduser()
         r.mkdir(parents=True, exist_ok=True)
         return r
+    data_env = (os.environ.get("RETCOMM_DATA_HOME") or "").strip()
+    if data_env:
+        r = Path(data_env).expanduser() / "toolchains" / PACK_ID
+        r.mkdir(parents=True, exist_ok=True)
+        return r
+    project = project_cache_root()
+    if project is not None:
+        project.mkdir(parents=True, exist_ok=True)
+        return project
     for r in shared_cache_roots():
         if "retcomm" in r.parts:
             r.mkdir(parents=True, exist_ok=True)
@@ -694,7 +770,12 @@ def _best_pack_under(base: Path, min_version: str = "") -> Optional[Path]:
 
 
 def migrate_legacy_psxrecomp_cache(log=None) -> None:
-    """Copy legacy psxrecomp cache into retcomm when retcomm has no usable pack."""
+    """Copy legacy psxrecomp cache into retcomm when retcomm has no usable pack.
+
+    Not with a project: its packs install into the project's toolchain folder,
+    and the legacy cache is read where it is (PS1B-687)."""
+    if _PROJECT_ROOT is not None:
+        return
     retcomm = next((r for r in shared_cache_roots() if "retcomm" in r.parts), None)
     legacy = next((r for r in shared_cache_roots() if "psxrecomp" in r.parts), None)
     if retcomm is None or legacy is None or not legacy.is_dir():
@@ -766,13 +847,13 @@ def write_toolchain_stamp(project_root: Path, bin_dir: Path) -> None:
 def materialize_into_project(
     project_root: Path, pack_root: Path, log=None
 ) -> Path:
-    """Point the project at a shared pack via stamp (no multi‑GB copy)."""
+    """Point the project at its pack via stamp (no multi‑GB copy)."""
     src = unwrap_pack_root(pack_root)
     if not pack_root_looks_usable(src):
         raise RuntimeError(f"toolchain pack unusable: {pack_root}")
     write_toolchain_stamp(project_root, src / "bin")
     if log:
-        log(f"Using shared toolchain at {src}")
+        log(f"Using toolchain at {src}")
     return src
 
 
@@ -791,12 +872,9 @@ def resolve_toolchain_bin(
         root = unwrap_pack_root(env_root)
         if pack_root_looks_usable(root) and pack_satisfies_min(root, min_version):
             return root / "bin"
-    if project_root is not None:
-        embedded = resolve_embedded_bin(project_root)
-        if embedded:
-            root = embedded.parent
-            if pack_satisfies_min(root, min_version):
-                return embedded
+    # RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME, then <project>/toolchain,
+    # then the older shared caches (shared_cache_roots holds that order).
+    use_project_root(project_root)
     cached = find_cached_pack(min_version=min_version)
     if cached:
         return cached / "bin"
@@ -1106,11 +1184,12 @@ def _register_user_path_unix(cache_root: Path, latest: Path, log=None) -> None:
 
 
 def register_toolchain_user_env(pack_root: Path, log=None) -> Path:
-    """Refresh ``latest`` + idempotently add ``latest/bin`` to the user login PATH.
+    """Refresh ``latest`` and put the pack on PATH for this process and its children.
 
-    Mirrors retcomm-toolchains zip ``install.sh`` / ``install.ps1`` so Retro
-    setup hosts and the standalone wizard leave cmake/clang on PATH for shell
-    development after placing the pack in the shared cache.
+    Only with set_persist_env(True) (``ensure-toolchain --persist-env``) also add
+    ``latest/bin`` to the user's login PATH and write RETCOMM_TOOLCHAIN_DIR (the
+    registry on Windows, the shell profile elsewhere), as retcomm-toolchains zip
+    ``install.sh`` / ``install.ps1`` do. Off by default since PS1B-687.
     """
     root = unwrap_pack_root(pack_root)
     if not pack_root_looks_usable(root):
@@ -1136,12 +1215,20 @@ def register_toolchain_user_env(pack_root: Path, log=None) -> Path:
     bin_dir = usable / "bin"
     if not bin_looks_usable(bin_dir):
         bin_dir = root / "bin"
+    # Session PATH for this process and its children (idempotent).
+    activate_toolchain_bin(bin_dir if bin_looks_usable(bin_dir) else root / "bin", log=None)
+    if not _PERSIST_ENV:
+        # PS1B-687: the pack lives in one game's folder. RETCOMM_TOOLCHAIN_DIR is
+        # first in every lookup, so a persistent value would send every other game
+        # into this folder and break them when it is deleted. Opt in only.
+        if log:
+            log("The user's login PATH and RETCOMM_TOOLCHAIN_DIR were not changed "
+                "(ensure-toolchain --persist-env writes them).")
+        return usable
     if sys_platform_is_windows():
         _register_user_path_windows(bin_dir, usable, log=log)
     else:
         _register_user_path_unix(cache_root, usable, log=log)
-    # Session PATH for this process (idempotent).
-    activate_toolchain_bin(bin_dir if bin_looks_usable(bin_dir) else root / "bin", log=None)
     if log:
         log(f"Registered toolchain user PATH via {bin_dir}")
     return usable
@@ -1202,8 +1289,15 @@ def install_from_zip(
         raise RuntimeError(
             f"The toolchain is read-only for this start ({READONLY_ENV}). Nothing was installed."
         )
+    use_project_root(project_root)
     put_back_set_aside(log)     # a pack an interrupted install left aside, before anything else
     cache_root = preferred_install_root()
+    if _is_link(cache_root):
+        # An older setup linked the project's toolchain folder to a pack in the
+        # shared cache. Only the link goes; that pack stays where it is and is
+        # still found there. The new pack goes into a real folder.
+        _remove_pointer(cache_root)
+        cache_root = preferred_install_root()
     staging = cache_root / ".staging-offline"
     root = unpack_zip_to(zip_path, staging)
     if not pack_satisfies_min(root, min_version):
@@ -1314,7 +1408,14 @@ def download_latest_pack(
     url = f"https://github.com/{repo}/releases/latest/download/{asset}"
     if log:
         log(f"Downloading {asset} from {repo}...")
-    with tempfile.TemporaryDirectory(prefix="psxrecomp-tc-") as tmp:
+    use_project_root(project_root)
+    install_root = preferred_install_root()
+    if _is_link(install_root):
+        _remove_pointer(install_root)     # as install_from_zip does
+        install_root = preferred_install_root()
+    # Downloaded beside where it is installed, in a dot-folder no lookup reads,
+    # removed after use. Not %TEMP% (PS1B-687).
+    with tempfile.TemporaryDirectory(prefix=".download-", dir=str(install_root)) as tmp:
         zpath = Path(tmp) / asset
         try:
             download_url(url, zpath, token=token or None)
@@ -1341,15 +1442,24 @@ def ensure_toolchain(
     repo: str = DEFAULT_REPO,
     min_version: str = "",
     log=None,
+    persist_env: bool = False,
 ) -> Path:
     """Return usable toolchain *bin* directory, installing if requested.
 
-    Resolution order: env override → project stamp/toolchain/ → shared
-    retcomm cache (legacy psxrecomp migrated) → optional --from-zip → download.
+    The pack is put on PATH (and RETCOMM_TOOLCHAIN_DIR set) for this process and
+    its children. persist_env=True also writes them to the user's login
+    environment; off by default (PS1B-687).
 
-    Installs always land under the shared Retro cache; the project only gets
-    a stamp file pointing at that pack.
+    Resolution order: RETCOMM_TOOLCHAIN_DIR → RETCOMM_TOOLCHAIN_CACHE /
+    RETCOMM_DATA_HOME → <project>/toolchain/ → older shared caches (read only)
+    → optional --from-zip → download.
+
+    Installs land in <project>/toolchain/<tag> (PS1B-687), or in
+    RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME when one is set; the project's
+    stamp names the pack's bin folder.
     """
+    use_project_root(project_root)
+    set_persist_env(persist_env)
     if not sys_platform_is_windows() and from_zip is None:
         # Setup/rebuild on Linux and macOS uses native tools. Do not turn a
         # missing dependency into an unsolicited portable-pack download.

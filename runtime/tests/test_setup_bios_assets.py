@@ -428,7 +428,7 @@ class PlatformCopyTests(unittest.TestCase):
                 host = "Fixture.exe" if windows else "Fixture"
                 readme = "1. Run {}.\n2. Provide a legal retail BIOS (required).\n".format(host)
                 if windows:
-                    readme += "downloads cmake-clang-v1 toolchain pack\n"
+                    readme += "downloads cmake-clang-v1 toolchain pack into the toolchain folder of this game folder\n"
                     controls = "Download latest portable toolchain Select cmake-clang-v1 toolchain zip cmake-clang-v1"
                 else:
                     readme += "Install CMake, Ninja, Python 3 and a C/C++ compiler; available on PATH; native build tools\n"
@@ -446,6 +446,12 @@ class PlatformCopyTests(unittest.TestCase):
                     controls = controls.replace("Select cmake-clang-v1 toolchain zip", "")
                     write()
                     with self.assertRaisesRegex(ValueError, "Select cmake-clang-v1 toolchain zip"):
+                        platform_copy.audit(archive)
+                    # PS1B-687: the pack goes into the game folder; a text naming AppData is refused.
+                    controls = controls + " Select cmake-clang-v1 toolchain zip"
+                    readme += "The pack goes into %LOCALAPPDATA%\\retcomm\\toolchains.\n"
+                    write()
+                    with self.assertRaisesRegex(ValueError, "forbidden copy: appdata"):
                         platform_copy.audit(archive)
                 else:
                     write("1. Portable toolchain")

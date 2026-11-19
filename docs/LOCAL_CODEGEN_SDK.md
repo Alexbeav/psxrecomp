@@ -39,23 +39,30 @@ product binary (`psxrecomp_codegen_host_forward_if_built`). Opt out with
 | `tools/package_setup_host.sh` | Retired setup-host zip packager (not used by release CI) |
 | `tools/ci/*.sh` | normalize version, check generated, generate OpenBIOS, record pins, build emitters |
 | `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
-| `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
+| `tools/toolchain_pack.py` | CLI: resolve / download / unpack into the project's `toolchain/` |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
-| Project `toolchain/` | Stamp file `.psxrecomp-bin` pointing at the shared pack `bin/` |
-| Shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` (Windows) or `~/.local/share/retcomm/toolchains/cmake-clang-v1/` — same tree Retro uses |
+| Project `toolchain/` | Where a fresh install goes: `<tag>/`, the `latest` pointer, and the stamp file `.psxrecomp-bin` naming the pack's `bin/` |
+| Older shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` (Windows) or `~/.local/share/retcomm/toolchains/cmake-clang-v1/` — read only: a pack an older setup or Retro put there is still found |
 | `docs/ci/` | Composite actions + [`templates/game-release.yml`](ci/templates/game-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
 | Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 
 Retro harvests emitters into the SDK cache and **downloads** `cmake-clang-v1`
 (no separate tools zip; game zips stay lean). The setup host and CLI install the
-portable pack into the **shared Retro cache**
-(`%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/<tag>/`, or XDG equivalent)
-with host-native `curl` + `tar`/`unzip` when possible — so Microsoft Store
-Python AppData redirection cannot hide cmake. Offline zips unpack to the same
-path. A legacy `%LOCALAPPDATA%/psxrecomp/…` cache is migrated automatically.
-Override with `RETCOMM_TOOLCHAIN_DIR`. Require a floor version via
+portable pack into the **game folder's own `toolchain/` folder**
+(`<game>/toolchain/<tag>/`, with `latest` beside it) with host-native `curl` +
+`tar`/`unzip` when possible. The download and the unpack happen in dot-folders
+inside `toolchain/` and are removed after use; nothing is written to the user
+profile or `%TEMP%`. Offline zips unpack to the same path. Lookup order:
+`RETCOMM_TOOLCHAIN_DIR`, then `RETCOMM_TOOLCHAIN_CACHE` / `RETCOMM_DATA_HOME`
+(which also take the install when set), then the game's `toolchain/`, then the
+older shared caches (`%LOCALAPPDATA%/retcomm/…`, XDG, `~/.local/share`, legacy
+`…/psxrecomp/…`), which are read and never written. The CLI puts the pack on
+`PATH` and sets `RETCOMM_TOOLCHAIN_DIR` for its own child processes only; it
+writes them to the user's login environment (registry or shell profile) only
+with `ensure-toolchain --persist-env`. On Linux and macOS the
+setup uses the host's own cmake and compiler (no pack). Require a floor version via
 `RETCOMM_TOOLCHAIN_MIN_VERSION` / `ensure-toolchain --min-version` (optional;
 default is none — wizard/`ensure-toolchain` fetch GitHub `/releases/latest`).
 Generate/rebuild still need Python 3

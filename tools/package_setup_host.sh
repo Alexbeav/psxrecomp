@@ -782,8 +782,10 @@ Standalone:
 3. Provide ${DISC_HINT} and ${BIOS_HINT}.
 4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
    cmake-clang-v1 from RetroPortingToolKit/RetroPorting-Toolchains (or you can
-   pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
-   also works if already on PATH.
+   pick a local cmake-clang-v1-*.zip for offline builds) and installs it into
+   the toolchain folder of this game folder. Nothing goes into your user
+   profile, and the download is removed after use. System cmake/ninja also
+   works if already on PATH.
 
 Retro uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves

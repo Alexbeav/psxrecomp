@@ -8,7 +8,7 @@ Commands:
                      profile declares (static_output)
   rebuild            cmake --build; if [pgo] enabled, instrument → train → use
   pgo-train          Standalone PGO train (same as rebuild's PGO phase)
-  ensure-toolchain   Resolve / download cmake-clang-v1 into the shared cache
+  ensure-toolchain   Resolve / download cmake-clang-v1 into the project toolchain folder
   ensure-emitters    Build psxrecomp-game + psxrecomp-bios when missing
 
 Exit codes: 0 ok · 1 runtime · 2 usage · 3 disc verify fail
@@ -2526,7 +2526,7 @@ def cmd_pgo_train(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
 
 def cmd_ensure_toolchain(args: argparse.Namespace, progress: ProgressReporter) -> int:
-    """Resolve / download / unpack cmake-clang-v1 into the shared Retro cache."""
+    """Resolve / download / unpack cmake-clang-v1 into the project's toolchain folder."""
     project_root = (
         Path(args.project_root).expanduser().resolve()
         if args.project_root
@@ -2545,6 +2545,7 @@ def cmd_ensure_toolchain(args: argparse.Namespace, progress: ProgressReporter) -
             download=want_download,
             min_version=min_version,
             log=progress.log,
+            persist_env=bool(getattr(args, "persist_env", False)),
         )
     except Exception as exc:  # noqa: BLE001
         progress.error(str(exc), code=EXIT_ERROR)
@@ -2835,7 +2836,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--toolchain-zip",
         default="",
-        help="offline cmake-clang-v1-*.zip to install into the shared cache",
+        help="offline cmake-clang-v1-*.zip to install into the project toolchain folder",
     )
     r.add_argument(
         "--no-toolchain-download",
@@ -2859,7 +2860,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser(
         "ensure-toolchain",
-        help="download or unpack cmake-clang-v1 into the shared cache",
+        help="download or unpack cmake-clang-v1 into the project toolchain folder",
     )
     e.add_argument("--project-root", default="", help="game project root (optional)")
     e.add_argument("--json-progress", action="store_true")
@@ -2882,6 +2883,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-version",
         default="",
         help="require retcomm-toolchain.json version >= this (semver)",
+    )
+    e.add_argument(
+        "--persist-env",
+        action="store_true",
+        help="also write the pack to the user's login PATH and RETCOMM_TOOLCHAIN_DIR "
+        "(registry / shell profile); by default they are set for this run's "
+        "child processes only",
     )
     e.set_defaults(handler=cmd_ensure_toolchain)
 

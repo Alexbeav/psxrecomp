@@ -86,9 +86,13 @@ def audit(path: Path) -> dict[str, object]:
     if platform == "windows":
         require(
             readme,
-            ("downloads", "cmake-clang-v1", "toolchain pack"),
+            ("downloads", "cmake-clang-v1", "toolchain pack", "toolchain folder of this game folder"),
             "Windows README-SETUP.txt",
         )
+        # PS1B-687: the pack is installed into the game folder, not the user's
+        # profile. A text that sends the player to AppData describes a route
+        # the setup no longer takes (PSX-PUB-026).
+        reject(readme.lower(), ("appdata", "localappdata"), "Windows README-SETUP.txt")
         require(
             host_copy,
             (
@@ -98,6 +102,7 @@ def audit(path: Path) -> dict[str, object]:
             ),
             "Windows setup host",
         )
+        reject(host_copy, ("%LOCALAPPDATA%\\retcomm\\toolchains",), "Windows setup host")
     else:
         require(
             readme,

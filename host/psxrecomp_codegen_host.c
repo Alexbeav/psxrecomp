@@ -734,9 +734,12 @@ static int resolve_toolchain_cache_base(const char* base, char* out, size_t cap)
     return resolve_toolchain_bin_under(base, out, cap);
 }
 
-/* Collect …/cmake-clang-v1 cache roots (same order as toolchain_pack.py).
- * Honors RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME; searches both XDG and
- * ~/.local/share so a pack installed by install.sh is always found. */
+/* Collect …/cmake-clang-v1 cache roots (same order as toolchain_pack.py):
+ * RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME first, then the project's own
+ * toolchain folder (where a fresh install goes, PS1B-687), then the older
+ * shared caches: %LOCALAPPDATA%, XDG and ~/.local/share. Those are read so a
+ * pack an older setup program or install.sh put there is still found; nothing
+ * is installed there unless no project root is known. */
 static int collect_toolchain_cache_bases(char bases[][1400], int max_n) {
     int n = 0;
     const char* cache = getenv("RETCOMM_TOOLCHAIN_CACHE");
@@ -746,6 +749,10 @@ static int collect_toolchain_cache_bases(char bases[][1400], int max_n) {
     const char* data = getenv("RETCOMM_DATA_HOME");
     if (data && data[0] && n < max_n) {
         if (join_path(bases[n], 1400, data, "toolchains/cmake-clang-v1"))
+            ++n;
+    }
+    if (g_project_root[0] && n < max_n) {
+        if (join_path(bases[n], 1400, g_project_root, "toolchain"))
             ++n;
     }
 #if defined(_WIN32)
@@ -811,9 +818,22 @@ static int collect_toolchain_cache_bases(char bases[][1400], int max_n) {
     return w;
 }
 
-/* Preferred install root for new downloads (first retcomm cache base). */
+/* Where a new pack is installed: RETCOMM_TOOLCHAIN_CACHE, else
+ * RETCOMM_DATA_HOME, else the project's toolchain folder beside the setup
+ * program (PS1B-687: the setup is portable and writes nothing to the user's
+ * profile). Only without a project root the first older shared cache. */
 static int preferred_toolchain_cache_root(char* out, size_t cap) {
     char bases[12][1400];
+    const char* cache = getenv("RETCOMM_TOOLCHAIN_CACHE");
+    const char* data = getenv("RETCOMM_DATA_HOME");
+    if (cache && cache[0]) {
+        snprintf(out, cap, "%s", cache);
+        return 1;
+    }
+    if (data && data[0])
+        return join_path(out, cap, data, "toolchains/cmake-clang-v1");
+    if (g_project_root[0])
+        return join_path(out, cap, g_project_root, "toolchain");
     int n = collect_toolchain_cache_bases(bases, 12);
     for (int i = 0; i < n; ++i) {
         if (strstr(bases[i], "retcomm") != NULL) {
@@ -897,13 +917,8 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
     }
     if (resolve_toolchain_stamp(out, cap))
         return 1;
-    if (g_project_root[0]) {
-        char wrap[1100];
-        if (join_path(wrap, sizeof(wrap), g_project_root, "toolchain") &&
-            resolve_toolchain_bin_under(wrap, out, cap))
-            return 1;
-    }
-    /* CLI downloads land here — must match toolchain_pack.py. */
+    /* RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME, the project's toolchain
+     * folder, then the older shared caches — must match toolchain_pack.py. */
     if (resolve_shared_toolchain_cache(out, cap))
         return 1;
     return 0;
@@ -3092,7 +3107,8 @@ static int find_store_localcache_pack_root(char* out, size_t cap) {
 }
 
 /* allow_copy=0: point this process at LocalCache (cheap).
- * allow_copy=1: also junction/robocopy into real %LOCALAPPDATA% (ensure). */
+ * allow_copy=1: also junction/robocopy it to latest in the install root, the
+ * project's toolchain folder by default (ensure). */
 static int harvest_store_python_toolchain(int allow_copy) {
     char cache_root[1400], real_latest[1400], proj_tc[1200];
     if (!find_store_localcache_pack_root(cache_root, sizeof(cache_root)))
@@ -3488,7 +3504,7 @@ static int host_install_toolchain_from_zip(
     char dest[1400], latest[1400], aside[1500];
     aside[0] = '\0';
     if (!preferred_toolchain_cache_root(cache_root, sizeof(cache_root))) {
-        snprintf(err_msg, err_cap, "Cannot resolve shared toolchain directory.");
+        snprintf(err_msg, err_cap, "Cannot resolve the toolchain folder.");
         return 0;
     }
     if (toolchain_readonly_skip("install a toolchain pack", cache_root)) {
@@ -3497,6 +3513,12 @@ static int host_install_toolchain_from_zip(
                  "(PSXRECOMP_TOOLCHAIN_READONLY). Nothing was installed.");
         return 0;
     }
+    /* An older setup program linked the project's toolchain folder to a pack
+     * in the shared cache. Only the link goes: the pack it pointed at stays
+     * where it is (and is still found there), and the new pack is installed
+     * into a real folder of the project, not through the link. */
+    if (path_is_link(cache_root))
+        remove_pointer_only(cache_root);
     mkdir_p(cache_root);
     if (!join_path(staging, sizeof(staging), cache_root, ".staging-host")) {
         snprintf(err_msg, err_cap, "Staging path too long.");
@@ -3534,7 +3556,7 @@ static int host_install_toolchain_from_zip(
         return 0;
     }
     if (on_progress)
-        on_progress(progress_ctx, 0.7f, "Installing into shared toolchain cache…");
+        on_progress(progress_ctx, 0.7f, "Installing into the toolchain folder…");
     /* The installed pack of this tag goes out of use by a rename, not by a
      * delete. A folder with an open file cannot be renamed on Windows: a build
      * is using it, so it stays whole and the new pack is dropped. */
@@ -3663,20 +3685,25 @@ static int host_download_and_install_toolchain(
     snprintf(url, sizeof(url),
              "https://github.com/%s/releases/latest/download/%s", k_tc_repo,
              asset);
-#if defined(_WIN32)
+    /* The zip is downloaded beside where it is installed (the project's
+     * toolchain folder unless an override names another), in a dot-folder no
+     * lookup reads, and removed after use. Not %TEMP% (PS1B-687). */
     {
-        char tmp[512];
-        DWORD n = GetTempPathA(sizeof(tmp), tmp);
-        if (n == 0 || n >= sizeof(tmp)) {
-            snprintf(err_msg, err_cap, "GetTempPath failed.");
+        char cache_root[1100], name[64];
+#if defined(_WIN32)
+        snprintf(name, sizeof(name), ".download-%lu",
+                 (unsigned long)GetCurrentProcessId());
+#else
+        snprintf(name, sizeof(name), ".download-%d", (int)getpid());
+#endif
+        if (!preferred_toolchain_cache_root(cache_root, sizeof(cache_root)) ||
+            !join_path(tmp_dir, sizeof(tmp_dir), cache_root, name)) {
+            snprintf(err_msg, err_cap, "Cannot resolve the toolchain folder.");
             return 0;
         }
-        snprintf(tmp_dir, sizeof(tmp_dir), "%spsxrecomp-tc-%lu", tmp,
-                 (unsigned long)GetCurrentProcessId());
+        if (path_is_link(cache_root))
+            remove_pointer_only(cache_root);   /* as the install below does */
     }
-#else
-    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/psxrecomp-tc-%d", (int)getpid());
-#endif
     mkdir_p(tmp_dir);
     if (!join_path(zip_path, sizeof(zip_path), tmp_dir, asset)) {
         snprintf(err_msg, err_cap, "Temp path too long.");
@@ -3831,6 +3858,42 @@ static int host_system_toolchain_ready(void) {
 }
 #endif
 
+/* A scratch file of the toolchain step: <project>/toolchain/.<name> (dot-names
+ * are read by no lookup), so a setup start writes nothing to %TEMP% (PS1B-687).
+ * The system temporary folder as before when no project root is known, when
+ * RETCOMM_TOOLCHAIN_CACHE or RETCOMM_DATA_HOME moves the install elsewhere,
+ * when the project's toolchain folder is a link into a pack, and with
+ * PSXRECOMP_TOOLCHAIN_READONLY (which then changes nothing in the project). */
+static int toolchain_scratch_file(char* out, size_t cap, const char* name) {
+    char dir[1200], root[1200], dotted[300];
+    if (!toolchain_readonly() && g_project_root[0] &&
+        join_path(dir, sizeof(dir), g_project_root, "toolchain") &&
+        preferred_toolchain_cache_root(root, sizeof(root)) &&
+        strcmp(root, dir) == 0 && !path_is_link(dir)) {
+        mkdir_p(dir);
+        snprintf(dotted, sizeof(dotted), ".%s", name);
+        if (path_is_dir(dir) && join_path(out, cap, dir, dotted))
+            return 1;
+    }
+#if defined(_WIN32)
+    {
+        char tdir[512];
+        DWORD tn = GetTempPathA(sizeof(tdir), tdir);
+        if (tn == 0 || tn >= sizeof(tdir))
+            return 0;
+        return snprintf(out, cap, "%s%s", tdir, name) < (int)cap;
+    }
+#else
+    {
+        /* TMPDIR when it is set, as other programs do; /tmp otherwise. */
+        const char* tdir = getenv("TMPDIR");
+        if (!tdir || !tdir[0])
+            tdir = "/tmp";
+        return join_path(out, cap, tdir, name);
+    }
+#endif
+}
+
 /* True when pack bin/ can compile+link a tiny C program (catches broken
  * ld.lld / missing libicuuc.so.* etc. that cmake --version still passes). */
 static int toolchain_bin_compiler_works(const char* bin) {
@@ -3874,29 +3937,23 @@ static int toolchain_bin_compiler_works(const char* bin) {
         return 0;
     }
 
-#if defined(_WIN32)
     {
-        char tdir[512];
-        DWORD tn = GetTempPathA(sizeof(tdir), tdir);
-        if (tn == 0 || tn >= sizeof(tdir)) {
+        char name_c[64], name_exe[64];
+#if defined(_WIN32)
+        snprintf(name_c, sizeof(name_c), "psxrecomp-tc-probe-%lu.c",
+                 (unsigned long)GetCurrentProcessId());
+        snprintf(name_exe, sizeof(name_exe), "psxrecomp-tc-probe-%lu.exe",
+                 (unsigned long)GetCurrentProcessId());
+#else
+        snprintf(name_c, sizeof(name_c), "psxrecomp-tc-probe-%d.c", (int)getpid());
+        snprintf(name_exe, sizeof(name_exe), "psxrecomp-tc-probe-%d", (int)getpid());
+#endif
+        if (!toolchain_scratch_file(src, sizeof(src), name_c) ||
+            !toolchain_scratch_file(exe, sizeof(exe), name_exe)) {
             g_tc_check_step = TC_STEP_TEMP;
             return 0;
         }
-        snprintf(src, sizeof(src), "%spsxrecomp-tc-probe-%lu.c", tdir,
-                 (unsigned long)GetCurrentProcessId());
-        snprintf(exe, sizeof(exe), "%spsxrecomp-tc-probe-%lu.exe", tdir,
-                 (unsigned long)GetCurrentProcessId());
     }
-#else
-    {
-        /* TMPDIR when it is set, as other programs do; /tmp otherwise. */
-        const char* tdir = getenv("TMPDIR");
-        if (!tdir || !tdir[0])
-            tdir = "/tmp";
-        snprintf(src, sizeof(src), "%s/psxrecomp-tc-probe-%d.c", tdir, (int)getpid());
-        snprintf(exe, sizeof(exe), "%s/psxrecomp-tc-probe-%d", tdir, (int)getpid());
-    }
-#endif
 
     f = fopen(src, "wb");
     if (!f) {
@@ -4254,18 +4311,17 @@ static int host_remote_toolchain_version(char* out, size_t cap) {
     out[0] = '\0';
     snprintf(url, sizeof(url),
              "https://api.github.com/repos/%s/releases/latest", k_tc_repo);
-#if defined(_WIN32)
     {
-        char tdir[512];
-        DWORD tn = GetTempPathA(sizeof(tdir), tdir);
-        if (tn == 0 || tn >= sizeof(tdir))
-            return 0;
-        snprintf(tmp, sizeof(tmp), "%spsxrecomp-tc-latest-%lu.json", tdir,
+        char name[64];
+#if defined(_WIN32)
+        snprintf(name, sizeof(name), "psxrecomp-tc-latest-%lu.json",
                  (unsigned long)GetCurrentProcessId());
-    }
 #else
-    snprintf(tmp, sizeof(tmp), "/tmp/psxrecomp-tc-latest-%d.json", (int)getpid());
+        snprintf(name, sizeof(name), "psxrecomp-tc-latest-%d.json", (int)getpid());
 #endif
+        if (!toolchain_scratch_file(tmp, sizeof(tmp), name))
+            return 0;
+    }
     /* GitHub API wants a UA; keep the request short so wizard open stays snappy. */
 #if defined(_WIN32)
     {
@@ -4297,14 +4353,14 @@ static int host_remote_toolchain_version(char* out, size_t cap) {
         snprintf(cmd, sizeof(cmd),
                  "curl -fsSL --connect-timeout 5 --max-time 15 "
                  "-A psxrecomp-codegen -H 'Accept: application/vnd.github+json' "
-                 "-o '%s' '%s'",
+                 "-o \"%s\" '%s'",
                  tmp, url);
         if (system(cmd) != 0 || !path_is_file(tmp)) {
             unlink(tmp);
             snprintf(cmd, sizeof(cmd),
                      "curl -fsSIL --connect-timeout 5 --max-time 15 "
                      "-A psxrecomp-codegen -o /dev/null -w '%%{url_effective}' "
-                     "'https://github.com/%s/releases/latest' > '%s'",
+                     "'https://github.com/%s/releases/latest' > \"%s\"",
                      k_tc_repo, tmp);
             if (system(cmd) != 0 || !path_is_file(tmp))
                 return 0;
@@ -4362,8 +4418,11 @@ static int host_toolchain_update_available(char* local_ver, size_t local_cap,
 
 /* Download or offline-install cmake-clang-v1 (wizard page 0 / rebuild fallback).
  * Prefer host-native curl/tar so Microsoft Store Python cannot redirect the
- * unpack into Packages\\...\\LocalCache. Installs into the shared Retro
- * cache: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/…
+ * unpack into Packages\\...\\LocalCache. Installs into the project's own
+ * toolchain folder beside the setup program (<project>/toolchain/<tag>, with
+ * latest beside it; PS1B-687) unless RETCOMM_TOOLCHAIN_CACHE or
+ * RETCOMM_DATA_HOME names another. A pack in the older shared cache
+ * (%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/…) is still found there.
  * Broken latest/ stamps are healed, then GitHub /releases/latest is fetched.
  *
  * download: 0 = zip/cache only, 1 = download if missing, 2 = force latest. */
@@ -4449,10 +4508,8 @@ static int host_ensure_toolchain_with_progress(
             /* Install saw bin/cmake.exe; ready check failed (won't run / min). */
             snprintf(err_msg, err_cap,
                      "Downloaded toolchain is present but cmake will not run"
-                     "%s. Check "
-                     "%%LOCALAPPDATA%%\\retcomm\\toolchains\\cmake-clang-v1\\"
-                     "<tag>\\bin\\cmake.exe --version, or set "
-                     "RETCOMM_TOOLCHAIN_DIR.",
+                     "%s. Check toolchain\\<tag>\\bin\\cmake.exe --version "
+                     "in the game folder, or set RETCOMM_TOOLCHAIN_DIR.",
                      (toolchain_min_version()[0]
                           ? " (or is below RETCOMM_TOOLCHAIN_MIN_VERSION)"
                           : ""));
