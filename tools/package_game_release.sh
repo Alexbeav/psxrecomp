@@ -42,7 +42,8 @@
 # RELEASE CHANNEL. The build tree must have been configured with
 # -DPSX_RELEASE_CHANNEL=public|playtest (runtime/psx_release_channel.cmake);
 # a tree without one is a dev build and is refused. playtest packages are
-# named <prefix>-<version>-playtest-<artifact>.zip, public packages always
+# named <prefix>-<version>-playtest-<artifact>.zip (linux-* artifacts also
+# get the same name with .tar.gz, exec bits kept), public packages always
 # drop developer-channel mods, and the staged Playtest Diagnostics defaults
 # must match the channel. Local title releases use
 # tools/package_title_release.py instead (docs/RELEASING_A_TITLE.md).
@@ -243,9 +244,13 @@ printf '%s\n' "${VERSION}" >"${ROOT}/VERSION"
 DIST="${ROOT:?}/dist"
 STAGE="${DIST:?}/stage-game-${ARTIFACT:?}"
 ZIP_NAME="${ZIP_PREFIX:?}-${VERSION:?}${CHANNEL_SUFFIX}-${ARTIFACT:?}.zip"
+# Linux also ships a .tar.gz of the same files: unzip tools often drop the
+# Unix exec bits a ZIP records, a tarball keeps them (create_release_zip.py).
+TAR_NAME=""
+case "${ARTIFACT}" in linux-*) TAR_NAME="${ZIP_NAME%.zip}.tar.gz" ;; esac
 rm -rf "${STAGE:?}"
 mkdir -p "${STAGE}" "${DIST}"
-if [[ "${STAGE_ONLY}" != 1 ]]; then rm -f "${DIST:?}/${ZIP_NAME:?}"; fi
+if [[ "${STAGE_ONLY}" != 1 ]]; then rm -f "${DIST:?}/${ZIP_NAME:?}" "${DIST:?}/${ZIP_NAME%.zip}.tar.gz"; fi
 
 # --- The executable and what CMake staged beside it --------------------------
 cp -a "${EXE}" "${STAGE}/"
@@ -522,6 +527,12 @@ if [[ "${STAGE_ONLY}" == 1 ]]; then
   exit 0
 fi
 
-"${PY}" "${SCRIPT_DIR}/create_release_zip.py" --source "${STAGE}" --output "${DIST}/${ZIP_NAME}" >/dev/null
+archive_args=(--source "${STAGE}" --output "${DIST}/${ZIP_NAME}")
+[[ -z "${TAR_NAME}" ]] || archive_args+=(--tar-output "${DIST}/${TAR_NAME}" --executable "${EXE_BASENAME}")
+"${PY}" "${SCRIPT_DIR}/create_release_zip.py" "${archive_args[@]}" >/dev/null
 echo "Wrote ${DIST}/${ZIP_NAME}"
 du -h "${DIST}/${ZIP_NAME}"
+if [[ -n "${TAR_NAME}" ]]; then
+  echo "Wrote ${DIST}/${TAR_NAME}"
+  du -h "${DIST}/${TAR_NAME}"
+fi

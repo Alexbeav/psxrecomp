@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Reject setup ZIPs whose toolchain copy does not match the host platform."""
+"""Reject setup ZIPs whose toolchain copy does not match the host platform.
+
+A Linux .tar.gz package is audited the same way, and its setup host must also
+be mode 0755 (the reason a tarball ships beside the zip)."""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ import hashlib
 import json
 import re
 import sys
+import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -67,12 +71,34 @@ def reject(text: str, tokens: tuple[str, ...], where: str) -> None:
         raise ValueError(f"{where} contains forbidden copy: {', '.join(found)}")
 
 
+def is_tarball(path: Path) -> bool:
+    return path.name.lower().endswith((".tar.gz", ".tgz"))
+
+
+def read_members(path: Path) -> tuple[list[str], dict[str, int], object]:
+    """Names, POSIX modes (tarball only) and a reader for one member."""
+    if is_tarball(path):
+        archive = tarfile.open(path, "r:gz")
+        files = {m.name: m for m in archive.getmembers() if m.isfile()}
+
+        def read_tar(name: str) -> bytes:
+            stream = archive.extractfile(files[name])
+            assert stream is not None
+            return stream.read()
+
+        return list(files), {n: m.mode & 0o777 for n, m in files.items()}, (archive, read_tar)
+    archive = zipfile.ZipFile(path)
+    return archive.namelist(), {}, (archive, archive.read)
+
+
 def audit(path: Path) -> dict[str, object]:
     platform = infer_platform(path)
-    with zipfile.ZipFile(path) as archive:
-        names = archive.namelist()
+    if is_tarball(path) and platform == "windows":
+        raise ValueError("Windows packages ship as a zip only")
+    names, modes, (archive, read) = read_members(path)
+    with archive:
         readme_name = root_member(names, "README-SETUP.txt")
-        readme = archive.read(readme_name).decode("utf-8")
+        readme = read(readme_name).decode("utf-8")
 
         run_match = re.search(r"(?m)^\s*\d+\.\s+Run\s+([^\s.]+(?:\.exe)?)\.\s*$", readme)
         if not run_match:
@@ -81,7 +107,9 @@ def audit(path: Path) -> dict[str, object]:
         if platform == "windows" and not host_name.lower().endswith(".exe"):
             host_name += ".exe"
         host_member = root_member(names, host_name)
-        host_copy = archive.read(host_member).decode("latin-1")
+        host_copy = read(host_member).decode("latin-1")
+    if modes and modes[host_member] != 0o755:
+        raise ValueError(f"setup host {host_member} is mode {modes[host_member]:o}, not 755")
 
     if platform == "windows":
         require(
@@ -154,7 +182,7 @@ def main() -> int:
     for path in args.archives:
         try:
             result = audit(path)
-        except (OSError, ValueError, zipfile.BadZipFile) as error:
+        except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
             result = {"archive": str(path.resolve()), "status": "fail", "error": str(error)}
             failed = True
         results.append(result)

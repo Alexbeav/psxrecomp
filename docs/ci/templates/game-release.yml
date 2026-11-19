@@ -674,13 +674,47 @@ jobs:
             exit 1
           fi
           echo "zip verified: compiled game, bundled OpenBIOS, mod catalog, no kit / dumps / dev mods"
+          # 5. Linux also ships a .tar.gz of the same files, because unzip
+          #    tools often drop the exec bits a zip records. Same file list as
+          #    the zip (so every rule above holds for it too); the game and
+          #    every ELF or #! file in it is mode 0755.
+          if [[ "${{ matrix.artifact }}" == linux-* ]]; then
+            TGZ="${ZIP%.zip}.tar.gz"
+            [[ -f "${TGZ}" ]] || { echo "::error::linux release lacks ${TGZ}" >&2; exit 1; }
+            python3 - "${ZIP}" "${TGZ}" <<'PY'
+          import sys, tarfile, zipfile
+          zip_path, tgz_path = sys.argv[1:3]
+          with zipfile.ZipFile(zip_path) as z:
+              zip_names = sorted(n for n in z.namelist() if not n.endswith("/"))
+              readme = z.read("README.txt").decode("utf-8")
+          with tarfile.open(tgz_path, "r:gz") as t:
+              members = {m.name: m for m in t.getmembers() if m.isfile()}
+              heads = {n: t.extractfile(m).read(4) for n, m in members.items()}
+          if sorted(members) != zip_names:
+              print("::error::tarball file list differs from the zip:",
+                    sorted(set(members) ^ set(zip_names))[:20], file=sys.stderr)
+              sys.exit(1)
+          exe = next((l.split("Run ", 1)[1].rstrip(".") for l in readme.splitlines()
+                      if l.startswith("1. Run ")), "")
+          need = {exe} | {n for n, h in heads.items() if h == b"\x7fELF" or h.startswith(b"#!")}
+          bad = sorted(n for n in need if n not in members or members[n].mode & 0o777 != 0o755)
+          if not exe or bad:
+              print(f"::error::tarball executables not mode 0755 (game {exe!r}): {bad[:20]}",
+                    file=sys.stderr)
+              sys.exit(1)
+          print(f"tarball verified: {len(members)} files = zip, {len(need)} executables 0755 ({exe})")
+          PY
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           # Artifact name uses the title zip prefix (e.g. bpe, motk).
           name: YOUR_ZIP_PREFIX-${{ matrix.artifact }}
-          path: dist/YOUR_ZIP_PREFIX-*-${{ matrix.artifact }}.zip
+          # The second line matches only on linux-*: its .tar.gz beside the zip.
+          path: |
+            dist/YOUR_ZIP_PREFIX-*-${{ matrix.artifact }}.zip
+            dist/YOUR_ZIP_PREFIX-*-${{ matrix.artifact }}.tar.gz
           if-no-files-found: error
           retention-days: 30
 
@@ -705,7 +739,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -type f -name 'YOUR_ZIP_PREFIX-*.zip' -exec cp -v {} dist/ \;
+          find artifacts -type f \( -name 'YOUR_ZIP_PREFIX-*.zip' -o -name 'YOUR_ZIP_PREFIX-*.tar.gz' \) \
+            -exec cp -v {} dist/ \;
+          ls dist/YOUR_ZIP_PREFIX-*-linux-x64.tar.gz >/dev/null || {
+            echo "::error::no linux-x64 .tar.gz among the build artifacts" >&2; exit 1; }
           ls -la dist/
 
       - name: Ensure release tag exists
@@ -731,6 +768,7 @@ jobs:
           name: "YOUR_GAME_TITLE ${{ needs.prepare.outputs.tag }}"
           files: |
             dist/YOUR_ZIP_PREFIX-*.zip
+            dist/YOUR_ZIP_PREFIX-*.tar.gz
           generate_release_notes: true
           fail_on_unmatched_files: true
           target_commitish: ${{ github.sha }}

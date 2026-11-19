@@ -3965,6 +3965,17 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         if(NOT PSX_PACKAGE_TEST_BASH)
             set_tests_properties(package_execution_stage_test PROPERTIES DISABLED TRUE)
         endif()
+        # Linux packages ship a .tar.gz beside the zip with exec bits 0755;
+        # the CI template's tarball gate and the setup audit read it. PS1B-687.
+        add_test(NAME release_tarball_test
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_tarball.py)
+        if(PSX_PACKAGE_TEST_BASH)
+            set_tests_properties(release_tarball_test PROPERTIES
+                ENVIRONMENT "PSX_PACKAGE_TEST_BASH=${PSX_PACKAGE_TEST_BASH}")
+        else()
+            set_tests_properties(release_tarball_test PROPERTIES DISABLED TRUE)
+        endif()
         add_test(NAME package_appimage_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_package_appimage.py)
