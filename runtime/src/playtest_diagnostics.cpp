@@ -341,7 +341,7 @@ void begin_recording() {
         if (!metadata) throw std::runtime_error("cannot capture session metadata");
         const auto settings = PSXRecompV4::mod_runtime_root().parent_path() / "settings.toml";
         if (std::filesystem::exists(settings)) std::filesystem::copy_file(settings, folder / "settings.toml");
-        const auto state = PSXRecompV4::mod_runtime_root() / "state.toml";
+        const auto state = PSXRecompV4::mod_runtime_state_dir() / "state.toml";
         if (std::filesystem::exists(state))
             std::filesystem::copy_file(state, folder / "mods-state.toml");
         else {

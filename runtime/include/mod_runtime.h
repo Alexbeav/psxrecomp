@@ -95,6 +95,9 @@ const std::string& mod_runtime_fingerprint();
 bool mod_runtime_savestate_scope(std::string& scope, std::string* error = nullptr);
 /* Host diagnostics may copy the persisted offline selection from this root. */
 const std::filesystem::path& mod_runtime_root();
+/* The folder that holds the selection (state.toml): mod_runtime_root() unless
+ * --data-dir moved it (PS1B-687). */
+std::filesystem::path mod_runtime_state_dir();
 const std::filesystem::path& mod_runtime_effective_disc_path();
 /* Read an effective-disc file as whole sectors (true end-of-file tail bytes
  * included). max_bytes = 0 allows a full CD. Emulation-thread only. */

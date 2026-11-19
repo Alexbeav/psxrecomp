@@ -13,11 +13,11 @@ import shutil
 import subprocess
 import tempfile
 
-# Every place main.cpp reads a persisted path must anchor it on the exe
-# directory. Each line below must appear in main.cpp exactly as written.
+# Every place main.cpp reads a persisted path must anchor it on the folder
+# that holds settings.toml: the exe directory, or --data-dir (PS1B-687). Each line below must appear in main.cpp exactly as written.
 CALL_SITES = [
-    'resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]))',
-    'cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0))',
+    'resolved_disc = resolve_persisted_disc_path(us.disc_path, user_dir_from_argv(argv[0]))',
+    'cached = resolve_persisted_disc_path(cached, user_dir_from_argv(argv0))',
     ': anchor_on_exe_dir(argv0, std::filesystem::path(line));',
     'settings_bios_storage = anchor_on_exe_dir(argv[0], us.bios_path).string();',
     'memcard_dir   = anchor_card_path(argv[0], us.memcard_dir);',
@@ -77,6 +77,9 @@ namespace PSXRecompV4 {
 }
 static std::filesystem::path exe_dir_from_argv(const char* dir) {
     return std::filesystem::path(dir);
+}
+static std::filesystem::path user_dir_from_argv(const char* dir) {
+    return exe_dir_from_argv(dir);
 }
 static std::filesystem::path sidecar_cfg_path(const char* dir, const char* filename) {
     return exe_dir_from_argv(dir) / filename;

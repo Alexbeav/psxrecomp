@@ -1818,6 +1818,14 @@ bool strip_developer_features(ModPackage& package) {
 
 ModPackageManager::ModPackageManager(fs::path mods_root) : root_(std::move(mods_root)) {}
 
+static fs::path g_user_state_dir;
+
+void ModPackageManager::set_user_state_dir(fs::path dir) { g_user_state_dir = std::move(dir); }
+
+fs::path ModPackageManager::state_dir() const {
+    return g_user_state_dir.empty() ? root_ : g_user_state_dir;
+}
+
 void ModPackageManager::set_root(fs::path mods_root) {
     root_ = std::move(mods_root);
     packages_.clear();
@@ -3051,7 +3059,7 @@ bool ModPackageManager::load_state(std::string* error) {
     selections_.clear();
     quick_visibility_.clear();
     sources_.clear();
-    const fs::path path = root_ / "state.toml";
+    const fs::path path = state_dir() / "state.toml";
     if (!fs::exists(path)) return true;
     try {
         const toml::value cfg = toml::parse(path.string());
@@ -3144,13 +3152,13 @@ bool ModPackageManager::load_state(std::string* error) {
 
 bool ModPackageManager::save_state(std::string* error) const {
     std::error_code ec;
-    fs::create_directories(root_, ec);
+    fs::create_directories(state_dir(), ec);
     if (ec) {
         set_error(error, "cannot create mods directory: " + ec.message());
         return false;
     }
-    const fs::path temp = root_ / "state.toml.tmp";
-    const fs::path final = root_ / "state.toml";
+    const fs::path temp = state_dir() / "state.toml.tmp";
+    const fs::path final = state_dir() / "state.toml";
     std::ofstream out(temp, std::ios::trunc);
     if (!out) {
         set_error(error, "cannot write " + temp.string());

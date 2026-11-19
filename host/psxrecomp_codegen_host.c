@@ -5580,6 +5580,26 @@ static int handover_adds_launcher(int argc, char** argv) {
 }
 #endif
 
+#if !defined(PSX_HAS_GAME_DISPATCH)
+/* The argument the product gets for argv[i]. The product anchors a relative
+ * --data-dir on ITS folder (build-release/); the player meant the folder of
+ * the exe they started, so a relative value is made absolute here. */
+static const char* handover_arg(int argc, char** argv, int i, const char* self,
+                                char* buf, size_t cap) {
+    const char* a = argv[i];
+    char dir[1100];
+    (void)argc;
+    if (i < 2 || strcmp(argv[i - 1], "--data-dir") != 0 || !a[0])
+        return a;
+    if (a[0] == '/' || a[0] == '\\' ||
+        (((a[0] >= 'A' && a[0] <= 'Z') || (a[0] >= 'a' && a[0] <= 'z')) && a[1] == ':'))
+        return a;
+    if (!dirname_copy(dir, sizeof(dir), self) || !join_path(buf, cap, dir, a))
+        return a;
+    return buf;
+}
+#endif
+
 /* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
 static void host_collect_diagnostics_or_return(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
@@ -5638,6 +5658,10 @@ void psxrecomp_codegen_host_forward_if_built(
     const char* force;
 
     if (!cfg || !cfg->cmake_target || !cfg->exe_basename)
+        return;
+    /* --help is answered by this program itself (main), never handed over:
+     * the product's text would reach no console once this process exits. */
+    if (argv_has(argc, argv, "--help") || argv_has(argc, argv, "-h"))
         return;
 
     no_fwd = getenv("PSXRECOMP_NO_FORWARD");
@@ -5732,9 +5756,11 @@ void psxrecomp_codegen_host_forward_if_built(
         {
             for (i = 1; i < argc && argv && argv[i]; ++i) {
                 int n;
+                char arg_buf[1300];
                 if (strcmp(argv[i], "--diagnostic") == 0)
                     continue; /* host-only switch; the runtime does not take it */
-                n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"", argv[i]);
+                n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"",
+                             handover_arg(argc, argv, i, self, arg_buf, sizeof(arg_buf)));
                 if (n <= 0 || (size_t)n >= sizeof(cmd) - pos)
                     break;
                 pos += (size_t)n;
@@ -5759,6 +5785,7 @@ void psxrecomp_codegen_host_forward_if_built(
         char** args;
         int i;
         int narg = (argc > 0) ? argc : 1;
+        static char data_dir_buf[1300]; /* lives until execv */
         args = (char**)calloc((size_t)narg + 2, sizeof(char*));
         if (!args)
             return;
@@ -5768,7 +5795,8 @@ void psxrecomp_codegen_host_forward_if_built(
             for (i = 1; i < argc && argv && argv[i]; ++i) {
                 if (strcmp(argv[i], "--diagnostic") == 0)
                     continue; /* host-only switch; the runtime does not take it */
-                args[n++] = argv[i];
+                args[n++] = (char*)handover_arg(argc, argv, i, self, data_dir_buf,
+                                                sizeof(data_dir_buf));
             }
             if (handover_adds_launcher(argc, argv))
                 args[n++] = "--launcher";

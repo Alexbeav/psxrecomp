@@ -500,6 +500,11 @@ public:
 
     void set_root(std::filesystem::path mods_root);
     const std::filesystem::path& root() const { return root_; }
+    /* Where state.toml (the player's mod selection) lives: root() unless a
+     * process-wide per-user folder was set (--data-dir, PS1B-687). The
+     * catalogs stay under root(). */
+    static void set_user_state_dir(std::filesystem::path dir);
+    std::filesystem::path state_dir() const;
     /* Developer-channel features are stripped at scan and install time unless
      * this is set. Defaults to kDeveloperChannelDefault; tests set it
      * explicitly so they exercise both a local and a release build. */

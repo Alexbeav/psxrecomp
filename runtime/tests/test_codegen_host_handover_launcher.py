@@ -269,6 +269,20 @@ def main() -> int:
              "--headless is forwarded as it is"),
             (["--bios", "b.bin"], {"PSX_HEADLESS": "1", "PSX_NO_LAUNCHER": "1"}, ["--bios", "b.bin"],
              "the fleet's start (both variables): arguments only"),
+            # PS1B-687 player flags reach the product as the player gave them.
+            (["--fullscreen", "--set", "audio.volume=50", "--set", "video.vsync=on",
+              "--data-dir", str(tmp / "abs data")], {},
+             ["--fullscreen", "--set", "audio.volume=50", "--set", "video.vsync=on",
+              "--data-dir", str(tmp / "abs data")] + launcher,
+             "--fullscreen, --set and an absolute --data-dir are forwarded as they are"),
+            (["--windowed", "--no-launcher"], {}, ["--windowed", "--no-launcher"],
+             "--windowed is forwarded as it is"),
+            (["--data-dir", "player data"], {}, ["--data-dir", "@SELF_DIR@/player data"] + launcher,
+             "a relative --data-dir is anchored on the exe the player started, not the product's folder"),
+            (["--help"], {}, None,
+             "--help is answered by the setup host itself, never handed over"),
+            (["-h", "--headless"], {}, None,
+             "-h is answered by the setup host itself, never handed over"),
         ]
         for args, variables, _expected, why in cases:
             asked = [a for a in args if a in FORBIDDEN_ARGS] + [v for v in variables if v in FORBIDDEN_VARS]
@@ -301,7 +315,7 @@ def main() -> int:
             run = subprocess.run([str(host_exe)] + args, capture_output=True, text=True,
                                  encoding="utf-8", errors="replace", env=env, cwd=str(tmp))
             # On Windows the host starts the product and exits without waiting for it.
-            deadline = time.time() + 15.0
+            deadline = time.time() + (0.5 if "NOT FORWARDED" in run.stdout else 15.0)
             got = None
             while time.time() < deadline:
                 if out.is_file():
@@ -310,6 +324,19 @@ def main() -> int:
                         got = lines[1:]
                         break
                 time.sleep(0.05)
+            if expected is not None:
+                expected = [a.replace("@SELF_DIR@", str(host_exe.parent)) for a in expected]
+                if os.name == "nt" and got is not None:
+                    # The host joins with "/" and Windows names are case-blind.
+                    norm = lambda a: os.path.normcase(os.path.normpath(a)) if "player data" in a else a
+                    got, expected = [norm(a) for a in got], [norm(a) for a in expected]
+            if expected is None:
+                if "NOT FORWARDED" in run.stdout and got is None:
+                    print("ok: %s" % why)
+                else:
+                    print("FAIL: %s\n  the host handed over with %r" % (why, got))
+                    failures += 1
+                continue
             if "NOT FORWARDED" in run.stdout:
                 print("FAIL: %s\n  the host did not hand over: %s" % (why, run.stderr.strip()[-400:]))
                 failures += 1

@@ -1815,6 +1815,21 @@ UserSettings load_user_settings(const std::filesystem::path& path);
 // Write settings.toml deterministically. Returns false on I/O failure.
 bool save_user_settings(const std::filesystem::path& path, const UserSettings& s);
 
+// Run-only settings.toml overrides (the game's --set SECTION.KEY=VALUE,
+// --fullscreen and --windowed). They apply only to the one settings file named
+// by set_user_settings_run_override_path. load_user_settings of that file sees
+// each override as if the file held it; save_user_settings of that file never
+// writes one: each overridden key keeps the value the file had on disk (or
+// stays absent). VALUE is read as a TOML value (true, 2, 1.5, "text"); text
+// that is not a TOML value is taken as a string. Returns false with `error`
+// set, and records nothing, for text that is not SECTION.KEY=VALUE or a key
+// load_user_settings does not read. A later override of the same key wins.
+bool add_user_settings_run_override(const std::string& assignment, std::string* error);
+void set_user_settings_run_override_path(const std::filesystem::path& settings_path);
+void clear_user_settings_run_overrides();
+// True when load_user_settings reads [section] key.
+bool user_settings_known_key(const std::string& section, const std::string& key);
+
 // `p` relative to `folder` when it lies inside it; otherwise `p` unchanged.
 // Keeps portable game folders portable once the launcher saves a path.
 std::filesystem::path relative_to_folder(const std::filesystem::path& p,

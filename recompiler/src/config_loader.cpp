@@ -3208,14 +3208,197 @@ GameOptions load_game_options(const fs::path& path) {
 
 // ---- UserSettings (settings.toml) — launcher-written override layer ----
 
+namespace {
+struct UserSettingsRunOverride {
+    std::string section, key;
+    toml::value value;
+};
+std::vector<UserSettingsRunOverride> g_run_overrides;
+fs::path g_run_override_path;
+
+bool run_overrides_apply_to(const fs::path& path) {
+    return !g_run_overrides.empty() && !g_run_override_path.empty() && !path.empty() &&
+           path.lexically_normal() == g_run_override_path.lexically_normal();
+}
+
+// Each override as if the file held it. The document becomes a table when the
+// file is absent.
+void apply_run_overrides(toml::value& doc) {
+    if (!doc.is_table()) doc = toml::table{};
+    for (const auto& o : g_run_overrides) {
+        auto& top = doc.as_table();
+        auto it = top.find(o.section);
+        if (it == top.end() || !it->second.is_table())
+            top[o.section] = toml::table{};
+        top[o.section].as_table()[o.key] = o.value;
+    }
+}
+
+// The key a settings line assigns ("" for a comment, heading or blank).
+std::string settings_line_key(const std::string& line) {
+    size_t a = line.find_first_not_of(" \t");
+    if (a == std::string::npos || line[a] == '#' || line[a] == '[') return {};
+    const size_t eq = line.find('=', a);
+    if (eq == std::string::npos) return {};
+    size_t b = eq;
+    while (b > a && (line[b - 1] == ' ' || line[b - 1] == '\t')) --b;
+    return line.substr(a, b - a);
+}
+
+// The written text with every overridden key put back to its on-disk value,
+// or removed when the file did not hold it.
+std::string restore_overridden_keys(const std::string& text, const toml::value& on_disk) {
+    std::vector<std::string> lines;
+    {
+        std::string line;
+        std::istringstream in(text);
+        while (std::getline(in, line)) lines.push_back(line);
+    }
+    for (const auto& o : g_run_overrides) {
+        const toml::value* disk = nullptr;
+        if (on_disk.is_table()) {
+            const auto& top = on_disk.as_table();
+            const auto sec = top.find(o.section);
+            if (sec != top.end() && sec->second.is_table()) {
+                const auto& t = sec->second.as_table();
+                const auto k = t.find(o.key);
+                if (k != t.end()) disk = &k->second;
+            }
+        }
+        std::string assign;
+        if (disk) {
+            assign = toml::format(*disk);
+            while (!assign.empty() && (assign.back() == '\n' || assign.back() == '\r'))
+                assign.pop_back();
+            assign = o.key + " = " + assign;
+        }
+        const std::string heading = "[" + o.section + "]";
+        int start = -1, end = (int)lines.size();
+        for (int i = 0; i < (int)lines.size(); ++i) {
+            const size_t a = lines[i].find_first_not_of(" \t");
+            const bool is_heading = a != std::string::npos && lines[i][a] == '[';
+            if (start < 0 && is_heading && lines[i].compare(a, heading.size(), heading) == 0) {
+                start = i;
+            } else if (start >= 0 && is_heading) {
+                end = i;
+                break;
+            }
+        }
+        int at = -1;
+        for (int i = start + 1; start >= 0 && i < end; ++i)
+            if (settings_line_key(lines[i]) == o.key) { at = i; break; }
+        if (at >= 0) {
+            if (disk) lines[at] = assign;
+            else lines.erase(lines.begin() + at);
+        } else if (disk) {
+            if (start >= 0) {
+                lines.insert(lines.begin() + start + 1, assign);
+            } else {
+                lines.push_back("");
+                lines.push_back(heading);
+                lines.push_back(assign);
+            }
+        }
+    }
+    std::string out;
+    for (const auto& line : lines) out += line + "\n";
+    return out;
+}
+}  // namespace
+
+bool user_settings_known_key(const std::string& section, const std::string& key) {
+    static const char* const kKnown[][2] = {
+        {"video", "renderer"}, {"video", "window_width"}, {"video", "fov_scale"},
+        {"video", "auto_skip_fmv"}, {"video", "turbo_loads"}, {"video", "fast_boot"},
+        {"video", "bios_hle"}, {"video", "fullscreen"}, {"video", "low_latency_input"},
+        {"video", "render_thread"}, {"video", "present_thread"},
+        {"video", "frame_generation"}, {"video", "vsync"},
+        {"video", "frame_interpolation"}, {"video", "frame_interpolation_fps"},
+        {"video", "aspect_ratio"}, {"video", "adaptive_view"},
+        {"audio", "volume"},
+        {"hotkeys", "rewind_pad"}, {"hotkeys", "save_state_menu_pad"},
+        {"hotkeys", "fast_forward_speed"}, {"hotkeys", "fast_forward_mode"},
+        {"hotkeys", "fast_forward_pad"}, {"hotkeys", "fast_forward_toggle_pad"},
+        {"launcher", "skip_launcher"},
+        {"netplay", "player_name"}, {"netplay", "lobby_url"},
+        {"bios", "path"}, {"disc", "path"}, {"disc", "selected"},
+        {"memcard", "dir"}, {"memcard", "card1"}, {"memcard", "card2"},
+        {"memcard", "enable1"}, {"memcard", "enable2"},
+        {"localization", "language"},
+        {"parappa_timing", "mode"}, {"parappa_timing", "extra_early"},
+        {"parappa_timing", "extra_late"},
+        {"controller", "multitap"}, {"controller", "multitap_analog"},
+        {"controller", "mouse_sensitivity"}, {"controller", "mouse_capture"},
+        {"controller", "jogcon_force_feedback"}, {"controller", "deadzone"},
+    };
+    for (const auto& k : kKnown)
+        if (section == k[0] && key == k[1]) return true;
+    if (section == "controller" && key.size() > 3 && key[0] == 'p' &&
+        key[1] >= '1' && key[1] < '1' + UserSettings::kMaxControllerPlayers && key[2] == '_') {
+        const std::string rest = key.substr(3);
+        if (rest == "device" || rest == "mode" || rest == "deadzone" || rest == "analog")
+            return true;
+    }
+    for (const auto& spec : kExtraPlayerSettings)
+        if (section == spec.section && key == spec.key) return true;
+    return false;
+}
+
+bool add_user_settings_run_override(const std::string& assignment, std::string* error) {
+    auto fail = [&](const std::string& why) {
+        if (error) *error = why;
+        return false;
+    };
+    const size_t eq = assignment.find('=');
+    if (eq == std::string::npos)
+        return fail("expected SECTION.KEY=VALUE");
+    const std::string name = assignment.substr(0, eq);
+    const std::string text = assignment.substr(eq + 1);
+    const size_t dot = name.find('.');
+    if (dot == std::string::npos || dot == 0 || dot + 1 >= name.size() ||
+        name.find('.', dot + 1) != std::string::npos)
+        return fail("expected SECTION.KEY=VALUE, got key '" + name + "'");
+    UserSettingsRunOverride o;
+    o.section = name.substr(0, dot);
+    o.key = name.substr(dot + 1);
+    if (!user_settings_known_key(o.section, o.key))
+        return fail("unknown settings.toml key '" + name + "'");
+    try {
+        std::istringstream in("value = " + text + "\n");
+        const toml::value doc = toml::parse(in, "--set");
+        o.value = toml::find(doc, "value");
+    } catch (const std::exception&) {
+        o.value = toml::value(text);  // not a TOML value: plain text
+    }
+    g_run_overrides.erase(
+        std::remove_if(g_run_overrides.begin(), g_run_overrides.end(),
+                       [&](const UserSettingsRunOverride& x) {
+                           return x.section == o.section && x.key == o.key;
+                       }),
+        g_run_overrides.end());
+    g_run_overrides.push_back(std::move(o));
+    return true;
+}
+
+void set_user_settings_run_override_path(const fs::path& settings_path) {
+    g_run_override_path = settings_path;
+}
+
+void clear_user_settings_run_overrides() {
+    g_run_overrides.clear();
+    g_run_override_path.clear();
+}
+
 UserSettings load_user_settings(const fs::path& path) {
     UserSettings s;
     std::error_code ec;
-    if (path.empty() || !fs::exists(path, ec)) return s;
+    const bool overrides = run_overrides_apply_to(path);
+    if (path.empty() || (!fs::exists(path, ec) && !overrides)) return s;
 
     toml::value doc;
     try {
-        doc = toml::parse(path.string());
+        if (fs::exists(path, ec)) doc = toml::parse(path.string());
+        else doc = toml::table{};
     } catch (const std::exception&) {
         // Malformed file: fall back to all-defaults rather than refuse to boot,
         // but tell the caller so the user hears about it (and so the file can
@@ -3223,6 +3406,7 @@ UserSettings load_user_settings(const fs::path& path) {
         s.parse_error = true;
         return s;
     }
+    if (overrides) apply_run_overrides(doc);
 
     // Each field guarded independently so one bad value can't blank the rest.
     auto try_get = [](auto&& fn) { try { fn(); } catch (const std::exception&) {} };
@@ -3630,8 +3814,15 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     if (!path.parent_path().empty())
         fs::create_directories(path.parent_path(), ec);  // best-effort
 
-    std::ofstream f(path, std::ios::trunc);
-    if (!f.is_open()) return false;
+    // Run-only overrides are never written: read what the file holds for each
+    // overridden key before it is replaced.
+    const bool overrides = run_overrides_apply_to(path);
+    toml::value on_disk = toml::table{};
+    if (overrides && fs::exists(path, ec)) {
+        try { on_disk = toml::parse(path.string()); } catch (const std::exception&) {}
+    }
+
+    std::ostringstream f;
 
     // Windows paths use forward slashes so separators need no TOML escaping.
     auto fwd = [](const fs::path& p) {
@@ -3840,7 +4031,12 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "extra_late = " << s.parappa_timing_extra_late << "\n";
     }
 
-    return f.good();
+    std::string text = f.str();
+    if (overrides) text = restore_overridden_keys(text, on_disk);
+    std::ofstream out(path, std::ios::trunc);
+    if (!out.is_open()) return false;
+    out << text;
+    return out.good();
 }
 
 bool upsert_game_toml_controller_bool(const std::filesystem::path& path,

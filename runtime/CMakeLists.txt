@@ -26,6 +26,16 @@ if(BUILD_TESTING)
     add_executable(pgxp_player_preferences_test tests/test_pgxp_player_preferences.c)
     target_include_directories(pgxp_player_preferences_test PRIVATE include)
     add_test(NAME pgxp_player_preferences_test COMMAND pgxp_player_preferences_test)
+    # PS1B-687: run-only settings.toml overrides (--set, --fullscreen,
+    # --windowed) are read but never saved.
+    add_executable(user_settings_run_overrides_test tests/test_user_settings_run_overrides.cpp
+        ../recompiler/src/config_loader.cpp ../recompiler/src/ps1_exe_parser.cpp)
+    target_include_directories(user_settings_run_overrides_test PRIVATE include ../recompiler/src
+        ../recompiler/include ../recompiler/lib/fmt/include ../recompiler/lib/toml11)
+    target_compile_definitions(user_settings_run_overrides_test PRIVATE FMT_HEADER_ONLY=1)
+    target_compile_options(user_settings_run_overrides_test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-UNDEBUG> $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>)
+    add_test(NAME user_settings_run_overrides_test COMMAND user_settings_run_overrides_test)
     if(PSX_RECOMP_UI AND EXISTS "${RECOMP_UI_ROOT}/src/recomp_launcher.h")
         add_executable(player_settings_provider_test tests/test_player_settings_provider.cpp
             ../recompiler/src/config_loader.cpp ../recompiler/src/ps1_exe_parser.cpp)
@@ -234,6 +244,16 @@ if(BUILD_TESTING)
                     --manifest "${PSXRECOMP_ROOT}/mods/builtin/packages/psx.integration.debug-server/1.0.0/manifest.toml"
                     --scratch "${CMAKE_CURRENT_BINARY_DIR}")
             set_tests_properties(debug_server_opt_in_test PROPERTIES TIMEOUT 90)
+            # PS1B-687: --help, --data-dir, --set, --fullscreen/--windowed on
+            # the same disposable headless player.
+            add_test(NAME cli_player_flags_test
+                COMMAND "${Python3_EXECUTABLE}" -I -B
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_player_flags.py"
+                    --runtime "$<TARGET_FILE:psx-runtime>"
+                    --bios "${PSXRECOMP_ROOT}/bios/OpenBIOS.BIN"
+                    --manifest "${PSXRECOMP_ROOT}/mods/builtin/packages/psx.integration.debug-server/1.0.0/manifest.toml"
+                    --scratch "${CMAKE_CURRENT_BINARY_DIR}")
+            set_tests_properties(cli_player_flags_test PROPERTIES TIMEOUT 300)
         endif()
     endif()
     find_package(Threads REQUIRED)

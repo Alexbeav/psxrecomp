@@ -3058,9 +3058,36 @@ static std::filesystem::path exe_dir_from_argv(const char* argv0) {
     return exe_dir;
 }
 
+/* --data-dir <dir>: the folder for the files this program writes for its
+ * player (settings.toml, the bios.cfg / disc.cfg sidecars, memory cards and
+ * saves, input.ini / keybinds.ini / config.ini, cache/). Empty = the exe
+ * directory, as before. Read-only files (game.toml, discs found beside the
+ * exe, bios/, mods/, assets/, overlay_toolchain/) stay beside the exe. */
+static std::filesystem::path g_user_data_dir;
+static std::filesystem::path user_dir_from_argv(const char* argv0) {
+    return g_user_data_dir.empty() ? exe_dir_from_argv(argv0) : g_user_data_dir;
+}
+/* psx_keybinds_init takes the exe path and uses its folder; a folder path
+ * with a trailing separator names the folder itself. */
+static std::string keybinds_anchor(const char* argv0) {
+    if (g_user_data_dir.empty()) return argv0 ? argv0 : "";
+    return g_user_data_dir.string() + "/";
+}
+/* With --data-dir, a key-binding file shipped beside the exe seeds the data
+ * folder's copy once, so its defaults survive and every write lands there. */
+static void seed_user_file_from_exe_dir(const char* argv0, const char* leaf) {
+    namespace fs = std::filesystem;
+    if (g_user_data_dir.empty()) return;
+    std::error_code ec;
+    const fs::path to = g_user_data_dir / leaf;
+    const fs::path from = exe_dir_from_argv(argv0) / leaf;
+    if (!fs::exists(to, ec) && fs::is_regular_file(from, ec))
+        fs::copy_file(from, to, ec);
+}
+
 static void load_host_keymap(const char *argv0) {
     namespace fs = std::filesystem;
-    const fs::path config = exe_dir_from_argv(argv0) / "config.ini";
+    const fs::path config = user_dir_from_argv(argv0) / "config.ini";
     std::error_code ec;
     if (fs::is_regular_file(config, ec)) host_keymap_load(config.string().c_str());
     else if (fs::is_regular_file(fs::path("config.ini"), ec)) host_keymap_load("config.ini");
@@ -3114,18 +3141,19 @@ static std::filesystem::path resolve_existing_runtime_path(const char* requested
 }
 
 static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* filename) {
-    return exe_dir_from_argv(argv0) / filename;
+    return user_dir_from_argv(argv0) / filename;
 }
 
 /* Relative paths in settings.toml and the bios.cfg / disc.cfg sidecars are
- * relative to the game folder. Resolve them against the exe directory, never
- * the working directory: a shortcut or frontend that starts the game from
+ * relative to the folder that holds those files: the exe directory, or the
+ * --data-dir folder (their writers store paths relative to it). Never the
+ * working directory: a shortcut or frontend that starts the game from
  * elsewhere must still find its own memory cards and BIOS. Absolute paths are
  * returned unchanged; empty stays empty. */
 static std::filesystem::path anchor_on_exe_dir(const char* argv0,
                                                const std::filesystem::path& p) {
     if (p.empty()) return p;
-    return PSXRecompV4::host_resolve(exe_dir_from_argv(argv0), p);
+    return PSXRecompV4::host_resolve(user_dir_from_argv(argv0), p);
 }
 
 static std::filesystem::path anchor_card_path(const char* argv0,
@@ -3154,7 +3182,7 @@ static void write_cached_path(const char* argv0, const char* filename,
     // read_cached_path anchors relative paths on the exe directory.
     if (f.is_open())
         f << PSXRecompV4::host_path_forward_slashes(
-                 PSXRecompV4::relative_to_folder(path, exe_dir_from_argv(argv0))) << "\n";
+                 PSXRecompV4::relative_to_folder(path, user_dir_from_argv(argv0))) << "\n";
 }
 
 /* Nobody is at the screen: never block on a modal dialog or a file picker. */
@@ -3999,7 +4027,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 
     std::filesystem::path cached = read_cached_path(argv0, "disc.cfg");
     if (!cached.empty()) {
-        cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
+        cached = resolve_persisted_disc_path(cached, user_dir_from_argv(argv0));
     }
     /* disc.cfg is shared by the programs of a set; the other program's disc
      * is not this build's. */
@@ -4181,7 +4209,7 @@ static bool resolve_match_session_bios_path(
 // block) specifies one: the executable's directory (authoritative, never cwd —
 // see exe_dir_from_argv), so saves always live next to the binary.
 static std::filesystem::path default_memcard_dir(const char* argv0) {
-    return exe_dir_from_argv(argv0);
+    return user_dir_from_argv(argv0);  /* --data-dir, else the exe dir */
 }
 
 static void close_controller(void);
@@ -6177,18 +6205,18 @@ static void load_input_config(const char* argv0) {
     set_default_controller_mapping();
 
     namespace fs = std::filesystem;
-    fs::path config_path = exe_dir_from_argv(argv0) / "input.ini";
+    fs::path config_path = user_dir_from_argv(argv0) / "input.ini";
     std::error_code ec;
     if (!fs::exists(config_path, ec)) {
         std::ofstream out(config_path, std::ios::binary);
         if (out) out << default_input_ini_text();
-        psx_keybinds_init(argv0);
+        psx_keybinds_init(keybinds_anchor(argv0).c_str());
         return;
     }
 
     std::ifstream in(config_path);
     if (!in) {
-        psx_keybinds_init(argv0);
+        psx_keybinds_init(keybinds_anchor(argv0).c_str());
         return;
     }
 
@@ -6256,7 +6284,7 @@ static void load_input_config(const char* argv0) {
      * from input.ini's gamepad map. Loads the user's map (or writes defaults on
      * first run). The launcher may have just edited+saved this file; we re-read
      * it here so the runtime always reflects the current bindings. */
-    psx_keybinds_init(argv0);
+    psx_keybinds_init(keybinds_anchor(argv0).c_str());
 }
 
 static PsxJogconFfbBackend player_ffb_backend(PlayerInput& p) {
@@ -13002,7 +13030,7 @@ namespace {
                       size_t out_cap, char* error, size_t error_cap) {
         try {
             const auto resolved = PSXRecompV4::resolve_disc_path(disc);
-            const auto root = exe_dir_from_argv(g_lnch_argv0 ? g_lnch_argv0 : "") / "sbi-input";
+            const auto root = user_dir_from_argv(g_lnch_argv0 ? g_lnch_argv0 : "") / "sbi-input";
             const auto imported = PSXRecompV4::import_sbi_setup(resolved.data, resolved.mount, sbi, root).string();
             if (imported.size() >= out_cap) throw std::runtime_error("The imported disc path is too long.");
             std::snprintf(out_disc, out_cap, "%s", imported.c_str());
@@ -18396,7 +18424,7 @@ namespace {
     };
 
     void ae_rui_set_sidecar_paths(const char* argv0) {
-        const auto exe = exe_dir_from_argv(argv0 ? argv0 : "");
+        const auto exe = user_dir_from_argv(argv0 ? argv0 : "");
         g_rui_keybinds_path = (exe / "keybinds.ini").string();
         g_rui_config_ini_path = (exe / "config.ini").string();
     }
@@ -19228,7 +19256,7 @@ static void recomp_overlay_setup(const char* argv0, const std::string& title,
 #if defined(RECOMP_LAUNCHER_MODULE_HOST)
     const auto module_root = exe_dir_from_argv(argv0);
     if (!recomp_launcher_module_set_roots(module_root.string().c_str(),
-        (module_root/"saves").string().c_str(),(module_root/"assets").string().c_str())) return;
+        (user_dir_from_argv(argv0)/"saves").string().c_str(),(module_root/"assets").string().c_str())) return;
 #endif
     const PsxMenuProvider* p = psx_menu_provider();
     g_menu_host.default_selection = 0;
@@ -19253,8 +19281,8 @@ static void recomp_overlay_setup(const char* argv0, const std::string& title,
     g_ovl_lock_device = lock_device;
     for (int i = 0; i < PSX_MAX_PLAYERS; ++i) g_ovl_locked_modes[i] = locked_modes[i];
     g_ovl_argv0 = argv0 ? argv0 : "";
-    g_ovl_keybinds = (dir / "keybinds.ini").string();
-    g_ovl_config = (dir / "config.ini").string();
+    g_ovl_keybinds = (user_dir_from_argv(argv0) / "keybinds.ini").string();
+    g_ovl_config = (user_dir_from_argv(argv0) / "config.ini").string();
     g_ovl_assets = (dir / "assets").string();
     g_menu_host.assets_dir = g_ovl_assets.c_str();
     mh_refresh_snapshot();
@@ -19351,7 +19379,7 @@ static void host_pause_service(void) {
     if (have_video) (void)psx_video_apply_live(&video);
 #if defined(RECOMP_LAUNCHER)
     if (have_ls) {
-        const auto settings_path = exe_dir_from_argv(g_ovl_argv0.c_str()) / "settings.toml";
+        const auto settings_path = user_dir_from_argv(g_ovl_argv0.c_str()) / "settings.toml";
         auto settings = PSXRecompV4::load_user_settings(settings_path);
         bool controls_changed = false;
         for (int i = 0; i < PSX_MAX_PLAYERS && i < RECOMP_LAUNCHER_MAX_PLAYERS; ++i) {
@@ -19405,7 +19433,7 @@ static void host_pause_service(void) {
         if ((post.jogcon_force_feedback != 0) != (psx_jogcon_ffb_player_enabled() != 0)) {
             psx_jogcon_ffb_set_player_enabled(post.jogcon_force_feedback);
             const auto settings_path =
-                exe_dir_from_argv(g_ovl_argv0.c_str()) / "settings.toml";
+                user_dir_from_argv(g_ovl_argv0.c_str()) / "settings.toml";
             PSXRecompV4::UserSettings us = PSXRecompV4::load_user_settings(settings_path);
             us.jogcon_force_feedback = post.jogcon_force_feedback != 0;
             us.has_jogcon_force_feedback = true;
@@ -19430,7 +19458,7 @@ static void host_pause_service(void) {
         (void)savestate_submit_slot(slot, (req & 0x100) ? 1 : 0);
     }
     if (g_ovl_reload_binds.exchange(0)) {
-        psx_keybinds_init(g_ovl_argv0.c_str());
+        psx_keybinds_init(keybinds_anchor(g_ovl_argv0.c_str()).c_str());
         load_input_config(g_ovl_argv0.c_str());
         load_host_keymap(g_ovl_argv0.c_str());
     }
@@ -19573,8 +19601,94 @@ static int g_player_title_select_allowed=1;
 
 /* Keep the modern unattended-message policy and preserve refusal evidence. */
 
+/* --help / -h: the command line this program takes. */
+static const char kCliUsage[] =
+    "Usage: %s [options] [bios-path]\n"
+    "\n"
+    "Start:\n"
+    "  --disc <path>             mount this disc image (.cue/.bin/.chd/.iso)\n"
+    "  --bios <path>             use this BIOS image instead of the remembered one\n"
+    "  --game <toml>             load this game config instead of the bundled one\n"
+    "  --launcher                show the launcher (wins over skip_launcher)\n"
+    "  --no-launcher             skip the launcher and boot straight in\n"
+    "  --game-mode               fullscreen, no launcher once a disc is set up\n"
+    "  --no-game-mode            never use game mode\n"
+    "  --fullscreen              this run in fullscreen (not saved)\n"
+    "  --windowed                this run in a window (not saved)\n"
+    "  --renderer <name>         software | opengl | vulkan for this run\n"
+    "  --window-title <text>     window title for this run\n"
+    "\n"
+    "Files:\n"
+    "  --data-dir <dir>          keep settings.toml, bios.cfg, disc.cfg, memory\n"
+    "                            cards, saves, key bindings and cache/ in <dir>\n"
+    "                            instead of beside the program (created if missing;\n"
+    "                            a relative <dir> is taken from the program folder)\n"
+    "  --memcard-dir <dir>       memory cards and game options in <dir> (wins over\n"
+    "                            --data-dir for cards)\n"
+    "  --set SECTION.KEY=VALUE   override one settings.toml value for this run only,\n"
+    "                            never saved; repeatable (e.g. --set audio.volume=50)\n"
+    "\n"
+    "Netplay:\n"
+    "  --netplay                 enable delay-sync LAN play (also PSX_NETPLAY=1)\n"
+    "  --net-slot <0|1>          local player slot\n"
+    "  --net-input-player <n>    host device to sample (0=P1, 1=P2)\n"
+    "  --net-bind <host:port>    local UDP bind (default 0.0.0.0:7777)\n"
+    "  --net-peer <host:port>    peer address\n"
+    "  --net-delay <n>           input delay in ticks (default 2)\n"
+    "  --net-session-id <n>      session id, must match the peer\n"
+    "  --netplay-query <request> answer a netplay query and exit\n"
+    "\n"
+    "Testing and tools:\n"
+    "  --headless                no window or audio; driven over the debug port\n"
+    "  --headless-opengl         hidden OpenGL context, no audio or controllers\n"
+    "  --hidden-window           full presenter in a window that is never shown\n"
+    "  --debug-port <n>          TCP debug-server port\n"
+    "  --replay <file>           play a recorded input replay\n"
+    "  --replay-verdict <file>   write the replay verdict to <file>\n"
+    "  --replay-fast             play the replay unthrottled\n"
+    "  --launcher-disc-check     check the launcher's disc choice and exit\n"
+    "  --audit-mod-plugins <dir>...  check the mod manifests and exit\n"
+    "  -h, --help                print this help and exit\n";
+
+/* A release build on Windows is a GUI-subsystem program: started from a
+ * console its stdout reaches nothing. Attach to the parent's console when
+ * stdout is not already redirected to a file or pipe. */
+static void cli_output_to_parent_console() {
+#ifdef _WIN32
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != nullptr && out != INVALID_HANDLE_VALUE) return;  /* redirected */
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    if (!std::freopen("CONOUT$", "w", stdout)) return;
+    (void)std::freopen("CONOUT$", "w", stderr);
+#endif
+}
+
+static bool cli_help_requested(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0)
+            return true;
+        /* Values of options are not switches: --window-title -h stays a title. */
+        static const char* const kTakesValue[] = {
+            "--disc", "--bios", "--game", "--renderer", "--window-title",
+            "--data-dir", "--memcard-dir", "--set", "--debug-port", "--replay",
+            "--replay-verdict", "--net-slot", "--net-input-player", "--net-bind",
+            "--net-peer", "--net-delay", "--net-session-id", "--netplay-query"};
+        for (const char* v : kTakesValue)
+            if (std::strcmp(argv[i], v) == 0) { ++i; break; }
+    }
+    return false;
+}
+
 #ifndef PSX_RUNTIME_EXTERNAL_MAIN
 int main(int argc, char** argv) {
+    /* Before any window, SDL, audio, regional hand-off or setup-host forward. */
+    if (cli_help_requested(argc, argv)) {
+        cli_output_to_parent_console();
+        std::fprintf(stdout, kCliUsage,
+                     exe_file_from_argv(argv[0]).filename().string().c_str());
+        std::fflush(stdout);
+        return 0;
+    }
     psx_disc_warning_set("");
 #if defined(RECOMP_LAUNCHER_MODULE_HOST)
     if (argc == 2 && std::strcmp(argv[1],"--launcher-module-check") == 0) {
@@ -19683,6 +19797,9 @@ int main(int argc, char** argv) {
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
     const char* cli_netplay_query = nullptr; /* --netplay-query <request> */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
+    const char* cli_data_dir = nullptr;      /* --data-dir: every per-player file */
+    int         cli_window_mode = -1;        /* --fullscreen 1 / --windowed 0; -1 = settings */
+    std::vector<std::string> cli_settings_overrides;  /* --set, in order */
     std::vector<std::string> cli_path_arg_storage;
     cli_path_arg_storage.reserve((size_t)argc);
     auto is_cli_option = [](const char* arg) {
@@ -19722,6 +19839,12 @@ int main(int argc, char** argv) {
      *   --disc <path>       override the game config disc path
      *   --debug-port <n>    override the TCP debug-server port (multi-instance)
      *   --memcard-dir <path> override card/save/options state (multi-instance)
+     *   --data-dir <path>   every per-player file (settings.toml, sidecars,
+     *                       cards, key bindings, cache) in <path>
+     *   --set S.K=V         run-only settings.toml override (never saved)
+     *   --fullscreen        this run fullscreen (borderless); not saved
+     *   --windowed          this run windowed; not saved
+     *   --help, -h          handled at the top of main()
      *   --renderer <name>   override the renderer: software|opengl|vulkan
      *   --launcher          force the GUI launcher (overrides skip_launcher)
      *   --no-launcher       skip the GUI launcher (boot straight in)
@@ -19757,6 +19880,14 @@ int main(int argc, char** argv) {
             cli_debug_port = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--memcard-dir") == 0 && i + 1 < argc) {
             cli_memcard_dir = consume_path_arg(i);
+        } else if (std::strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc) {
+            cli_data_dir = consume_path_arg(i);
+        } else if (std::strcmp(argv[i], "--set") == 0 && i + 1 < argc) {
+            cli_settings_overrides.emplace_back(argv[++i]);
+        } else if (std::strcmp(argv[i], "--fullscreen") == 0) {
+            cli_window_mode = 1;
+        } else if (std::strcmp(argv[i], "--windowed") == 0) {
+            cli_window_mode = 0;
         } else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             const char* r = argv[++i];
             if      (std::strcmp(r, "software") == 0) cli_renderer = 0;
@@ -19837,6 +19968,48 @@ int main(int argc, char** argv) {
             g_headless = 1;
             force_no_launcher = true;
         }
+    }
+    /* --data-dir: anchored on the exe directory like every relative runtime
+     * path (never cwd), created now, before anything reads or writes there. */
+    if (cli_data_dir) {
+        std::filesystem::path dir(cli_data_dir);
+        if (!PSXRecompV4::host_path_is_absolute(dir))
+            dir = exe_dir_from_argv(argv[0]) / dir;
+        dir = dir.lexically_normal();
+        std::error_code data_ec;
+        std::filesystem::create_directories(dir, data_ec);
+        if (data_ec || !std::filesystem::is_directory(dir, data_ec)) {
+            std::fprintf(stderr, "psxrecomp: cannot create --data-dir %s: %s\n",
+                         dir.string().c_str(),
+                         data_ec ? data_ec.message().c_str() : "not a folder");
+            return 1;
+        }
+        g_user_data_dir = dir;
+        seed_user_file_from_exe_dir(argv[0], "keybinds.ini");
+        seed_user_file_from_exe_dir(argv[0], "config.ini");
+        seed_user_file_from_exe_dir(argv[0], "input.ini");
+        /* The mod selection moves too; the mod catalogs stay beside the exe. */
+        PSXRecompV4::ModPackageManager::set_user_state_dir(dir / "mods");
+        if (std::filesystem::is_regular_file(exe_dir_from_argv(argv[0]) / "mods" / "state.toml", data_ec)) {
+            std::filesystem::create_directories(dir / "mods", data_ec);
+            seed_user_file_from_exe_dir(argv[0], "mods/state.toml");
+        }
+        std::fprintf(stdout, "psxrecomp: data directory = %s\n", dir.string().c_str());
+    }
+    /* --set / --fullscreen / --windowed: run-only views of settings.toml. The
+     * window flags win over a --set of the same key. */
+    PSXRecompV4::set_user_settings_run_override_path(
+        user_dir_from_argv(argv[0]) / "settings.toml");
+    if (cli_window_mode >= 0)
+        cli_settings_overrides.push_back(cli_window_mode ? "video.fullscreen=1"
+                                                         : "video.fullscreen=0");
+    for (const std::string& assignment : cli_settings_overrides) {
+        std::string why;
+        if (PSXRecompV4::add_user_settings_run_override(assignment, &why))
+            std::fprintf(stdout, "psxrecomp: --set %s (this run only)\n", assignment.c_str());
+        else
+            std::fprintf(stderr, "psxrecomp: warning: --set %s ignored: %s\n",
+                         assignment.c_str(), why.c_str());
     }
     /* The settings file is not read yet; its skip_launcher is added below. */
     s_start_interactive =
@@ -20076,6 +20249,14 @@ int main(int argc, char** argv) {
                     gc.discs.size(), game_discs.size(), g_program_discs.front());
             if (!game_discs.empty()) resolved_disc = game_discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
+            /* --data-dir: a card folder inside the game folder (memcard_dir =
+             * "saves") moves under the data folder; one elsewhere is kept. */
+            if (gc.runtime.has_memcard_dir && !g_user_data_dir.empty()) {
+                const auto rel = gc.runtime.memcard_dir.lexically_normal()
+                                     .lexically_relative(gc.project_root.lexically_normal());
+                if (!rel.empty() && rel.is_relative() && *rel.begin() != "..")
+                    memcard_dir = (g_user_data_dir / rel).lexically_normal();
+            }
             g_fast_loading_optout = gc.runtime.fast_loading_optout;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
             if (gc.runtime.has_debug_port)   debug_port    = gc.runtime.debug_port;
@@ -20724,7 +20905,7 @@ int main(int argc, char** argv) {
     bool user_settings_has_renderer = false;
     {
         std::filesystem::path settings_path =
-            exe_dir_from_argv(argv[0]) / "settings.toml";
+            user_dir_from_argv(argv[0]) / "settings.toml";
 #if defined(RECOMP_LAUNCHER)
         g_lnch_settings_path = settings_path;
         g_overlay_settings_path = settings_path;
@@ -20850,7 +21031,7 @@ int main(int argc, char** argv) {
             bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
-            resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]));
+            resolved_disc = resolve_persisted_disc_path(us.disc_path, user_dir_from_argv(argv[0]));
         /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
          * PRESENT; absent it, [disc] path decides and the index is derived
          * from it.
@@ -21022,7 +21203,7 @@ int main(int argc, char** argv) {
     if (cli_memcard_dir) {
         memcard_dir = std::filesystem::path(cli_memcard_dir);
         if (memcard_dir.is_relative())
-            memcard_dir = exe_dir_from_argv(argv[0]) / memcard_dir;
+            memcard_dir = user_dir_from_argv(argv[0]) / memcard_dir;
         memcard_dir = memcard_dir.lexically_normal();
         memcard1_path.clear();
         memcard2_path.clear();
@@ -21108,7 +21289,7 @@ int main(int argc, char** argv) {
     auto run_deferred_overlay_init = [&]() {
         PSXRecompV4::HostLaunchTimingScope timing(HOST_LAUNCH_OVERLAY_WORKER);
         std::filesystem::path exe_dir = exe_dir_from_argv(argv[0]);
-        std::string cache_dir = (exe_dir / "cache").string();
+        std::string cache_dir = (user_dir_from_argv(argv[0]) / "cache").string();
         std::filesystem::path captures_path =
             resolve_overlay_capture_path(deferred_overlay_project_root, exe_dir, game_id);
         if (!overlay_capture_set_path(captures_path.string().c_str())) {
@@ -21234,7 +21415,7 @@ int main(int argc, char** argv) {
                 " --recompiler " + cmd_quote((tk_dir / tk_recompiler).string()) +
                 " --runtime-include " + cmd_quote((tk_dir / "include").string()) +
                 " --project-root " + cmd_quote(tk_dir.string()) +
-                " --out-dir " + cmd_quote((tk_xd / "cache").string()) +
+                " --out-dir " + cmd_quote((user_dir_from_argv(argv[0]) / "cache").string()) +
                 (g_psx_cps_mode ? " --cps" : "") +
                 " --compiler " + compiler;
             if (std::string(compiler) == "gcc" && !tk_compiler.empty())
@@ -21374,7 +21555,9 @@ int main(int argc, char** argv) {
                                            : "launcher first (no disc set up yet)");
         }
     }
-    player_settings_configure(exe_dir_from_argv(argv[0])/"settings.toml",
+    /* The launcher's Fullscreen row shows --fullscreen / --windowed. */
+    if (cli_window_mode >= 0) g_fullscreen = cli_window_mode;
+    player_settings_configure(user_dir_from_argv(argv[0]) / "settings.toml",
         player_settings_baseline(fast_boot,bios_hle,bios_hle_keep_intro,resolved_audio_buffer_ms,memcard_dir));
     const bool want_launcher =
         force_launcher ||
@@ -22168,7 +22351,7 @@ int main(int argc, char** argv) {
                     player_settings_merge(seed);
                     PSXRecompV4::UserSettings save = seed;
                     (void)PSXRecompV4::save_user_settings(
-                        exe_dir_from_argv(argv[0]) / "settings.toml", save);
+                        user_dir_from_argv(argv[0]) / "settings.toml", save);
                 }
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
                 /* Not a refusal, but it ends before the first frame like one;
@@ -22347,7 +22530,7 @@ int main(int argc, char** argv) {
                     player_settings_merge(seed);
                     PSXRecompV4::UserSettings save = seed;
                     (void)PSXRecompV4::save_user_settings(
-                        exe_dir_from_argv(argv[0]) / "settings.toml", save);
+                        user_dir_from_argv(argv[0]) / "settings.toml", save);
                 }
             }
         }
@@ -22548,7 +22731,7 @@ int main(int argc, char** argv) {
     if (cli_memcard_dir) {
         memcard_dir = std::filesystem::path(cli_memcard_dir);
         if (memcard_dir.is_relative())
-            memcard_dir = exe_dir_from_argv(argv[0]) / memcard_dir;
+            memcard_dir = user_dir_from_argv(argv[0]) / memcard_dir;
         memcard_dir = memcard_dir.lexically_normal();
         memcard1_path.clear();
         memcard2_path.clear();
@@ -23103,7 +23286,7 @@ session_reboot:
     std::fprintf(stdout,"psxrecomp: runtime disc roster registered=%d selected=%d\n",
                  cdrom_disc_roster_count(),cdrom_disc_selected());
     disc_menu_session = { &selected_disc_index, &disc_path_str, &resolved_disc,
-                          exe_dir_from_argv(argv[0]) / "settings.toml" };
+                          user_dir_from_argv(argv[0]) / "settings.toml" };
     psx_disc_tray_set_host_hook([](void *ctx, int disc, const char *path) {
         auto &session = *static_cast<DiscMenuSession*>(ctx);
         replay_session_shutdown();
@@ -23337,6 +23520,15 @@ session_reboot:
      * the BIOS hands control to the game EXE — not on the BIOS shell. */
     if (game_entry_pc != 0)
         fntrace_set_game_range(game_entry_pc, 0);
+
+    /* --fullscreen / --windowed win for this run over settings.toml, game
+     * mode and the launcher's Fullscreen row; the run-only override keeps
+     * every settings.toml save from writing it. */
+    if (cli_window_mode >= 0) g_fullscreen = cli_window_mode;
+    std::fprintf(stdout, "psxrecomp: window mode = %s (%s)\n",
+                 g_fullscreen == 2 ? "exclusive fullscreen" :
+                 g_fullscreen ? "fullscreen" : "windowed",
+                 cli_window_mode >= 0 ? "command line, this run only" : "settings");
 
   /* Headless still runs the SPU as a guest-cycle device. Register and prime
    * the pump before the frontend split so deterministic gates exercise the
@@ -24967,7 +25159,7 @@ soft_return_lobby:
             /* The rematch launcher can rebind keys just like the first-boot
              * one; the first-boot path re-reads keybinds.ini after the
              * launcher returns, and so must this one. */
-            psx_keybinds_init(argv[0]);
+            psx_keybinds_init(keybinds_anchor(argv[0]).c_str());
             host_volume_set(ls.volume);
             if (rui_out_disc[0]) {
                 resolved_disc = normalize_disc_path_for_launch(rui_out_disc);
@@ -25069,7 +25261,7 @@ soft_return_lobby:
              * the rest of settings.toml — merge into the on-disk file. */
             {
                 const auto settings_path =
-                    exe_dir_from_argv(argv[0]) / "settings.toml";
+                    user_dir_from_argv(argv[0]) / "settings.toml";
                 PSXRecompV4::UserSettings us =
                     PSXRecompV4::load_user_settings(settings_path);
                 apply_extra_player_settings(us,bios_hle_keep_intro,resolved_audio_buffer_ms);

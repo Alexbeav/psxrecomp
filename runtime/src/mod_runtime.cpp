@@ -269,7 +269,7 @@ bool dependency_files(RuntimeMods& s, const std::filesystem::path& disc,
 
 bool record_selection_file(RuntimeMods& s,
                            std::map<std::filesystem::path, std::string>& files) {
-    const auto path = s.manager.root() / "state.toml";
+    const auto path = s.manager.state_dir() / "state.toml";
     std::error_code ec;
     if (!std::filesystem::exists(path, ec)) {
         files.erase(path);
@@ -2944,6 +2944,10 @@ bool mod_runtime_savestate_scope(std::string& scope, std::string* error) {
 
 const std::filesystem::path& mod_runtime_root() {
     return state().manager.root();
+}
+
+std::filesystem::path mod_runtime_state_dir() {
+    return state().manager.state_dir();
 }
 
 const std::filesystem::path& mod_runtime_effective_disc_path() {
