@@ -286,15 +286,89 @@ static int hle_service_b0(CPUState* cpu, uint32_t fn)
 
 /* ── boot shell-skip ─────────────────────────────────────────────────────── */
 
+/* GPU registers the retail shell leaves when it hands over to the game.
+ *
+ * A title may rely on them: SaGa Frontier (USA) never issues GP1(03h) in its
+ * boot, intro or title screen, so with the shell skipped and the GPU still in
+ * its reset state (display off) it ran, drew and played sound with no picture.
+ *
+ * The values are read from the running shells, not derived: on each image
+ * below the shell was run (kernel calls in HLE and in LLE) and GPUSTAT, the
+ * display registers and the draw area were sampled around game entry. They
+ * are constant from the shell's last screen until the game's own first GPU
+ * write, and equal in every run of one image:
+ *
+ *   SCPH-1001, SCPH-5500   GPUSTAT bits 16-22 = 0x4E (640x480 interlaced,
+ *                          NTSC, 15-bit), H range 608..3168, V range 16..255
+ *   SCPH-5552              GPUSTAT bits 16-22 = 0x5E (the same in PAL),
+ *                          H range 638..3198, V range 43..282
+ *   all three              display on, display start (0,2), GPUSTAT bits 0-12
+ *                          = 0x060B, draw area (0,2)-(639,479), draw offset
+ *                          (0,2)
+ *
+ * The draw mode belongs to the set: interlace with draw-to-display left off
+ * is a state no shell leaves, and it skips rows of every draw.
+ *
+ * Not reproduced: VRAM contents (the shell's last picture) and the texture
+ * window, which the samples do not show. An image with no row here keeps the
+ * reset state, as before. */
+typedef struct {
+    const char* image_id;
+    uint32_t    gp1_mode;     /* GP1(08h) */
+    uint32_t    gp1_h_range;  /* GP1(06h) */
+    uint32_t    gp1_v_range;  /* GP1(07h) */
+} PsxShellExitGpu;
+
+static const PsxShellExitGpu k_shell_exit_gpu[] = {
+    { "SCPH-1001", 0x08000027u, 0x06C60260u, 0x0703FC10u },
+    { "SCPH-5500", 0x08000027u, 0x06C60260u, 0x0703FC10u },
+    { "SCPH-5552", 0x0800002Fu, 0x06C7E27Eu, 0x0704682Bu },
+};
+
+#define PSX_MMIO_GP0 0x1F801810u
+#define PSX_MMIO_GP1 0x1F801814u
+
+static int hle_str_eq(const char* a, const char* b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+/* Issue the shell's final GPU state as the guest stores the shell would have
+ * made, so every device model sees them the way it sees the real shell. */
+static void hle_shell_exit_gpu_state(CPUState* cpu)
+{
+    const PsxShellExitGpu* row = NULL;
+    if (!psx_bios_image.image_id) return;
+    for (size_t i = 0; i < sizeof(k_shell_exit_gpu) / sizeof(k_shell_exit_gpu[0]); i++) {
+        if (hle_str_eq(k_shell_exit_gpu[i].image_id, psx_bios_image.image_id)) {
+            row = &k_shell_exit_gpu[i];
+            break;
+        }
+    }
+    if (!row) return;
+    cpu->write_word(PSX_MMIO_GP1, row->gp1_mode);
+    cpu->write_word(PSX_MMIO_GP1, 0x05000800u);     /* display start (0,2) */
+    cpu->write_word(PSX_MMIO_GP1, row->gp1_h_range);
+    cpu->write_word(PSX_MMIO_GP1, row->gp1_v_range);
+    cpu->write_word(PSX_MMIO_GP0, 0xE100060Bu);     /* draw mode */
+    cpu->write_word(PSX_MMIO_GP0, 0xE3000800u);     /* draw area (0,2) */
+    cpu->write_word(PSX_MMIO_GP0, 0xE4077E7Fu);     /* ... to (639,479) */
+    cpu->write_word(PSX_MMIO_GP0, 0xE5001000u);     /* draw offset (0,2) */
+    cpu->write_word(PSX_MMIO_GP1, 0x03000000u);     /* display on */
+}
+
 static int hle_boot_shell_skip(CPUState* cpu)
 {
     if (!s_boot_skip_on || s_shell_skipped || fntrace_is_game_started())
         return 0;
     s_shell_skipped = 1;
+    hle_shell_exit_gpu_state(cpu);
     /* Return straight to LoadRunShell's call site: BIOS Main() proceeds to
      * step 8 (SYSTEM.CNF + game EXE load) exactly as if the shell had exited
      * immediately with no disc-menu interaction. Kernel state at this point
-     * was built entirely by the real recompiled kernel init. */
+     * was built entirely by the real recompiled kernel init; the GPU holds the
+     * registers the shell leaves (hle_shell_exit_gpu_state). */
     cpu->gpr[2] = 0u;
     hle_record(psx_bios_image.shell_entry_phys, 0u, cpu, 0u, PSX_HLE_ROUTE_BOOT);
     return 1;

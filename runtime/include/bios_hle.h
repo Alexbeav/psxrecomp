@@ -30,8 +30,10 @@
  * the old fast_boot snapshot restore.
  *
  * The boot-skip is BIOS-INDEPENDENT and works under pure LLE. It needs only
- * the image's shell_entry_phys anchor — nothing is synthesized, the shell call
- * just returns immediately — so it fires identically on retail SCPH-1001 and
+ * the image's shell_entry_phys anchor. The shell call returns immediately and
+ * the only state written is the GPU registers the shell was measured to leave
+ * at hand-over (bios_hle.c, k_shell_exit_gpu; images with no measured row get
+ * none), so it fires identically on retail SCPH-1001 and
  * on the bundled OpenBIOS, whose kernel-call HLE is separately (and correctly)
  * refused for want of a DeliverEvent anchor. bios_hle_plan.h documents why the
  * two axes must not be collapsed; deriving the skip from the granted call-HLE
