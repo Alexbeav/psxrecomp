@@ -95,6 +95,13 @@ void sw_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0,
                                       uint16_t clut_x, uint16_t clut_y,
                                       uint16_t texpage, int raw_texture);
 void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color);
+/* Flat rectangles rasterised, and repeats dropped because one more
+ * application had been shown to change no covered pixel (diagnostics, tests). */
+typedef struct {
+    uint64_t drawn;
+    uint64_t dropped;
+} SwFlatRectRepeatStats;
+void sw_flat_rect_repeat_stats(SwFlatRectRepeatStats *out);
 void sw_draw_textured_rect(int x, int y, int w, int h,
                            int u, int v,
                            uint16_t clut_x, uint16_t clut_y,

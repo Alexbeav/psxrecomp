@@ -53,6 +53,10 @@ static uint16_t *g_hr      = NULL;
 static int       g_scale   = 1;
 static int       g_hr_w    = VRAM_WIDTH;
 static int       g_hr_h    = VRAM_HEIGHT;
+/* Counts the operations of this file that can write VRAM or one of its
+ * mirrors. The hi-res mirror is private to this file, so an unchanged count
+ * means an unchanged mirror (see "Repeated flat rectangle" below). */
+static uint32_t  g_write_serial;
 static int       g_precise_valid = 0;
 static int32_t   g_precise_x16[3], g_precise_y16[3];
 static int       g_perspective_valid = 0;
@@ -142,6 +146,7 @@ typedef struct {
 
 static inline RTarget rt_native(void) {
     RTarget t;
+    g_write_serial++;
     t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_vram; t.w = VRAM_WIDTH; t.h = VRAM_HEIGHT; t.s = 1;
     t.cx1 = g_clip_x1; t.cy1 = g_clip_y1; t.cx2 = g_clip_x2; t.cy2 = g_clip_y2;
@@ -151,6 +156,7 @@ static inline RTarget rt_native(void) {
 static inline RTarget rt_hires(void) {
     int s = g_scale;
     RTarget t;
+    g_write_serial++;
     t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_hr; t.w = g_hr_w; t.h = g_hr_h; t.s = s;
     t.cx1 = g_clip_x1 * s;
@@ -174,6 +180,7 @@ static int view_enabled, view_shift, view_pad_left, view_pad_right;
 static inline RTarget rt_wide(void) {
     int s = g_scale;
     RTarget t;
+    g_write_serial++;
     t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_wide_cur;
     t.w = g_wide_w * s; t.h = VRAM_HEIGHT * s; t.s = s;
@@ -479,6 +486,7 @@ static void sw_rect_uv_limits(int u0, int v0, int u1, int v1) {
 /* ------------------------------------------------------------------ */
 
 void sw_renderer_init(uint16_t *vram) {
+    g_write_serial++;
     g_vram = vram;
     g_clip_x1 = 0;
     g_clip_y1 = 0;
@@ -501,6 +509,7 @@ void sw_renderer_init(uint16_t *vram) {
 /* Point the rasterizer at another VRAM array without touching any draw
  * state (the OpenGL render thread switches its upload source this way). */
 void sw_renderer_rebind_vram(uint16_t *vram) {
+    g_write_serial++;
     g_vram = vram;
 }
 
@@ -512,6 +521,7 @@ void sw_renderer_set_scale(int scale) {
     if (scale < 1) scale = 1;
     if (scale > SW_MAX_INTERNAL_SCALE) scale = SW_MAX_INTERNAL_SCALE;
 
+    g_write_serial++;
     if (g_hr) { free(g_hr); g_hr = NULL; }
     /* Wide compositor surfaces are scale-sized; drop them so they re-allocate
      * at the new scale on next use (gpu re-configures native-wide after this). */
@@ -665,6 +675,7 @@ void sw_set_draw_offset(int x, int y) {
 
 static void hr_fill_block(int x, int y, int w, int h, uint16_t color) {
     int s = g_scale;
+    g_write_serial++;
     int x0 = (x & (VRAM_WIDTH - 1)) * s;
     int y0 = (y & (VRAM_HEIGHT - 1)) * s;
     int W = w * s, H = h * s;
@@ -684,6 +695,7 @@ void sw_fill_rect(int x, int y, int w, int h, uint16_t color) {
     int x0 = x & (VRAM_WIDTH - 1);
     int y0 = y & (VRAM_HEIGHT - 1);
 
+    g_write_serial++;
     for (int row = 0; row < h; row++) {
         int py = (y0 + row) & (VRAM_HEIGHT - 1);
         for (int col = 0; col < w; col++) {
@@ -703,6 +715,7 @@ void sw_fill_rect(int x, int y, int w, int h, uint16_t color) {
 void sw_copy_rect(int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
     uint16_t row_buf[VRAM_WIDTH];
 
+    g_write_serial++;
     /* Hi-res scratch: one native row's worth of source super-rows. */
     int s = g_scale;
     uint16_t *hr_rows = NULL;
@@ -1313,7 +1326,134 @@ static void raster_flat_rect(const RTarget *t, int x, int y, int w, int h,
     }
 }
 
+/* Repeated flat rectangle.
+ *
+ * A game can leave the GPU a list that loops, so the same rectangle arrives
+ * again and again with the same drawing state until the game cancels the
+ * transfer (Metal Slug X: a full-screen half-transparent rectangle, 210,000
+ * times in three frames). An untextured rectangle computes each pixel from
+ * that pixel alone, so once one more application leaves every covered pixel
+ * as it was, each further application does the same.
+ *
+ * The first repeat of a rectangle (same arguments, same drawing state, no
+ * other write by this file since) is drawn with a copy of the covered pixels
+ * taken before it. If the draw changed none of them, the rectangle is at
+ * rest. A later repeat is then dropped only while (a) no operation of this
+ * file has written since, which covers the private hi-res mirror, and (b) the
+ * covered canonical VRAM still equals the kept copy, which covers writers
+ * outside this file. Guest-visible VRAM is the same with and without the
+ * drop. Not used with a wide surface or with rollback dirty tracking. */
+typedef struct {
+    int x, y, w, h, color;
+    int cx1, cy1, cx2, cy2;
+    int semi, mode, mask_set, mask_check, skipped_row;
+    int scale, x0, y0, cols, rows;      /* covered native pixels */
+    const uint16_t *vram, *hr;
+} FlatRectKey;
+
+static struct {
+    FlatRectKey key;
+    uint32_t serial;       /* g_write_serial after the last flat rectangle */
+    int have, at_rest;
+    uint16_t *native, *hires;          /* covered pixels before the draw */
+    size_t native_cap, hires_cap;      /* in pixels */
+} g_flat_repeat;
+static SwFlatRectRepeatStats g_flat_repeat_stats;
+
+void sw_flat_rect_repeat_stats(SwFlatRectRepeatStats *out) {
+    if (out) *out = g_flat_repeat_stats;
+}
+
+static int flat_rect_key(FlatRectKey *k, int x, int y, int w, int h,
+                         uint16_t color) {
+    memset(k, 0, sizeof(*k));
+    if (!g_vram || g_wide_cur || GPU_VRAM_DIRTY_TRACKING_ON()) return 0;
+    if (w <= 0 || h <= 0) return 0;
+    int x0 = max_i(max_i(x, g_clip_x1), 0);
+    int y0 = max_i(max_i(y, g_clip_y1), 0);
+    int x1 = min_i(min_i(x + w - 1, g_clip_x2), VRAM_WIDTH - 1);
+    int y1 = min_i(min_i(y + h - 1, g_clip_y2), VRAM_HEIGHT - 1);
+    if (x0 > x1 || y0 > y1) return 0;
+    k->x = x; k->y = y; k->w = w; k->h = h; k->color = color;
+    k->cx1 = g_clip_x1; k->cy1 = g_clip_y1; k->cx2 = g_clip_x2; k->cy2 = g_clip_y2;
+    k->semi = g_semi_trans_enabled; k->mode = g_semi_trans_mode;
+    k->mask_set = g_mask_set_bit; k->mask_check = g_mask_check_bit;
+    k->skipped_row = gpu_raster_skipped_row();
+    k->scale = g_hr ? g_scale : 1;
+    k->x0 = x0; k->y0 = y0; k->cols = x1 - x0 + 1; k->rows = y1 - y0 + 1;
+    k->vram = g_vram; k->hr = g_hr;
+    return 1;
+}
+
+static int flat_rect_reserve(uint16_t **buf, size_t *cap, size_t pixels) {
+    if (*cap >= pixels) return 1;
+    uint16_t *grown = (uint16_t *)realloc(*buf, pixels * sizeof(uint16_t));
+    if (!grown) return 0;
+    *buf = grown; *cap = pixels;
+    return 1;
+}
+
+static void flat_rect_region_copy(uint16_t *dst, const uint16_t *buf, int stride,
+                                  int x0, int y0, int cols, int rows) {
+    for (int row = 0; row < rows; row++)
+        memcpy(dst + (size_t)row * (size_t)cols,
+               buf + (size_t)(y0 + row) * (size_t)stride + (size_t)x0,
+               (size_t)cols * sizeof(uint16_t));
+}
+
+static int flat_rect_region_same(const uint16_t *kept, const uint16_t *buf,
+                                 int stride, int x0, int y0, int cols, int rows) {
+    for (int row = 0; row < rows; row++)
+        if (memcmp(kept + (size_t)row * (size_t)cols,
+                   buf + (size_t)(y0 + row) * (size_t)stride + (size_t)x0,
+                   (size_t)cols * sizeof(uint16_t)) != 0)
+            return 0;
+    return 1;
+}
+
+static int flat_rect_keep(const FlatRectKey *k) {
+    size_t native = (size_t)k->cols * (size_t)k->rows;
+    if (!flat_rect_reserve(&g_flat_repeat.native, &g_flat_repeat.native_cap, native))
+        return 0;
+    flat_rect_region_copy(g_flat_repeat.native, g_vram, VRAM_WIDTH,
+                          k->x0, k->y0, k->cols, k->rows);
+    if (g_hr) {
+        int s = g_scale;
+        if (!flat_rect_reserve(&g_flat_repeat.hires, &g_flat_repeat.hires_cap,
+                               native * (size_t)s * (size_t)s))
+            return 0;
+        flat_rect_region_copy(g_flat_repeat.hires, g_hr, g_hr_w,
+                              k->x0 * s, k->y0 * s, k->cols * s, k->rows * s);
+    }
+    return 1;
+}
+
+static int flat_rect_unchanged(const FlatRectKey *k) {
+    if (!flat_rect_region_same(g_flat_repeat.native, g_vram, VRAM_WIDTH,
+                               k->x0, k->y0, k->cols, k->rows))
+        return 0;
+    if (g_hr) {
+        int s = g_scale;
+        return flat_rect_region_same(g_flat_repeat.hires, g_hr, g_hr_w,
+                                     k->x0 * s, k->y0 * s, k->cols * s, k->rows * s);
+    }
+    return 1;
+}
+
 void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
+    FlatRectKey key;
+    int keyed = flat_rect_key(&key, x, y, w, h, color);
+    int repeat = keyed && g_flat_repeat.have &&
+                 g_flat_repeat.serial == g_write_serial &&
+                 memcmp(&key, &g_flat_repeat.key, sizeof(key)) == 0;
+    if (repeat && g_flat_repeat.at_rest &&
+        flat_rect_region_same(g_flat_repeat.native, g_vram, VRAM_WIDTH,
+                              key.x0, key.y0, key.cols, key.rows)) {
+        g_flat_repeat_stats.dropped++;
+        return;
+    }
+    int kept = repeat && flat_rect_keep(&key);
+
     RTarget n = rt_native();
     raster_flat_rect(&n, x, y, w, h, color);
     if (g_hr) {
@@ -1343,6 +1483,12 @@ void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
         } else
             raster_flat_rect(&wt, (x+dx)*s, y*s, w*s, h*s, color);
     }
+
+    g_flat_repeat_stats.drawn++;
+    g_flat_repeat.at_rest = kept && flat_rect_unchanged(&key);
+    g_flat_repeat.key = key;
+    g_flat_repeat.have = keyed;
+    g_flat_repeat.serial = g_write_serial;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1427,6 +1573,7 @@ void sw_wide_emit_tile(int band_y, int x, int y, int u, int v,
     if (!g_wide_cur) return;
     int s = g_scale, dx = wide_dx();
     RTarget t;
+    g_write_serial++;
     t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_wide_cur; t.w = g_wide_w * s; t.h = VRAM_HEIGHT * s; t.s = s;
     t.cx1 = 0;            t.cx2 = g_wide_w * s - 1;
@@ -1595,6 +1742,7 @@ void sw_draw_shaded_line(int x0, int y0, uint16_t c0,
 void sw_vram_write(int x, int y, uint16_t pixel) {
     x &= (VRAM_WIDTH - 1);
     y &= (VRAM_HEIGHT - 1);
+    g_write_serial++;
     g_vram[y * VRAM_WIDTH + x] = pixel;
     gpu_vram_dirty_mark_row((uint32_t)y);
 
@@ -1623,6 +1771,7 @@ static void hr_rebuild_from_vram(void) {
     if (!g_hr || !g_vram) return;
     const int s = g_scale;
     if (s <= 1) return;
+    g_write_serial++;
     uint16_t *row = (uint16_t *)malloc((size_t)g_hr_w * sizeof(uint16_t));
     if (!row) {
         /* Fall back to slow per-pixel replication if OOM (should not happen). */
@@ -1658,6 +1807,7 @@ static void hr_rebuild_from_vram(void) {
 void sw_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data) {
     if (!data || !g_vram || w <= 0 || h <= 0) return;
 
+    g_write_serial++;
     /* Full-VRAM replace (savestate / boot_state): memcpy + one HR rebuild.
      * The general path is a wrapped per-pixel loop that, with supersampling,
      * does s² stores per guest texel — multi-second hitches on 2×/4×. */
