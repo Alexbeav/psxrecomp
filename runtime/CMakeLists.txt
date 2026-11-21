@@ -2448,6 +2448,27 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(bios_hle_plan_test PRIVATE include)
     add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
 
+    # The skipped boot leaves the GPU registers the shell was measured to
+    # leave at hand-over (display on, mode, ranges, draw area); a title that
+    # never enables the display itself had no picture (PS1G-96). Real
+    # bios_hle.c hook against the real gpu.c.
+    add_executable(bios_shell_skip_gpu_state_test
+        tests/test_bios_shell_skip_gpu_state.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(bios_shell_skip_gpu_state_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(bios_shell_skip_gpu_state_test PRIVATE -flto)
+        target_link_options(bios_shell_skip_gpu_state_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(bios_shell_skip_gpu_state_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(bios_shell_skip_gpu_state_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME bios_shell_skip_gpu_state_test COMMAND bios_shell_skip_gpu_state_test)
+
     # Every func_override failure mode is silent at runtime: a registration
     # that is never consulted, a package override that survives clear-mods
     # (a netplay divergence), a residency guard that corrupts instead of
