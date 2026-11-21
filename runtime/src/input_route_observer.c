@@ -623,14 +623,27 @@ void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
     psx_sha256_final(&supplied, digest); hex_hash(digest, supplied_hash);
     psx_sha256_ctx applied = delivered_hash;
     psx_sha256_final(&applied, digest); hex_hash(digest, applied_hash);
-    unsigned w = di.disabled ? 1u : (unsigned)di.width;
-    unsigned h = di.disabled ? 1u : (unsigned)di.height;
+    /* A display range much smaller than the screen is captured as it is
+     * presented: at its place on the black screen (the layout of
+     * gpu_display_stage_placed; calloc gives the black). */
+    const int placed = !di.disabled && di.placed && !di.depth24 &&
+        di.canvas_width && di.canvas_width <= 640 &&
+        di.canvas_height && di.canvas_height <= 576;
+    unsigned w = di.disabled ? 1u : (unsigned)(placed ? di.canvas_width : di.width);
+    unsigned h = di.disabled ? 1u : (unsigned)(placed ? di.canvas_height : di.height);
     if (!w || w > 640) w = 1;
-    if (!h || h > 512) h = 1;
+    if (!h || h > (placed ? 576u : 512u)) h = 1;
     uint8_t *rgb = (uint8_t *)calloc((size_t)w*h, 3);
     if (!rgb) fail("screenshot allocation");
-    if (!di.disabled) for (unsigned y=0; y<h; ++y) for (unsigned x=0; x<w; ++x) {
-        uint8_t *p = rgb + ((size_t)y*w+x)*3;
+    const unsigned ox = placed ? (unsigned)di.canvas_x : 0u;
+    const unsigned oy = placed ? (unsigned)di.canvas_y : 0u;
+    unsigned pw = placed ? (unsigned)di.width : w;
+    unsigned ph = placed ? (unsigned)di.height : h;
+    if (ox > w || oy > h) pw = ph = 0;
+    if (pw > w - ox) pw = w - ox;
+    if (ph > h - oy) ph = h - oy;
+    if (!di.disabled) for (unsigned y=0; y<ph; ++y) for (unsigned x=0; x<pw; ++x) {
+        uint8_t *p = rgb + ((size_t)(oy+y)*w+ox+x)*3;
         gpu_display_pixel_rgb(&di, x, y, p, p+1, p+2);
     }
     snprintf(name, sizeof(name), "frame-%06u.png", (unsigned)completed);

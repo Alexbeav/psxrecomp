@@ -92,6 +92,77 @@ static inline PsxDisplayVerticalLayout psx_display_vertical_layout(
     return out;
 }
 
+/* A display range much smaller than the screen (PS1G-36).
+ *
+ * A game may narrow GP1(06h)/GP1(07h) to show a small picture, for example
+ * Alundra 2's 128 x 32 "NOW LOADING" strip. A television shows that picture
+ * at its place on a black screen. A range that only trims overscan is not
+ * placed: its picture keeps filling the presented frame.
+ *
+ * The screen is the 2560 video clocks that a standard GP1(06h) range spans
+ * (psx-spx: X1 = 260h, X2 = X1 + 320*8) and the PAL or NTSC active lines of
+ * psx_display_vertical_layout. The picture is placed when it covers less
+ * than PSX_DISPLAY_PLACED_NUM / PSX_DISPLAY_PLACED_DEN of the screen in
+ * either direction.
+ *
+ * The half comes from measured ranges, not from the hardware: on 25 other
+ * titles at boot and menu every 15-bit range spans the full 2560 clocks and
+ * at least 77.8% of the active lines (224 of PAL's 288), while Alundra 2's
+ * strip spans 50% of the clocks and 13.3% of the lines. The horizontal
+ * origin uses the one X1 for PAL and NTSC. */
+#define PSX_DISPLAY_SCREEN_CLOCKS 2560u
+#define PSX_DISPLAY_SCREEN_X1 0x260u
+#define PSX_DISPLAY_PLACED_NUM 1u
+#define PSX_DISPLAY_PLACED_DEN 2u
+
+typedef struct {
+    uint32_t canvas_width;   /* screen width in pixels of the dot clock */
+    uint32_t canvas_height;  /* active lines of one field */
+    uint32_t origin_x;       /* picture position on the screen */
+    uint32_t origin_y;
+    int placed;
+} PsxDisplayPlacement;
+
+/* Screen width in pixels for a dot-clock divider, rounded like the visible
+ * width of a GP1(06h) range. */
+static inline uint32_t psx_display_screen_width(uint32_t cycles)
+{
+    return cycles ? ((PSX_DISPLAY_SCREEN_CLOCKS / cycles) + 2u) & ~3u : 0u;
+}
+
+/* cycles: video clocks per pixel. width: visible pixels of the GP1(06h)
+ * range. vertical: the layout of the GP1(07h) range, in field lines. */
+static inline PsxDisplayPlacement psx_display_placement(
+    uint32_t cycles, uint32_t raw_x1, uint32_t raw_x2, uint32_t width,
+    PsxDisplayVerticalLayout vertical)
+{
+    PsxDisplayPlacement out = {0};
+    const uint32_t screen_w = psx_display_screen_width(cycles);
+    const uint32_t screen_h = vertical.canvas_height;
+
+    if (raw_x2 <= raw_x1 || !vertical.valid || width == 0u ||
+        screen_w == 0u || screen_h == 0u)
+        return out;
+    if (width > screen_w || vertical.source_height > screen_h)
+        return out;
+    if (width * PSX_DISPLAY_PLACED_DEN >= screen_w * PSX_DISPLAY_PLACED_NUM &&
+        vertical.source_height * PSX_DISPLAY_PLACED_DEN >=
+            screen_h * PSX_DISPLAY_PLACED_NUM)
+        return out;
+
+    out.canvas_width = screen_w;
+    out.canvas_height = screen_h;
+    out.origin_x = raw_x1 > PSX_DISPLAY_SCREEN_X1
+        ? (raw_x1 - PSX_DISPLAY_SCREEN_X1) / cycles : 0u;
+    if (out.origin_x > screen_w - width)
+        out.origin_x = screen_w - width;
+    out.origin_y = vertical.canvas_origin_y;
+    if (out.origin_y > screen_h - vertical.source_height)
+        out.origin_y = screen_h - vertical.source_height;
+    out.placed = 1;
+    return out;
+}
+
 /* Return the vertical position of a GP1(07h) display range relative to the
  * broadcast centre. Positive values move the scanout down. The limits and
  * centres are the PS1 PAL/NTSC active regions documented by psx-spx. */

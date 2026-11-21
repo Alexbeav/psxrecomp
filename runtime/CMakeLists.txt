@@ -2186,6 +2186,26 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     endif()
     add_test(NAME depth24_crop_exec_test COMMAND depth24_crop_exec_test)
 
+    # A display range much smaller than the screen is placed on a black screen
+    # instead of being presented as the whole frame (PS1G-36).
+    add_executable(display_range_placement_exec_test
+        tests/test_display_range_placement_exec.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(display_range_placement_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(display_range_placement_exec_test PRIVATE -flto)
+        target_link_options(display_range_placement_exec_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(display_range_placement_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(display_range_placement_exec_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME display_range_placement_exec_test
+             COMMAND display_range_placement_exec_test)
+
     # Depth24 row coverage follows GP0(80h) VRAM-to-VRAM copies (PS1G-163):
     # a movie decoded off-screen and copied into the displayed buffer shows.
     add_executable(depth24_copy_exec_test

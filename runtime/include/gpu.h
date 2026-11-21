@@ -53,6 +53,13 @@ typedef struct {
     int32_t  screen_offset_y;          /* GP1(07h) position relative to TV centre */
     int      depth24;                  /* GP1(08h) display depth flag: RGB888 scanout */
     int      disabled;                 /* GP1(03h) display disable flag */
+    /* A 15-bit display range much smaller than the screen (display_scanout.h
+     * psx_display_placement): the width x height picture belongs at
+     * (canvas_x, canvas_y) on a black canvas_width x canvas_height screen.
+     * All zero for every other display. */
+    int      placed;
+    uint32_t canvas_width, canvas_height;
+    uint32_t canvas_x, canvas_y;
 } GpuDisplayInfo;
 
 void gpu_get_display_info(GpuDisplayInfo* out);
@@ -92,6 +99,12 @@ void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out
  * source rows staged. */
 uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo* di, uint32_t* buf,
                                    uint32_t w, uint32_t margin);
+/* Stage a placed 15-bit display (di->placed) into a di->canvas_width x
+ * di->canvas_height ARGB buffer: black, with the picture at its place.
+ * Every present and capture of a placed display uses it. Returns the picture
+ * rows staged, 0 when the display is not placed. Presentation only, not
+ * guest state. */
+uint32_t gpu_display_stage_placed(const GpuDisplayInfo* di, uint32_t* buf);
 /* [video] fmv_crop_to_picture. On: gpu_get_display_info reports a depth24
  * frame with screen_height == height and screen_origin_y == 0 (no black
  * canvas rows above or below the picture), and a zero staging margin still

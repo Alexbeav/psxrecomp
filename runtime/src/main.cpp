@@ -11325,6 +11325,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     bool pin_43    = false;  /* pillarbox this present (FMV, or a native-wide
                                 game frame that could not present wide) */
     bool depth24_frame = false;
+    bool placed_frame = false;  /* small 15-bit picture staged on a black screen */
     bool local_viewport_crop_applied = false;
     bool game_view_applied = false;
     uint32_t gv_x = 0, gv_y = 0, gv_w = 0, gv_h = 0;
@@ -11369,13 +11370,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         w = di.width; h = di.height;
         present_h = psx_display_present_height(
             di.depth24, h, di.screen_height);
+        /* A display range much smaller than the screen (PS1G-36): the
+         * picture is staged at its place on a black 4:3 screen and takes the
+         * CPU present of a 24-bit frame. Netplay views keep their own crop. */
+        placed_frame = di.placed && !di.depth24 && !psx_netplay_active();
+        if (placed_frame)
+            present_h = di.canvas_height;
         /* 4:3-pinned frames: the pre-game BIOS boot, plus (once engaged) every
          * frame the widescreen layer presents native — FMV video and full-2D
          * menu/title screens. gpu_ws_present_native_43() is the single source
          * of truth, shared with the GTE/GPU squash so content and present stay
          * locked: we squash IFF we stretch. depth24 always classifies as FMV
          * even if the ws layer is not engaged yet (4:3 titles). */
-        fmv_frame = di.depth24 || !g_ws_engaged || gpu_ws_present_native_43() != 0;
+        fmv_frame = di.depth24 || placed_frame || !g_ws_engaged ||
+                    gpu_ws_present_native_43() != 0;
         /* MDEC movies are already decoded at their authored cadence and are
          * CPU/upload heavy. High-refresh crossfades only contend with decoding
          * and can starve audio, so present native-4:3/MDEC phases directly.
@@ -11396,7 +11404,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         /* Canonical present width. Native-wide does NOT widen the canonical read
          * (that bled across adjacent framebuffers); it composites into a separate
          * wide surface and presents from there instead (see gpu wide compositor). */
-        present_w = w;
+        present_w = placed_frame ? di.canvas_width : w;
 
         /* Native-wide present: on a game frame, if the active backend has the
          * wide compositor, present the wider surface (canonical width + EXTRA)
@@ -11466,7 +11474,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             netplay_note_present();
             return ep;
         }
-        if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
+        if (g_gl_active && g_gl_fbo_present && !di.depth24 && !placed_frame &&
             (!local_viewport_crop || local_viewport_wide) && !game_view) {
             if (wide_present) {
                 /* GPU-direct native-wide present: blit the displayed buffer's
@@ -11506,6 +11514,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 vk_renderer_present_cpu(sdl_pixel_buf, (int)present_w,
                                         (int)present_h,
                                         0 /* nearest */, fmv_frame ? 1 : 0);
+            } else if (placed_frame) {
+                vk_renderer_sync_cpu();
+                gpu_display_stage_placed(&di, sdl_pixel_buf);
+                vk_renderer_present_cpu(sdl_pixel_buf, (int)present_w,
+                                        (int)present_h,
+                                        g_video_aa ? 1 : 0, 1);
             } else if (wide_present &&
                        vk_renderer_present_wide((int)di.display_x, (int)di.display_y,
                                                 (int)h, g_video_aa ? 1 : 0)) {
@@ -11534,7 +11548,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         else if (g_gl_active)
             active_scale = 1;
         else
-            active_scale = (g_video_scale > 1 && !di.depth24) ? g_video_scale : 1;
+            active_scale = (g_video_scale > 1 && !di.depth24 && !placed_frame)
+                ? g_video_scale : 1;
 
         if (wide_present) {
             /* The wide compositor surface is at the renderer's REAL internal
@@ -11583,6 +11598,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * per-pixel call chain was the dominant FMV present cost
                  * (3x the VRAM touches of the 16-bit path below). */
                 depth24_stage_scanout(&di, sdl_pixel_buf, present_w);
+            } else if (placed_frame) {
+                gpu_display_stage_placed(&di, sdl_pixel_buf);
             } else {
                 for (uint32_t y = 0; y < h; y++) {
                     for (uint32_t x = 0; x < present_w; x++) {
@@ -11632,7 +11649,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 blend_cfg = (e && e[0] == '1') ? 1 : 0;   /* default off (masker only) */
             }
             const bool simple_sw = !g_gl_active && !g_vk_active && !wide_present &&
-                                   !di.depth24 && active_scale == 1;
+                                   !di.depth24 && !placed_frame &&
+                                   active_scale == 1;
             if (blend_cfg && simple_sw &&
                 !g_smooth_60fps.load(std::memory_order_acquire)) {
                 static uint32_t prev_buf[640 * 512];
