@@ -114,4 +114,20 @@ assert re.search(r"return s_replay_vblank == 0 && !load_slot;", power_on), (
     "replay_host_at_power_on must refuse when PSX_LOAD_SLOT is set"
 )
 
+# 5. The start: the identity a replay is bound to is read with the game's own
+#    serial as the expected one, also when the launcher was skipped (headless,
+#    --no-launcher, a replay). A disc with no SYSTEM.CNF (King's Field (Japan))
+#    gets its serial only from a volume id that equals the expected serial, so
+#    an empty expected serial left such a start with no serial and no replay
+#    (PS1G-101).
+start = MAIN[MAIN.index("std::string replay_serial;"):]
+start = start[: start.index("replay_serial = ident.detected_serial;")]
+assert re.search(
+    r"#if defined\(RECOMP_LAUNCHER\)\s*(/\*.*?\*/\s*)?const std::string& expected_serial =\s*"
+    r"g_lnch_expected_serial\.empty\(\) \? game_id : g_lnch_expected_serial;",
+    start,
+    re.S,
+), "a start that skips the launcher must expect the game's own serial"
+assert re.search(r"PSXRecompV4::identify_disc\(\s*disc_path_str, expected_serial,", start)
+
 print("replay disc identity wiring: ok")

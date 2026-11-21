@@ -23336,7 +23336,12 @@ session_reboot:
          * driver revalidates it mid-game). Derive it from the disc's boot
          * serial via the same disc_identity module the launch check uses. */
 #if defined(RECOMP_LAUNCHER)
-        const std::string& expected_serial = g_lnch_expected_serial;
+        /* The launcher sets its expected serial when it is shown. A start
+         * that skips it (--no-launcher, --headless, a replay) expects the
+         * game's own serial, as a build without the launcher does: a disc
+         * with no SYSTEM.CNF then gets its serial and region either way. */
+        const std::string& expected_serial =
+            g_lnch_expected_serial.empty() ? game_id : g_lnch_expected_serial;
         const uint32_t expected_crc = g_lnch_expected_crc;
         const bool has_crc = g_lnch_has_crc;
 #else
