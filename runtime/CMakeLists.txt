@@ -3358,6 +3358,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME gpu_sw_texture_mask_test COMMAND gpu_sw_texture_mask_test)
     target_sources(gpu_sw_texture_mask_test PRIVATE tests/source_gpu_raster_stub.c)
 
+    add_executable(sw_flat_rect_repeat_test
+        tests/test_sw_flat_rect_repeat.c src/gpu_sw_renderer.c src/gpu_vram_dirty.c
+        tests/source_gpu_raster_stub.c)
+    target_include_directories(sw_flat_rect_repeat_test PRIVATE include src)
+    if(NOT MSVC)
+        target_link_libraries(sw_flat_rect_repeat_test PRIVATE m)
+    endif()
+    add_test(NAME sw_flat_rect_repeat_test COMMAND sw_flat_rect_repeat_test)
+
     add_executable(gpu_uv_test tests/test_gpu_uv.c)
     target_include_directories(gpu_uv_test PRIVATE src)
     add_test(NAME gpu_uv_test COMMAND gpu_uv_test)
