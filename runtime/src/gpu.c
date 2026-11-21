@@ -4935,6 +4935,27 @@ uint32_t gpu_depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
     return rows;
 }
 
+/* A placed 15-bit display: black screen, the picture at its place. */
+uint32_t gpu_display_stage_placed(const GpuDisplayInfo *di, uint32_t *buf) {
+    if (!di || !buf || !di->placed || di->depth24)
+        return 0u;
+    const uint32_t cw = di->canvas_width, ch = di->canvas_height;
+    if (cw == 0u || ch == 0u || di->canvas_x > cw || di->canvas_y > ch)
+        return 0u;
+    const size_t count = (size_t)cw * ch;
+    for (size_t i = 0; i < count; i++)
+        buf[i] = 0xFF000000u;
+    uint32_t cols = di->width, rows = di->height;
+    if (cols > cw - di->canvas_x) cols = cw - di->canvas_x;
+    if (rows > ch - di->canvas_y) rows = ch - di->canvas_y;
+    for (uint32_t y = 0; y < rows; y++) {
+        uint32_t *row = buf + (size_t)(di->canvas_y + y) * cw + di->canvas_x;
+        for (uint32_t x = 0; x < cols; x++)
+            row[x] = gpu_display_pixel_argb(di, x, y);
+    }
+    return rows;
+}
+
 int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
 }
@@ -4950,7 +4971,7 @@ int gpu_depth24_crop_to_picture(void) {
 /* Visible horizontal pixel width (GP1(08h) mode + GP1(06h) range). Shared by
  * gpu_get_display_info and the widescreen cull margin, which is called per
  * vertex and must not pay for the vertical layout. */
-static uint32_t gpu_h_display_width(void) {
+static uint32_t gpu_dot_clock_divider(uint32_t *mode_width) {
     /* Dot-clock divider from GP1(08h) hres (PSX-SPX graphicsprocessingunitgpu,
      * "Horizontal Timings", Dotclocks: /10, /8, /7, /5, /4). */
     uint32_t cycles;
@@ -4964,6 +4985,13 @@ static uint32_t gpu_h_display_width(void) {
         cycles = cyc_lut[hres1 & 3];
         mode_w = hres_lut[hres1 & 3];
     }
+    if (mode_width) *mode_width = mode_w;
+    return cycles;
+}
+
+static uint32_t gpu_h_display_width(void) {
+    uint32_t mode_w;
+    uint32_t cycles = gpu_dot_clock_divider(&mode_w);
 
     /* Visible pixel width from GP1(06h): (((X2-X1)/cycles)+2) & ~3 (psx-spx).
      * Fall back to the mode width when the range is unset/degenerate. */
@@ -4983,6 +5011,9 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
     out->display_y = display_area_y;
     out->depth24   = (int)(display_depth & 1u);
     out->disabled  = (int)display_disabled;
+    out->placed = 0;
+    out->canvas_width = out->canvas_height = 0u;
+    out->canvas_x = out->canvas_y = 0u;
 
     uint32_t w = gpu_h_display_width();
 
@@ -5034,6 +5065,21 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         screen_h = h;
         screen_origin_y = 0u;
         screen_source_skip_y = 0u;
+        /* A range much smaller than the screen is a small picture at its
+         * place, not a frame to fit (PS1G-36). The picture itself stays the
+         * same width x height source rectangle. */
+        PsxDisplayPlacement place = psx_display_placement(
+            gpu_dot_clock_divider(NULL), h_display_x1, h_display_x2, w,
+            vertical);
+        if (place.placed) {
+            out->placed = 1;
+            out->canvas_width = place.canvas_width;
+            out->canvas_height = psx_display_interlaced_rows(
+                place.canvas_height, vres != 0);
+            out->canvas_x = place.origin_x;
+            out->canvas_y = psx_display_interlaced_rows(
+                place.origin_y, vres != 0);
+        }
     }
 
     out->width  = w;
