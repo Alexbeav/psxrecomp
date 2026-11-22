@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""PS1B-238: a cached unit over declared kernel patch words never runs natively.
+"""PS1B-238: a cached unit never runs natively over code the interpreter hands
+to static code: declared kernel patch words, or game text with a static entry
+whose ranges still match RAM.
 
 Builds the real overlay loader with overlay_kernel_patch_tier_harness.c and the
 authored pair fixture (no game, BIOS or disc input), publishes one unit with
-code [0x10000, 0x10008) and runs three modes, each in a fresh process: a
-declared range inside the unit (no native run, four kernel_patch misses), a
-range that starts where the unit ends, and no range (both run natively, so the
-harness can see a native run). The harness says which check failed.
+code [0x10000, 0x10008) and runs six modes, each in a fresh process: a declared
+kernel range inside the unit and a matching static continuation inside it (no
+native run, four misses under kernel_patch or static_text), and four where the
+unit runs natively (a kernel range where the unit ends, nothing declared, an
+image with no matching static entry in the unit, a matching static entry where
+the unit ends). The harness says which check failed.
 """
 from __future__ import annotations
 
@@ -20,12 +24,12 @@ from pathlib import Path
 import test_overlay_pair_dedup_runtime as pair
 
 
-def run(cmd: list[str]) -> str:
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(cmd, text=True, encoding="utf-8", errors="replace",
                             capture_output=True)
-    if result.returncode:
+    if check and result.returncode:
         raise AssertionError(f"exit {result.returncode}: {cmd}\n{result.stdout}\n{result.stderr}")
-    return result.stdout
+    return result
 
 
 def main() -> int:
@@ -56,13 +60,19 @@ def main() -> int:
         if platform.system() != "Windows":
             cmd += ["-ldl", "-pthread"]
         run(cmd)
-        for mode in ("cover", "apart", "none"):
+        failed = []
+        for mode in ("cover", "apart", "none", "static", "stale", "beyond"):
             cache = root / f"cache-{mode}"
             unit = pair.publish(cache, "gcc", f"00010000_11111111{ext}", fixture,
                                 pair.manifest([(0x80010000, 8)]))
-            out = run([str(harness), str(cache), mode, str(unit)])
-            assert f"PASS mode={mode}" in out, out
-            print(f"PASS kernel patch tier {mode}")
+            result = run([str(harness), str(cache), mode, str(unit)], check=False)
+            if result.returncode or f"PASS mode={mode}" not in result.stdout:
+                failed.append(mode)
+                print(f"FAIL static code tier {mode}\n{result.stdout}{result.stderr}", end="")
+            else:
+                print(f"PASS static code tier {mode}")
+        if failed:
+            raise SystemExit(f"failed modes: {' '.join(failed)}")
     return 0
 
 

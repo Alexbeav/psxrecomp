@@ -279,6 +279,10 @@ int      dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
 int      dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
                                         uint32_t count);
 int      dirty_ram_text_image_registered(void);
+/* True when RAM [phys, phys + len) overlaps the executable image the static
+ * game code was generated from. The overlay loader asks it before looking for
+ * static code a unit's words still match (PS1B-238). */
+int      dirty_ram_text_ref_overlaps(uint32_t phys, uint32_t len);
 /* Bless an intentional runtime data patch (e.g. text_xlate string/glyph tables)
  * into the text reference image so it is not mistaken for self-modifying code. */
 void     dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len);

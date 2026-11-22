@@ -40,10 +40,10 @@ assert "overlay_loader_dispatch_seg(cpu, addr, &reason)" in dispatch
 seg = dispatch[dispatch.index("static int overlay_loader_dispatch_seg(CPUState *cpu, uint32_t addr, int *reason) {"):]
 assert "DISP_MISS(" not in seg
 exits = re.findall(r"\*reason\s*=([^;]*);", seg, flags=re.S)
-assert len(exits) >= 14, f"expected fourteen or more reason-producing exits, found {len(exits)}"
+assert len(exits) >= 16, f"expected sixteen or more reason-producing exits, found {len(exits)}"
 reasons = re.findall(r"^\s*(PSX_MISS_[A-Z_]+)\b", HEADER[HEADER.index("enum {"):HEADER.index("PSX_INTERP_MISS_REASONS")],
                      flags=re.M)
-assert len(reasons) == 12, reasons
+assert len(reasons) == 13, reasons
 for text in exits:
     named = re.findall(r"PSX_MISS_[A-Z_]+", text)
     assert named and all(n in reasons for n in named), f"a miss exit names no known reason: {text!r}"
@@ -138,4 +138,4 @@ for needle in ("in.kernel_end       = DIRTY_RAM_KERNEL_WINDOW_END;",
                "in.text_hi          = g_overlay_region_floor;"):
     assert needle in block, f"the report's place ranges changed; the move must follow: {needle}"
 
-print("interp_report wiring: 14+ miss exits, 12 reasons, writer, source list and game-entry move OK")
+print("interp_report wiring: 16+ miss exits, 13 reasons, writer, source list and game-entry move OK")

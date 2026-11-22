@@ -324,6 +324,12 @@ int psx_game_text_native_ok(uint32_t addr) {
     if (phys != 0x00010008u && phys != 0x00010010u) return 0;
     return dirty_ram_text_native_ok_ranges_from(k_resident_ranges, 1u, addr);
 }
+/* The emitter's whole-range form validates the same ranges. */
+int psx_game_text_native_ok_full(uint32_t addr) {
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (phys != 0x00010008u && phys != 0x00010010u) return 0;
+    return dirty_ram_text_native_ok_ranges(k_resident_ranges, 1u);
+}
 
 /* ---- Scenario ------------------------------------------------------------ */
 extern int g_psx_cps_mode;

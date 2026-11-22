@@ -968,6 +968,15 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
     return 1;
 }
 
+/* Does RAM [phys, phys + len) overlap the reference image? Outside it no
+ * static game code exists, so the overlay loader skips its word-by-word look
+ * for static code a unit still matches (overlay_loader.c, PS1B-238). */
+int dirty_ram_text_ref_overlaps(uint32_t phys, uint32_t len) {
+    if (!text_ref_image || len == 0) return 0;
+    phys &= 0x1FFFFFFFu;
+    return phys < text_ref_hi && phys + len > text_ref_lo;
+}
+
 /* Preserve the generated-code ABI used by existing game projects. */
 int dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
                                     uint32_t count) {

@@ -73,6 +73,22 @@ int psx_kernel_patch_range_overlaps(uint32_t phys, uint32_t len) {
     return len != 0 && s_patch_lo < s_patch_hi &&
            s_patch_lo < phys + len && phys < s_patch_hi;
 }
+/* The loader looks for static game code a unit's words still match
+ * (PS1B-238). There is no executable image and no static code unless a
+ * harness that includes this file sets the image [s_text_lo, s_text_hi) and
+ * the one static entry s_static_entry whose ranges still match;
+ * s_static_asks counts the words asked about. */
+static uint32_t s_text_lo, s_text_hi, s_static_entry;
+static unsigned s_static_asks;
+int dirty_ram_text_ref_overlaps(uint32_t phys, uint32_t len) {
+    phys &= 0x1FFFFFFFu;
+    return len != 0 && s_text_lo < s_text_hi &&
+           s_text_lo < phys + len && phys < s_text_hi;
+}
+int psx_game_text_native_ok_full(uint32_t address) {
+    s_static_asks++;
+    return s_static_entry != 0 && address == s_static_entry;
+}
 int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
     (void)cpu; (void)addr; (void)stop; return 0;
 }

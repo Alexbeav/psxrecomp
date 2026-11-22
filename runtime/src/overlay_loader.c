@@ -360,7 +360,7 @@ static uint32_t s_cps_probe_found = 0;     /* chosen c->addr (0 if none) */
 static int      s_cps_probe_ci = -2;       /* overlay_find_by_range result */
 static int      s_cps_probe_nrange = -1;
 static int      s_cps_probe_matched = -1;  /* crc match */
-static int      s_cps_probe_outcome = -1;  /* 0=find<0,1=crc-miss->interp,2=native,3=device,4=blocked,8=kernel patch */
+static int      s_cps_probe_outcome = -1;  /* 0=find<0,1=crc-miss->interp,2=native,3=device,4=blocked,8=kernel patch,9=static text */
 static int      s_cps_probe_ncand_inrange = 0; /* how many candidates' range contains the PC */
 void overlay_loader_cps_probe_set(uint32_t pc) {
     s_cps_probe_pc = pc & 0x1FFFFFFFu; s_cps_probe_count = 0;
@@ -802,6 +802,32 @@ static int cand_kernel_patch(Candidate *c) {
         c->kernel_patch = hit ? 2 : 1;
     }
     return c->kernel_patch == 2;
+}
+
+/* Generated dispatch shard (game_dispatch_emitter.cpp); game_dispatch_compat.c
+ * answers 0 for a dispatcher without whole-range validation. */
+extern int psx_game_text_native_ok_full(uint32_t addr);
+
+/* PS1B-238: the game-text form of cand_kernel_patch. When a game patches a few
+ * words of its own executable, the interpreter runs the patched words and, at
+ * the first static entry or continuation whose emitted ranges still match RAM,
+ * hands the rest to that static code (dirty_ram_interp.c: interp_enter_compiled
+ * and the straight-line psx_game_text_native_ok_full handoff). A unit compiled
+ * over the whole function ran that rest itself with per-instruction timing;
+ * Gradius Gaiden's patched delay loop at 0x8006D5D8 charged 13 cycles more
+ * per call than the interpreter and static code. Refused while any word of the
+ * unit's code is such a static entry, so the interpreter decides it in every
+ * tier. Asked at each dispatch, not cached: the answer follows the live bytes.
+ * Code outside the executable image has no static code and costs one compare
+ * per range. */
+static int cand_static_text(const Candidate *c, uint32_t seg) {
+    for (int i = 0; i < c->nranges; i++) {
+        const uint32_t lo = c->range_lo[i], len = c->range_len[i];
+        if (!dirty_ram_text_ref_overlaps(lo, len)) continue;
+        for (uint32_t a = lo & ~3u; a < lo + len; a += 4u)
+            if (psx_game_text_native_ok_full(seg | a)) return 1;
+    }
+    return 0;
 }
 
 #ifdef PSX_HAS_OVERLAY_DISPATCH
@@ -4419,6 +4445,7 @@ retry_candidates:
                 if (c->state != ENTRY_VALID) { c->state = ENTRY_VALID; s_valid_count++; }
                 if (c->device_touch)   { if (_probe) s_cps_probe_outcome = 3; *reason=PSX_MISS_DEVICE_TOUCH;  return 0; }
                 if (cand_kernel_patch(c)) { if (_probe) s_cps_probe_outcome = 8; *reason=PSX_MISS_KERNEL_PATCH; return 0; }
+                if (cand_static_text(c, seg)) { if (_probe) s_cps_probe_outcome = 9; *reason=PSX_MISS_STATIC_TEXT; return 0; }
                 /* Diff instrument — same contract as the entry chain's want_diff
                  * gate below. A continuation re-entry must NOT run native blind
                  * while its candidate is still inside the verify budget: CPS
@@ -4544,6 +4571,9 @@ retry_candidates:
             /* Patched kernel words stay on the interpreter in every tier
              * (cand_kernel_patch, PS1B-238). */
             if (cand_kernel_patch(c)) { *reason=PSX_MISS_KERNEL_PATCH; return 0; }
+            /* So does game code the static image still holds
+             * (cand_static_text, PS1B-238). */
+            if (cand_static_text(c, seg)) { *reason=PSX_MISS_STATIC_TEXT; return 0; }
             /* Same-state differential: run native+interp from identical state,
              * compare, keep the interp result. Takes precedence over the A/B
              * toggle. Verify-budget: once a candidate has passed cleanly enough
