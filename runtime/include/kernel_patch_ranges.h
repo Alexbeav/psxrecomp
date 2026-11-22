@@ -6,10 +6,10 @@
  * per image by [[recompiler.install_slots]] and emitted next to the kernel
  * body table (psx_bios_image.h, PsxKernelPatchRange).
  *
- * These two functions are the whole decision, kept free of runtime globals so
+ * These functions are the whole decision, kept free of runtime globals so
  * they can be tested directly (runtime/tests/test_kernel_patch_ranges.c).
  * memory.c wraps them with its snapshotted window constants; dirty_ram_interp.c
- * reads the second one through that wrapper.
+ * reads the second one through that wrapper, overlay_loader.c the third.
  *
  * Rule 18: the patched words still execute, on the dirty-RAM interpreter,
  * exactly as the guest wrote them. Nothing here synthesises behaviour — it
@@ -50,6 +50,15 @@ int psx_kernel_patch_cmp(const PsxKernelPatchRange *ranges, uint32_t n,
  * flow back to static dispatch there and only the patched words interpret. */
 int psx_kernel_patch_ends_at(const PsxKernelPatchRange *ranges, uint32_t n,
                              uint32_t phys);
+
+/* Does any declared range intersect RAM [lo, lo + len)? An overlay unit whose
+ * code covers patched words must not run them natively: in the other tier the
+ * interpreter runs those words and hands the rest of the body back to static
+ * code at the range end, so a unit that ran on would charge different cycles
+ * for the same guest instructions (PS1B-238). A zero length intersects nothing;
+ * a range that wraps the address space is clamped at its top. */
+int psx_kernel_patch_overlaps(const PsxKernelPatchRange *ranges, uint32_t n,
+                              uint32_t lo, uint32_t len);
 
 #ifdef __cplusplus
 }

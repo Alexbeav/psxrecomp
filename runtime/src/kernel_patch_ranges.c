@@ -38,3 +38,15 @@ int psx_kernel_patch_ends_at(const PsxKernelPatchRange *ranges, uint32_t n,
     }
     return 0;
 }
+
+int psx_kernel_patch_overlaps(const PsxKernelPatchRange *ranges, uint32_t n,
+                              uint32_t lo, uint32_t len)
+{
+    if (len == 0) return 0;
+    uint32_t hi = lo + len;
+    if (hi < lo) hi = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < n; i++) {
+        if (ranges[i].lo < hi && lo < ranges[i].hi) return 1;
+    }
+    return 0;
+}

@@ -19,6 +19,8 @@ const char *psx_interp_miss_reason_name(int reason)
     case PSX_MISS_BAD_ENTRY:      return "bad_entry";
     case PSX_MISS_MODIFIED_TEXT_BACKOFF: return "modified_text_backoff";
     case PSX_MISS_MODIFIED_TEXT_LOAD_BOUND: return "modified_text_load_bound";
+    case PSX_MISS_KERNEL_PATCH:   return "kernel_patch";
+    case PSX_MISS_STATIC_TEXT:    return "static_text";
     default:                      return "unknown";
     }
 }

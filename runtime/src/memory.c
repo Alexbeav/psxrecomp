@@ -500,6 +500,20 @@ int psx_kernel_patch_range_ends_at(uint32_t phys) {
     return psx_kernel_patch_ends_at(s_kb_pr, s_kb_pr_n, phys);
 }
 
+/* Does a declared patch range intersect RAM [phys, phys + len)? The overlay
+ * loader asks this once per cached unit (PS1B-238). While bless is on, the
+ * interpreter runs a range's patched words and hands the rest of the body to
+ * the static function at the range end (above). A unit compiled over those
+ * words would run that rest itself, with its own per-instruction timing
+ * against the static body's span charges, so guest RAM came to depend on the
+ * moment a background compile went live. The loader leaves such a unit to the
+ * interpreter, as Rule 18 says for the patched words. With bless off nothing
+ * is handed back and both tiers charge the same, so nothing is refused. */
+int psx_kernel_patch_range_overlaps(uint32_t phys, uint32_t len) {
+    if (!kbless_on()) return 0;
+    return psx_kernel_patch_overlaps(s_kb_pr, s_kb_pr_n, phys, len);
+}
+
 /* Binary search the (key-sorted) body table. -1 if absent. */
 static int kbless_find(uint32_t phys) {
     uint32_t lo = 0, hi = psx_bios_kernel_body_count;
@@ -952,6 +966,15 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
         return 0;
     }
     return 1;
+}
+
+/* Does RAM [phys, phys + len) overlap the reference image? Outside it no
+ * static game code exists, so the overlay loader skips its word-by-word look
+ * for static code a unit still matches (overlay_loader.c, PS1B-238). */
+int dirty_ram_text_ref_overlaps(uint32_t phys, uint32_t len) {
+    if (!text_ref_image || len == 0) return 0;
+    phys &= 0x1FFFFFFFu;
+    return phys < text_ref_hi && phys + len > text_ref_lo;
 }
 
 /* Preserve the generated-code ABI used by existing game projects. */

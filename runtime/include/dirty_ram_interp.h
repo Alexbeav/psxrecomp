@@ -219,6 +219,10 @@ const char* psx_kernel_bless_off_reason(void);
  * straight-line flow back to static dispatch there and only the guest's
  * patched words interpret (memory.c psx_bios_kernel_patch_ranges). */
 int      psx_kernel_patch_range_ends_at(uint32_t phys);
+/* True when a declared kernel patch range intersects RAM [phys, phys + len)
+ * while kernel bless is on. The overlay loader keeps a cached unit that covers
+ * patched words off native execution (PS1B-238, Rule 18). */
+int      psx_kernel_patch_range_overlaps(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_stats(uint64_t out[8]);
 void     psx_kernel_bless_paranoid_stats(uint64_t out[5]);
@@ -275,6 +279,10 @@ int      dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
 int      dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
                                         uint32_t count);
 int      dirty_ram_text_image_registered(void);
+/* True when RAM [phys, phys + len) overlaps the executable image the static
+ * game code was generated from. The overlay loader asks it before looking for
+ * static code a unit's words still match (PS1B-238). */
+int      dirty_ram_text_ref_overlaps(uint32_t phys, uint32_t len);
 /* Bless an intentional runtime data patch (e.g. text_xlate string/glyph tables)
  * into the text reference image so it is not mistaken for self-modifying code. */
 void     dirty_ram_text_bless(uint32_t phys, const uint8_t *bytes, uint32_t len);

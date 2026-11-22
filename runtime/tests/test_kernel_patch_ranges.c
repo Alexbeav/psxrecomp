@@ -127,6 +127,26 @@ int main(void) {
     expect(psx_kernel_patch_ends_at(0, 0, 0x550u) == 0,
            "no ranges: no resume PCs");
 
+    /* ---- 7. The overlay unit predicate (PS1B-238) ---------------------- */
+    expect(psx_kernel_patch_overlaps(many, 4, 0x500u, 0x100u) == 1,
+           "a unit spanning a whole body covers its ranges");
+    expect(psx_kernel_patch_overlaps(many, 4, 0x54Cu, 4u) == 1,
+           "a unit over one patched word covers it");
+    expect(psx_kernel_patch_overlaps(many, 4, 0x520u, 0x20u) == 0,
+           "a unit between two ranges covers none");
+    expect(psx_kernel_patch_overlaps(many, 4, 0x550u, 0x10u) == 0,
+           "a unit starting at a range end does not cover it");
+    expect(psx_kernel_patch_overlaps(many, 4, 0x530u, 0x10u) == 0,
+           "a unit ending at a range start does not cover it");
+    expect(psx_kernel_patch_overlaps(many, 4, 0x530u, 0x11u) == 1,
+           "one byte into a range covers it");
+    expect(psx_kernel_patch_overlaps(many, 4, 0x540u, 0u) == 0,
+           "a zero-length unit covers nothing");
+    expect(psx_kernel_patch_overlaps(many, 4, 0xFFFFFFF0u, 0x20u) == 0,
+           "a wrapping unit above every range covers none");
+    expect(psx_kernel_patch_overlaps(0, 0, 0x500u, 0x100u) == 0,
+           "no ranges: nothing covered");
+
     if (s_fails == 0) {
         printf("test_kernel_patch_ranges: all checks passed\n");
         return 0;

@@ -35,12 +35,14 @@ debug server, so this is the only place where a start says it.
                                      "outside_window": 0, "device_touch": 0, "native_off": 0,
                                      "diff_gate": 0, "rank": 0, "bad_entry": 0,
                                      "modified_text_backoff": 0,
-                                     "modified_text_load_bound": 0},
+                                     "modified_text_load_bound": 0, "kernel_patch": 0,
+                                     "static_text": 0},
                     "kernel": {"miss_cached": 3800, "no_unit": 49, "stale_bytes": 0,
                                "outside_window": 0, "device_touch": 0, "native_off": 0,
                                "diff_gate": 0, "rank": 0, "bad_entry": 0,
                                "modified_text_backoff": 0,
-                               "modified_text_load_bound": 0}}
+                               "modified_text_load_bound": 0, "kernel_patch": 0,
+                               "static_text": 0}}
 }
 ```
 
@@ -149,6 +151,8 @@ sums of the reasons, taken when the report is written.
 | `diff_gate` | Held back by the native-against-interpreter comparison (development). |
 | `rank` | Held back by the native rank filter (debug tools only). |
 | `bad_entry` | The unit ran and refused a foreign interior entry. |
+| `kernel_patch` | The unit matches but its code covers a declared kernel patch range. The interpreter runs those words in every tier and hands the rest of the body to its static function, so the unit never runs natively (PS1B-238). |
+| `static_text` | The unit matches but a word of its code is a static game entry or continuation whose emitted ranges still match RAM. The interpreter runs the patched words and hands that code to the static function, so the unit does not run natively while it matches (PS1B-238). |
 | `mod_entry_hook` | A configured function-entry hook owns the address, so dispatch preserves that hook through the interpreter. |
 
 `disp_interp` counts loader lookups that found no native unit. The interpreter

@@ -4216,6 +4216,12 @@ add_test(NAME overlay_tier_witness_runtime_test COMMAND "${Python3_EXECUTABLE}" 
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_tier_witness_runtime.py"
                 --cc "${CMAKE_C_COMPILER}")
 
+# PS1B-238: a cached unit over declared kernel patch words never runs natively,
+# so the cycles charged for them do not depend on when a compile went live.
+add_test(NAME overlay_kernel_patch_tier_runtime_test COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_kernel_patch_tier_runtime.py"
+                --cc "${CMAKE_C_COMPILER}")
+
 add_test(NAME overlay_tier_identity_test COMMAND "${CMAKE_COMMAND}"
             "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/tier-identity-fixture"

@@ -97,6 +97,10 @@ typedef struct {
     int       device_touch;              /* 1 = touches MMIO; never run its shard,
                                           * always interp (shadow diff can't safely
                                           * double-execute device I/O). */
+    uint8_t   kernel_patch;              /* 0 = not asked yet, 1 = clear, 2 = its
+                                          * code covers a declared kernel patch
+                                          * range: never run natively
+                                          * (cand_kernel_patch, PS1B-238) */
 #ifndef PSX_NO_DEBUG_TOOLS
     uint32_t  native_rank;                /* first-seen identity rank for bisection */
 #endif
@@ -356,7 +360,7 @@ static uint32_t s_cps_probe_found = 0;     /* chosen c->addr (0 if none) */
 static int      s_cps_probe_ci = -2;       /* overlay_find_by_range result */
 static int      s_cps_probe_nrange = -1;
 static int      s_cps_probe_matched = -1;  /* crc match */
-static int      s_cps_probe_outcome = -1;  /* 0=find<0,1=crc-miss->interp,2=native,3=device,4=blocked */
+static int      s_cps_probe_outcome = -1;  /* 0=find<0,1=crc-miss->interp,2=native,3=device,4=blocked,8=kernel patch,9=static text */
 static int      s_cps_probe_ncand_inrange = 0; /* how many candidates' range contains the PC */
 void overlay_loader_cps_probe_set(uint32_t pc) {
     s_cps_probe_pc = pc & 0x1FFFFFFFu; s_cps_probe_count = 0;
@@ -779,6 +783,51 @@ static int cand_live_crc(const Candidate *c, uint32_t *live) {
 
 static uint32_t cand_gensum(const Candidate *c) {
     return ov_ranges_gensum(c->range_lo, c->range_len, c->nranges);
+}
+
+/* PS1B-238, Rule 18: a unit whose code covers a declared kernel patch range
+ * never runs natively. The interpreter runs the guest's patched words and, at
+ * the range end, hands the rest of the kernel body to its static function
+ * (dirty_ram_interp.c). A unit compiled over the whole body ran that rest
+ * itself, with per-instruction I-cache and load timing where the static body
+ * charges spans (SaGa Frontier's 0x4990..0x49B8 tail: 69 cycles against about
+ * 26), so guest RAM depended on the moment a background compile went live.
+ * Left to the interpreter, both tiers run the same words the same way. Asked
+ * once per unit: the ranges and the bless latch do not change during a run. */
+static int cand_kernel_patch(Candidate *c) {
+    if (c->kernel_patch == 0) {
+        int hit = 0;
+        for (int i = 0; i < c->nranges && !hit; i++)
+            hit = psx_kernel_patch_range_overlaps(c->range_lo[i], c->range_len[i]);
+        c->kernel_patch = hit ? 2 : 1;
+    }
+    return c->kernel_patch == 2;
+}
+
+/* Generated dispatch shard (game_dispatch_emitter.cpp); game_dispatch_compat.c
+ * answers 0 for a dispatcher without whole-range validation. */
+extern int psx_game_text_native_ok_full(uint32_t addr);
+
+/* PS1B-238: the game-text form of cand_kernel_patch. When a game patches a few
+ * words of its own executable, the interpreter runs the patched words and, at
+ * the first static entry or continuation whose emitted ranges still match RAM,
+ * hands the rest to that static code (dirty_ram_interp.c: interp_enter_compiled
+ * and the straight-line psx_game_text_native_ok_full handoff). A unit compiled
+ * over the whole function ran that rest itself with per-instruction timing;
+ * Gradius Gaiden's patched delay loop at 0x8006D5D8 charged 13 cycles more
+ * per call than the interpreter and static code. Refused while any word of the
+ * unit's code is such a static entry, so the interpreter decides it in every
+ * tier. Asked at each dispatch, not cached: the answer follows the live bytes.
+ * Code outside the executable image has no static code and costs one compare
+ * per range. */
+static int cand_static_text(const Candidate *c, uint32_t seg) {
+    for (int i = 0; i < c->nranges; i++) {
+        const uint32_t lo = c->range_lo[i], len = c->range_len[i];
+        if (!dirty_ram_text_ref_overlaps(lo, len)) continue;
+        for (uint32_t a = lo & ~3u; a < lo + len; a += 4u)
+            if (psx_game_text_native_ok_full(seg | a)) return 1;
+    }
+    return 0;
 }
 
 #ifdef PSX_HAS_OVERLAY_DISPATCH
@@ -1409,6 +1458,7 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
     c->dll     = dll;
     c->tier    = (uint8_t)tier;
     c->state   = ENTRY_VALID;
+    c->kernel_patch = 0;
     c->nranges = 0;
     for (int i = 0; i < m->n && c->nranges < MAX_CODE_RANGES; i++) {
         c->range_lo[c->nranges]  = m->lo[i] & 0x1FFFFFFFu;
@@ -4394,6 +4444,8 @@ retry_candidates:
             if (matched) {
                 if (c->state != ENTRY_VALID) { c->state = ENTRY_VALID; s_valid_count++; }
                 if (c->device_touch)   { if (_probe) s_cps_probe_outcome = 3; *reason=PSX_MISS_DEVICE_TOUCH;  return 0; }
+                if (cand_kernel_patch(c)) { if (_probe) s_cps_probe_outcome = 8; *reason=PSX_MISS_KERNEL_PATCH; return 0; }
+                if (cand_static_text(c, seg)) { if (_probe) s_cps_probe_outcome = 9; *reason=PSX_MISS_STATIC_TEXT; return 0; }
                 /* Diff instrument — same contract as the entry chain's want_diff
                  * gate below. A continuation re-entry must NOT run native blind
                  * while its candidate is still inside the verify budget: CPS
@@ -4516,6 +4568,12 @@ retry_candidates:
              * can't safely double-execute MMIO/SIO/DMA to validate them, so they
              * always fall to the interpreter (the authoritative single path). */
             if (c->device_touch) { *reason=PSX_MISS_DEVICE_TOUCH;  return 0; }
+            /* Patched kernel words stay on the interpreter in every tier
+             * (cand_kernel_patch, PS1B-238). */
+            if (cand_kernel_patch(c)) { *reason=PSX_MISS_KERNEL_PATCH; return 0; }
+            /* So does game code the static image still holds
+             * (cand_static_text, PS1B-238). */
+            if (cand_static_text(c, seg)) { *reason=PSX_MISS_STATIC_TEXT; return 0; }
             /* Same-state differential: run native+interp from identical state,
              * compare, keep the interp result. Takes precedence over the A/B
              * toggle. Verify-budget: once a candidate has passed cleanly enough
