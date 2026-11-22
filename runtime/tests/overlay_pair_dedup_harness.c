@@ -63,6 +63,16 @@ uint32_t dirty_ram_text_modified_bitmap_word(uint32_t word) { (void)word; return
 void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
     (void)phys; (void)len;
 }
+/* The loader asks once per unit whether its code covers a declared kernel
+ * patch range (PS1B-238). Nothing is declared unless a harness that includes
+ * this file sets [s_patch_lo, s_patch_hi); s_patch_asks counts the questions. */
+static uint32_t s_patch_lo, s_patch_hi;
+static unsigned s_patch_asks;
+int psx_kernel_patch_range_overlaps(uint32_t phys, uint32_t len) {
+    s_patch_asks++;
+    return len != 0 && s_patch_lo < s_patch_hi &&
+           s_patch_lo < phys + len && phys < s_patch_hi;
+}
 int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
     (void)cpu; (void)addr; (void)stop; return 0;
 }

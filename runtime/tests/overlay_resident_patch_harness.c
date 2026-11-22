@@ -86,6 +86,14 @@ int psx_kernel_patch_ends_at(const PsxKernelPatchRange *ranges, uint32_t n,
                              uint32_t phys) {
     (void)ranges; (void)n; (void)phys; return 0;
 }
+/* memory.c asks this only while kernel bless is on; this image has no bless
+ * window, so bless is off. */
+int psx_kernel_patch_overlaps(const PsxKernelPatchRange *ranges, uint32_t n,
+                              uint32_t lo, uint32_t len) {
+    (void)ranges; (void)n; (void)lo; (void)len;
+    unreachable("kernel patch overlap");
+    return 0;
+}
 int card_data_writes_check(uint32_t phys, uint32_t value, uint8_t width) {
     (void)phys; (void)value; (void)width; return 0;
 }

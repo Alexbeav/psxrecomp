@@ -32,6 +32,7 @@ enum {
     PSX_MISS_BAD_ENTRY,       /* the unit ran and refused a foreign interior entry */
     PSX_MISS_MODIFIED_TEXT_BACKOFF, /* a rewritten text page left to the interpreter after its limit of take-outs (PS1B-421) */
     PSX_MISS_MODIFIED_TEXT_LOAD_BOUND, /* a rewritten text page that has had its limit of lazy loads (PS1B-421) */
+    PSX_MISS_KERNEL_PATCH,    /* the unit matches but covers a declared kernel patch range: it never runs natively (PS1B-238) */
     PSX_INTERP_MISS_REASONS
 };
 

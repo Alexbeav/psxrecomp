@@ -219,6 +219,10 @@ const char* psx_kernel_bless_off_reason(void);
  * straight-line flow back to static dispatch there and only the guest's
  * patched words interpret (memory.c psx_bios_kernel_patch_ranges). */
 int      psx_kernel_patch_range_ends_at(uint32_t phys);
+/* True when a declared kernel patch range intersects RAM [phys, phys + len)
+ * while kernel bless is on. The overlay loader keeps a cached unit that covers
+ * patched words off native execution (PS1B-238, Rule 18). */
+int      psx_kernel_patch_range_overlaps(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_stats(uint64_t out[8]);
 void     psx_kernel_bless_paranoid_stats(uint64_t out[5]);
