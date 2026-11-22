@@ -21,7 +21,9 @@
 static uint16_t vram[VW * VH];
 int g_ws_bd_stretch_on, g_ws_bd_stretch_pct;
 int psx_ws_prim_in_backdrop(void) { return 0; }
-/* gpu_raster_skipped_row() comes from tests/source_gpu_raster_stub.c (-1). */
+/* gpu_raster_skipped_row() comes from tests/source_gpu_raster_stub.c (-1
+ * unless a case sets the protected row parity). */
+extern int g_source_raster_skipped_row;
 
 static uint16_t m_native[WIN_W * WIN_H];
 static uint16_t m_hires[WIN_W * MAX_S * WIN_H * MAX_S];
@@ -59,6 +61,7 @@ static uint16_t model_pixel(uint16_t back, uint16_t color) {
 static void model_rect(int x, int y, int w, int h, uint16_t color) {
     for (int py = y; py < y + h; py++)
         for (int px = x; px < x + w; px++) {
+            if ((py & 1) == g_source_raster_skipped_row) continue;
             if (px < clip_x1 || px > clip_x2 || py < clip_y1 || py > clip_y2) continue;
             if (px < 0 || px >= WIN_W || py < 0 || py >= WIN_H) continue;
             m_native[py * WIN_W + px] = model_pixel(m_native[py * WIN_W + px], color);
@@ -302,18 +305,82 @@ int main(void) {
     memset(m_hires, 0, sizeof(m_hires));
     expect_drawn("scale", 4, 4, 41, 30, 0x0842);
 
-    /* Rollback dirty tracking needs every row marked: nothing is dropped. */
-    settle(4, 4, 41, 30, 0x0842);
+    /* 4. Rollback dirty tracking (netplay, PS1B-691): a repeat is dropped as
+     *    without it, and every application, drawn or dropped, leaves the dirty
+     *    rows a full draw marks: each covered row that is not the protected
+     *    interlace row and, with the mask check on, has a pixel without bit 15.
+     *    The mask is cleared before each application, as a rollback snapshot
+     *    clears it. */
     gpu_vram_dirty_set_tracking(1);
+    unsigned dirty_cases = 0;
+    for (scale = 1; scale <= MAX_S; scale += 3)
+    for (int chk = 0; chk < 2; chk++)
+    for (int skip = -1; skip <= 1; skip++) {
+        sw_renderer_set_scale(scale);
+        memset(m_hires, 0, sizeof(m_hires));
+        g_source_raster_skipped_row = -1;
+        clip(2, 3, 60, 44);
+        state(0, 0, 0, 0);
+        seed(200 + dirty_cases);
+        for (int px = 0; px < WIN_W; px++) {          /* a row the mask check closes */
+            uint16_t v = (uint16_t)(m_native[10 * WIN_W + px] | 0x8000);
+            sw_vram_write(px, 10, v);
+            model_set(px, 10, v, 1);
+        }
+        g_source_raster_skipped_row = skip;
+        state(1, 1, 0, chk);
+        uint64_t s0 = dropped();
+        for (int i = 0; i < 40; i++) {
+            uint64_t want[VH / 64] = {0};
+            for (int py = 3; py <= 44; py++) {        /* rect (-5, 1, 50, 60) in the clip */
+                if ((py & 1) == skip) continue;
+                int open = !chk;
+                for (int px = 2; px <= 44 && !open; px++) open = !(m_native[py * WIN_W + px] & 0x8000);
+                if (open) want[py >> 6] |= 1ull << (py & 63);
+            }
+            gpu_vram_dirty_clear();
+            rect(-5, 1, 50, 60, 0x7fff);
+            check("dirty tracking pictures");
+            if (memcmp(gpu_vram_dirty_mask(), want, sizeof(want)) != 0) {
+                fail("dirty rows differ from a full draw", (int)dirty_cases, i);
+                break;
+            }
+        }
+        if (dropped() - s0 < 6) fail("tail not dropped under dirty tracking", scale, chk * 3 + skip + 1);
+        dirty_cases++;
+    }
+    g_source_raster_skipped_row = -1;
+
+    /* The Metal Slug X list in a netplay session: dirty tracking on, the
+     * software renderer at 1x (the netplay authority). Stops early if the
+     * repeats are drawn. */
+    scale = 1;
+    sw_renderer_set_scale(1);
+    clip(0, 0, WIN_W - 1, WIN_H - 1);
+    state(0, 0, 0, 0);
+    seed(78);
+    sw_set_draw_area(0, 0, 319, 255);
     {
-        uint64_t before = dropped();
-        for (int i = 0; i < 5; i++) rect(4, 4, 41, 30, 0x0842);
-        if (dropped() != before) fail("dropped under dirty tracking", 0, 0);
-        check("dirty tracking");
+        uint64_t d0 = drawn();
+        for (int lap = 0; lap < 210542 && drawn() - d0 <= 8; lap++) {
+            sw_set_semi_transparency(0, 2);
+            st_semi = 1; st_mode = 2;
+            sw_set_semi_transparency(1, 2);
+            if (lap == 210541) gpu_vram_dirty_clear();
+            sw_draw_flat_rect(0, 0, 320, 256, 0x5ef7);
+            if (lap < 4) model_rect(0, 0, 320, 256, 0x5ef7);
+            sw_set_semi_transparency(0, 0);
+        }
+        printf("looping list under dirty tracking: %llu rectangles drawn\n",
+               (unsigned long long)(drawn() - d0));
+        if (drawn() - d0 > 8) fail("looping list not bounded under dirty tracking", (int)(drawn() - d0), 0);
+        else if (gpu_vram_dirty_row_count() != 256) fail("last lap rows", (int)gpu_vram_dirty_row_count(), 256);
+        check("looping list under dirty tracking");
     }
     gpu_vram_dirty_set_tracking(0);
 
     if (failures) { printf("FAIL %u check(s), %u blend cases\n", failures, cases); return 1; }
-    printf("PASS repeated flat rectangle: %u blend cases, looping list bounded, writers end the drop\n", cases);
+    printf("PASS repeated flat rectangle: %u blend cases, %u dirty-tracking cases, looping list bounded "
+           "with and without dirty tracking, writers end the drop\n", cases, dirty_cases);
     return 0;
 }

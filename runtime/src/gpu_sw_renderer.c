@@ -1342,12 +1342,21 @@ static void raster_flat_rect(const RTarget *t, int x, int y, int w, int h,
  * file has written since, which covers the private hi-res mirror, and (b) the
  * covered canonical VRAM still equals the kept copy, which covers writers
  * outside this file. Guest-visible VRAM is the same with and without the
- * drop. Not used with a wide surface or with rollback dirty tracking. */
+ * drop. Not used with a wide surface.
+ *
+ * With rollback dirty tracking on (netplay), a draw has one more effect: it
+ * marks dirty every canonical VRAM row it writes a pixel to, even a pixel
+ * written with the value it already holds. A dropped repeat marks the same
+ * rows. They are found once, when the rectangle comes to rest, from the
+ * covered pixels (which every later dropped repeat sees unchanged): a row is
+ * written unless it is the skipped interlace row or, with the mask check on,
+ * every covered pixel of it has bit 15 set. */
 typedef struct {
     int x, y, w, h, color;
     int cx1, cy1, cx2, cy2;
     int semi, mode, mask_set, mask_check, skipped_row;
     int scale, x0, y0, cols, rows;      /* covered native pixels */
+    int dirty;                          /* rollback dirty tracking on */
     const uint16_t *vram, *hr;
 } FlatRectKey;
 
@@ -1357,6 +1366,8 @@ static struct {
     int have, at_rest;
     uint16_t *native, *hires;          /* covered pixels before the draw */
     size_t native_cap, hires_cap;      /* in pixels */
+    uint16_t dirty_row[VRAM_HEIGHT];   /* rows a draw at rest marks dirty */
+    int dirty_rows;
 } g_flat_repeat;
 static SwFlatRectRepeatStats g_flat_repeat_stats;
 
@@ -1367,7 +1378,7 @@ void sw_flat_rect_repeat_stats(SwFlatRectRepeatStats *out) {
 static int flat_rect_key(FlatRectKey *k, int x, int y, int w, int h,
                          uint16_t color) {
     memset(k, 0, sizeof(*k));
-    if (!g_vram || g_wide_cur || GPU_VRAM_DIRTY_TRACKING_ON()) return 0;
+    if (!g_vram || g_wide_cur) return 0;
     if (w <= 0 || h <= 0) return 0;
     int x0 = max_i(max_i(x, g_clip_x1), 0);
     int y0 = max_i(max_i(y, g_clip_y1), 0);
@@ -1381,6 +1392,7 @@ static int flat_rect_key(FlatRectKey *k, int x, int y, int w, int h,
     k->skipped_row = gpu_raster_skipped_row();
     k->scale = g_hr ? g_scale : 1;
     k->x0 = x0; k->y0 = y0; k->cols = x1 - x0 + 1; k->rows = y1 - y0 + 1;
+    k->dirty = GPU_VRAM_DIRTY_TRACKING_ON() ? 1 : 0;
     k->vram = g_vram; k->hr = g_hr;
     return 1;
 }
@@ -1440,6 +1452,23 @@ static int flat_rect_unchanged(const FlatRectKey *k) {
     return 1;
 }
 
+/* The rows put_opaque marks dirty when the rectangle is drawn over the
+ * covered native pixels as they are now (see "Repeated flat rectangle"). */
+static void flat_rect_dirty_rows(const FlatRectKey *k) {
+    g_flat_repeat.dirty_rows = 0;
+    for (int row = 0; row < k->rows; row++) {
+        int y = k->y0 + row;
+        if ((y & 1) == k->skipped_row) continue;
+        if (k->mask_check) {
+            const uint16_t *p = g_vram + (size_t)y * VRAM_WIDTH + (size_t)k->x0;
+            int open = 0;
+            for (int i = 0; i < k->cols && !open; i++) open = !(p[i] & 0x8000);
+            if (!open) continue;
+        }
+        g_flat_repeat.dirty_row[g_flat_repeat.dirty_rows++] = (uint16_t)y;
+    }
+}
+
 void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
     FlatRectKey key;
     int keyed = flat_rect_key(&key, x, y, w, h, color);
@@ -1449,6 +1478,9 @@ void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
     if (repeat && g_flat_repeat.at_rest &&
         flat_rect_region_same(g_flat_repeat.native, g_vram, VRAM_WIDTH,
                               key.x0, key.y0, key.cols, key.rows)) {
+        if (key.dirty)
+            for (int i = 0; i < g_flat_repeat.dirty_rows; i++)
+                gpu_vram_dirty_mark_row(g_flat_repeat.dirty_row[i]);
         g_flat_repeat_stats.dropped++;
         return;
     }
@@ -1486,6 +1518,7 @@ void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
 
     g_flat_repeat_stats.drawn++;
     g_flat_repeat.at_rest = kept && flat_rect_unchanged(&key);
+    if (g_flat_repeat.at_rest && key.dirty) flat_rect_dirty_rows(&key);
     g_flat_repeat.key = key;
     g_flat_repeat.have = keyed;
     g_flat_repeat.serial = g_write_serial;
