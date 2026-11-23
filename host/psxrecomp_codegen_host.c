@@ -5782,16 +5782,24 @@ typedef struct HostPrepareSpan {
 } HostPrepareSpan;
 
 static void host_prepare_progress(void* ctx, float pct, const char* message) {
+    /* The CLI restarts its fraction at 0 for each sub-step (the CHD reader
+     * build, then emitting); the launcher's bar only goes forward. */
+    static float shown;
     const HostPrepareSpan* s = (const HostPrepareSpan*)ctx;
     char text[300];
     size_t i;
+    float value;
     if (pct < 0.0f) pct = 0.0f;
     if (pct > 1.0f) pct = 1.0f;
+    value = s ? s->base + s->span * pct : pct;
+    if (value < shown)
+        value = shown;
+    shown = value;
     snprintf(text, sizeof(text), "%s", message ? message : "");
     for (i = 0; text[i]; ++i)
         if (text[i] == '\r' || text[i] == '\n')
             text[i] = ' ';
-    printf("progress %.2f %s\n", s ? s->base + s->span * pct : pct, text);
+    printf("progress %.2f %s\n", value, text);
     fflush(stdout);
 }
 
