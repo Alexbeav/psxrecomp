@@ -56,6 +56,7 @@ extern "C" int iso_source_bin_path(void*,char*,uint32_t);
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
 #include "psx_bios_module.h"
+#include "psx_shared_bios.h"
 #include "psx_cycles.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
@@ -3891,6 +3892,65 @@ static bool validate_bios_for_launch(const std::filesystem::path& path) {
 
 static std::filesystem::path resolve_bios_path(const char* requested, const char* argv0);
 
+/* The shared BIOS folder (psx_shared_bios.h, PS1B-677 A1): one place where
+ * every port keeps the player's retail dump, so one pick covers them all.
+ * Looked at only by a title that needs a retail BIOS, just before it would
+ * ask; an OpenBIOS title still boots OpenBIOS until the player picks. A file
+ * counts when this build was compiled from it (size and CRC32), whatever its
+ * name. */
+static std::filesystem::path shared_bios_folder() {
+    char dir[4096];
+    if (!psx_shared_bios_dir(dir, sizeof(dir))) return {};
+    return std::filesystem::path(dir);
+}
+
+static std::filesystem::path find_shared_retail_bios() {
+    namespace fs = std::filesystem;
+    const fs::path dir = shared_bios_folder();
+    std::error_code ec;
+    if (dir.empty() || !fs::is_directory(dir, ec)) return {};
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const fs::path p = it->path();
+        std::error_code fec;
+        if (!it->is_regular_file(fec) || fec || p.extension() == ".part") continue;
+        if (it->file_size(fec) != 512u * 1024u || fec) continue;
+        const PsxBiosBackend* b = bios_backend_for_file(p, nullptr, nullptr);
+        if (b && b->image && !b->image->image_bundled) return p;
+    }
+    return {};
+}
+
+/* Keep a copy of a validated pick in the shared folder, under the image's
+ * usual name, so the next port finds it. Skipped when the folder already has
+ * this image. A failure only means the next port asks again. */
+static void store_shared_retail_bios(const std::filesystem::path& picked) {
+    namespace fs = std::filesystem;
+    const PsxBiosBackend* b = bios_backend_for_file(picked, nullptr, nullptr);
+    if (!b || !b->image || b->image->image_bundled) return;
+    const fs::path dir = shared_bios_folder();
+    if (dir.empty()) return;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fec;
+        if (it->is_regular_file(fec) && !fec &&
+            bios_backend_for_file(it->path(), nullptr, nullptr) == b)
+            return;
+    }
+    ec.clear();
+    fs::create_directories(dir, ec);
+    const fs::path dest = dir / psx_expected_bios_label();
+    fs::path part = dest;
+    part += ".part";
+    ec.clear();
+    fs::copy_file(picked, part, fs::copy_options::overwrite_existing, ec);
+    if (!ec) fs::rename(part, dest, ec);
+    if (ec) {
+        std::fprintf(stderr, "psxrecomp: could not keep the BIOS in %s: %s\n",
+                     dir.string().c_str(), ec.message().c_str());
+        fs::remove(part, ec);
+    }
+}
+
 /* Resolve which BIOS image file to load, and activate its backend.
  *
  * Policy (docs/BIOS_SELECTION.md):
@@ -3972,7 +4032,15 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
         return {};
     }
 
-    /* 3. This title requires a retail BIOS: ask for one. */
+    /* 3. This title requires a retail BIOS: the shared folder first (another
+     * port's pick, or the setup step's), then ask for one. */
+    {
+        std::filesystem::path shared = find_shared_retail_bios();
+        if (!shared.empty() && validate_bios_for_launch(shared)) {
+            write_cached_path(argv0, "bios.cfg", shared);
+            return shared;
+        }
+    }
     const std::string accepted = bios_accepted_images();
     launcher_info((s_picker_game_name + " — PlayStation BIOS needed").c_str(),
         s_picker_game_name + " requires a PlayStation BIOS.\n\n"
@@ -3996,6 +4064,7 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
         }
         if (validate_bios_for_launch(picked)) {
             write_cached_path(argv0, "bios.cfg", picked);
+            store_shared_retail_bios(picked);
             return picked;
         }
     }
@@ -4201,6 +4270,8 @@ static bool resolve_match_session_bios_path(
         try_retail(read_cached_path(argv0, "bios.cfg"));
     if (retail.empty())
         try_retail(discover_retail_bios_near(argv0));
+    if (retail.empty())
+        try_retail(find_shared_retail_bios());
     *out_path = std::move(retail); /* empty ⇒ caller falls back to OpenBIOS */
     return true;
 }
@@ -22498,6 +22569,7 @@ int main(int argc, char** argv) {
                     bios_explicit = true;
                     bios_from_cli = false; /* launcher pick supersedes argv --bios */
                     write_cached_path(argv[0], "bios.cfg", seed.bios_path);
+                    store_shared_retail_bios(seed.bios_path); /* PS1B-677 A1 */
                 } else {
                     /* OpenBIOS: always clear, even when launched with --bios.
                      * Write an empty bios.cfg (do not delete — missing triggers
