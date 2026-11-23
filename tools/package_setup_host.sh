@@ -994,8 +994,8 @@ fi
 # RecompLauncher reads it at the zip root. Written from the staged game.toml and
 # catalog_identity.json, never hand-kept. The repo comes from
 # RECOMPLAUNCHER_REPO or, in GitHub Actions, GITHUB_REPOSITORY; without either
-# the file is not written and that is said. A set and a multi-disc title are
-# not written yet (the tool refuses multi-disc).
+# the file is not written and that is said. A set of separate programs is not
+# written yet; a multi-disc title gets one input per disc.
 write_recomplauncher_manifest() {
   local repo="${RECOMPLAUNCHER_REPO:-${GITHUB_REPOSITORY:-}}" python=""
   if [[ -n "${SET_FILE}" ]]; then

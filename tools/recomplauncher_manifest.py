@@ -5,34 +5,41 @@ RecompLauncher (recomplauncher.com) installs a recomp from its GitHub release
 and reads `recomplauncher.json` at the top of the zip. This writes that file
 from what the title already records, so no title keeps a hand-written copy:
 
-  game.toml              [game] name, id, discs, disc_serials;
-                         [prepare_disc] known_sizes, known_crc32;
-                         [netplay] required_tracks
-  catalog_identity.json  marketing.region (the Redump dump's name), optional
+  game.toml  [game] name, id, discs, disc_serials, program_discs;
+             [runtime] window_title, memcard_dir
 
 The file says:
 
-  inputs   one input "game": the player's .cue or .chd, refused unless its
-           serial is one of disc_serials. A one-track disc with a known CRC32
-           also gets `dumps`, for the launcher's "verified" badge. Redump's
-           CRC32 of a one-track disc is the CRC32 of its only track, which is
-           what known_crc32 holds.
-  prepare  the setup program with --prepare --disc <the player's copy>: it
-           generates and builds the game without a window, printing
-           `progress <0..1> <text>` lines. `done` is the built game, so the
-           launcher skips the step once it is there.
-  start    the setup program at the zip root, with --disc <the player's copy>;
+  inputs   one disc: input "game", the player's .cue or .chd, refused unless
+           its serial is one of disc_serials. Several discs: inputs disc1 ..
+           discN with role "disc", each checked against its own serial when
+           disc_serials has one per disc, else against all of them. The first
+           disc's label names .cue, so the launcher hands the game the .cue
+           and not its first track.
+  prepare  the setup program with --prepare and one --disc per disc: it
+           records the set, generates and builds the game without a window,
+           printing `progress <0..1> <text>` lines. `done` is the built game,
+           so the launcher skips the step once it is there.
+  start    the setup program at the zip root, with --disc <the boot disc>;
            once built it forwards to the game.
   saves    the memory-card folder (runtime.memcard_dir, under the install).
   settings "Start in the recomp lobby" (A2): No passes --no-launcher and is
-           the default.
+           the default. Video rows (renderer, display, vsync, antialiasing,
+           dithering) pass the runtime's own one-run switches (--renderer,
+           --fullscreen, --windowed, --set video.<key>=<value>); their first
+           choice passes nothing and keeps what the player set in the game.
+
+No `dumps`: the launcher compares the CRC32 of the very file the player picks,
+which for a PS1 disc is the .cue sheet's text or the .chd container, never the
+tracks Redump lists. A Redump CRC32 there would tell every good copy that it
+"isn't a known clean dump". This waits on the launcher reading a sheet's tracks.
 
 The player's BIOS is not an input: the launcher has no BIOS support (its
 schema says so). --prepare reads it from the shared BIOS folder every port
 uses (runtime/include/psx_shared_bios.h), which the setup wizard fills.
 
-Multi-disc titles are refused for now: the launcher wants one input per disc
-(disc1..discN) and nothing here has been tried with it yet.
+A set whose discs boot different programs ([game] program_discs) is refused
+for now: each program is its own build.
 
     recomplauncher_manifest.py write --root <title> --exe-name <name> \\
         --repo <owner/name> [--os windows|linux|macos] \\
@@ -88,35 +95,86 @@ def _read_json(path):
         raise ManifestError('%s is not valid JSON: %s' % (path, error))
 
 
-def _dumps(game_toml, catalog):
-    """One Redump entry for a one-track disc whose CRC32 and size are known."""
-    prep = game_toml.get('prepare_disc', {})
-    crcs = prep.get('known_crc32') or []
-    sizes = prep.get('known_sizes') or []
-    tracks = game_toml.get('netplay', {}).get('required_tracks')
-    counts = catalog.get('rom_identity', {}).get('track_counts')
-    one_track = tracks == 1 or counts == [1]
-    if not one_track or len(crcs) != 1:
-        return []
-    entry = {'name': catalog.get('marketing', {}).get('region') or 'Redump',
-             'crc32': str(crcs[0]).lower()}
-    if len(sizes) == 1:
-        entry['size'] = int(sizes[0])
-    return [entry]
+MAX_DISCS = 8  # PSX_HOST_MAX_DISCS in host/psxrecomp_codegen_host.c
+
+
+def _choices(*rows):
+    """Setting choices from (label, args) pairs."""
+    return [{'label': label, 'args': list(args)} for label, args in rows]
+
+
+def _set(key, value):
+    return ['--set', 'video.%s=%s' % (key, value)]
+
+
+GAME_CHOICE = ("Game's setting", [])
+
+VIDEO_SETTINGS = [
+    {'id': 'renderer', 'label': 'Renderer', 'group': 'Video',
+     'help': 'How the game draws. Vulkan is the fastest on most PCs.',
+     'choices': _choices(GAME_CHOICE, ('Vulkan', ['--renderer', 'vulkan']),
+                         ('OpenGL', ['--renderer', 'opengl']),
+                         ('Software', ['--renderer', 'software']))},
+    {'id': 'display', 'label': 'Display', 'group': 'Video',
+     'choices': _choices(GAME_CHOICE, ('Fullscreen', ['--fullscreen']),
+                         ('Exclusive fullscreen', _set('fullscreen', '2')),
+                         ('Window', ['--windowed']))},
+    {'id': 'vsync', 'label': 'VSync', 'group': 'Video',
+     'choices': _choices(GAME_CHOICE, ('On', _set('vsync', 'on')),
+                         ('Off', _set('vsync', 'immediate')),
+                         ('Adaptive', _set('vsync', 'adaptive')),
+                         ('Variable refresh (VRR)', _set('vsync', 'vrr')))},
+    {'id': 'antialiasing', 'label': 'Antialiasing', 'group': 'Video',
+     'choices': _choices(GAME_CHOICE, ('Off', _set('antialiasing_mode', 'off')),
+                         ('FXAA', _set('antialiasing_mode', 'fxaa')),
+                         ('FXAA (high quality)', _set('antialiasing_mode', 'fxaa_hq')))},
+    {'id': 'dithering', 'label': 'Dithering', 'group': 'Video',
+     'help': "The console's colour dithering. Fine keeps it at higher resolutions.",
+     'choices': _choices(GAME_CHOICE, ('Off', _set('dithering', 'off')),
+                         ('On', _set('dithering', 'on')),
+                         ('Fine', _set('dithering', 'fine')))},
+]
+
+
+def _disc_inputs(name, discs, serials):
+    """The player's disc: input "game", or disc1..discN for a set."""
+    formats = [{'type': 'file', 'extensions': list(DISC_EXTENSIONS)}]
+    if len(discs) <= 1:
+        return [{
+            'id': 'game',
+            'label': 'Your %s disc (%s) as .cue/.bin or .chd' % (name, ', '.join(serials)),
+            'role': 'game',
+            'formats': formats,
+            'check': {'ids': list(serials)},
+        }]
+    per_disc = len(serials) == len(discs)
+    inputs = []
+    for n in range(1, len(discs) + 1):
+        ids = [serials[n - 1]] if per_disc else list(serials)
+        inputs.append({
+            'id': 'disc%d' % n,
+            'label': 'Disc %d (%s) as .cue/.bin or .chd' % (n, ', '.join(ids)),
+            'role': 'disc',
+            'formats': formats,
+            'check': {'ids': ids},
+        })
+    return inputs
 
 
 def build_manifest(root, exe_name, repo, os_name='windows', build_dir_name='build-release'):
     root = Path(root)
     game_toml = _read_toml(root / 'game.toml')
-    catalog = _read_json(root / 'catalog_identity.json')
     game = game_toml.get('game', {})
     name = game.get('name')
     if not name:
         raise ManifestError('[game] name missing from %s' % (root / 'game.toml'))
     discs = game.get('discs') or ([game['disc']] if game.get('disc') else [])
-    if len(discs) > 1:
-        raise Unsupported('%s has %d discs; multi-disc manifests are not written yet'
-                            % (name, len(discs)))
+    if len(discs) > 1 and game.get('program_discs'):
+        raise Unsupported('%s is a set of separate programs ([game] program_discs); '
+                          'not written yet' % name)
+    if len(discs) > MAX_DISCS:
+        raise ManifestError('%s has %d discs; the setup program takes at most %d'
+                            % (name, len(discs), MAX_DISCS))
     serials = game.get('disc_serials') or ([game['id']] if game.get('id') else [])
     if not serials:
         raise ManifestError('[game] disc_serials and id missing: the launcher cannot '
@@ -127,17 +185,10 @@ def build_manifest(root, exe_name, repo, os_name='windows', build_dir_name='buil
         raise ManifestError('--os is one of %s' % ', '.join(OSES))
     built = exe_name + ('.exe' if os_name == 'windows' else '')
 
-    label = 'Your %s disc (%s) as .cue/.bin or .chd' % (name, ', '.join(serials))
-    disc = {
-        'id': 'game',
-        'label': label,
-        'role': 'game',
-        'formats': [{'type': 'file', 'extensions': list(DISC_EXTENSIONS)}],
-        'check': {'ids': list(serials)},
-    }
-    dumps = _dumps(game_toml, catalog)
-    if dumps:
-        disc['dumps'] = dumps
+    inputs = _disc_inputs(name, discs, serials)
+    disc_args = []
+    for disc in inputs:
+        disc_args += ['--disc', '{input:%s}' % disc['id']]
 
     memcards = game_toml.get('runtime', {}).get('memcard_dir') or 'saves'
     return {
@@ -145,16 +196,16 @@ def build_manifest(root, exe_name, repo, os_name='windows', build_dir_name='buil
         'format': 1,
         'name': game_toml.get('runtime', {}).get('window_title') or name,
         'repo': repo,
-        'inputs': [disc],
+        'inputs': inputs,
         'prepare': {
             'program': [exe_name + '.exe', exe_name],
-            'args': ['--prepare', '--disc', '{input:game}'],
+            'args': ['--prepare'] + disc_args,
             'label': 'Building %s from your disc' % name,
             'done': ['{install}/%s/%s' % (build_dir_name, built)],
         },
         'start': {
             'program': [exe_name + '.exe', exe_name],
-            'args': ['--disc', '{input:game}'],
+            'args': disc_args[:2],
         },
         'saves': ['{install}/%s' % memcards.strip('/\\')],
         'settings': [{
@@ -163,7 +214,7 @@ def build_manifest(root, exe_name, repo, os_name='windows', build_dir_name='buil
             'in': 'args',
             'choices': [{'label': 'No', 'args': ['--no-launcher']},
                         {'label': 'Yes', 'args': []}],
-        }],
+        }] + [dict(row, **{'in': 'args'}) for row in VIDEO_SETTINGS],
     }
 
 
