@@ -950,6 +950,42 @@ if (( ${#missing_incs[@]} )); then
   exit 1
 fi
 
+# --- recomplauncher.json (PS1B-677) ----------------------------------------
+# RecompLauncher reads it at the zip root. Written from the staged game.toml and
+# catalog_identity.json, never hand-kept. The repo comes from
+# RECOMPLAUNCHER_REPO or, in GitHub Actions, GITHUB_REPOSITORY; without either
+# the file is not written and that is said. A set and a multi-disc title are
+# not written yet (the tool refuses multi-disc).
+write_recomplauncher_manifest() {
+  local repo="${RECOMPLAUNCHER_REPO:-${GITHUB_REPOSITORY:-}}" python=""
+  if [[ -n "${SET_FILE}" ]]; then
+    echo "note: recomplauncher.json is not written for a set yet (PS1B-677)" >&2
+    return 0
+  fi
+  if [[ -z "${repo}" ]]; then
+    echo "note: no RECOMPLAUNCHER_REPO or GITHUB_REPOSITORY; recomplauncher.json not written" >&2
+    return 0
+  fi
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then python="${candidate}"; break; fi
+  done
+  if [[ -z "${python}" ]]; then
+    echo "error: no python3 on PATH; recomplauncher.json could not be written" >&2
+    exit 1
+  fi
+  local rc=0
+  "${python}" "${SCRIPT_DIR}/recomplauncher_manifest.py" write --root "${STAGE}" \
+    --exe-name "${EXE_BASENAME%.exe}" --repo "${repo}" \
+    --out "${STAGE}/recomplauncher.json" >&2 || rc=$?
+  if [[ "${rc}" -eq 4 ]]; then
+    echo "note: recomplauncher.json not written for this title yet (see above)" >&2
+  elif [[ "${rc}" -ne 0 ]]; then
+    echo "error: recomplauncher.json could not be written" >&2
+    exit 1
+  fi
+}
+write_recomplauncher_manifest
+
 # --- Windows: Authenticode-sign what the player will run -------------------
 # The host exe, its DLLs, and the emitters. A no-op without a certificate in
 # the environment (see tools/ci/sign_windows.sh); fatal if one is configured
