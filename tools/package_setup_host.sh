@@ -618,7 +618,7 @@ if [[ -n "${SET_FILE}" ]]; then
   done
 fi
 
-recipe_bios_hint() {  # recipe_bios_hint <game.toml>: player-facing BIOS wording for README-SETUP.txt
+recipe_bios_stem() {  # recipe_bios_stem <game.toml>: the pinned image's stem (SCPH5552), or empty
   # A recipe may omit bios_config and rely on the host default stem; grep's
   # no-match status must not abort the packager under `set -euo pipefail`
   # (it did, silently, right after stage_setup_sdk on the Wave 4 pilot).
@@ -627,6 +627,12 @@ recipe_bios_hint() {  # recipe_bios_hint <game.toml>: player-facing BIOS wording
   if [[ "${line}" == *"${q}"*".toml${q}"* ]]; then
     stem="${line%${q}*}"; stem="${stem##*/}"; stem="${stem%.toml}"
   fi
+  echo "${stem}"
+}
+
+recipe_bios_hint() {  # recipe_bios_hint <game.toml>: player-facing BIOS wording for README-SETUP.txt
+  local recipe="$1" stem
+  stem="$(recipe_bios_stem "${recipe}")"
   if grep -qE '^[[:space:]]*openbios[[:space:]]*=[[:space:]]*false' "${recipe}" 2>/dev/null; then
     echo "your own legally dumped ${stem:-retail PlayStation} BIOS image (required; OpenBIOS is not supported by this title)"
   else
@@ -813,6 +819,40 @@ EOF
     exit 1
     ;;
 esac
+
+# Where the player's BIOS is kept (PS1B-677, A1; runtime/include/psx_shared_bios.h).
+# Only a retail-only title reads that folder; an OpenBIOS title needs no dump.
+# Every such port looks there before it asks, and a pick in any port puts a
+# copy there under the pinned image's name, so the player supplies it once.
+# RecompLauncher's setup step (--prepare) has no BIOS step of its own and
+# finds the dump there by that name (host shared_bios_find).
+BIOS_RECIPE="${STAGE}/game.toml"
+[[ -n "${SET_FILE}" ]] && BIOS_RECIPE="${RECIPES[0]}"
+if grep -qE '^[[:space:]]*openbios[[:space:]]*=[[:space:]]*false' "${BIOS_RECIPE}" 2>/dev/null; then
+  BIOS_FILE_NAME="$(recipe_bios_stem "${BIOS_RECIPE}")"
+  BIOS_FILE_NAME="${BIOS_FILE_NAME:-SCPH1001}.BIN"
+  case "${ARTIFACT}" in
+    windows-*) SHARED_BIOS_DIR_TEXT='%LOCALAPPDATA%\psxrecomp\bios' ;;
+    *)         SHARED_BIOS_DIR_TEXT='~/.local/share/psxrecomp/bios ($XDG_DATA_HOME/psxrecomp/bios when that is set)' ;;
+  esac
+  cat >>"${STAGE}/README-SETUP.txt" <<EOF
+
+Your BIOS file:
+- The BIOS is a file you supply: a dump of your own console's BIOS. It is
+  never in this zip, and this game does not start without it.
+- The first time you choose it, a copy is kept in this folder:
+    ${SHARED_BIOS_DIR_TEXT}
+  Every PS1 recomp from this project looks there before it asks, so you
+  choose it once for all of them.
+- You can also copy your dump into that folder yourself. Name it
+  ${BIOS_FILE_NAME}. The environment variable PSXRECOMP_BIOS_DIR names
+  another folder instead.
+- A BIOS you choose for this game alone (bios.cfg next to the program, or
+  --bios <file>) is used before that folder.
+- RecompLauncher (recomplauncher.com) does not ask for a BIOS. Put your dump
+  in that folder before you install this game there.
+EOF
+fi
 
 if [[ -n "${SET_FILE}" ]]; then
   # A set: what differs for the player, in place of the diagnostic-mode text

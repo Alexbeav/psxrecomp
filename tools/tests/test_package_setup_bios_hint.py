@@ -72,6 +72,40 @@ def to_shell_path(path: Path, bash: str) -> str:
     return out.stdout.strip() or str(path)
 
 
+SHARED_CASES = [
+    # (recipe text, artifact, expected substrings, block expected)
+    ('[recompiler]\nbios_config = "psxrecomp/bios/SCPH5552.toml"\n\n[runtime]\nopenbios = false\n',
+     "windows-x64", ["%LOCALAPPDATA%\\psxrecomp\\bios", "Name it\n  SCPH5552.BIN",
+                     "PSXRECOMP_BIOS_DIR", "RecompLauncher"], True),
+    ('[recompiler]\nseeds = "x"\n\n[runtime]\nopenbios = false\n',
+     "linux-x64", ["~/.local/share/psxrecomp/bios", "SCPH1001.BIN"], True),
+    ('[recompiler]\nbios_config = "psxrecomp/bios/SCPH1001.toml"\n',
+     "windows-x64", [], False),
+]
+
+
+def shared_folder_text(bash: str, text: str, funcs: str, tmp: Path) -> None:
+    """A retail-only title's README names the shared BIOS folder and the file
+    name the setup step looks for (PS1B-677 A1); an OpenBIOS title gets none."""
+    start = text.index('BIOS_RECIPE="${STAGE}/game.toml"')
+    end = text.index("\nfi\n", start) + 4
+    block = text[start:end]
+    for recipe, artifact, expects, present in SHARED_CASES:
+        (tmp / "game.toml").write_bytes(recipe.encode("utf-8"))
+        readme = tmp / "README-SETUP.txt"
+        readme.write_bytes(b"")
+        script = ("set -euo pipefail\nSET_FILE=\nRECIPES=()\nSTAGE=\"$1\"\nARTIFACT=\"$2\"\n"
+                  + funcs + "\n" + block)
+        run = subprocess.run([bash, "-c", script, "_", to_shell_path(tmp, bash), artifact],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             env=shell_env(bash))
+        assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
+        out = readme.read_text(encoding="utf-8").replace("\r", "")
+        assert ("Your BIOS file:" in out) == present, (recipe, out)
+        for e in expects:
+            assert e in out, (recipe, e, out)
+
+
 def main() -> int:
     bash = find_bash()
     if bash is None:
@@ -80,8 +114,8 @@ def main() -> int:
     text = PACKAGER.read_text(encoding="utf-8")
     assert "recipe_bios_hint() {" in text
     assert 'BIOS_HINT="$(recipe_bios_hint "${STAGE}/game.toml")"' in text
-    start = text.index("recipe_bios_hint() {")
-    end = text.index("\n}\n", start) + 3
+    start = text.index("recipe_bios_stem() {")
+    end = text.index("\n}\n", text.index("recipe_bios_hint() {")) + 3
     func = text[start:end]
     with tempfile.TemporaryDirectory() as tmp:
         for recipe, expect, forbid in CASES:
@@ -96,6 +130,7 @@ def main() -> int:
             hint = out[: -len("rc=0\n")].strip()
             assert expect in hint, (recipe, hint)
             assert forbid not in hint, (recipe, hint)
+        shared_folder_text(bash, text, func, Path(tmp))
     print("package setup bios hint test: PASS")
     return 0
 
