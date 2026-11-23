@@ -17,17 +17,26 @@ The file says:
            also gets `dumps`, for the launcher's "verified" badge. Redump's
            CRC32 of a one-track disc is the CRC32 of its only track, which is
            what known_crc32 holds.
-  start    the setup program at the zip root, with --disc <the player's copy>.
+  prepare  the setup program with --prepare --disc <the player's copy>: it
+           generates and builds the game without a window, printing
+           `progress <0..1> <text>` lines. `done` is the built game, so the
+           launcher skips the step once it is there.
+  start    the setup program at the zip root, with --disc <the player's copy>;
+           once built it forwards to the game.
   saves    the memory-card folder (runtime.memcard_dir, under the install).
+  settings "Start in the recomp lobby" (A2): No passes --no-launcher and is
+           the default.
 
 The player's BIOS is not an input: the launcher has no BIOS support (its
-schema says so), so the setup program keeps its own BIOS step.
+schema says so). --prepare reads it from the shared BIOS folder every port
+uses (runtime/include/psx_shared_bios.h), which the setup wizard fills.
 
 Multi-disc titles are refused for now: the launcher wants one input per disc
 (disc1..discN) and nothing here has been tried with it yet.
 
     recomplauncher_manifest.py write --root <title> --exe-name <name> \\
-        --repo <owner/name> --out <stage>/recomplauncher.json
+        --repo <owner/name> [--os windows|linux|macos] \\
+        [--build-dir-name build-release] --out <stage>/recomplauncher.json
     recomplauncher_manifest.py check --manifest <file> --schema <schema.json>
 
 `check` validates against the published schema
@@ -47,6 +56,7 @@ except ModuleNotFoundError:  # Python < 3.11
 SCHEMA_URL = 'https://recomplauncher.com/schema/recomplauncher.json'
 DISC_EXTENSIONS = ['cue', 'chd']
 EXIT_NO_VALIDATOR = 3
+OSES = ('windows', 'linux', 'macos')
 
 
 EXIT_UNSUPPORTED = 4
@@ -95,7 +105,7 @@ def _dumps(game_toml, catalog):
     return [entry]
 
 
-def build_manifest(root, exe_name, repo):
+def build_manifest(root, exe_name, repo, os_name='windows', build_dir_name='build-release'):
     root = Path(root)
     game_toml = _read_toml(root / 'game.toml')
     catalog = _read_json(root / 'catalog_identity.json')
@@ -113,6 +123,9 @@ def build_manifest(root, exe_name, repo):
                             'tell this game from another')
     if not exe_name or exe_name.endswith('.exe'):
         raise ManifestError('--exe-name is the program name without .exe')
+    if os_name not in OSES:
+        raise ManifestError('--os is one of %s' % ', '.join(OSES))
+    built = exe_name + ('.exe' if os_name == 'windows' else '')
 
     label = 'Your %s disc (%s) as .cue/.bin or .chd' % (name, ', '.join(serials))
     disc = {
@@ -133,16 +146,30 @@ def build_manifest(root, exe_name, repo):
         'name': game_toml.get('runtime', {}).get('window_title') or name,
         'repo': repo,
         'inputs': [disc],
+        'prepare': {
+            'program': [exe_name + '.exe', exe_name],
+            'args': ['--prepare', '--disc', '{input:game}'],
+            'label': 'Building %s from your disc' % name,
+            'done': ['{install}/%s/%s' % (build_dir_name, built)],
+        },
         'start': {
             'program': [exe_name + '.exe', exe_name],
             'args': ['--disc', '{input:game}'],
         },
         'saves': ['{install}/%s' % memcards.strip('/\\')],
+        'settings': [{
+            'id': 'lobby',
+            'label': 'Start in the recomp lobby',
+            'in': 'args',
+            'choices': [{'label': 'No', 'args': ['--no-launcher']},
+                        {'label': 'Yes', 'args': []}],
+        }],
     }
 
 
 def write(args):
-    manifest = build_manifest(args.root, args.exe_name, args.repo)
+    manifest = build_manifest(args.root, args.exe_name, args.repo, args.os,
+                              args.build_dir_name)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8', newline='\n')
@@ -176,6 +203,9 @@ def main(argv=None):
     w.add_argument('--root', required=True)
     w.add_argument('--exe-name', required=True)
     w.add_argument('--repo', required=True)
+    w.add_argument('--os', default='windows', choices=OSES,
+                   help='the system the zip is for; names the built game in prepare.done')
+    w.add_argument('--build-dir-name', default='build-release')
     w.add_argument('--out', required=True)
     c = sub.add_parser('check')
     c.add_argument('--manifest', required=True)

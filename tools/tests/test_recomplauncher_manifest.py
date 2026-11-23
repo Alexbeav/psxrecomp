@@ -60,6 +60,21 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(m['start']['args'], ['--disc', '{input:game}'])
         self.assertEqual(m['saves'], ['{install}/saves'])
         self.assertEqual(m['name'], 'Spyro the Dragon Recompiled')
+        self.assertEqual(m['prepare']['program'], m['start']['program'])
+        self.assertEqual(m['prepare']['args'], ['--prepare', '--disc', '{input:game}'])
+        self.assertEqual(m['prepare']['done'],
+                         ['{install}/build-release/Spyro_the_Dragon_Recompiled.exe'])
+        lobby, = m['settings']
+        self.assertEqual(lobby['in'], 'args')
+        self.assertEqual(lobby['choices'][0], {'label': 'No', 'args': ['--no-launcher']})
+        self.assertEqual(lobby['choices'][1]['args'], [])
+
+    def test_done_names_the_built_game_per_os(self):
+        root = self.title(ONE_TRACK, CATALOG)
+        m = rm.build_manifest(root, 'X', 'o/x', 'linux')
+        self.assertEqual(m['prepare']['done'], ['{install}/build-release/X'])
+        with self.assertRaisesRegex(rm.ManifestError, '--os'):
+            rm.build_manifest(root, 'X', 'o/x', 'windows-x64')
 
     def test_multi_track_disc_has_no_dumps(self):
         toml = ONE_TRACK.replace('required_tracks = 1', 'required_tracks = 3')

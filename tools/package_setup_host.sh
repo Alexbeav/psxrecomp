@@ -975,7 +975,7 @@ write_recomplauncher_manifest() {
   fi
   local rc=0
   "${python}" "${SCRIPT_DIR}/recomplauncher_manifest.py" write --root "${STAGE}" \
-    --exe-name "${EXE_BASENAME%.exe}" --repo "${repo}" \
+    --exe-name "${EXE_BASENAME%.exe}" --repo "${repo}" --os "${ARTIFACT%%-*}" \
     --out "${STAGE}/recomplauncher.json" >&2 || rc=$?
   if [[ "${rc}" -eq 4 ]]; then
     echo "note: recomplauncher.json not written for this title yet (see above)" >&2
