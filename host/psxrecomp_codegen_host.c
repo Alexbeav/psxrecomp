@@ -5,6 +5,7 @@
 #include "start_refusal.h"
 
 #include "psx_bios_known_images.h"
+#include "psx_shared_bios.h"     /* one BIOS folder for every port (PS1B-677) */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -83,6 +84,10 @@ static const char* g_tc_check_step = "";
 /* Set when host_persist_setup receives an explicit bios_path (including ""
  * for OpenBIOS). Distinguishes intentional OpenBIOS clear from "unset". */
 static int g_wizard_bios_explicit;
+/* --prepare (PS1B-677): no window anywhere. The CLI's console children start
+ * with CREATE_NO_WINDOW and the rebuild runs in this process instead of the
+ * deferred helper's console. */
+static int g_prepare_headless;
 
 static const char* cfg_or(const char* v, const char* d) {
     return (v && v[0]) ? v : d;
@@ -1706,6 +1711,82 @@ static int discover_retail_bios_c(char* out, size_t cap) {
     return 0;
 }
 
+/* The shared BIOS folder (psx_shared_bios.h): the dump this build pins, under
+ * any of its usual names. */
+static int shared_bios_find(char* out, size_t cap) {
+    char dir[1100];
+    char names[8][32];
+    int nnames, n;
+    if (!psx_shared_bios_dir(dir, sizeof(dir)))
+        return 0;
+    nnames = psx_known_bios_filenames(psx_expected_bios(), names, 8);
+    for (n = 0; n < nnames; ++n) {
+        char cand[1200];
+        if (!join_path(cand, sizeof(cand), dir, names[n]))
+            continue;
+        if (!retail_bios_file_ok_c(cand))
+            continue;
+        if (!absolutize_existing_file(out, cap, cand))
+            snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+    return 0;
+}
+
+/* A pick of the pinned image is copied into the shared folder, so the other
+ * ports find it without asking. Written to a temporary name and renamed, so a
+ * port reading the folder never sees half a file. Failure only costs the next
+ * port a picker, so it is reported and otherwise ignored. */
+static void shared_bios_store(const char* src) {
+    char dir[1100], dst[1200], tmp[1240], have[1100];
+    FILE *in, *out;
+    char buf[65536];
+    size_t n;
+    int ok = 1;
+    if (!src || !src[0] || !retail_bios_file_ok_c(src))
+        return;
+    if (shared_bios_find(have, sizeof(have)))
+        return;
+    if (!psx_shared_bios_dir(dir, sizeof(dir)) || !mkdir_p(dir) ||
+        !join_path(dst, sizeof(dst), dir, psx_expected_bios_label()))
+        return;
+    snprintf(tmp, sizeof(tmp), "%s.part", dst);
+    in = fopen(src, "rb");
+    if (!in)
+        return;
+    out = fopen(tmp, "wb");
+    if (!out) {
+        fclose(in);
+        fprintf(stderr, "psxrecomp-codegen: could not write the shared BIOS "
+                        "folder %s\n", dir);
+        return;
+    }
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+        if (fwrite(buf, 1, n, out) != n) {
+            ok = 0;
+            break;
+        }
+    if (ferror(in))
+        ok = 0;
+    fclose(in);
+    if (fclose(out) != 0)
+        ok = 0;
+#if defined(_WIN32)
+    if (ok && !MoveFileExA(tmp, dst, MOVEFILE_REPLACE_EXISTING))
+        ok = 0;
+#else
+    if (ok && rename(tmp, dst) != 0)
+        ok = 0;
+#endif
+    if (!ok) {
+        remove(tmp);
+        fprintf(stderr, "psxrecomp-codegen: could not copy the BIOS into the "
+                        "shared folder %s\n", dir);
+        return;
+    }
+    fprintf(stderr, "psxrecomp-codegen: BIOS kept for every port in %s\n", dst);
+}
+
 static int bios_cfg_sidecar_exists(void) {
     char cand[1100];
     char dir[1100];
@@ -1750,8 +1831,9 @@ static int resolve_bios_arg(char* out, size_t cap) {
         out[0] = '\0';
         return 0;
     }
-    /* No remembered pick — adopt SCPH1001 if present; else OpenBIOS (empty). */
-    if (discover_retail_bios_c(out, cap)) {
+    /* No remembered pick — adopt the pinned dump beside the install, else the
+     * one in the shared folder (PS1B-677); else OpenBIOS (empty). */
+    if (discover_retail_bios_c(out, cap) || shared_bios_find(out, cap)) {
         snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", out);
         if (g_project_root[0] &&
             join_path(cand, sizeof(cand), g_project_root, "bios.cfg"))
@@ -1902,6 +1984,9 @@ static int host_persist_setup(void* ctx, const char* rom_path,
                 write_sidecar_near_exe(build_exe, "bios.cfg",
                                        g_wizard_bios[0] ? g_wizard_bios : "");
         }
+        /* One pick covers every port (PS1B-677). */
+        if (g_wizard_bios[0])
+            shared_bios_store(g_wizard_bios);
     }
     if (rom_path && rom_path[0]) {
         if (g_project_root[0] &&
@@ -2231,7 +2316,8 @@ static int run_cli_win(const char* cmdline,
 
     char mutable_cmd[4096];
     snprintf(mutable_cmd, sizeof(mutable_cmd), "%s", cmdline);
-    if (!CreateProcessA(NULL, mutable_cmd, NULL, NULL, TRUE, 0, NULL,
+    if (!CreateProcessA(NULL, mutable_cmd, NULL, NULL, TRUE,
+                        g_prepare_headless ? CREATE_NO_WINDOW : 0, NULL,
                         g_project_root, &si, &pi)) {
         CloseHandle(rd);
         CloseHandle(wr);
@@ -5205,6 +5291,43 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
     }
 
 #if defined(_WIN32)
+    /* --prepare: the zip-root setup exe builds build-release/, which does not
+     * hold this process's image, so nothing needs it to exit first. Build in
+     * place, with no console, and report the product (PS1B-677). */
+    if (g_prepare_headless && !force_pgo && !want_diagnostic) {
+        char cmdline[4096];
+        char disc_arg[1200];
+        int n;
+        disc_arg[0] = '\0';
+        if (disc_path && disc_path[0])
+            snprintf(disc_arg, sizeof(disc_arg), " --disc \"%s\"", disc_path);
+        n = snprintf(cmdline, sizeof(cmdline),
+                     "\"%s\" \"%s\" rebuild --project-root \"%s\" --config \"%s\" "
+                     "--build-dir \"%s\" --target \"%s\" --exe-basename \"%s\"%s "
+                     "--no-pgo --prune-after build-intermediates --json-progress",
+                     g_python, g_cli_path, g_project_root, g_game_toml,
+                     g_build_dir, g_cmake_target, g_exe_basename, disc_arg);
+        if (n <= 0 || (size_t)n >= sizeof(cmdline)) {
+            snprintf(err_msg, err_cap, "Rebuild command line too long.");
+            return 0;
+        }
+        if (on_progress)
+            on_progress(progress_ctx, 0.05f, "Starting rebuild (cmake)…");
+        if (!run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
+                         "psxrecomp rebuild"))
+            return 0;
+        /* runtime.cmake publishes the exe name it really used. */
+        (void)resolve_build_paths();
+        if (!path_is_file(g_exe_path)) {
+            snprintf(err_msg, err_cap, "Build succeeded but binary missing: %s",
+                     g_exe_path);
+            return 0;
+        }
+        snprintf(out_exe_path, out_cap, "%s", g_exe_path);
+        if (on_progress)
+            on_progress(progress_ctx, 1.0f, "Build complete");
+        return 1;
+    }
     if (on_progress)
         on_progress(progress_ctx, 0.4f,
                     force_pgo ? "Scheduling Windows PGO optimize after exit…"
@@ -5641,10 +5764,181 @@ static void host_collect_diagnostics_or_return(
     exit(status == 0 ? 0 : 1);
 }
 
+
+/* --prepare --disc <image> [--bios <file>]: RecompLauncher's setup step
+ * (PS1B-677, amendment A3; recomplauncher.com guide, "prepare"). Runs the
+ * wizard's Generate & rebuild with no window and prints the launcher's
+ * progress lines, "progress <0..1> <text>", on stdout. Exit 0 when
+ * build-release/ holds the game; 2 for a bad request or a missing BIOS;
+ * otherwise the CLI's exit code (3 = the disc was refused), else 1.
+ *
+ * The BIOS comes from --bios, else the usual order: bios.cfg, a dump beside
+ * the install, the shared BIOS folder (psx_shared_bios.h). A title that needs
+ * a retail BIOS stops before Generate when none is found, naming the folder. */
+#if defined(PSX_HAS_SETUP_WIZARD) && !defined(PSX_HAS_GAME_DISPATCH)
+typedef struct HostPrepareSpan {
+    float base;
+    float span;
+} HostPrepareSpan;
+
+static void host_prepare_progress(void* ctx, float pct, const char* message) {
+    const HostPrepareSpan* s = (const HostPrepareSpan*)ctx;
+    char text[300];
+    size_t i;
+    if (pct < 0.0f) pct = 0.0f;
+    if (pct > 1.0f) pct = 1.0f;
+    snprintf(text, sizeof(text), "%s", message ? message : "");
+    for (i = 0; text[i]; ++i)
+        if (text[i] == '\r' || text[i] == '\n')
+            text[i] = ' ';
+    printf("progress %.2f %s\n", s ? s->base + s->span * pct : pct, text);
+    fflush(stdout);
+}
+
+/* openbios = false in game.toml: the title boots only on a retail BIOS. */
+static int host_title_requires_retail_bios(void) {
+    FILE* f;
+    char line[512];
+    int required = 0;
+    if (!g_game_toml[0] || !(f = fopen(g_game_toml, "rb")))
+        return 0;
+    while (fgets(line, sizeof(line), f)) {
+        const char* p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (strncmp(p, "openbios", 8) != 0)
+            continue;
+        p += 8;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '=')
+            continue;
+        ++p;
+        while (*p == ' ' || *p == '\t') ++p;
+        required = strncmp(p, "false", 5) == 0;
+    }
+    fclose(f);
+    return required;
+}
+
+static void host_prepare_fail(int code, const char* what) {
+    fprintf(stderr, "psxrecomp-codegen: prepare failed: %s\n", what);
+    fflush(stderr);
+    exit(code);
+}
+
+static const char* host_argv_value(int argc, char** argv, const char* flag) {
+    int i;
+    for (i = 1; i + 1 < argc && argv && argv[i]; ++i)
+        if (strcmp(argv[i], flag) == 0)
+            return argv[i + 1];
+    return NULL;
+}
+#endif
+
+static void host_prepare_or_return(const PsxrecompCodegenHostConfig* cfg,
+                                   int argc, char** argv) {
+    if (!argv_has(argc, argv, "--prepare"))
+        return;
+#if defined(PSX_HAS_GAME_DISPATCH)
+    /* The product itself: setup is already done. */
+    (void)cfg;
+    printf("progress 1.00 Already set up\n");
+    fflush(stdout);
+    exit(0);
+#elif !defined(PSX_HAS_SETUP_WIZARD)
+    (void)cfg;
+    fprintf(stderr, "psxrecomp-codegen: --prepare needs a setup-wizard build\n");
+    exit(2);
+#else
+    RecompLauncherCGameInfo gi;
+    HostPrepareSpan span;
+    const char* disc = host_argv_value(argc, argv, "--disc");
+    const char* bios = host_argv_value(argc, argv, "--bios");
+    char disc_abs[1100], bios_abs[1100], out[1300], err[1024], msg[1600];
+    char self[1100];
+
+    g_prepare_headless = 1;
+    if (!disc || !disc[0])
+        host_prepare_fail(2, "--prepare needs --disc <your disc image>");
+    if (!absolutize_existing_file(disc_abs, sizeof(disc_abs), disc)) {
+        snprintf(msg, sizeof(msg), "disc image not found: %s", disc);
+        host_prepare_fail(2, msg);
+    }
+
+    /* The wizard's own wiring: project root, CLI, game.toml, build paths. */
+    memset(&gi, 0, sizeof(gi));
+    psxrecomp_codegen_host_apply(&gi, cfg);
+    if (!g_ready || !gi.prepare_with_progress)
+        host_prepare_fail(2, "the game's project folder (game.toml and "
+                             "psxrecomp_cli.py) was not found next to this program");
+    if (!gi.rebuild_with_progress)
+        host_prepare_fail(2, "the build folder could not be formed");
+
+    /* Already built (the player finished setup in our own wizard). */
+    if (!psxrecomp_codegen_host_sources_missing(cfg) && path_is_file(g_exe_path)) {
+        span.base = 0.0f;
+        span.span = 1.0f;
+        host_prepare_progress(&span, 1.0f, "Already set up");
+        exit(0);
+    }
+    if (host_self_exe_path(self, sizeof(self)) &&
+        path_is_under_dir(self, g_build_dir))
+        host_prepare_fail(2, "run --prepare from the setup program, not from "
+                             "the build folder");
+
+    if (bios && bios[0]) {
+        if (!absolutize_existing_file(bios_abs, sizeof(bios_abs), bios)) {
+            snprintf(msg, sizeof(msg), "BIOS file not found: %s", bios);
+            host_prepare_fail(2, msg);
+        }
+        if (!retail_bios_file_ok_c(bios_abs)) {
+            snprintf(msg, sizeof(msg), "%s is not the BIOS this game needs (%s, "
+                     "512 KB)", bios_abs, psx_expected_bios_label());
+            host_prepare_fail(2, msg);
+        }
+        host_persist_setup(NULL, NULL, bios_abs);
+    } else if (host_title_requires_retail_bios() &&
+               !resolve_bios_arg(bios_abs, sizeof(bios_abs))) {
+        char dir[1100];
+        if (!psx_shared_bios_dir(dir, sizeof(dir)))
+            snprintf(dir, sizeof(dir), "(no per-user folder known)");
+        snprintf(msg, sizeof(msg), "no PlayStation BIOS found. Put your %s "
+                 "dump in %s, or pass --bios <file>", psx_expected_bios_label(),
+                 dir);
+        host_prepare_fail(2, msg);
+    }
+
+    err[0] = '\0';
+    span.base = 0.0f;
+    span.span = 0.45f;
+    if (!host_prepare_generate(disc_abs, out, sizeof(out), err, sizeof(err),
+                               host_prepare_progress, &span))
+        host_prepare_fail(g_cli_last_exit_code > 0 ? (int)g_cli_last_exit_code : 1,
+                          err[0] ? err : "generate failed");
+    span.base = 0.45f;
+    span.span = 0.55f;
+    if (!host_rebuild_game(disc_abs, out, sizeof(out), err, sizeof(err),
+                           host_prepare_progress, &span))
+        host_prepare_fail(g_cli_last_exit_code > 0 ? (int)g_cli_last_exit_code : 1,
+                          err[0] ? err : "rebuild failed");
+#if defined(_WIN32)
+    if (g_relaunch_is_helper)
+        host_prepare_fail(1, "the build was deferred instead of run");
+#endif
+    /* What the wizard leaves beside the product before its first start. */
+    persist_relaunch_sidecars(g_exe_path, disc_abs);
+    fprintf(stderr, "psxrecomp-codegen: prepare built %s\n", g_exe_path);
+    span.base = 0.0f;
+    span.span = 1.0f;
+    host_prepare_progress(&span, 1.0f, "Ready to play");
+    exit(0);
+#endif
+}
+
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
     host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
     host_collect_diagnostics_or_return(cfg, argc, argv); /* exits when requested */
+    host_prepare_or_return(cfg, argc, argv); /* exits when requested */
 #if defined(PSX_HAS_GAME_DISPATCH)
     /* Full game binary — already the product tree. */
     (void)cfg;
