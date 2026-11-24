@@ -174,15 +174,87 @@ static inline int psx_fetch_uncached(uint32_t pc) {
     return pc >= 0xA0000000u;
 }
 
-/* Experimental native-span budget, not the faithful pipeline model. A span
- * owns its base and estimated load work, so its loads do not run ReadAbsorb,
- * dependency or cache-tag bookkeeping. Uncached BIOS execution still costs
- * more than cached work. Device clocks and completion deadlines are separate.
+/* Native-span budget. A span charges one gen-time constant, so the runtime
+ * runs no ReadAbsorb, dependency or cache-tag bookkeeping for it. The constant
+ * is the reference interlock (psx_cyc.h: §1 base, GPR_DEPRES, DO_LDS, and the
+ * main-RAM ReadMemory wait with its ReadFudge and LDAbsorb give-back) evaluated
+ * statically over the span's own instructions from the state a span starts in
+ * (no load pending). Every data load is assumed to hit main RAM; the opcode
+ * cannot name its region. Uncached fetches cost +4 and clear the give-back.
+ * Device clocks and completion deadlines are separate.
+ *
+ * A flat +2 per load undercharged a main-RAM load by about 4 cycles net. Polls
+ * on a kernel event (TestEvent) then ran about a third faster than the
+ * reference, and a pass-count timeout that a game sets against a card read
+ * expired first (PS1B-695: Tiny Toon's card wait, 177 cycles per pass against
+ * the reference's 237, which this model reproduces exactly).
  */
-static inline uint32_t psx_native_instr_cycles(uint32_t insn, uint32_t pc) {
+typedef struct PsxNativeSpanModel {
+    uint8_t read_absorb[33];
+    uint8_t read_absorb_which;
+    uint8_t ld_which_t;
+    uint8_t ld_absorb;
+    uint8_t read_fudge;
+} PsxNativeSpanModel;
+
+static inline void psx_native_span_model_init(PsxNativeSpanModel* m) {
+    for (unsigned i = 0; i < 33u; ++i) m->read_absorb[i] = 0u;
+    m->read_absorb_which = 0u;
+    m->ld_which_t = 0x20u;
+    m->ld_absorb = 0u;
+    m->read_fudge = 0x20u;
+}
+
+static inline void psx_native_span_model_lds(PsxNativeSpanModel* m) {
+    uint8_t lw = m->ld_which_t;
+    m->read_absorb[lw] = m->ld_absorb;
+    m->read_fudge = lw;
+    m->read_absorb_which = (uint8_t)(m->read_absorb_which | (lw & 0x1Fu));
+    m->ld_which_t = 0x20u;
+}
+
+/* Cycles one instruction adds to its span, advancing the span's interlock state. */
+static inline uint32_t psx_native_span_model_step(PsxNativeSpanModel* m,
+                                                  uint32_t insn, uint32_t pc) {
+    uint32_t cycles = 0u;
+    if (psx_fetch_uncached(pc)) {
+        cycles += 4u;
+        m->read_absorb[m->read_absorb_which] = 0u;
+        m->read_absorb_which = 0u;
+    }
+    if (m->read_absorb[m->read_absorb_which]) m->read_absorb[m->read_absorb_which]--;
+    else                                      cycles += 1u;
+    uint32_t deps = psx_cyc_dep_res_mask(insn) & 0xFFFFFFFEu;
+    for (unsigned n = 1; n < 32u; ++n)
+        if (deps & (UINT32_C(1) << n)) m->read_absorb[n] = 0u;
     uint32_t op = insn >> 26;
-    uint32_t load = ((op >= 0x20u && op <= 0x26u) || op == 0x32u) ? 2u : 0u;
-    return 1u + load + (psx_fetch_uncached(pc) ? 4u : 0u);
+    if (op >= 0x20u && op <= 0x26u) {
+        uint8_t rt = (uint8_t)((insn >> 16) & 0x1Fu);
+        if (m->ld_which_t == rt) m->ld_which_t = 0u;
+        psx_native_span_model_lds(m);
+        m->read_absorb[m->read_absorb_which] = 0u;
+        m->read_absorb_which = 0u;
+        cycles += (uint32_t)((m->read_fudge >> 4) & 2u) + 5u;  /* wait 3 + completion 2 */
+        m->ld_absorb = 5u;
+        m->ld_which_t = rt;
+    } else {
+        psx_native_span_model_lds(m);
+        if (op == 0x32u) {   /* LWC2: wait 3 + completion 1, no GPR target */
+            m->read_absorb[m->read_absorb_which] = 0u;
+            m->read_absorb_which = 0u;
+            cycles += (uint32_t)((m->read_fudge >> 4) & 2u) + 4u;
+            m->ld_absorb = 4u;
+            m->ld_which_t = 0x20u;
+        }
+    }
+    return cycles;
+}
+
+/* One instruction charged as a span of its own. */
+static inline uint32_t psx_native_instr_cycles(uint32_t insn, uint32_t pc) {
+    PsxNativeSpanModel m;
+    psx_native_span_model_init(&m);
+    return psx_native_span_model_step(&m, insn, pc);
 }
 
 #ifdef __cplusplus

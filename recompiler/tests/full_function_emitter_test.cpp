@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -301,10 +302,14 @@ void native_span_preserves_reference_body() {
         0x03E00008u, 0u,
     }, {function_at(kBase, kBase + 12u, {kBase})});
     expect(result.stats.functions_emitted == 1, "span fixture stays native");
-    // Every admitted resume starts its own span. The same four instructions
-    // still charge 3+1+2=6, including the return's architectural delay slot.
+    // Every admitted resume starts its own span, but the reference interlock
+    // runs through the whole basic block and each instruction's cost goes to
+    // its span. The main-RAM load is base 1 + ReadFudge 2 + wait 5 = 8; its
+    // successor still pays 1 (the load writes back at its end, so absorption
+    // starts one instruction later); the return and its architectural delay
+    // slot are both absorbed into the remaining wait (0).
     const uint32_t offsets[] = {0u, 4u, 8u};
-    const uint32_t costs[] = {3u, 1u, 2u};
+    const uint32_t costs[] = {8u, 1u, 0u};
     for (unsigned i=0;i<3;i++) {
         char label[48], charge[64];
         std::snprintf(label,sizeof label,"label_%08X:",kBase+offsets[i]);
@@ -313,13 +318,45 @@ void native_span_preserves_reference_body() {
         const auto end=at==std::string::npos?at:result.full.find("label_",at+std::strlen(label));
         expect(at!=std::string::npos &&
                result.full.substr(at,end==std::string::npos?end:end-at).find(charge)!=std::string::npos,
-               "native resume spans partition the original six cycles without gaps");
+               "native resume spans partition the reference interlock cost without gaps");
     }
     expect(result.full.find("psx_native_span.h") != std::string::npos,
            "generated native body selects the source-local policy");
     expect(result.full.find("psx_cyc_load_word") != std::string::npos &&
            result.full.find("psx_cyc_step") != std::string::npos,
            "faithful timing and load values remain in the same generated artifact");
+}
+
+void native_span_charges_reference_load_interlock() {
+    // PS1B-695: a kernel event poll (two dependent main-RAM loads) in one
+    // basic block. Its spans together must charge the reference interlock
+    // over the same instructions: lui 1; lw 1+2+5; subu, sll absorbed; addu
+    // (uses the loaded t6) 1; lw 1+2+5; addiu absorbed; xor (uses t8) 1; jr 1;
+    // nop 1 = 21. The former flat +2 per load charged 14, so a game's poll
+    // loop ran a third faster than the reference and its card-read timeout
+    // expired before the card read completed. Resetting the interlock at each
+    // exact-EPC resume span instead would charge 24.
+    const auto result = run_case("native-span-poll", {
+        0x3C0E8000u, // lui t6,0x8000
+        0x8DCE0040u, // lw t6,64(t6)
+        0x01E47823u, // subu t7,t7,a0
+        0x000F7880u, // sll t7,t7,2
+        0x01CF1021u, // addu v0,t6,t7
+        0x8C580004u, // lw t8,4(v0)
+        0x24014000u, // addiu at,zero,0x4000
+        0x03011026u, // xor v0,t8,at
+        0x03E00008u, 0u,
+    }, {function_at(kBase, kBase + 36u, {kBase})});
+    expect(result.stats.functions_emitted == 1, "poll span fixture stays native");
+    const std::string call = "psx_native_span_charge(";
+    unsigned total = 0, spans = 0;
+    for (auto at = result.full.find(call); at != std::string::npos;
+         at = result.full.find(call, at + call.size())) {
+        total += static_cast<unsigned>(std::strtoul(result.full.c_str() + at + call.size(), nullptr, 10));
+        ++spans;
+    }
+    expect(spans >= 1 && total == 21u,
+           "poll block spans charge the reference main-RAM load interlock (21), not a flat +2 per load (14) or a per-span reset (24)");
 }
 
 int main(int argc, char** argv) {
@@ -525,6 +562,7 @@ int main(int argc, char** argv) {
     complementary_lwl_lwr_stays_native();
     mod_guest_dispatch_precedes_hardware_routes();
     native_span_preserves_reference_body();
+    native_span_charges_reference_load_interlock();
     patch_range_guards(config);
     patch_range_delay_boundaries(config);
     FullFunctionEmitter::set_address_model(&model);

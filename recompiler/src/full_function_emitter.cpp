@@ -503,14 +503,32 @@ bool FullFunctionEmitter::emit_function(
     // opt-in span accounting; the existing reference block timing is unchanged.
     std::set<uint32_t> native_span_leaders = block_leaders;
     native_span_leaders.insert(resume_points.begin(), resume_points.end());
-    for (auto it = addr_to_raw.begin(); it != addr_to_raw.end(); ++it) {
-        if (!native_span_leaders.count(it->first)) continue;
-        auto next = it;
-        do {
-            native_span_cycles[it->first] +=
-                psx_native_instr_cycles(next->second, relocate_ra(next->first));
-            ++next;
-        } while (next != addr_to_raw.end() && !native_span_leaders.count(next->first));
+    // PS1B-695: the load-interlock state runs through the whole basic block
+    // (reset only at a block leader or an address gap), and each instruction's
+    // cost goes to the span that contains it. Exact-EPC resume points split
+    // spans at almost every BIOS instruction; resetting the model there would
+    // drop every absorbed load wait and overcharge, the mirror of the former
+    // flat +2 per load undercharge. Fall-through execution of the spans of a
+    // block therefore sums to the reference cost of that block.
+    {
+        PsxNativeSpanModel span_model;
+        psx_native_span_model_init(&span_model);
+        bool have_span = false;
+        uint32_t span_leader = 0u;
+        uint32_t prev_pc = 0u;
+        for (auto it = addr_to_raw.begin(); it != addr_to_raw.end(); ++it) {
+            const uint32_t pc = it->first;
+            if (block_leaders.count(pc) || it == addr_to_raw.begin() || pc != prev_pc + 4u)
+                psx_native_span_model_init(&span_model);
+            if (native_span_leaders.count(pc)) {
+                span_leader = pc;
+                have_span = true;
+            }
+            const uint32_t cost = psx_native_span_model_step(
+                &span_model, it->second, relocate_ra(pc));
+            if (have_span) native_span_cycles[span_leader] += cost;
+            prev_pc = pc;
+        }
     }
 
     /* Emit branch-predicate variable declarations at function entry,
