@@ -2088,6 +2088,23 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
 
+    # GPUSTAT bit 26 is clear while a GP0 command takes words (PS1B-697).
+    add_executable(gpu_ready_cmd_status_test
+        tests/test_gpu_ready_cmd_status.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(gpu_ready_cmd_status_test PRIVATE
+        include
+        src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(gpu_ready_cmd_status_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(gpu_ready_cmd_status_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME gpu_ready_cmd_status_test
+             COMMAND gpu_ready_cmd_status_test)
+
     # auto_ui_squash corrects untextured HUD fills with their textured frames.
     add_executable(ws_auto_ui_untextured_exec_test
         tests/test_ws_auto_ui_untextured_exec.c

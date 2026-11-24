@@ -4456,8 +4456,15 @@ uint32_t gpu_read_gpustat(void) {
         case 3: stat |= (1u << 25); break; /* mirrors ready-to-send */
     }
 
-    /* Bit 26: ready to receive cmd word — 1 when not busy */
-    stat |= (1u << 26);
+    /* Bit 26: ready to receive cmd word. The GPU is not ready while a command
+     * is still taking words: a partly received packet, a polyline, or a VRAM
+     * write (GP0 A0) waiting for its data. Commands execute when complete, so
+     * the parser state alone says whether one is in progress. Final Doom's
+     * own primitive queue polls this bit before each CPU write to GP0; with it
+     * stuck at 1 the queue's words landed inside a LoadImage transfer and the
+     * image data that followed was parsed as commands (PS1B-697). */
+    if (gp0_state == GP0_IDLE)
+        stat |= (1u << 26);
 
     /* Bit 27: ready to send VRAM to CPU — 1 when VRAM read is active */
     if (vram_read_active)
