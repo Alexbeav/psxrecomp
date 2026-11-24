@@ -58,7 +58,7 @@ class ManifestTest(unittest.TestCase):
         self.assertIn('.cue', disc['label'])
         self.assertEqual(m['start']['program'], ['Spyro_the_Dragon_Recompiled.exe',
                                                  'Spyro_the_Dragon_Recompiled'])
-        self.assertEqual(m['start']['args'], ['--disc', '{input:game}'])
+        self.assertEqual(m['start']['args'], ['--no-launcher', '--disc', '{input:game}'])
         self.assertEqual(m['saves'], ['{install}/saves'])
         self.assertEqual(m['name'], 'Spyro the Dragon Recompiled')
         self.assertEqual(m['prepare']['program'], m['start']['program'])
@@ -67,8 +67,11 @@ class ManifestTest(unittest.TestCase):
                          ['{install}/build-release/Spyro_the_Dragon_Recompiled.exe'])
         lobby = m['settings'][0]
         self.assertEqual(lobby['in'], 'args')
-        self.assertEqual(lobby['choices'][0], {'label': 'No', 'args': ['--no-launcher']})
-        self.assertEqual(lobby['choices'][1]['args'], [])
+        # An unclicked setting adds nothing, so the first choice must pass nothing.
+        self.assertEqual(lobby['choices'][0], {'label': 'No', 'args': []})
+        self.assertEqual(lobby['choices'][1]['args'], ['--launcher'])
+        for row in m['settings']:
+            self.assertEqual(row['choices'][0]['args'], [], row['id'])
 
     def test_done_names_the_built_game_per_os(self):
         root = self.title(ONE_TRACK, CATALOG)
@@ -103,7 +106,7 @@ class ManifestTest(unittest.TestCase):
         self.assertTrue(d1['label'].startswith('Disc 1') and '.cue' in d1['label'])
         self.assertEqual(m['prepare']['args'], ['--prepare', '--disc', '{input:disc1}',
                                                 '--disc', '{input:disc2}'])
-        self.assertEqual(m['start']['args'], ['--disc', '{input:disc1}'])
+        self.assertEqual(m['start']['args'], ['--no-launcher', '--disc', '{input:disc1}'])
 
     def test_multi_disc_without_per_disc_serials_checks_all(self):
         toml = ONE_TRACK.replace('discs = ["disc/Spyro.cue"]',

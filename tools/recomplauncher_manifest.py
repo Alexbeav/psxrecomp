@@ -23,8 +23,10 @@ The file says:
   start    the setup program at the zip root, with --disc <the boot disc>;
            once built it forwards to the game.
   saves    the memory-card folder (runtime.memcard_dir, under the install).
-  settings "Start in the recomp lobby" (A2): No passes --no-launcher and is
-           the default. Video rows (renderer, display, vsync, antialiasing,
+  settings "Start in the recomp lobby" (A2): start always passes
+           --no-launcher and Yes adds --launcher, which wins in the runtime.
+           The launcher adds nothing for a setting the player never clicked,
+           so every first choice passes nothing. Video rows (renderer, display, vsync, antialiasing,
            dithering) pass the runtime's own one-run switches (--renderer,
            --fullscreen, --windowed, --set video.<key>=<value>); their first
            choice passes nothing and keeps what the player set in the game.
@@ -205,15 +207,15 @@ def build_manifest(root, exe_name, repo, os_name='windows', build_dir_name='buil
         },
         'start': {
             'program': [exe_name + '.exe', exe_name],
-            'args': disc_args[:2],
+            'args': ['--no-launcher'] + disc_args[:2],
         },
         'saves': ['{install}/%s' % memcards.strip('/\\')],
         'settings': [{
             'id': 'lobby',
             'label': 'Start in the recomp lobby',
             'in': 'args',
-            'choices': [{'label': 'No', 'args': ['--no-launcher']},
-                        {'label': 'Yes', 'args': []}],
+            'choices': [{'label': 'No', 'args': []},
+                        {'label': 'Yes', 'args': ['--launcher']}],
         }] + [dict(row, **{'in': 'args'}) for row in VIDEO_SETTINGS],
     }
 
