@@ -1711,26 +1711,69 @@ static int discover_retail_bios_c(char* out, size_t cap) {
     return 0;
 }
 
+/* One file of the shared folder, by name: the pinned image when its size and
+ * CRC32 match. A .part is a copy still being written. */
+static int shared_bios_try(const char* dir, const char* name, char* out, size_t cap) {
+    char cand[1200];
+    size_t len = strlen(name);
+    if (name[0] == '.' || (len > 5 && strcmp(name + len - 5, ".part") == 0))
+        return 0;
+    if (!join_path(cand, sizeof(cand), dir, name) || !retail_bios_file_ok_c(cand))
+        return 0;
+    if (!absolutize_existing_file(out, cap, cand))
+        snprintf(out, cap, "%s", cand);
+    return 1;
+}
+
 /* The shared BIOS folder (psx_shared_bios.h): the dump this build pins, under
- * any of its usual names. */
+ * its usual names first, then under any name. BIOS packs name the same dump
+ * "[US] SCPH1001.BIN" or "scph1001 (v2.2).bin"; the contents decide, as the
+ * runtime's find_shared_retail_bios() does. */
 static int shared_bios_find(char* out, size_t cap) {
     char dir[1100];
     char names[8][32];
-    int nnames, n;
+    int nnames, n, found = 0;
     if (!psx_shared_bios_dir(dir, sizeof(dir)))
         return 0;
     nnames = psx_known_bios_filenames(psx_expected_bios(), names, 8);
-    for (n = 0; n < nnames; ++n) {
-        char cand[1200];
-        if (!join_path(cand, sizeof(cand), dir, names[n]))
-            continue;
-        if (!retail_bios_file_ok_c(cand))
-            continue;
-        if (!absolutize_existing_file(out, cap, cand))
-            snprintf(out, cap, "%s", cand);
-        return 1;
+    for (n = 0; n < nnames; ++n)
+        if (shared_bios_try(dir, names[n], out, cap))
+            return 1;
+#if defined(_WIN32)
+    {
+        char pattern[1200];
+        WIN32_FIND_DATAA fd;
+        HANDLE h;
+        if (!join_path(pattern, sizeof(pattern), dir, "*"))
+            return 0;
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE)
+            return 0;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                continue;
+            if (shared_bios_try(dir, fd.cFileName, out, cap)) {
+                found = 1;
+                break;
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
     }
-    return 0;
+#else
+    {
+        DIR* d = opendir(dir);
+        struct dirent* ent;
+        if (!d)
+            return 0;
+        while ((ent = readdir(d)) != NULL)
+            if (shared_bios_try(dir, ent->d_name, out, cap)) {
+                found = 1;
+                break;
+            }
+        closedir(d);
+    }
+#endif
+    return found;
 }
 
 /* A pick of the pinned image is copied into the shared folder, so the other
@@ -5932,11 +5975,15 @@ static void host_prepare_or_return(const PsxrecompCodegenHostConfig* cfg,
     } else if (host_title_requires_retail_bios() &&
                !resolve_bios_arg(bios_abs, sizeof(bios_abs))) {
         char dir[1100];
+        /* Made here, so the folder the message names is there to drop the
+         * dump into; any file name will do (shared_bios_find). */
         if (!psx_shared_bios_dir(dir, sizeof(dir)))
             snprintf(dir, sizeof(dir), "(no per-user folder known)");
+        else
+            mkdir_p(dir);
         snprintf(msg, sizeof(msg), "no PlayStation BIOS found. Put your %s "
-                 "dump in %s, or pass --bios <file>", psx_expected_bios_label(),
-                 dir);
+                 "dump (any file name) in %s, or pass --bios <file>",
+                 psx_expected_bios_label(), dir);
         host_prepare_fail(2, msg);
     }
 
