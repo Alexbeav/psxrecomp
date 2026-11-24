@@ -1673,7 +1673,7 @@ label_BFC000B8:
     cosim_block(0x1FC000B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC000B8u);
@@ -2001,7 +2001,7 @@ label_BFC000F0:
     cosim_block(0x1FC000F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC000F0u);
@@ -2133,7 +2133,7 @@ label_BFC00104: ;
 #endif
 label_BFC00108: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00108u);
@@ -2154,7 +2154,7 @@ label_BFC00108: ;
 #endif
 label_BFC0010C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0010Cu);
@@ -2303,7 +2303,7 @@ label_BFC00120:
 #endif
 label_BFC00124: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00124u);
@@ -3063,7 +3063,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC001A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC001A0u);
@@ -5137,7 +5137,7 @@ label_BFC00314:
     cosim_block(0x1FC00314u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00314u);
@@ -6020,7 +6020,7 @@ label_BFC003A8:
 #endif
 label_BFC003AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC003ACu);
@@ -6283,7 +6283,7 @@ label_BFC003D0:
 #endif
 label_BFC003D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC003D4u);
@@ -6380,7 +6380,7 @@ label_BFC003E4:
     cosim_block(0x1FC003E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC003E4u);
@@ -6756,7 +6756,7 @@ label_BFC00414: ;
 #endif
 label_BFC00418: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00418u);
@@ -6983,7 +6983,7 @@ label_BFC0043C:
     cosim_block(0x1FC0043Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0043Cu);
@@ -7200,7 +7200,7 @@ label_BFC00460:
     cosim_block(0x1FC00460u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00460u);
@@ -7385,7 +7385,7 @@ label_BFC0047C: ;
 #endif
 label_BFC00480: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00480u);
@@ -7776,7 +7776,7 @@ label_BFC004C4: ;
 #endif
 label_BFC004C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC004C8u);
@@ -7992,7 +7992,7 @@ label_BFC004EC:
     cosim_block(0x1FC004ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC004ECu);
@@ -9156,7 +9156,7 @@ label_BFC0059C:
     cosim_block(0x1FC0059Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0059Cu);
@@ -9329,7 +9329,7 @@ label_BFC005B8:
     cosim_block(0x1FC005B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005B8u);
@@ -9350,7 +9350,7 @@ label_BFC005B8:
 #endif
 label_BFC005BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005BCu);
@@ -9371,7 +9371,7 @@ label_BFC005BC: ;
 #endif
 label_BFC005C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005C0u);
@@ -9392,7 +9392,7 @@ label_BFC005C0: ;
 #endif
 label_BFC005C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005C4u);
@@ -9413,7 +9413,7 @@ label_BFC005C4: ;
 #endif
 label_BFC005C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005C8u);
@@ -9434,7 +9434,7 @@ label_BFC005C8: ;
 #endif
 label_BFC005CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005CCu);
@@ -9455,7 +9455,7 @@ label_BFC005CC: ;
 #endif
 label_BFC005D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005D0u);
@@ -9476,7 +9476,7 @@ label_BFC005D0: ;
 #endif
 label_BFC005D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005D4u);
@@ -9497,7 +9497,7 @@ label_BFC005D4: ;
 #endif
 label_BFC005D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005D8u);
@@ -9518,7 +9518,7 @@ label_BFC005D8: ;
 #endif
 label_BFC005DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC005DCu);
@@ -9712,7 +9712,7 @@ label_BFC005FC: ;
 #endif
 label_BFC00600: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00600u);
@@ -10025,7 +10025,7 @@ label_BFC00630: ;
 #endif
 label_BFC00634: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00634u);
@@ -10594,7 +10594,7 @@ label_BFC00698:
     cosim_block(0x1FC00698u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00698u);
@@ -10615,7 +10615,7 @@ label_BFC00698:
 #endif
 label_BFC0069C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0069Cu);
@@ -10636,7 +10636,7 @@ label_BFC0069C: ;
 #endif
 label_BFC006A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006A0u);
@@ -10657,7 +10657,7 @@ label_BFC006A0: ;
 #endif
 label_BFC006A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006A4u);
@@ -10678,7 +10678,7 @@ label_BFC006A4: ;
 #endif
 label_BFC006A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006A8u);
@@ -10699,7 +10699,7 @@ label_BFC006A8: ;
 #endif
 label_BFC006AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006ACu);
@@ -10720,7 +10720,7 @@ label_BFC006AC: ;
 #endif
 label_BFC006B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006B0u);
@@ -10741,7 +10741,7 @@ label_BFC006B0: ;
 #endif
 label_BFC006B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006B4u);
@@ -10762,7 +10762,7 @@ label_BFC006B4: ;
 #endif
 label_BFC006B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006B8u);
@@ -10783,7 +10783,7 @@ label_BFC006B8: ;
 #endif
 label_BFC006BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC006BCu);
@@ -13353,7 +13353,7 @@ label_BFC00864:
     cosim_block(0x1FC00864u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00864u);
@@ -13374,7 +13374,7 @@ label_BFC00864:
 #endif
 label_BFC00868: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00868u);
@@ -13395,7 +13395,7 @@ label_BFC00868: ;
 #endif
 label_BFC0086C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0086Cu);
@@ -13416,7 +13416,7 @@ label_BFC0086C: ;
 #endif
 label_BFC00870: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00870u);
@@ -13437,7 +13437,7 @@ label_BFC00870: ;
 #endif
 label_BFC00874: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00874u);
@@ -13458,7 +13458,7 @@ label_BFC00874: ;
 #endif
 label_BFC00878: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00878u);
@@ -13479,7 +13479,7 @@ label_BFC00878: ;
 #endif
 label_BFC0087C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0087Cu);
@@ -13500,7 +13500,7 @@ label_BFC0087C: ;
 #endif
 label_BFC00880: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00880u);
@@ -13521,7 +13521,7 @@ label_BFC00880: ;
 #endif
 label_BFC00884: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00884u);
@@ -13542,7 +13542,7 @@ label_BFC00884: ;
 #endif
 label_BFC00888: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00888u);
@@ -14964,7 +14964,7 @@ label_BFC00954:
     cosim_block(0x1FC00954u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00954u);
@@ -15059,7 +15059,7 @@ label_BFC00964:
     cosim_block(0x1FC00964u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00964u);
@@ -15175,7 +15175,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC00978: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00978u);
@@ -15270,7 +15270,7 @@ label_BFC00988:
     cosim_block(0x1FC00988u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00988u);
@@ -15291,7 +15291,7 @@ label_BFC00988:
 #endif
 label_BFC0098C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0098Cu);
@@ -15312,7 +15312,7 @@ label_BFC0098C: ;
 #endif
 label_BFC00990: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00990u);
@@ -15333,7 +15333,7 @@ label_BFC00990: ;
 #endif
 label_BFC00994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00994u);
@@ -15354,7 +15354,7 @@ label_BFC00994: ;
 #endif
 label_BFC00998: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00998u);
@@ -15375,7 +15375,7 @@ label_BFC00998: ;
 #endif
 label_BFC0099C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0099Cu);
@@ -15396,7 +15396,7 @@ label_BFC0099C: ;
 #endif
 label_BFC009A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC009A0u);
@@ -15417,7 +15417,7 @@ label_BFC009A0: ;
 #endif
 label_BFC009A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC009A4u);
@@ -15438,7 +15438,7 @@ label_BFC009A4: ;
 #endif
 label_BFC009A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC009A8u);
@@ -15459,7 +15459,7 @@ label_BFC009A8: ;
 #endif
 label_BFC009AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC009ACu);
@@ -17200,7 +17200,7 @@ label_BFC00AD0:
     cosim_block(0x1FC00AD0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00AD0u);
@@ -17346,7 +17346,7 @@ label_BFC00AE8:
     cosim_block(0x1FC00AE8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00AE8u);
@@ -17367,7 +17367,7 @@ label_BFC00AE8:
 #endif
 label_BFC00AEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00AECu);
@@ -17749,7 +17749,7 @@ label_BFC00B28:
     cosim_block(0x1FC00B28u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00B28u);
@@ -18616,7 +18616,7 @@ label_BFC00BB8:
     cosim_block(0x1FC00BB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BB8u);
@@ -18637,7 +18637,7 @@ label_BFC00BB8:
 #endif
 label_BFC00BBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BBCu);
@@ -18658,7 +18658,7 @@ label_BFC00BBC: ;
 #endif
 label_BFC00BC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BC0u);
@@ -18679,7 +18679,7 @@ label_BFC00BC0: ;
 #endif
 label_BFC00BC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BC4u);
@@ -18700,7 +18700,7 @@ label_BFC00BC4: ;
 #endif
 label_BFC00BC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BC8u);
@@ -18721,7 +18721,7 @@ label_BFC00BC8: ;
 #endif
 label_BFC00BCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BCCu);
@@ -18742,7 +18742,7 @@ label_BFC00BCC: ;
 #endif
 label_BFC00BD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BD0u);
@@ -18763,7 +18763,7 @@ label_BFC00BD0: ;
 #endif
 label_BFC00BD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BD4u);
@@ -18784,7 +18784,7 @@ label_BFC00BD4: ;
 #endif
 label_BFC00BD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BD8u);
@@ -18826,7 +18826,7 @@ label_BFC00BDC: ;
 #endif
 label_BFC00BE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BE0u);
@@ -18916,7 +18916,7 @@ label_BFC00BEC:
 #endif
 label_BFC00BF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00BF0u);
@@ -19000,7 +19000,7 @@ label_BFC00BFC: ;
 #endif
 label_BFC00C00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00C00u);
@@ -20334,7 +20334,7 @@ label_BFC00CDC:
     cosim_block(0x1FC00CDCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00CDCu);
@@ -20355,7 +20355,7 @@ label_BFC00CDC:
 #endif
 label_BFC00CE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00CE0u);
@@ -20376,7 +20376,7 @@ label_BFC00CE0: ;
 #endif
 label_BFC00CE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00CE4u);
@@ -20397,7 +20397,7 @@ label_BFC00CE4: ;
 #endif
 label_BFC00CE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00CE8u);
@@ -20418,7 +20418,7 @@ label_BFC00CE8: ;
 #endif
 label_BFC00CEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00CECu);
@@ -21011,7 +21011,7 @@ label_BFC00D4C:
     cosim_block(0x1FC00D4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00D4Cu);
@@ -21032,7 +21032,7 @@ label_BFC00D4C:
 #endif
 label_BFC00D50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00D50u);
@@ -21932,7 +21932,7 @@ label_BFC00DE0: ;
 #endif
 label_BFC00DE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00DE4u);
@@ -22450,7 +22450,7 @@ label_BFC00E38:
     cosim_block(0x1FC00E38u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E38u);
@@ -22780,7 +22780,7 @@ label_BFC00E6C:
     cosim_block(0x1FC00E6Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E6Cu);
@@ -22801,7 +22801,7 @@ label_BFC00E6C:
 #endif
 label_BFC00E70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E70u);
@@ -22822,7 +22822,7 @@ label_BFC00E70: ;
 #endif
 label_BFC00E74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E74u);
@@ -22843,7 +22843,7 @@ label_BFC00E74: ;
 #endif
 label_BFC00E78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E78u);
@@ -22864,7 +22864,7 @@ label_BFC00E78: ;
 #endif
 label_BFC00E7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E7Cu);
@@ -22885,7 +22885,7 @@ label_BFC00E7C: ;
 #endif
 label_BFC00E80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E80u);
@@ -22906,7 +22906,7 @@ label_BFC00E80: ;
 #endif
 label_BFC00E84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E84u);
@@ -22927,7 +22927,7 @@ label_BFC00E84: ;
 #endif
 label_BFC00E88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E88u);
@@ -22948,7 +22948,7 @@ label_BFC00E88: ;
 #endif
 label_BFC00E8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00E8Cu);
@@ -24117,7 +24117,7 @@ label_BFC00F50: ;
 #endif
 label_BFC00F54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00F54u);
@@ -24159,7 +24159,7 @@ label_BFC00F58: ;
 #endif
 label_BFC00F5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00F5Cu);
@@ -24338,7 +24338,7 @@ label_BFC00F78: ;
 #endif
 label_BFC00F7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00F7Cu);
@@ -24469,7 +24469,7 @@ label_BFC00F8C:
 #endif
 label_BFC00F90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00F90u);
@@ -24563,7 +24563,7 @@ label_BFC00FA0:
     cosim_block(0x1FC00FA0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FA0u);
@@ -24875,7 +24875,7 @@ label_BFC00FC0: ;
 #endif
 label_BFC00FC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FC4u);
@@ -25082,7 +25082,7 @@ label_BFC00FE8:
     cosim_block(0x1FC00FE8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FE8u);
@@ -25124,7 +25124,7 @@ label_BFC00FEC: ;
 #endif
 label_BFC00FF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FF0u);
@@ -25145,7 +25145,7 @@ label_BFC00FF0: ;
 #endif
 label_BFC00FF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FF4u);
@@ -25166,7 +25166,7 @@ label_BFC00FF4: ;
 #endif
 label_BFC00FF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FF8u);
@@ -25187,7 +25187,7 @@ label_BFC00FF8: ;
 #endif
 label_BFC00FFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC00FFCu);
@@ -25208,7 +25208,7 @@ label_BFC00FFC: ;
 #endif
 label_BFC01000: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01000u);
@@ -25229,7 +25229,7 @@ label_BFC01000: ;
 #endif
 label_BFC01004: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01004u);
@@ -25250,7 +25250,7 @@ label_BFC01004: ;
 #endif
 label_BFC01008: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01008u);
@@ -25271,7 +25271,7 @@ label_BFC01008: ;
 #endif
 label_BFC0100C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0100Cu);
@@ -25292,7 +25292,7 @@ label_BFC0100C: ;
 #endif
 label_BFC01010: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01010u);
@@ -25313,7 +25313,7 @@ label_BFC01010: ;
 #endif
 label_BFC01014: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01014u);
@@ -25334,7 +25334,7 @@ label_BFC01014: ;
 #endif
 label_BFC01018: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01018u);
@@ -25508,7 +25508,7 @@ label_BFC01034: ;
 #endif
 label_BFC01038: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01038u);
@@ -25591,7 +25591,7 @@ label_BFC01044: ;
 #endif
 label_BFC01048: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01048u);
@@ -25612,7 +25612,7 @@ label_BFC01048: ;
 #endif
 label_BFC0104C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0104Cu);
@@ -25737,7 +25737,7 @@ label_BFC01060: ;
 #endif
 label_BFC01064: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01064u);
@@ -26061,7 +26061,7 @@ label_BFC01098:
 #endif
 label_BFC0109C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0109Cu);
@@ -26514,7 +26514,7 @@ label_BFC010D8: ;
 #endif
 label_BFC010DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC010DCu);
@@ -26966,7 +26966,7 @@ label_BFC01124:
     cosim_block(0x1FC01124u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01124u);
@@ -26987,7 +26987,7 @@ label_BFC01124:
 #endif
 label_BFC01128: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01128u);
@@ -27008,7 +27008,7 @@ label_BFC01128: ;
 #endif
 label_BFC0112C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0112Cu);
@@ -27029,7 +27029,7 @@ label_BFC0112C: ;
 #endif
 label_BFC01130: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01130u);
@@ -27050,7 +27050,7 @@ label_BFC01130: ;
 #endif
 label_BFC01134: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01134u);
@@ -27071,7 +27071,7 @@ label_BFC01134: ;
 #endif
 label_BFC01138: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01138u);
@@ -27092,7 +27092,7 @@ label_BFC01138: ;
 #endif
 label_BFC0113C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0113Cu);
@@ -27113,7 +27113,7 @@ label_BFC0113C: ;
 #endif
 label_BFC01140: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01140u);
@@ -27134,7 +27134,7 @@ label_BFC01140: ;
 #endif
 label_BFC01144: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01144u);
@@ -27155,7 +27155,7 @@ label_BFC01144: ;
 #endif
 label_BFC01148: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01148u);
@@ -27338,7 +27338,7 @@ label_BFC0115C: ;
 #endif
 label_BFC01160: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01160u);
@@ -27421,7 +27421,7 @@ label_BFC0116C: ;
 #endif
 label_BFC01170: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01170u);
@@ -27442,7 +27442,7 @@ label_BFC01170: ;
 #endif
 label_BFC01174: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01174u);
@@ -27567,7 +27567,7 @@ label_BFC01188: ;
 #endif
 label_BFC0118C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0118Cu);
@@ -27954,7 +27954,7 @@ label_BFC011CC: ;
 #endif
 label_BFC011D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC011D0u);
@@ -28692,7 +28692,7 @@ label_BFC01224: ;
 #endif
 label_BFC01228: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01228u);
@@ -28899,7 +28899,7 @@ label_BFC01248:
     cosim_block(0x1FC01248u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01248u);
@@ -28994,7 +28994,7 @@ label_BFC01258:
     cosim_block(0x1FC01258u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01258u);
@@ -29198,7 +29198,7 @@ label_BFC0127C:
     cosim_block(0x1FC0127Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0127Cu);
@@ -29219,7 +29219,7 @@ label_BFC0127C:
 #endif
 label_BFC01280: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01280u);
@@ -29240,7 +29240,7 @@ label_BFC01280: ;
 #endif
 label_BFC01284: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01284u);
@@ -29261,7 +29261,7 @@ label_BFC01284: ;
 #endif
 label_BFC01288: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01288u);
@@ -29282,7 +29282,7 @@ label_BFC01288: ;
 #endif
 label_BFC0128C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0128Cu);
@@ -29303,7 +29303,7 @@ label_BFC0128C: ;
 #endif
 label_BFC01290: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01290u);
@@ -29324,7 +29324,7 @@ label_BFC01290: ;
 #endif
 label_BFC01294: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01294u);
@@ -29345,7 +29345,7 @@ label_BFC01294: ;
 #endif
 label_BFC01298: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01298u);
@@ -29366,7 +29366,7 @@ label_BFC01298: ;
 #endif
 label_BFC0129C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0129Cu);
@@ -29408,7 +29408,7 @@ label_BFC012A0: ;
 #endif
 label_BFC012A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC012A4u);
@@ -30397,7 +30397,7 @@ label_BFC01348:
 #endif
 label_BFC0134C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0134Cu);
@@ -30552,7 +30552,7 @@ label_BFC01364:
 #endif
 label_BFC01368: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01368u);
@@ -31342,7 +31342,7 @@ label_BFC013F0:
     cosim_block(0x1FC013F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC013F0u);
@@ -31435,7 +31435,7 @@ label_BFC01400:
     cosim_block(0x1FC01400u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01400u);
@@ -31456,7 +31456,7 @@ label_BFC01400:
 #endif
 label_BFC01404: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01404u);
@@ -31838,7 +31838,7 @@ label_BFC01440:
     cosim_block(0x1FC01440u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01440u);
@@ -32594,7 +32594,7 @@ label_BFC014BC:
 #endif
 label_BFC014C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC014C0u);
@@ -32678,7 +32678,7 @@ label_BFC014CC: ;
 #endif
 label_BFC014D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC014D0u);
@@ -32900,7 +32900,7 @@ label_BFC014F0:
 #endif
 label_BFC014F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC014F4u);
@@ -33055,7 +33055,7 @@ label_BFC0150C:
 #endif
 label_BFC01510: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01510u);
@@ -34084,7 +34084,7 @@ label_BFC015B0: ;
 #endif
 label_BFC015B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC015B4u);
@@ -34179,7 +34179,7 @@ label_BFC015C4:
     cosim_block(0x1FC015C4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC015C4u);
@@ -34247,7 +34247,7 @@ label_BFC015D0:
     cosim_block(0x1FC015D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC015D0u);
@@ -34763,7 +34763,7 @@ label_BFC01620: ;
 #endif
 label_BFC01624: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01624u);
@@ -34858,7 +34858,7 @@ label_BFC01634:
     cosim_block(0x1FC01634u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01634u);
@@ -34926,7 +34926,7 @@ label_BFC01640:
     cosim_block(0x1FC01640u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01640u);
@@ -35442,7 +35442,7 @@ label_BFC01690: ;
 #endif
 label_BFC01694: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01694u);
@@ -35537,7 +35537,7 @@ label_BFC016A4:
     cosim_block(0x1FC016A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC016A4u);
@@ -35605,7 +35605,7 @@ label_BFC016B0:
     cosim_block(0x1FC016B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC016B0u);
@@ -36441,7 +36441,7 @@ label_BFC0173C:
     cosim_block(0x1FC0173Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0173Cu);
@@ -36462,7 +36462,7 @@ label_BFC0173C:
 #endif
 label_BFC01740: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01740u);
@@ -36483,7 +36483,7 @@ label_BFC01740: ;
 #endif
 label_BFC01744: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01744u);
@@ -36504,7 +36504,7 @@ label_BFC01744: ;
 #endif
 label_BFC01748: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01748u);
@@ -36859,7 +36859,7 @@ label_BFC0177C:
     cosim_block(0x1FC0177Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0177Cu);
@@ -36880,7 +36880,7 @@ label_BFC0177C:
 #endif
 label_BFC01780: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01780u);
@@ -36992,7 +36992,7 @@ label_BFC01794:
     cosim_block(0x1FC01794u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01794u);
@@ -37013,7 +37013,7 @@ label_BFC01794:
 #endif
 label_BFC01798: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01798u);
@@ -37126,7 +37126,7 @@ label_BFC017AC:
     cosim_block(0x1FC017ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC017ACu);
@@ -37153,7 +37153,7 @@ label_BFC017B0:
     cosim_block(0x1FC017B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC017B0u);
@@ -37283,7 +37283,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC017C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC017C4u);
@@ -37393,7 +37393,7 @@ label_BFC017D0:
     cosim_block(0x1FC017D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC017D0u);
@@ -37618,7 +37618,7 @@ label_BFC017F4: ;
 #endif
 label_BFC017F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC017F8u);
@@ -37801,7 +37801,7 @@ label_BFC01818:
     cosim_block(0x1FC01818u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01818u);
@@ -37822,7 +37822,7 @@ label_BFC01818:
 #endif
 label_BFC0181C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0181Cu);
@@ -39213,7 +39213,7 @@ label_BFC018FC:
     cosim_block(0x1FC018FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC018FCu);
@@ -39234,7 +39234,7 @@ label_BFC018FC:
 #endif
 label_BFC01900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01900u);
@@ -39255,7 +39255,7 @@ label_BFC01900: ;
 #endif
 label_BFC01904: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01904u);
@@ -39276,7 +39276,7 @@ label_BFC01904: ;
 #endif
 label_BFC01908: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01908u);
@@ -39297,7 +39297,7 @@ label_BFC01908: ;
 #endif
 label_BFC0190C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0190Cu);
@@ -39339,7 +39339,7 @@ label_BFC01910: ;
 #endif
 label_BFC01914: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01914u);
@@ -39566,7 +39566,7 @@ label_BFC01938:
     cosim_block(0x1FC01938u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01938u);
@@ -39587,7 +39587,7 @@ label_BFC01938:
 #endif
 label_BFC0193C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0193Cu);
@@ -39608,7 +39608,7 @@ label_BFC0193C: ;
 #endif
 label_BFC01940: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01940u);
@@ -39629,7 +39629,7 @@ label_BFC01940: ;
 #endif
 label_BFC01944: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01944u);
@@ -39650,7 +39650,7 @@ label_BFC01944: ;
 #endif
 label_BFC01948: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01948u);
@@ -39692,7 +39692,7 @@ label_BFC0194C: ;
 #endif
 label_BFC01950: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01950u);
@@ -39760,7 +39760,7 @@ label_BFC0195C:
     cosim_block(0x1FC0195Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0195Cu);
@@ -39857,7 +39857,7 @@ label_BFC0196C:
     cosim_block(0x1FC0196Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0196Cu);
@@ -39973,7 +39973,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC01980: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01980u);
@@ -40066,7 +40066,7 @@ label_BFC01990:
     cosim_block(0x1FC01990u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01990u);
@@ -40087,7 +40087,7 @@ label_BFC01990:
 #endif
 label_BFC01994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01994u);
@@ -40108,7 +40108,7 @@ label_BFC01994: ;
 #endif
 label_BFC01998: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01998u);
@@ -40129,7 +40129,7 @@ label_BFC01998: ;
 #endif
 label_BFC0199C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0199Cu);
@@ -40150,7 +40150,7 @@ label_BFC0199C: ;
 #endif
 label_BFC019A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC019A0u);
@@ -40192,7 +40192,7 @@ label_BFC019A4: ;
 #endif
 label_BFC019A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC019A8u);
@@ -40417,7 +40417,7 @@ label_BFC019C4: ;
 #endif
 label_BFC019C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC019C8u);
@@ -40644,7 +40644,7 @@ label_BFC019EC: ;
 #endif
 label_BFC019F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC019F0u);
@@ -40786,7 +40786,7 @@ label_BFC01A08:
     cosim_block(0x1FC01A08u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01A08u);
@@ -40930,7 +40930,7 @@ label_BFC01A1C:
 #endif
 label_BFC01A20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01A20u);
@@ -40951,7 +40951,7 @@ label_BFC01A20: ;
 #endif
 label_BFC01A24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01A24u);
@@ -40993,7 +40993,7 @@ label_BFC01A28: ;
 #endif
 label_BFC01A2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01A2Cu);
@@ -42379,7 +42379,7 @@ label_BFC01B04:
     cosim_block(0x1FC01B04u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B04u);
@@ -42687,7 +42687,7 @@ label_BFC01B30:
 #endif
 label_BFC01B34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B34u);
@@ -42835,7 +42835,7 @@ label_BFC01B4C:
     cosim_block(0x1FC01B4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B4Cu);
@@ -42856,7 +42856,7 @@ label_BFC01B4C:
 #endif
 label_BFC01B50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B50u);
@@ -43085,7 +43085,7 @@ label_BFC01B74:
     cosim_block(0x1FC01B74u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B74u);
@@ -43106,7 +43106,7 @@ label_BFC01B74:
 #endif
 label_BFC01B78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B78u);
@@ -43127,7 +43127,7 @@ label_BFC01B78: ;
 #endif
 label_BFC01B7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B7Cu);
@@ -43148,7 +43148,7 @@ label_BFC01B7C: ;
 #endif
 label_BFC01B80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B80u);
@@ -43169,7 +43169,7 @@ label_BFC01B80: ;
 #endif
 label_BFC01B84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B84u);
@@ -43190,7 +43190,7 @@ label_BFC01B84: ;
 #endif
 label_BFC01B88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B88u);
@@ -43211,7 +43211,7 @@ label_BFC01B88: ;
 #endif
 label_BFC01B8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B8Cu);
@@ -43253,7 +43253,7 @@ label_BFC01B90: ;
 #endif
 label_BFC01B94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01B94u);
@@ -44031,7 +44031,7 @@ label_BFC01BEC: ;
 #endif
 label_BFC01BF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01BF0u);
@@ -44343,7 +44343,7 @@ label_BFC01C24: ;
 #endif
 label_BFC01C28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01C28u);
@@ -45219,7 +45219,7 @@ label_BFC01CBC:
     cosim_block(0x1FC01CBCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01CBCu);
@@ -45686,7 +45686,7 @@ label_BFC01D0C:
     cosim_block(0x1FC01D0Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01D0Cu);
@@ -45875,7 +45875,7 @@ label_BFC01D28:
 #endif
 label_BFC01D2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01D2Cu);
@@ -46061,7 +46061,7 @@ label_BFC01D4C:
     cosim_block(0x1FC01D4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01D4Cu);
@@ -46620,7 +46620,7 @@ label_BFC01DAC:
     cosim_block(0x1FC01DACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01DACu);
@@ -46641,7 +46641,7 @@ label_BFC01DAC:
 #endif
 label_BFC01DB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01DB0u);
@@ -46662,7 +46662,7 @@ label_BFC01DB0: ;
 #endif
 label_BFC01DB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01DB4u);
@@ -46683,7 +46683,7 @@ label_BFC01DB4: ;
 #endif
 label_BFC01DB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01DB8u);
@@ -46909,7 +46909,7 @@ label_BFC01DDC: ;
 #endif
 label_BFC01DE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01DE0u);
@@ -47005,7 +47005,7 @@ label_BFC01DEC:
 #endif
 label_BFC01DF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01DF0u);
@@ -47852,7 +47852,7 @@ label_BFC01E7C:
     cosim_block(0x1FC01E7Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E7Cu);
@@ -47873,7 +47873,7 @@ label_BFC01E7C:
 #endif
 label_BFC01E80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E80u);
@@ -47894,7 +47894,7 @@ label_BFC01E80: ;
 #endif
 label_BFC01E84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E84u);
@@ -47915,7 +47915,7 @@ label_BFC01E84: ;
 #endif
 label_BFC01E88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E88u);
@@ -47936,7 +47936,7 @@ label_BFC01E88: ;
 #endif
 label_BFC01E8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E8Cu);
@@ -47957,7 +47957,7 @@ label_BFC01E8C: ;
 #endif
 label_BFC01E90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E90u);
@@ -47978,7 +47978,7 @@ label_BFC01E90: ;
 #endif
 label_BFC01E94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E94u);
@@ -47999,7 +47999,7 @@ label_BFC01E94: ;
 #endif
 label_BFC01E98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E98u);
@@ -48020,7 +48020,7 @@ label_BFC01E98: ;
 #endif
 label_BFC01E9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01E9Cu);
@@ -48062,7 +48062,7 @@ label_BFC01EA0: ;
 #endif
 label_BFC01EA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01EA4u);
@@ -48852,7 +48852,7 @@ label_BFC01F08: ;
 #endif
 label_BFC01F0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01F0Cu);
@@ -49143,7 +49143,7 @@ label_BFC01F3C: ;
 #endif
 label_BFC01F40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01F40u);
@@ -49710,7 +49710,7 @@ label_BFC01F9C:
     cosim_block(0x1FC01F9Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01F9Cu);
@@ -49731,7 +49731,7 @@ label_BFC01F9C:
 #endif
 label_BFC01FA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01FA0u);
@@ -49752,7 +49752,7 @@ label_BFC01FA0: ;
 #endif
 label_BFC01FA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01FA4u);
@@ -49773,7 +49773,7 @@ label_BFC01FA4: ;
 #endif
 label_BFC01FA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01FA8u);
@@ -49794,7 +49794,7 @@ label_BFC01FA8: ;
 #endif
 label_BFC01FAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01FACu);
@@ -49815,7 +49815,7 @@ label_BFC01FAC: ;
 #endif
 label_BFC01FB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01FB0u);
@@ -49836,7 +49836,7 @@ label_BFC01FB0: ;
 #endif
 label_BFC01FB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC01FB4u);
@@ -50299,7 +50299,7 @@ label_BFC02004: ;
 #endif
 label_BFC02008: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02008u);
@@ -50579,7 +50579,7 @@ label_BFC02034: ;
 #endif
 label_BFC02038: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02038u);
@@ -50732,7 +50732,7 @@ label_BFC02054:
     cosim_block(0x1FC02054u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02054u);
@@ -50825,7 +50825,7 @@ label_BFC02064:
     cosim_block(0x1FC02064u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02064u);
@@ -51002,7 +51002,7 @@ label_BFC02080: ;
 #endif
 label_BFC02084: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02084u);
@@ -51099,7 +51099,7 @@ label_BFC02094:
     cosim_block(0x1FC02094u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02094u);
@@ -51373,7 +51373,7 @@ label_BFC020C4:
     cosim_block(0x1FC020C4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC020C4u);
@@ -51539,7 +51539,7 @@ label_BFC020E0:
     cosim_block(0x1FC020E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC020E0u);
@@ -52355,7 +52355,7 @@ label_BFC02158: ;
 #endif
 label_BFC0215C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0215Cu);
@@ -52584,7 +52584,7 @@ label_BFC02180: ;
 #endif
 label_BFC02184: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02184u);
@@ -52747,7 +52747,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC021A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC021A0u);
@@ -52768,7 +52768,7 @@ label_BFC021A0: ;
 #endif
 label_BFC021A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC021A4u);
@@ -53083,7 +53083,7 @@ label_BFC021D8: ;
 #endif
 label_BFC021DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC021DCu);
@@ -53166,7 +53166,7 @@ label_BFC021E8: ;
 #endif
 label_BFC021EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC021ECu);
@@ -53338,7 +53338,7 @@ label_BFC02208: ;
 #endif
 label_BFC0220C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0220Cu);
@@ -53502,7 +53502,7 @@ label_BFC02224:
 #endif
 label_BFC02228: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02228u);
@@ -53523,7 +53523,7 @@ label_BFC02228: ;
 #endif
 label_BFC0222C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0222Cu);
@@ -53544,7 +53544,7 @@ label_BFC0222C: ;
 #endif
 label_BFC02230: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02230u);
@@ -53586,7 +53586,7 @@ label_BFC02234: ;
 #endif
 label_BFC02238: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02238u);
@@ -54020,7 +54020,7 @@ label_BFC02268: ;
 #endif
 label_BFC0226C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0226Cu);
@@ -54290,7 +54290,7 @@ label_BFC02298: ;
 #endif
 label_BFC0229C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0229Cu);
@@ -54579,7 +54579,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC022CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC022CCu);
@@ -54813,7 +54813,7 @@ label_BFC022F0:
 #endif
 label_BFC022F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC022F4u);
@@ -54985,7 +54985,7 @@ label_BFC02310:
     cosim_block(0x1FC02310u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02310u);
@@ -55006,7 +55006,7 @@ label_BFC02310:
 #endif
 label_BFC02314: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02314u);
@@ -55027,7 +55027,7 @@ label_BFC02314: ;
 #endif
 label_BFC02318: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02318u);
@@ -55069,7 +55069,7 @@ label_BFC0231C: ;
 #endif
 label_BFC02320: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02320u);
@@ -55356,7 +55356,7 @@ label_BFC02350:
     cosim_block(0x1FC02350u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02350u);
@@ -55926,7 +55926,7 @@ label_BFC023AC:
     cosim_block(0x1FC023ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC023ACu);
@@ -55947,7 +55947,7 @@ label_BFC023AC:
 #endif
 label_BFC023B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC023B0u);
@@ -55968,7 +55968,7 @@ label_BFC023B0: ;
 #endif
 label_BFC023B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC023B4u);
@@ -55989,7 +55989,7 @@ label_BFC023B4: ;
 #endif
 label_BFC023B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC023B8u);
@@ -56367,7 +56367,7 @@ label_BFC023E4: ;
 #endif
 label_BFC023E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC023E8u);
@@ -56679,7 +56679,7 @@ label_BFC0241C: ;
 #endif
 label_BFC02420: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02420u);
@@ -57240,7 +57240,7 @@ label_BFC0247C:
     cosim_block(0x1FC0247Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0247Cu);
@@ -57261,7 +57261,7 @@ label_BFC0247C:
 #endif
 label_BFC02480: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02480u);
@@ -57282,7 +57282,7 @@ label_BFC02480: ;
 #endif
 label_BFC02484: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02484u);
@@ -57303,7 +57303,7 @@ label_BFC02484: ;
 #endif
 label_BFC02488: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02488u);
@@ -57324,7 +57324,7 @@ label_BFC02488: ;
 #endif
 label_BFC0248C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0248Cu);
@@ -57345,7 +57345,7 @@ label_BFC0248C: ;
 #endif
 label_BFC02490: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02490u);
@@ -57366,7 +57366,7 @@ label_BFC02490: ;
 #endif
 label_BFC02494: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02494u);
@@ -57974,7 +57974,7 @@ label_BFC024FC:
     cosim_block(0x1FC024FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC024FCu);
@@ -58277,7 +58277,7 @@ label_BFC02530:
     cosim_block(0x1FC02530u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02530u);
@@ -59308,7 +59308,7 @@ label_BFC025D0: ;
 #endif
 label_BFC025D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC025D4u);
@@ -59704,7 +59704,7 @@ label_BFC02610: ;
 #endif
 label_BFC02614: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02614u);
@@ -60450,7 +60450,7 @@ label_BFC02668: ;
 #endif
 label_BFC0266C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0266Cu);
@@ -60760,7 +60760,7 @@ label_BFC026A0: ;
 #endif
 label_BFC026A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026A4u);
@@ -60903,7 +60903,7 @@ label_BFC026BC:
     cosim_block(0x1FC026BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026BCu);
@@ -61017,7 +61017,7 @@ label_BFC026D0:
     cosim_block(0x1FC026D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026D0u);
@@ -61205,7 +61205,7 @@ label_BFC026F0:
     cosim_block(0x1FC026F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026F0u);
@@ -61226,7 +61226,7 @@ label_BFC026F0:
 #endif
 label_BFC026F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026F4u);
@@ -61247,7 +61247,7 @@ label_BFC026F4: ;
 #endif
 label_BFC026F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026F8u);
@@ -61268,7 +61268,7 @@ label_BFC026F8: ;
 #endif
 label_BFC026FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC026FCu);
@@ -61289,7 +61289,7 @@ label_BFC026FC: ;
 #endif
 label_BFC02700: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02700u);
@@ -61310,7 +61310,7 @@ label_BFC02700: ;
 #endif
 label_BFC02704: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02704u);
@@ -61331,7 +61331,7 @@ label_BFC02704: ;
 #endif
 label_BFC02708: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02708u);
@@ -61352,7 +61352,7 @@ label_BFC02708: ;
 #endif
 label_BFC0270C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0270Cu);
@@ -61373,7 +61373,7 @@ label_BFC0270C: ;
 #endif
 label_BFC02710: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02710u);
@@ -61415,7 +61415,7 @@ label_BFC02714: ;
 #endif
 label_BFC02718: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02718u);
@@ -61484,7 +61484,7 @@ label_BFC02724:
     cosim_block(0x1FC02724u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02724u);
@@ -61606,7 +61606,7 @@ label_BFC02738:
     cosim_block(0x1FC02738u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02738u);
@@ -62225,7 +62225,7 @@ label_BFC0279C:
     cosim_block(0x1FC0279Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0279Cu);
@@ -62246,7 +62246,7 @@ label_BFC0279C:
 #endif
 label_BFC027A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC027A0u);
@@ -62406,7 +62406,7 @@ label_BFC027BC:
     cosim_block(0x1FC027BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC027BCu);
@@ -62872,7 +62872,7 @@ label_BFC02808:
     cosim_block(0x1FC02808u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02808u);
@@ -63001,7 +63001,7 @@ label_BFC02820:
     cosim_block(0x1FC02820u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02820u);
@@ -63063,7 +63063,7 @@ label_BFC02828: ;
 #endif
 label_BFC0282C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0282Cu);
@@ -63144,7 +63144,7 @@ label_BFC02838: ;
 #endif
 label_BFC0283C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0283Cu);
@@ -63205,7 +63205,7 @@ label_BFC02844: ;
 #endif
 label_BFC02848: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02848u);
@@ -63362,7 +63362,7 @@ label_BFC02860: ;
 #endif
 label_BFC02864: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02864u);
@@ -63438,7 +63438,7 @@ label_BFC02870:
     cosim_block(0x1FC02870u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02870u);
@@ -63499,7 +63499,7 @@ label_BFC02878: ;
 #endif
 label_BFC0287C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0287Cu);
@@ -64030,7 +64030,7 @@ label_BFC028DC:
     cosim_block(0x1FC028DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC028DCu);
@@ -64215,7 +64215,7 @@ label_BFC028FC:
     cosim_block(0x1FC028FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC028FCu);
@@ -64236,7 +64236,7 @@ label_BFC028FC:
 #endif
 label_BFC02900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02900u);
@@ -64307,7 +64307,7 @@ label_BFC0290C:
     cosim_block(0x1FC0290Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0290Cu);
@@ -64825,7 +64825,7 @@ label_BFC02964:
     cosim_block(0x1FC02964u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02964u);
@@ -64996,7 +64996,7 @@ label_BFC02980:
     cosim_block(0x1FC02980u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02980u);
@@ -65758,7 +65758,7 @@ label_BFC029CC: ;
 #endif
 label_BFC029D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC029D0u);
@@ -66068,7 +66068,7 @@ label_BFC02A04: ;
 #endif
 label_BFC02A08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A08u);
@@ -66211,7 +66211,7 @@ label_BFC02A20:
     cosim_block(0x1FC02A20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A20u);
@@ -66325,7 +66325,7 @@ label_BFC02A34:
     cosim_block(0x1FC02A34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A34u);
@@ -66513,7 +66513,7 @@ label_BFC02A54:
     cosim_block(0x1FC02A54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A54u);
@@ -66534,7 +66534,7 @@ label_BFC02A54:
 #endif
 label_BFC02A58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A58u);
@@ -66555,7 +66555,7 @@ label_BFC02A58: ;
 #endif
 label_BFC02A5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A5Cu);
@@ -66576,7 +66576,7 @@ label_BFC02A5C: ;
 #endif
 label_BFC02A60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A60u);
@@ -66597,7 +66597,7 @@ label_BFC02A60: ;
 #endif
 label_BFC02A64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A64u);
@@ -66618,7 +66618,7 @@ label_BFC02A64: ;
 #endif
 label_BFC02A68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A68u);
@@ -66639,7 +66639,7 @@ label_BFC02A68: ;
 #endif
 label_BFC02A6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A6Cu);
@@ -66660,7 +66660,7 @@ label_BFC02A6C: ;
 #endif
 label_BFC02A70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A70u);
@@ -66681,7 +66681,7 @@ label_BFC02A70: ;
 #endif
 label_BFC02A74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A74u);
@@ -66723,7 +66723,7 @@ label_BFC02A78: ;
 #endif
 label_BFC02A7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A7Cu);
@@ -66792,7 +66792,7 @@ label_BFC02A88:
     cosim_block(0x1FC02A88u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A88u);
@@ -66914,7 +66914,7 @@ label_BFC02A9C:
     cosim_block(0x1FC02A9Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02A9Cu);
@@ -67513,7 +67513,7 @@ label_BFC02AFC:
     cosim_block(0x1FC02AFCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02AFCu);
@@ -67534,7 +67534,7 @@ label_BFC02AFC:
 #endif
 label_BFC02B00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02B00u);
@@ -67888,7 +67888,7 @@ label_BFC02B3C:
     cosim_block(0x1FC02B3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02B3Cu);
@@ -68311,7 +68311,7 @@ label_BFC02B80:
     cosim_block(0x1FC02B80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02B80u);
@@ -68568,7 +68568,7 @@ label_BFC02BAC:
     cosim_block(0x1FC02BACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02BACu);
@@ -68630,7 +68630,7 @@ label_BFC02BB4: ;
 #endif
 label_BFC02BB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02BB8u);
@@ -68711,7 +68711,7 @@ label_BFC02BC4: ;
 #endif
 label_BFC02BC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02BC8u);
@@ -68792,7 +68792,7 @@ label_BFC02BD4: ;
 #endif
 label_BFC02BD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02BD8u);
@@ -68948,7 +68948,7 @@ label_BFC02BF0: ;
 #endif
 label_BFC02BF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02BF4u);
@@ -69024,7 +69024,7 @@ label_BFC02C00:
     cosim_block(0x1FC02C00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02C00u);
@@ -69085,7 +69085,7 @@ label_BFC02C08: ;
 #endif
 label_BFC02C0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02C0Cu);
@@ -69616,7 +69616,7 @@ label_BFC02C6C:
     cosim_block(0x1FC02C6Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02C6Cu);
@@ -69801,7 +69801,7 @@ label_BFC02C8C:
     cosim_block(0x1FC02C8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02C8Cu);
@@ -69822,7 +69822,7 @@ label_BFC02C8C:
 #endif
 label_BFC02C90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02C90u);
@@ -69893,7 +69893,7 @@ label_BFC02C9C:
     cosim_block(0x1FC02C9Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02C9Cu);
@@ -70411,7 +70411,7 @@ label_BFC02CF4:
     cosim_block(0x1FC02CF4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02CF4u);
@@ -70658,7 +70658,7 @@ label_BFC02D1C:
     cosim_block(0x1FC02D1Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02D1Cu);
@@ -70803,7 +70803,7 @@ label_BFC02D34: ;
 #endif
 label_BFC02D38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02D38u);
@@ -71273,7 +71273,7 @@ label_BFC02D84:
     cosim_block(0x1FC02D84u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02D84u);
@@ -71294,7 +71294,7 @@ label_BFC02D84:
 #endif
 label_BFC02D88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02D88u);
@@ -71420,7 +71420,7 @@ label_BFC02D9C:
     cosim_block(0x1FC02D9Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02D9Cu);
@@ -71536,7 +71536,7 @@ label_BFC02DAC:
 #endif
 label_BFC02DB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02DB0u);
@@ -72099,7 +72099,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC02E04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E04u);
@@ -72233,7 +72233,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC02E1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E1Cu);
@@ -72327,7 +72327,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC02E2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E2Cu);
@@ -72421,7 +72421,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC02E3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E3Cu);
@@ -72515,7 +72515,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC02E4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E4Cu);
@@ -72609,7 +72609,7 @@ label_BFC02E58:
 #endif
 label_BFC02E5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E5Cu);
@@ -72630,7 +72630,7 @@ label_BFC02E5C: ;
 #endif
 label_BFC02E60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02E60u);
@@ -73988,7 +73988,7 @@ cpu->gpr[17] = 0x00000000u;
 #endif
 label_BFC02F44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F44u);
@@ -74081,7 +74081,7 @@ label_BFC02F54:
     cosim_block(0x1FC02F54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F54u);
@@ -74154,7 +74154,7 @@ label_BFC02F60:
     cosim_block(0x1FC02F60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F60u);
@@ -74227,7 +74227,7 @@ label_BFC02F6C:
     cosim_block(0x1FC02F6Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F6Cu);
@@ -74300,7 +74300,7 @@ label_BFC02F78:
     cosim_block(0x1FC02F78u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F78u);
@@ -74419,7 +74419,7 @@ label_BFC02F8C:
     cosim_block(0x1FC02F8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F8Cu);
@@ -74461,7 +74461,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC02F94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F94u);
@@ -74482,7 +74482,7 @@ label_BFC02F94: ;
 #endif
 label_BFC02F98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F98u);
@@ -74503,7 +74503,7 @@ label_BFC02F98: ;
 #endif
 label_BFC02F9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02F9Cu);
@@ -74524,7 +74524,7 @@ label_BFC02F9C: ;
 #endif
 label_BFC02FA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02FA0u);
@@ -74545,7 +74545,7 @@ label_BFC02FA0: ;
 #endif
 label_BFC02FA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02FA4u);
@@ -74566,7 +74566,7 @@ label_BFC02FA4: ;
 #endif
 label_BFC02FA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02FA8u);
@@ -75034,7 +75034,7 @@ label_BFC02FF0:
     cosim_block(0x1FC02FF0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02FF0u);
@@ -75055,7 +75055,7 @@ label_BFC02FF0:
 #endif
 label_BFC02FF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC02FF4u);
@@ -75563,7 +75563,7 @@ label_BFC03040:
     cosim_block(0x1FC03040u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03040u);
@@ -75691,7 +75691,7 @@ label_BFC03054:
     cosim_block(0x1FC03054u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03054u);
@@ -75718,7 +75718,7 @@ label_BFC03058:
     cosim_block(0x1FC03058u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03058u);
@@ -75739,7 +75739,7 @@ label_BFC03058:
 #endif
 label_BFC0305C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0305Cu);
@@ -75760,7 +75760,7 @@ label_BFC0305C: ;
 #endif
 label_BFC03060: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03060u);
@@ -75781,7 +75781,7 @@ label_BFC03060: ;
 #endif
 label_BFC03064: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03064u);
@@ -76054,7 +76054,7 @@ label_BFC03090:
     cosim_block(0x1FC03090u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03090u);
@@ -76499,7 +76499,7 @@ label_BFC030D0:
     cosim_block(0x1FC030D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC030D0u);
@@ -76592,7 +76592,7 @@ label_BFC030E0:
     cosim_block(0x1FC030E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC030E0u);
@@ -77343,7 +77343,7 @@ label_BFC03138: ;
 #endif
 label_BFC0313C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0313Cu);
@@ -77488,7 +77488,7 @@ label_BFC03154:
     cosim_block(0x1FC03154u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03154u);
@@ -77632,7 +77632,7 @@ label_BFC0316C:
     cosim_block(0x1FC0316Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0316Cu);
@@ -77832,7 +77832,7 @@ label_BFC03190:
     cosim_block(0x1FC03190u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03190u);
@@ -78126,7 +78126,7 @@ label_BFC031C0:
     cosim_block(0x1FC031C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC031C0u);
@@ -78563,7 +78563,7 @@ cpu->gpr[23] = 0x00000000u;
 #endif
 label_BFC03208: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03208u);
@@ -78854,7 +78854,7 @@ label_BFC03238: ;
 #endif
 label_BFC0323C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0323Cu);
@@ -79089,7 +79089,7 @@ label_BFC03264:
     cosim_block(0x1FC03264u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03264u);
@@ -79255,7 +79255,7 @@ label_BFC03280:
     cosim_block(0x1FC03280u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03280u);
@@ -79388,7 +79388,7 @@ label_BFC03298:
     cosim_block(0x1FC03298u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03298u);
@@ -79409,7 +79409,7 @@ label_BFC03298:
 #endif
 label_BFC0329C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0329Cu);
@@ -79541,7 +79541,7 @@ label_BFC032B4:
     cosim_block(0x1FC032B4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC032B4u);
@@ -79562,7 +79562,7 @@ label_BFC032B4:
 #endif
 label_BFC032B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC032B8u);
@@ -79885,7 +79885,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC032F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC032F0u);
@@ -80160,7 +80160,7 @@ label_BFC03320:
     cosim_block(0x1FC03320u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03320u);
@@ -80181,7 +80181,7 @@ label_BFC03320:
 #endif
 label_BFC03324: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03324u);
@@ -80562,7 +80562,7 @@ label_BFC03360:
     cosim_block(0x1FC03360u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03360u);
@@ -80703,7 +80703,7 @@ label_BFC03378:
     cosim_block(0x1FC03378u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03378u);
@@ -80724,7 +80724,7 @@ label_BFC03378:
 #endif
 label_BFC0337C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0337Cu);
@@ -80996,7 +80996,7 @@ label_BFC033A8:
     cosim_block(0x1FC033A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033A8u);
@@ -81017,7 +81017,7 @@ label_BFC033A8:
 #endif
 label_BFC033AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033ACu);
@@ -81038,7 +81038,7 @@ label_BFC033AC: ;
 #endif
 label_BFC033B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033B0u);
@@ -81059,7 +81059,7 @@ label_BFC033B0: ;
 #endif
 label_BFC033B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033B4u);
@@ -81080,7 +81080,7 @@ label_BFC033B4: ;
 #endif
 label_BFC033B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033B8u);
@@ -81101,7 +81101,7 @@ label_BFC033B8: ;
 #endif
 label_BFC033BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033BCu);
@@ -81122,7 +81122,7 @@ label_BFC033BC: ;
 #endif
 label_BFC033C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033C0u);
@@ -81143,7 +81143,7 @@ label_BFC033C0: ;
 #endif
 label_BFC033C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033C4u);
@@ -81164,7 +81164,7 @@ label_BFC033C4: ;
 #endif
 label_BFC033C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033C8u);
@@ -81206,7 +81206,7 @@ label_BFC033CC: ;
 #endif
 label_BFC033D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC033D0u);
@@ -82072,7 +82072,7 @@ label_BFC0344C:
     cosim_block(0x1FC0344Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0344Cu);
@@ -82093,7 +82093,7 @@ label_BFC0344C:
 #endif
 label_BFC03450: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03450u);
@@ -82114,7 +82114,7 @@ label_BFC03450: ;
 #endif
 label_BFC03454: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03454u);
@@ -82135,7 +82135,7 @@ label_BFC03454: ;
 #endif
 label_BFC03458: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03458u);
@@ -82156,7 +82156,7 @@ label_BFC03458: ;
 #endif
 label_BFC0345C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0345Cu);
@@ -82177,7 +82177,7 @@ label_BFC0345C: ;
 #endif
 label_BFC03460: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03460u);
@@ -82198,7 +82198,7 @@ label_BFC03460: ;
 #endif
 label_BFC03464: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03464u);
@@ -82240,7 +82240,7 @@ label_BFC03468: ;
 #endif
 label_BFC0346C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0346Cu);
@@ -82441,7 +82441,7 @@ label_BFC0348C:
 #endif
 label_BFC03490: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03490u);
@@ -82462,7 +82462,7 @@ label_BFC03490: ;
 #endif
 label_BFC03494: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03494u);
@@ -82684,7 +82684,7 @@ label_BFC034B8:
     cosim_block(0x1FC034B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC034B8u);
@@ -82705,7 +82705,7 @@ label_BFC034B8:
 #endif
 label_BFC034BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC034BCu);
@@ -82726,7 +82726,7 @@ label_BFC034BC: ;
 #endif
 label_BFC034C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC034C0u);
@@ -82747,7 +82747,7 @@ label_BFC034C0: ;
 #endif
 label_BFC034C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC034C4u);
@@ -82977,7 +82977,7 @@ label_BFC034EC:
     cosim_block(0x1FC034ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC034ECu);
@@ -83046,7 +83046,7 @@ label_BFC034F8:
     cosim_block(0x1FC034F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC034F8u);
@@ -83253,7 +83253,7 @@ label_BFC0351C:
     cosim_block(0x1FC0351Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0351Cu);
@@ -83419,7 +83419,7 @@ label_BFC03538:
     cosim_block(0x1FC03538u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03538u);
@@ -83440,7 +83440,7 @@ label_BFC03538:
 #endif
 label_BFC0353C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0353Cu);
@@ -83481,7 +83481,7 @@ label_BFC03540: ;
 #endif
 label_BFC03544: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03544u);
@@ -83655,7 +83655,7 @@ label_BFC03564:
     cosim_block(0x1FC03564u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03564u);
@@ -84644,7 +84644,7 @@ label_BFC035F8:
     cosim_block(0x1FC035F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC035F8u);
@@ -84665,7 +84665,7 @@ label_BFC035F8:
 #endif
 label_BFC035FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC035FCu);
@@ -84686,7 +84686,7 @@ label_BFC035FC: ;
 #endif
 label_BFC03600: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03600u);
@@ -84782,7 +84782,7 @@ label_BFC03610:
     cosim_block(0x1FC03610u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03610u);
@@ -85111,7 +85111,7 @@ label_BFC03648:
     cosim_block(0x1FC03648u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03648u);
@@ -85592,7 +85592,7 @@ label_BFC03694: ;
 #endif
 label_BFC03698: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03698u);
@@ -85652,7 +85652,7 @@ label_BFC036A0: ;
 #endif
 label_BFC036A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC036A4u);
@@ -85734,7 +85734,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC036B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC036B4u);
@@ -86273,7 +86273,7 @@ label_BFC03700:
     cosim_block(0x1FC03700u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03700u);
@@ -86442,7 +86442,7 @@ label_BFC0371C:
     cosim_block(0x1FC0371Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0371Cu);
@@ -86630,7 +86630,7 @@ label_BFC0373C:
     cosim_block(0x1FC0373Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0373Cu);
@@ -86651,7 +86651,7 @@ label_BFC0373C:
 #endif
 label_BFC03740: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03740u);
@@ -86672,7 +86672,7 @@ label_BFC03740: ;
 #endif
 label_BFC03744: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03744u);
@@ -87040,7 +87040,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC03780: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03780u);
@@ -87061,7 +87061,7 @@ label_BFC03780: ;
 #endif
 label_BFC03784: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03784u);
@@ -87156,7 +87156,7 @@ label_BFC03794:
     cosim_block(0x1FC03794u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03794u);
@@ -87177,7 +87177,7 @@ label_BFC03794:
 #endif
 label_BFC03798: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03798u);
@@ -87219,7 +87219,7 @@ label_BFC0379C: ;
 #endif
 label_BFC037A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC037A0u);
@@ -87310,7 +87310,7 @@ label_BFC037B0:
     cosim_block(0x1FC037B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC037B0u);
@@ -87403,7 +87403,7 @@ label_BFC037C0:
     cosim_block(0x1FC037C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC037C0u);
@@ -87445,7 +87445,7 @@ label_BFC037C4: ;
 #endif
 label_BFC037C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC037C8u);
@@ -88006,7 +88006,7 @@ label_BFC03818:
     cosim_block(0x1FC03818u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03818u);
@@ -88128,7 +88128,7 @@ label_BFC0382C:
     cosim_block(0x1FC0382Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0382Cu);
@@ -88323,7 +88323,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC0384C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0384Cu);
@@ -88418,7 +88418,7 @@ label_BFC0385C:
     cosim_block(0x1FC0385Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0385Cu);
@@ -88460,7 +88460,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC03864: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03864u);
@@ -88574,7 +88574,7 @@ cpu->gpr[17] = 0x00000000u;
 #endif
 label_BFC03878: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03878u);
@@ -88928,7 +88928,7 @@ label_BFC038B4: ;
 #endif
 label_BFC038B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038B8u);
@@ -88990,7 +88990,7 @@ label_BFC038C0: ;
 #endif
 label_BFC038C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038C4u);
@@ -89058,7 +89058,7 @@ label_BFC038D0:
     cosim_block(0x1FC038D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038D0u);
@@ -89175,7 +89175,7 @@ label_BFC038E4:
     cosim_block(0x1FC038E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038E4u);
@@ -89196,7 +89196,7 @@ label_BFC038E4:
 #endif
 label_BFC038E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038E8u);
@@ -89217,7 +89217,7 @@ label_BFC038E8: ;
 #endif
 label_BFC038EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038ECu);
@@ -89238,7 +89238,7 @@ label_BFC038EC: ;
 #endif
 label_BFC038F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC038F0u);
@@ -89640,7 +89640,7 @@ label_BFC03924:
     cosim_block(0x1FC03924u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03924u);
@@ -89661,7 +89661,7 @@ label_BFC03924:
 #endif
 label_BFC03928: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03928u);
@@ -89730,7 +89730,7 @@ label_BFC03930:
 #endif
 label_BFC03934: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03934u);
@@ -90203,7 +90203,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC03984: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03984u);
@@ -90271,7 +90271,7 @@ label_BFC03990:
     cosim_block(0x1FC03990u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03990u);
@@ -90292,7 +90292,7 @@ label_BFC03990:
 #endif
 label_BFC03994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03994u);
@@ -90663,7 +90663,7 @@ label_BFC039D0:
     cosim_block(0x1FC039D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC039D0u);
@@ -91363,7 +91363,7 @@ label_BFC03A3C:
     cosim_block(0x1FC03A3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03A3Cu);
@@ -93569,7 +93569,7 @@ label_BFC03B90:
     cosim_block(0x1FC03B90u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03B90u);
@@ -93787,7 +93787,7 @@ label_BFC03BB4:
     cosim_block(0x1FC03BB4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03BB4u);
@@ -94026,7 +94026,7 @@ label_BFC03BDC:
     cosim_block(0x1FC03BDCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03BDCu);
@@ -94154,7 +94154,7 @@ label_BFC03BF0:
     cosim_block(0x1FC03BF0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03BF0u);
@@ -94280,7 +94280,7 @@ label_BFC03C04:
     cosim_block(0x1FC03C04u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C04u);
@@ -94637,7 +94637,7 @@ label_BFC03C3C:
     cosim_block(0x1FC03C3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C3Cu);
@@ -94658,7 +94658,7 @@ label_BFC03C3C:
 #endif
 label_BFC03C40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C40u);
@@ -94679,7 +94679,7 @@ label_BFC03C40: ;
 #endif
 label_BFC03C44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C44u);
@@ -94700,7 +94700,7 @@ label_BFC03C44: ;
 #endif
 label_BFC03C48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C48u);
@@ -94721,7 +94721,7 @@ label_BFC03C48: ;
 #endif
 label_BFC03C4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C4Cu);
@@ -94742,7 +94742,7 @@ label_BFC03C4C: ;
 #endif
 label_BFC03C50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C50u);
@@ -94763,7 +94763,7 @@ label_BFC03C50: ;
 #endif
 label_BFC03C54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C54u);
@@ -94784,7 +94784,7 @@ label_BFC03C54: ;
 #endif
 label_BFC03C58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C58u);
@@ -94826,7 +94826,7 @@ label_BFC03C5C: ;
 #endif
 label_BFC03C60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C60u);
@@ -94895,7 +94895,7 @@ label_BFC03C6C:
     cosim_block(0x1FC03C6Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03C6Cu);
@@ -95748,7 +95748,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC03CF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03CF0u);
@@ -95829,7 +95829,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC03D00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03D00u);
@@ -96003,7 +96003,7 @@ label_BFC03D18: ;
 #endif
 label_BFC03D1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03D1Cu);
@@ -96645,7 +96645,7 @@ label_BFC03D88: ;
 #endif
 label_BFC03D8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03D8Cu);
@@ -97007,7 +97007,7 @@ cpu->gpr[5] = 0x00000000u;
 #endif
 label_BFC03DC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03DC8u);
@@ -97527,7 +97527,7 @@ label_BFC03E14: ;
 #endif
 label_BFC03E18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03E18u);
@@ -97704,7 +97704,7 @@ label_BFC03E34: ;
 #endif
 label_BFC03E38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03E38u);
@@ -97765,7 +97765,7 @@ label_BFC03E40: ;
 #endif
 label_BFC03E44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03E44u);
@@ -98418,7 +98418,7 @@ label_BFC03EA4:
 #endif
 label_BFC03EA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03EA8u);
@@ -99067,7 +99067,7 @@ cpu->gpr[16] = 0x00000000u;
 #endif
 label_BFC03F0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F0Cu);
@@ -99231,7 +99231,7 @@ label_BFC03F24:
 #endif
 label_BFC03F28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F28u);
@@ -99375,7 +99375,7 @@ label_BFC03F40:
     cosim_block(0x1FC03F40u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F40u);
@@ -99396,7 +99396,7 @@ label_BFC03F40:
 #endif
 label_BFC03F44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F44u);
@@ -99563,7 +99563,7 @@ label_BFC03F5C:
 #endif
 label_BFC03F60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F60u);
@@ -99755,7 +99755,7 @@ label_BFC03F80:
     cosim_block(0x1FC03F80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F80u);
@@ -99776,7 +99776,7 @@ label_BFC03F80:
 #endif
 label_BFC03F84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F84u);
@@ -99817,7 +99817,7 @@ label_BFC03F88: ;
 #endif
 label_BFC03F8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F8Cu);
@@ -99877,7 +99877,7 @@ label_BFC03F94: ;
 #endif
 label_BFC03F98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03F98u);
@@ -100072,7 +100072,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC03FB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03FB4u);
@@ -100114,7 +100114,7 @@ label_BFC03FB8: ;
 #endif
 label_BFC03FBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03FBCu);
@@ -100154,7 +100154,7 @@ label_BFC03FC0: ;
 #endif
 label_BFC03FC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03FC4u);
@@ -100416,7 +100416,7 @@ label_BFC03FE8:
     cosim_block(0x1FC03FE8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC03FE8u);
@@ -100593,7 +100593,7 @@ label_BFC04004:
     cosim_block(0x1FC04004u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04004u);
@@ -100614,7 +100614,7 @@ label_BFC04004:
 #endif
 label_BFC04008: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04008u);
@@ -100925,7 +100925,7 @@ label_BFC0403C:
     cosim_block(0x1FC0403Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0403Cu);
@@ -100985,7 +100985,7 @@ label_BFC04044: ;
 #endif
 label_BFC04048: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04048u);
@@ -101045,7 +101045,7 @@ label_BFC04050: ;
 #endif
 label_BFC04054: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04054u);
@@ -101233,7 +101233,7 @@ label_BFC04074:
     cosim_block(0x1FC04074u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04074u);
@@ -102388,7 +102388,7 @@ label_BFC04134:
 #endif
 label_BFC04138: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04138u);
@@ -102430,7 +102430,7 @@ label_BFC0413C: ;
 #endif
 label_BFC04140: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04140u);
@@ -102539,7 +102539,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC04150: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04150u);
@@ -102948,7 +102948,7 @@ label_BFC04190:
     cosim_block(0x1FC04190u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04190u);
@@ -103041,7 +103041,7 @@ label_BFC041A0:
     cosim_block(0x1FC041A0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC041A0u);
@@ -103111,7 +103111,7 @@ label_BFC041AC:
     cosim_block(0x1FC041ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC041ACu);
@@ -103212,7 +103212,7 @@ label_BFC041BC:
     cosim_block(0x1FC041BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC041BCu);
@@ -103233,7 +103233,7 @@ label_BFC041BC:
 #endif
 label_BFC041C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC041C0u);
@@ -103254,7 +103254,7 @@ label_BFC041C0: ;
 #endif
 label_BFC041C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC041C4u);
@@ -103616,7 +103616,7 @@ label_BFC041FC:
     cosim_block(0x1FC041FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC041FCu);
@@ -104068,7 +104068,7 @@ label_BFC04244:
     cosim_block(0x1FC04244u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04244u);
@@ -104171,7 +104171,7 @@ label_BFC04254:
     cosim_block(0x1FC04254u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04254u);
@@ -104192,7 +104192,7 @@ label_BFC04254:
 #endif
 label_BFC04258: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04258u);
@@ -104213,7 +104213,7 @@ label_BFC04258: ;
 #endif
 label_BFC0425C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0425Cu);
@@ -104255,7 +104255,7 @@ label_BFC04260: ;
 #endif
 label_BFC04264: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04264u);
@@ -104594,7 +104594,7 @@ label_BFC04298:
     cosim_block(0x1FC04298u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04298u);
@@ -104740,7 +104740,7 @@ label_BFC042B0:
     cosim_block(0x1FC042B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC042B0u);
@@ -104837,7 +104837,7 @@ label_BFC042BC:
 #endif
 label_BFC042C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC042C0u);
@@ -104974,7 +104974,7 @@ label_BFC042D8:
     cosim_block(0x1FC042D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC042D8u);
@@ -104995,7 +104995,7 @@ label_BFC042D8:
 #endif
 label_BFC042DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC042DCu);
@@ -105016,7 +105016,7 @@ label_BFC042DC: ;
 #endif
 label_BFC042E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC042E0u);
@@ -105037,7 +105037,7 @@ label_BFC042E0: ;
 #endif
 label_BFC042E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC042E4u);
@@ -105844,7 +105844,7 @@ label_BFC0435C:
 #endif
 label_BFC04360: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04360u);
@@ -106086,7 +106086,7 @@ label_BFC04384:
     cosim_block(0x1FC04384u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04384u);
@@ -106388,7 +106388,7 @@ label_BFC043B8:
     cosim_block(0x1FC043B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC043B8u);
@@ -106725,7 +106725,7 @@ label_BFC043E4:
     cosim_block(0x1FC043E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC043E4u);
@@ -106867,7 +106867,7 @@ label_BFC043FC:
     cosim_block(0x1FC043FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC043FCu);
@@ -107165,7 +107165,7 @@ label_BFC0442C:
     cosim_block(0x1FC0442Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0442Cu);
@@ -107357,7 +107357,7 @@ label_BFC0444C:
     cosim_block(0x1FC0444Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0444Cu);
@@ -107568,7 +107568,7 @@ label_BFC04470:
     cosim_block(0x1FC04470u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04470u);
@@ -107670,7 +107670,7 @@ label_BFC04480:
     cosim_block(0x1FC04480u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04480u);
@@ -107712,7 +107712,7 @@ label_BFC04484: ;
 #endif
 label_BFC04488: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04488u);
@@ -108385,7 +108385,7 @@ label_BFC044F0:
     cosim_block(0x1FC044F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC044F0u);
@@ -108571,7 +108571,7 @@ label_BFC04510:
     cosim_block(0x1FC04510u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04510u);
@@ -108693,7 +108693,7 @@ label_BFC04524:
     cosim_block(0x1FC04524u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04524u);
@@ -108714,7 +108714,7 @@ label_BFC04524:
 #endif
 label_BFC04528: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04528u);
@@ -108735,7 +108735,7 @@ label_BFC04528: ;
 #endif
 label_BFC0452C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0452Cu);
@@ -109044,7 +109044,7 @@ label_BFC0455C:
     cosim_block(0x1FC0455Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0455Cu);
@@ -109160,7 +109160,7 @@ label_BFC04570:
     cosim_block(0x1FC04570u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04570u);
@@ -109250,7 +109250,7 @@ label_BFC0457C:
 #endif
 label_BFC04580: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04580u);
@@ -109271,7 +109271,7 @@ label_BFC04580: ;
 #endif
 label_BFC04584: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04584u);
@@ -109313,7 +109313,7 @@ label_BFC04588: ;
 #endif
 label_BFC0458C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0458Cu);
@@ -109601,7 +109601,7 @@ label_BFC045B8:
     cosim_block(0x1FC045B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC045B8u);
@@ -109641,7 +109641,7 @@ label_BFC045BC: ;
 #endif
 label_BFC045C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC045C0u);
@@ -109729,7 +109729,7 @@ label_BFC045D0:
     cosim_block(0x1FC045D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC045D0u);
@@ -110064,7 +110064,7 @@ label_BFC04604:
     cosim_block(0x1FC04604u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04604u);
@@ -110434,7 +110434,7 @@ label_BFC04640:
     cosim_block(0x1FC04640u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04640u);
@@ -110551,7 +110551,7 @@ label_BFC04654:
     cosim_block(0x1FC04654u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04654u);
@@ -110572,7 +110572,7 @@ label_BFC04654:
 #endif
 label_BFC04658: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04658u);
@@ -110593,7 +110593,7 @@ label_BFC04658: ;
 #endif
 label_BFC0465C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0465Cu);
@@ -110927,7 +110927,7 @@ label_BFC04690:
     cosim_block(0x1FC04690u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04690u);
@@ -110948,7 +110948,7 @@ label_BFC04690:
 #endif
 label_BFC04694: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04694u);
@@ -110969,7 +110969,7 @@ label_BFC04694: ;
 #endif
 label_BFC04698: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04698u);
@@ -110990,7 +110990,7 @@ label_BFC04698: ;
 #endif
 label_BFC0469C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0469Cu);
@@ -111080,7 +111080,7 @@ label_BFC046A8:
 #endif
 label_BFC046AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC046ACu);
@@ -111434,7 +111434,7 @@ label_BFC046DC:
     cosim_block(0x1FC046DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC046DCu);
@@ -111605,7 +111605,7 @@ label_BFC046F8:
     cosim_block(0x1FC046F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC046F8u);
@@ -111626,7 +111626,7 @@ label_BFC046F8:
 #endif
 label_BFC046FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC046FCu);
@@ -111647,7 +111647,7 @@ label_BFC046FC: ;
 #endif
 label_BFC04700: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04700u);
@@ -112005,7 +112005,7 @@ label_BFC04738:
 #endif
 label_BFC0473C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0473Cu);
@@ -112065,7 +112065,7 @@ label_BFC04744: ;
 #endif
 label_BFC04748: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04748u);
@@ -112127,7 +112127,7 @@ label_BFC04750: ;
 #endif
 label_BFC04754: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04754u);
@@ -112187,7 +112187,7 @@ label_BFC0475C: ;
 #endif
 label_BFC04760: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04760u);
@@ -112334,7 +112334,7 @@ label_BFC04778:
     cosim_block(0x1FC04778u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04778u);
@@ -112409,7 +112409,7 @@ label_BFC04784:
     cosim_block(0x1FC04784u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04784u);
@@ -112760,7 +112760,7 @@ label_BFC047B0:
 #endif
 label_BFC047B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC047B4u);
@@ -112781,7 +112781,7 @@ label_BFC047B4: ;
 #endif
 label_BFC047B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC047B8u);
@@ -112802,7 +112802,7 @@ label_BFC047B8: ;
 #endif
 label_BFC047BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC047BCu);
@@ -112973,7 +112973,7 @@ label_BFC047D8:
     cosim_block(0x1FC047D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC047D8u);
@@ -112994,7 +112994,7 @@ label_BFC047D8:
 #endif
 label_BFC047DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC047DCu);
@@ -113252,7 +113252,7 @@ label_BFC04804:
     cosim_block(0x1FC04804u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04804u);
@@ -113326,7 +113326,7 @@ label_BFC04810:
     cosim_block(0x1FC04810u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04810u);
@@ -113964,7 +113964,7 @@ label_BFC04868:
 #endif
 label_BFC0486C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0486Cu);
@@ -114146,7 +114146,7 @@ label_BFC0488C:
     cosim_block(0x1FC0488Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0488Cu);
@@ -114167,7 +114167,7 @@ label_BFC0488C:
 #endif
 label_BFC04890: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04890u);
@@ -114188,7 +114188,7 @@ label_BFC04890: ;
 #endif
 label_BFC04894: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04894u);
@@ -114209,7 +114209,7 @@ label_BFC04894: ;
 #endif
 label_BFC04898: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04898u);
@@ -114326,7 +114326,7 @@ label_BFC048AC:
     cosim_block(0x1FC048ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC048ACu);
@@ -114347,7 +114347,7 @@ label_BFC048AC:
 #endif
 label_BFC048B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC048B0u);
@@ -114444,7 +114444,7 @@ label_BFC048C0:
     cosim_block(0x1FC048C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC048C0u);
@@ -114593,7 +114593,7 @@ label_BFC048D8:
     cosim_block(0x1FC048D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC048D8u);
@@ -114708,7 +114708,7 @@ label_BFC048E8: ;
 #endif
 label_BFC048EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC048ECu);
@@ -114822,7 +114822,7 @@ label_BFC04900:
     cosim_block(0x1FC04900u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04900u);
@@ -114843,7 +114843,7 @@ label_BFC04900:
 #endif
 label_BFC04904: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04904u);
@@ -115281,7 +115281,7 @@ label_BFC04948:
     cosim_block(0x1FC04948u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04948u);
@@ -115428,7 +115428,7 @@ label_BFC04960:
     cosim_block(0x1FC04960u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04960u);
@@ -115900,7 +115900,7 @@ label_BFC0499C:
 #endif
 label_BFC049A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049A0u);
@@ -116082,7 +116082,7 @@ label_BFC049C0:
     cosim_block(0x1FC049C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049C0u);
@@ -116103,7 +116103,7 @@ label_BFC049C0:
 #endif
 label_BFC049C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049C4u);
@@ -116124,7 +116124,7 @@ label_BFC049C4: ;
 #endif
 label_BFC049C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049C8u);
@@ -116145,7 +116145,7 @@ label_BFC049C8: ;
 #endif
 label_BFC049CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049CCu);
@@ -116262,7 +116262,7 @@ label_BFC049E0:
     cosim_block(0x1FC049E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049E0u);
@@ -116283,7 +116283,7 @@ label_BFC049E0:
 #endif
 label_BFC049E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049E4u);
@@ -116380,7 +116380,7 @@ label_BFC049F4:
     cosim_block(0x1FC049F4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC049F4u);
@@ -116529,7 +116529,7 @@ label_BFC04A0C:
     cosim_block(0x1FC04A0Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04A0Cu);
@@ -116644,7 +116644,7 @@ label_BFC04A1C: ;
 #endif
 label_BFC04A20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04A20u);
@@ -116758,7 +116758,7 @@ label_BFC04A34:
     cosim_block(0x1FC04A34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04A34u);
@@ -116779,7 +116779,7 @@ label_BFC04A34:
 #endif
 label_BFC04A38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04A38u);
@@ -117217,7 +117217,7 @@ label_BFC04A7C:
     cosim_block(0x1FC04A7Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04A7Cu);
@@ -117364,7 +117364,7 @@ label_BFC04A94:
     cosim_block(0x1FC04A94u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04A94u);
@@ -117722,7 +117722,7 @@ label_BFC04AC4:
 #endif
 label_BFC04AC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04AC8u);
@@ -117910,7 +117910,7 @@ label_BFC04AE8:
     cosim_block(0x1FC04AE8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04AE8u);
@@ -117952,7 +117952,7 @@ label_BFC04AEC: ;
 #endif
 label_BFC04AF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04AF0u);
@@ -118021,7 +118021,7 @@ label_BFC04AFC:
     cosim_block(0x1FC04AFCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04AFCu);
@@ -118062,7 +118062,7 @@ label_BFC04B00: ;
 #endif
 label_BFC04B04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B04u);
@@ -118152,7 +118152,7 @@ label_BFC04B14:
     cosim_block(0x1FC04B14u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B14u);
@@ -118227,7 +118227,7 @@ label_BFC04B20:
     cosim_block(0x1FC04B20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B20u);
@@ -118654,7 +118654,7 @@ label_BFC04B60:
     cosim_block(0x1FC04B60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B60u);
@@ -118675,7 +118675,7 @@ label_BFC04B60:
 #endif
 label_BFC04B64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B64u);
@@ -118764,7 +118764,7 @@ label_BFC04B74:
     cosim_block(0x1FC04B74u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B74u);
@@ -118785,7 +118785,7 @@ label_BFC04B74:
 #endif
 label_BFC04B78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04B78u);
@@ -119334,7 +119334,7 @@ label_BFC04BD0:
     cosim_block(0x1FC04BD0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04BD0u);
@@ -119355,7 +119355,7 @@ label_BFC04BD0:
 #endif
 label_BFC04BD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04BD4u);
@@ -119376,7 +119376,7 @@ label_BFC04BD4: ;
 #endif
 label_BFC04BD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04BD8u);
@@ -119925,7 +119925,7 @@ label_BFC04C28:
     cosim_block(0x1FC04C28u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C28u);
@@ -119946,7 +119946,7 @@ label_BFC04C28:
 #endif
 label_BFC04C2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C2Cu);
@@ -119967,7 +119967,7 @@ label_BFC04C2C: ;
 #endif
 label_BFC04C30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C30u);
@@ -120132,7 +120132,7 @@ label_BFC04C4C:
     cosim_block(0x1FC04C4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C4Cu);
@@ -120478,7 +120478,7 @@ label_BFC04C84:
     cosim_block(0x1FC04C84u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C84u);
@@ -120519,7 +120519,7 @@ label_BFC04C88: ;
 #endif
 label_BFC04C8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C8Cu);
@@ -120609,7 +120609,7 @@ label_BFC04C9C:
     cosim_block(0x1FC04C9Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04C9Cu);
@@ -120683,7 +120683,7 @@ label_BFC04CA8:
     cosim_block(0x1FC04CA8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04CA8u);
@@ -121022,7 +121022,7 @@ label_BFC04CDC:
     cosim_block(0x1FC04CDCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04CDCu);
@@ -121049,7 +121049,7 @@ label_BFC04CE0:
     cosim_block(0x1FC04CE0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04CE0u);
@@ -121316,7 +121316,7 @@ label_BFC04D0C:
     cosim_block(0x1FC04D0Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04D0Cu);
@@ -121644,7 +121644,7 @@ label_BFC04D3C:
     cosim_block(0x1FC04D3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04D3Cu);
@@ -121758,7 +121758,7 @@ label_BFC04D50:
     cosim_block(0x1FC04D50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04D50u);
@@ -121779,7 +121779,7 @@ label_BFC04D50:
 #endif
 label_BFC04D54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04D54u);
@@ -122028,7 +122028,7 @@ label_BFC04D7C:
     cosim_block(0x1FC04D7Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04D7Cu);
@@ -122398,7 +122398,7 @@ label_BFC04DB8:
     cosim_block(0x1FC04DB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04DB8u);
@@ -122419,7 +122419,7 @@ label_BFC04DB8:
 #endif
 label_BFC04DBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04DBCu);
@@ -124322,7 +124322,7 @@ label_BFC04EE0:
 #endif
 label_BFC04EE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04EE4u);
@@ -124364,7 +124364,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC04EEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04EECu);
@@ -124385,7 +124385,7 @@ label_BFC04EEC: ;
 #endif
 label_BFC04EF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04EF0u);
@@ -124406,7 +124406,7 @@ label_BFC04EF0: ;
 #endif
 label_BFC04EF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04EF4u);
@@ -124427,7 +124427,7 @@ label_BFC04EF4: ;
 #endif
 label_BFC04EF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04EF8u);
@@ -124448,7 +124448,7 @@ label_BFC04EF8: ;
 #endif
 label_BFC04EFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04EFCu);
@@ -124469,7 +124469,7 @@ label_BFC04EFC: ;
 #endif
 label_BFC04F00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F00u);
@@ -124490,7 +124490,7 @@ label_BFC04F00: ;
 #endif
 label_BFC04F04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F04u);
@@ -124552,7 +124552,7 @@ label_BFC04F0C: ;
 #endif
 label_BFC04F10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F10u);
@@ -124899,7 +124899,7 @@ label_BFC04F44:
     cosim_block(0x1FC04F44u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F44u);
@@ -124992,7 +124992,7 @@ label_BFC04F54:
     cosim_block(0x1FC04F54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F54u);
@@ -125013,7 +125013,7 @@ label_BFC04F54:
 #endif
 label_BFC04F58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F58u);
@@ -125368,7 +125368,7 @@ label_BFC04F94:
     cosim_block(0x1FC04F94u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04F94u);
@@ -125881,7 +125881,7 @@ label_BFC04FDC:
     cosim_block(0x1FC04FDCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04FDCu);
@@ -125902,7 +125902,7 @@ label_BFC04FDC:
 #endif
 label_BFC04FE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04FE0u);
@@ -125923,7 +125923,7 @@ label_BFC04FE0: ;
 #endif
 label_BFC04FE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04FE4u);
@@ -125944,7 +125944,7 @@ label_BFC04FE4: ;
 #endif
 label_BFC04FE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04FE8u);
@@ -125965,7 +125965,7 @@ label_BFC04FE8: ;
 #endif
 label_BFC04FEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC04FECu);
@@ -126499,7 +126499,7 @@ label_BFC05044:
     cosim_block(0x1FC05044u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05044u);
@@ -126591,7 +126591,7 @@ label_BFC05054:
     cosim_block(0x1FC05054u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05054u);
@@ -126612,7 +126612,7 @@ label_BFC05054:
 #endif
 label_BFC05058: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05058u);
@@ -126908,7 +126908,7 @@ label_BFC05088:
     cosim_block(0x1FC05088u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05088u);
@@ -126989,7 +126989,7 @@ label_BFC05094: ;
 #endif
 label_BFC05098: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05098u);
@@ -127049,7 +127049,7 @@ label_BFC050A0: ;
 #endif
 label_BFC050A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC050A4u);
@@ -127219,7 +127219,7 @@ label_BFC050C0:
     cosim_block(0x1FC050C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC050C0u);
@@ -127571,7 +127571,7 @@ label_BFC050F0:
     cosim_block(0x1FC050F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC050F0u);
@@ -127742,7 +127742,7 @@ label_BFC0510C:
     cosim_block(0x1FC0510Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0510Cu);
@@ -127763,7 +127763,7 @@ label_BFC0510C:
 #endif
 label_BFC05110: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05110u);
@@ -128101,7 +128101,7 @@ label_BFC05148:
     cosim_block(0x1FC05148u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05148u);
@@ -128161,7 +128161,7 @@ label_BFC05150: ;
 #endif
 label_BFC05154: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05154u);
@@ -128221,7 +128221,7 @@ label_BFC0515C: ;
 #endif
 label_BFC05160: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05160u);
@@ -128368,7 +128368,7 @@ label_BFC05178:
     cosim_block(0x1FC05178u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05178u);
@@ -128994,7 +128994,7 @@ label_BFC051D8: ;
 #endif
 label_BFC051DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC051DCu);
@@ -129086,7 +129086,7 @@ label_BFC051EC:
     cosim_block(0x1FC051ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC051ECu);
@@ -129294,7 +129294,7 @@ label_BFC05200: ;
 #endif
 label_BFC05204: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05204u);
@@ -129507,7 +129507,7 @@ label_BFC0522C:
     cosim_block(0x1FC0522Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0522Cu);
@@ -129957,7 +129957,7 @@ label_BFC0527C:
     cosim_block(0x1FC0527Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0527Cu);
@@ -129978,7 +129978,7 @@ label_BFC0527C:
 #endif
 label_BFC05280: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05280u);
@@ -129999,7 +129999,7 @@ label_BFC05280: ;
 #endif
 label_BFC05284: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05284u);
@@ -130020,7 +130020,7 @@ label_BFC05284: ;
 #endif
 label_BFC05288: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05288u);
@@ -130041,7 +130041,7 @@ label_BFC05288: ;
 #endif
 label_BFC0528C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0528Cu);
@@ -130274,7 +130274,7 @@ label_BFC052B4:
     cosim_block(0x1FC052B4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC052B4u);
@@ -130295,7 +130295,7 @@ label_BFC052B4:
 #endif
 label_BFC052B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC052B8u);
@@ -130316,7 +130316,7 @@ label_BFC052B8: ;
 #endif
 label_BFC052BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC052BCu);
@@ -130337,7 +130337,7 @@ label_BFC052BC: ;
 #endif
 label_BFC052C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC052C0u);
@@ -130413,7 +130413,7 @@ label_BFC052CC:
     cosim_block(0x1FC052CCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC052CCu);
@@ -130594,7 +130594,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC052E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC052E8u);
@@ -130799,7 +130799,7 @@ label_BFC052FC: ;
 #endif
 label_BFC05300: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05300u);
@@ -131007,7 +131007,7 @@ label_BFC05324:
     cosim_block(0x1FC05324u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05324u);
@@ -131375,7 +131375,7 @@ label_BFC05360:
     cosim_block(0x1FC05360u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05360u);
@@ -131592,7 +131592,7 @@ label_BFC05384:
     cosim_block(0x1FC05384u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05384u);
@@ -131777,7 +131777,7 @@ label_BFC053A4:
     cosim_block(0x1FC053A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC053A4u);
@@ -132242,7 +132242,7 @@ label_BFC053E8: ;
 #endif
 label_BFC053EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC053ECu);
@@ -132263,7 +132263,7 @@ label_BFC053EC: ;
 #endif
 label_BFC053F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC053F0u);
@@ -132346,7 +132346,7 @@ label_BFC053FC: ;
 #endif
 label_BFC05400: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05400u);
@@ -132367,7 +132367,7 @@ label_BFC05400: ;
 #endif
 label_BFC05404: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05404u);
@@ -132556,7 +132556,7 @@ label_BFC05424: ;
 #endif
 label_BFC05428: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05428u);
@@ -132637,7 +132637,7 @@ label_BFC05434: ;
 #endif
 label_BFC05438: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05438u);
@@ -132866,7 +132866,7 @@ label_BFC05460: ;
 #endif
 label_BFC05464: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05464u);
@@ -133070,7 +133070,7 @@ label_BFC05484:
     cosim_block(0x1FC05484u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05484u);
@@ -133132,7 +133132,7 @@ label_BFC0548C: ;
 #endif
 label_BFC05490: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05490u);
@@ -133387,7 +133387,7 @@ label_BFC054B8:
     cosim_block(0x1FC054B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC054B8u);
@@ -133408,7 +133408,7 @@ label_BFC054B8:
 #endif
 label_BFC054BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC054BCu);
@@ -133509,7 +133509,7 @@ label_BFC054CC:
     cosim_block(0x1FC054CCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC054CCu);
@@ -133597,7 +133597,7 @@ label_BFC054DC:
     cosim_block(0x1FC054DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC054DCu);
@@ -134090,7 +134090,7 @@ label_BFC05528: ;
 #endif
 label_BFC0552C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0552Cu);
@@ -134173,7 +134173,7 @@ label_BFC05538: ;
 #endif
 label_BFC0553C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0553Cu);
@@ -134365,7 +134365,7 @@ label_BFC0555C: ;
 #endif
 label_BFC05560: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05560u);
@@ -134386,7 +134386,7 @@ label_BFC05560: ;
 #endif
 label_BFC05564: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05564u);
@@ -134702,7 +134702,7 @@ label_BFC05594:
     cosim_block(0x1FC05594u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05594u);
@@ -134955,7 +134955,7 @@ label_BFC055C0:
     cosim_block(0x1FC055C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC055C0u);
@@ -135159,7 +135159,7 @@ label_BFC055E4:
     cosim_block(0x1FC055E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC055E4u);
@@ -135405,7 +135405,7 @@ label_BFC05604: ;
 #endif
 label_BFC05608: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05608u);
@@ -135426,7 +135426,7 @@ label_BFC05608: ;
 #endif
 label_BFC0560C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0560Cu);
@@ -135642,7 +135642,7 @@ label_BFC05630:
     cosim_block(0x1FC05630u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05630u);
@@ -136091,7 +136091,7 @@ label_BFC05670: ;
 #endif
 label_BFC05674: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05674u);
@@ -136344,7 +136344,7 @@ label_BFC056A4:
     cosim_block(0x1FC056A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC056A4u);
@@ -136525,7 +136525,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC056C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC056C0u);
@@ -136609,7 +136609,7 @@ label_BFC056CC: ;
 #endif
 label_BFC056D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC056D0u);
@@ -136871,7 +136871,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC056F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC056F8u);
@@ -136955,7 +136955,7 @@ label_BFC05704: ;
 #endif
 label_BFC05708: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05708u);
@@ -137191,7 +137191,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC0572C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0572Cu);
@@ -137480,7 +137480,7 @@ label_BFC05758: ;
 #endif
 label_BFC0575C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0575Cu);
@@ -137543,7 +137543,7 @@ label_BFC05764: ;
 #endif
 label_BFC05768: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05768u);
@@ -137883,7 +137883,7 @@ label_BFC05798: ;
 #endif
 label_BFC0579C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0579Cu);
@@ -137946,7 +137946,7 @@ label_BFC057A4: ;
 #endif
 label_BFC057A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC057A8u);
@@ -138098,7 +138098,7 @@ label_BFC057C0:
     cosim_block(0x1FC057C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC057C0u);
@@ -139598,7 +139598,7 @@ label_BFC058B0:
     cosim_block(0x1FC058B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC058B0u);
@@ -139835,7 +139835,7 @@ label_BFC058D0:
     cosim_block(0x1FC058D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC058D0u);
@@ -139928,7 +139928,7 @@ label_BFC058E0:
     cosim_block(0x1FC058E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC058E0u);
@@ -140278,7 +140278,7 @@ label_BFC05914:
     cosim_block(0x1FC05914u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05914u);
@@ -140720,7 +140720,7 @@ label_BFC05958:
     cosim_block(0x1FC05958u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05958u);
@@ -140905,7 +140905,7 @@ label_BFC05970:
     cosim_block(0x1FC05970u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05970u);
@@ -141241,7 +141241,7 @@ label_BFC059A0:
     cosim_block(0x1FC059A0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC059A0u);
@@ -141595,7 +141595,7 @@ label_BFC059D0:
 #endif
 label_BFC059D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC059D4u);
@@ -141882,7 +141882,7 @@ label_BFC059FC:
     cosim_block(0x1FC059FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC059FCu);
@@ -142055,7 +142055,7 @@ label_BFC05A18:
     cosim_block(0x1FC05A18u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05A18u);
@@ -142358,7 +142358,7 @@ label_BFC05A44:
     cosim_block(0x1FC05A44u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05A44u);
@@ -142379,7 +142379,7 @@ label_BFC05A44:
 #endif
 label_BFC05A48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05A48u);
@@ -142762,7 +142762,7 @@ label_BFC05A7C:
 #endif
 label_BFC05A80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05A80u);
@@ -142783,7 +142783,7 @@ label_BFC05A80: ;
 #endif
 label_BFC05A84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05A84u);
@@ -143179,7 +143179,7 @@ label_BFC05AC0:
     cosim_block(0x1FC05AC0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05AC0u);
@@ -143299,7 +143299,7 @@ label_BFC05AD4:
     cosim_block(0x1FC05AD4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05AD4u);
@@ -143645,7 +143645,7 @@ label_BFC05B04:
 #endif
 label_BFC05B08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05B08u);
@@ -144063,7 +144063,7 @@ label_BFC05B4C:
     cosim_block(0x1FC05B4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05B4Cu);
@@ -144856,7 +144856,7 @@ label_BFC05BC4:
     cosim_block(0x1FC05BC4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05BC4u);
@@ -145104,7 +145104,7 @@ label_BFC05BEC:
     cosim_block(0x1FC05BECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05BECu);
@@ -145553,7 +145553,7 @@ label_BFC05C30:
     cosim_block(0x1FC05C30u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05C30u);
@@ -145691,7 +145691,7 @@ label_BFC05C48:
     cosim_block(0x1FC05C48u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05C48u);
@@ -145751,7 +145751,7 @@ label_BFC05C50: ;
 #endif
 label_BFC05C54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05C54u);
@@ -145811,7 +145811,7 @@ label_BFC05C5C: ;
 #endif
 label_BFC05C60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05C60u);
@@ -145871,7 +145871,7 @@ label_BFC05C68: ;
 #endif
 label_BFC05C6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05C6Cu);
@@ -145931,7 +145931,7 @@ label_BFC05C74: ;
 #endif
 label_BFC05C78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05C78u);
@@ -146255,7 +146255,7 @@ label_BFC05C9C: ;
 #endif
 label_BFC05CA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CA0u);
@@ -146408,7 +146408,7 @@ label_BFC05CBC:
     cosim_block(0x1FC05CBCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CBCu);
@@ -146429,7 +146429,7 @@ label_BFC05CBC:
 #endif
 label_BFC05CC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CC0u);
@@ -146450,7 +146450,7 @@ label_BFC05CC0: ;
 #endif
 label_BFC05CC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CC4u);
@@ -146608,7 +146608,7 @@ label_BFC05CE0:
     cosim_block(0x1FC05CE0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CE0u);
@@ -146629,7 +146629,7 @@ label_BFC05CE0:
 #endif
 label_BFC05CE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CE4u);
@@ -146650,7 +146650,7 @@ label_BFC05CE4: ;
 #endif
 label_BFC05CE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CE8u);
@@ -146671,7 +146671,7 @@ label_BFC05CE8: ;
 #endif
 label_BFC05CEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05CECu);
@@ -146783,7 +146783,7 @@ label_BFC05D00:
     cosim_block(0x1FC05D00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D00u);
@@ -146804,7 +146804,7 @@ label_BFC05D00:
 #endif
 label_BFC05D04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D04u);
@@ -146825,7 +146825,7 @@ label_BFC05D04: ;
 #endif
 label_BFC05D08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D08u);
@@ -146846,7 +146846,7 @@ label_BFC05D08: ;
 #endif
 label_BFC05D0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D0Cu);
@@ -146958,7 +146958,7 @@ label_BFC05D20:
     cosim_block(0x1FC05D20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D20u);
@@ -146979,7 +146979,7 @@ label_BFC05D20:
 #endif
 label_BFC05D24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D24u);
@@ -147000,7 +147000,7 @@ label_BFC05D24: ;
 #endif
 label_BFC05D28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D28u);
@@ -147021,7 +147021,7 @@ label_BFC05D28: ;
 #endif
 label_BFC05D2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D2Cu);
@@ -147133,7 +147133,7 @@ label_BFC05D40:
     cosim_block(0x1FC05D40u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D40u);
@@ -147154,7 +147154,7 @@ label_BFC05D40:
 #endif
 label_BFC05D44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D44u);
@@ -147175,7 +147175,7 @@ label_BFC05D44: ;
 #endif
 label_BFC05D48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D48u);
@@ -147196,7 +147196,7 @@ label_BFC05D48: ;
 #endif
 label_BFC05D4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D4Cu);
@@ -147308,7 +147308,7 @@ label_BFC05D60:
     cosim_block(0x1FC05D60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D60u);
@@ -147329,7 +147329,7 @@ label_BFC05D60:
 #endif
 label_BFC05D64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D64u);
@@ -147350,7 +147350,7 @@ label_BFC05D64: ;
 #endif
 label_BFC05D68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D68u);
@@ -147371,7 +147371,7 @@ label_BFC05D68: ;
 #endif
 label_BFC05D6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D6Cu);
@@ -147483,7 +147483,7 @@ label_BFC05D80:
     cosim_block(0x1FC05D80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D80u);
@@ -147504,7 +147504,7 @@ label_BFC05D80:
 #endif
 label_BFC05D84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D84u);
@@ -147525,7 +147525,7 @@ label_BFC05D84: ;
 #endif
 label_BFC05D88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D88u);
@@ -147546,7 +147546,7 @@ label_BFC05D88: ;
 #endif
 label_BFC05D8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05D8Cu);
@@ -147658,7 +147658,7 @@ label_BFC05DA0:
     cosim_block(0x1FC05DA0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DA0u);
@@ -147679,7 +147679,7 @@ label_BFC05DA0:
 #endif
 label_BFC05DA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DA4u);
@@ -147700,7 +147700,7 @@ label_BFC05DA4: ;
 #endif
 label_BFC05DA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DA8u);
@@ -147721,7 +147721,7 @@ label_BFC05DA8: ;
 #endif
 label_BFC05DAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DACu);
@@ -147833,7 +147833,7 @@ label_BFC05DC0:
     cosim_block(0x1FC05DC0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DC0u);
@@ -147854,7 +147854,7 @@ label_BFC05DC0:
 #endif
 label_BFC05DC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DC4u);
@@ -147875,7 +147875,7 @@ label_BFC05DC4: ;
 #endif
 label_BFC05DC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DC8u);
@@ -147896,7 +147896,7 @@ label_BFC05DC8: ;
 #endif
 label_BFC05DCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DCCu);
@@ -148008,7 +148008,7 @@ label_BFC05DE0:
     cosim_block(0x1FC05DE0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DE0u);
@@ -148029,7 +148029,7 @@ label_BFC05DE0:
 #endif
 label_BFC05DE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05DE4u);
@@ -148349,7 +148349,7 @@ cpu->gpr[2] = 0xBFC10000u;
 #endif
 label_BFC05E14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05E14u);
@@ -148545,7 +148545,7 @@ cpu->gpr[2] = 0xBFC10000u;
 #endif
 label_BFC05E38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05E38u);
@@ -148587,7 +148587,7 @@ cpu->gpr[4] = 0x00000000u;
 #endif
 label_BFC05E40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05E40u);
@@ -149732,7 +149732,7 @@ label_BFC05EF0:
 #endif
 label_BFC05EF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05EF4u);
@@ -149753,7 +149753,7 @@ label_BFC05EF4: ;
 #endif
 label_BFC05EF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05EF8u);
@@ -149774,7 +149774,7 @@ label_BFC05EF8: ;
 #endif
 label_BFC05EFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05EFCu);
@@ -149905,7 +149905,7 @@ label_BFC05F0C:
     cosim_block(0x1FC05F0Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05F0Cu);
@@ -150128,7 +150128,7 @@ label_BFC05F30:
     cosim_block(0x1FC05F30u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05F30u);
@@ -150374,7 +150374,7 @@ label_BFC05F50:
     cosim_block(0x1FC05F50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05F50u);
@@ -150595,7 +150595,7 @@ label_BFC05F74:
     cosim_block(0x1FC05F74u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05F74u);
@@ -151018,7 +151018,7 @@ label_BFC05FB0:
     cosim_block(0x1FC05FB0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05FB0u);
@@ -151239,7 +151239,7 @@ label_BFC05FD4:
     cosim_block(0x1FC05FD4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC05FD4u);
@@ -151720,7 +151720,7 @@ label_BFC0601C:
     cosim_block(0x1FC0601Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0601Cu);
@@ -151915,7 +151915,7 @@ label_BFC0603C:
     cosim_block(0x1FC0603Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0603Cu);
@@ -152257,7 +152257,7 @@ label_BFC06070:
     cosim_block(0x1FC06070u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06070u);
@@ -152299,7 +152299,7 @@ label_BFC06074: ;
 #endif
 label_BFC06078: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06078u);
@@ -152623,7 +152623,7 @@ label_BFC060A8:
     cosim_block(0x1FC060A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC060A8u);
@@ -152665,7 +152665,7 @@ label_BFC060AC: ;
 #endif
 label_BFC060B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC060B0u);
@@ -153065,7 +153065,7 @@ cpu->gpr[3] = 0x00010000u;
 #endif
 label_BFC060E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC060E8u);
@@ -153585,7 +153585,7 @@ label_BFC06138:
     cosim_block(0x1FC06138u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06138u);
@@ -153718,7 +153718,7 @@ label_BFC06150:
     cosim_block(0x1FC06150u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06150u);
@@ -153739,7 +153739,7 @@ label_BFC06150:
 #endif
 label_BFC06154: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06154u);
@@ -153760,7 +153760,7 @@ label_BFC06154: ;
 #endif
 label_BFC06158: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06158u);
@@ -153914,7 +153914,7 @@ label_BFC06170:
     cosim_block(0x1FC06170u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06170u);
@@ -154337,7 +154337,7 @@ label_BFC061B0:
     cosim_block(0x1FC061B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061B0u);
@@ -154358,7 +154358,7 @@ label_BFC061B0:
 #endif
 label_BFC061B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061B4u);
@@ -154379,7 +154379,7 @@ label_BFC061B4: ;
 #endif
 label_BFC061B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061B8u);
@@ -154400,7 +154400,7 @@ label_BFC061B8: ;
 #endif
 label_BFC061BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061BCu);
@@ -154534,7 +154534,7 @@ label_BFC061D0: ;
 #endif
 label_BFC061D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061D4u);
@@ -154555,7 +154555,7 @@ label_BFC061D4: ;
 #endif
 label_BFC061D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061D8u);
@@ -154712,7 +154712,7 @@ label_BFC061F4:
     cosim_block(0x1FC061F4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC061F4u);
@@ -154786,7 +154786,7 @@ label_BFC06200:
     cosim_block(0x1FC06200u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06200u);
@@ -154807,7 +154807,7 @@ label_BFC06200:
 #endif
 label_BFC06204: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06204u);
@@ -155161,7 +155161,7 @@ label_BFC06234: ;
 #endif
 label_BFC06238: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06238u);
@@ -155630,7 +155630,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC0627C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0627Cu);
@@ -156003,7 +156003,7 @@ cpu->gpr[3] = 0x1F800000u;
 #endif
 label_BFC062AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC062ACu);
@@ -157040,7 +157040,7 @@ label_BFC06354:
     cosim_block(0x1FC06354u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06354u);
@@ -157180,7 +157180,7 @@ label_BFC0636C:
     cosim_block(0x1FC0636Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0636Cu);
@@ -157562,7 +157562,7 @@ label_BFC063A8:
     cosim_block(0x1FC063A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC063A8u);
@@ -157695,7 +157695,7 @@ label_BFC063BC: ;
 #endif
 label_BFC063C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC063C0u);
@@ -157766,7 +157766,7 @@ label_BFC063CC:
     cosim_block(0x1FC063CCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC063CCu);
@@ -157787,7 +157787,7 @@ label_BFC063CC:
 #endif
 label_BFC063D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC063D0u);
@@ -157829,7 +157829,7 @@ label_BFC063D4: ;
 #endif
 label_BFC063D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC063D8u);
@@ -158324,7 +158324,7 @@ label_BFC06424:
     cosim_block(0x1FC06424u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06424u);
@@ -158471,7 +158471,7 @@ label_BFC0643C:
     cosim_block(0x1FC0643Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0643Cu);
@@ -158492,7 +158492,7 @@ label_BFC0643C:
 #endif
 label_BFC06440: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06440u);
@@ -158513,7 +158513,7 @@ label_BFC06440: ;
 #endif
 label_BFC06444: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06444u);
@@ -158555,7 +158555,7 @@ label_BFC06448: ;
 #endif
 label_BFC0644C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0644Cu);
@@ -158624,7 +158624,7 @@ label_BFC06458:
     cosim_block(0x1FC06458u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06458u);
@@ -158645,7 +158645,7 @@ label_BFC06458:
 #endif
 label_BFC0645C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0645Cu);
@@ -158759,7 +158759,7 @@ label_BFC0646C:
 #endif
 label_BFC06470: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06470u);
@@ -159322,7 +159322,7 @@ label_BFC064BC:
     cosim_block(0x1FC064BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC064BCu);
@@ -159520,7 +159520,7 @@ label_BFC064DC:
     cosim_block(0x1FC064DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC064DCu);
@@ -159855,7 +159855,7 @@ label_BFC06514:
     cosim_block(0x1FC06514u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06514u);
@@ -160043,7 +160043,7 @@ label_BFC06530: ;
 #endif
 label_BFC06534: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06534u);
@@ -160105,7 +160105,7 @@ label_BFC0653C: ;
 #endif
 label_BFC06540: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06540u);
@@ -160720,7 +160720,7 @@ label_BFC065A8:
     cosim_block(0x1FC065A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC065A8u);
@@ -160782,7 +160782,7 @@ label_BFC065B0: ;
 #endif
 label_BFC065B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC065B4u);
@@ -161181,7 +161181,7 @@ label_BFC065F4:
     cosim_block(0x1FC065F4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC065F4u);
@@ -161727,7 +161727,7 @@ label_BFC06644: ;
 #endif
 label_BFC06648: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06648u);
@@ -161748,7 +161748,7 @@ label_BFC06648: ;
 #endif
 label_BFC0664C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0664Cu);
@@ -161824,7 +161824,7 @@ label_BFC06658:
     cosim_block(0x1FC06658u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06658u);
@@ -161947,7 +161947,7 @@ label_BFC0666C:
     cosim_block(0x1FC0666Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(12u);
+    psx_native_span_charge(17u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0666Cu);
@@ -162002,7 +162002,7 @@ label_BFC06674:
     cosim_block(0x1FC06674u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06674u);
@@ -162090,7 +162090,7 @@ label_BFC06684:
     cosim_block(0x1FC06684u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06684u);
@@ -162184,7 +162184,7 @@ label_BFC06694:
     cosim_block(0x1FC06694u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06694u);
@@ -162205,7 +162205,7 @@ label_BFC06694:
 #endif
 label_BFC06698: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06698u);
@@ -162226,7 +162226,7 @@ label_BFC06698: ;
 #endif
 label_BFC0669C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0669Cu);
@@ -162247,7 +162247,7 @@ label_BFC0669C: ;
 #endif
 label_BFC066A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066A0u);
@@ -162268,7 +162268,7 @@ label_BFC066A0: ;
 #endif
 label_BFC066A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066A4u);
@@ -162704,7 +162704,7 @@ label_BFC066EC:
     cosim_block(0x1FC066ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066ECu);
@@ -162725,7 +162725,7 @@ label_BFC066EC:
 #endif
 label_BFC066F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066F0u);
@@ -162746,7 +162746,7 @@ label_BFC066F0: ;
 #endif
 label_BFC066F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066F4u);
@@ -162767,7 +162767,7 @@ label_BFC066F4: ;
 #endif
 label_BFC066F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066F8u);
@@ -162788,7 +162788,7 @@ label_BFC066F8: ;
 #endif
 label_BFC066FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC066FCu);
@@ -162809,7 +162809,7 @@ label_BFC066FC: ;
 #endif
 label_BFC06700: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06700u);
@@ -162830,7 +162830,7 @@ label_BFC06700: ;
 #endif
 label_BFC06704: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06704u);
@@ -162851,7 +162851,7 @@ label_BFC06704: ;
 #endif
 label_BFC06708: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06708u);
@@ -162872,7 +162872,7 @@ label_BFC06708: ;
 #endif
 label_BFC0670C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0670Cu);
@@ -162893,7 +162893,7 @@ label_BFC0670C: ;
 #endif
 label_BFC06710: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06710u);
@@ -162914,7 +162914,7 @@ label_BFC06710: ;
 #endif
 label_BFC06714: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06714u);
@@ -162935,7 +162935,7 @@ label_BFC06714: ;
 #endif
 label_BFC06718: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06718u);
@@ -163647,7 +163647,7 @@ label_BFC06788:
     cosim_block(0x1FC06788u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06788u);
@@ -163668,7 +163668,7 @@ label_BFC06788:
 #endif
 label_BFC0678C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0678Cu);
@@ -163689,7 +163689,7 @@ label_BFC0678C: ;
 #endif
 label_BFC06790: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06790u);
@@ -163710,7 +163710,7 @@ label_BFC06790: ;
 #endif
 label_BFC06794: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06794u);
@@ -163731,7 +163731,7 @@ label_BFC06794: ;
 #endif
 label_BFC06798: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06798u);
@@ -163752,7 +163752,7 @@ label_BFC06798: ;
 #endif
 label_BFC0679C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0679Cu);
@@ -163773,7 +163773,7 @@ label_BFC0679C: ;
 #endif
 label_BFC067A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC067A0u);
@@ -164052,7 +164052,7 @@ label_BFC067D0:
     cosim_block(0x1FC067D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC067D0u);
@@ -164734,7 +164734,7 @@ label_BFC06838: ;
 #endif
 label_BFC0683C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0683Cu);
@@ -164858,7 +164858,7 @@ label_BFC06850:
     cosim_block(0x1FC06850u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06850u);
@@ -165077,7 +165077,7 @@ label_BFC06874:
     cosim_block(0x1FC06874u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06874u);
@@ -165484,7 +165484,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC068B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC068B0u);
@@ -165778,7 +165778,7 @@ label_BFC068E8:
     cosim_block(0x1FC068E8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC068E8u);
@@ -165934,7 +165934,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC06900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06900u);
@@ -166217,7 +166217,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC06930: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06930u);
@@ -167220,7 +167220,7 @@ label_BFC069CC:
 #endif
 label_BFC069D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC069D0u);
@@ -167241,7 +167241,7 @@ label_BFC069D0: ;
 #endif
 label_BFC069D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC069D4u);
@@ -168147,7 +168147,7 @@ label_BFC06A64:
     cosim_block(0x1FC06A64u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06A64u);
@@ -168277,7 +168277,7 @@ label_BFC06A7C:
     cosim_block(0x1FC06A7Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06A7Cu);
@@ -168388,7 +168388,7 @@ label_BFC06A8C:
     cosim_block(0x1FC06A8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06A8Cu);
@@ -168585,7 +168585,7 @@ label_BFC06AA8:
     cosim_block(0x1FC06AA8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06AA8u);
@@ -168678,7 +168678,7 @@ label_BFC06AB8:
     cosim_block(0x1FC06AB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06AB8u);
@@ -169194,7 +169194,7 @@ label_BFC06AF4:
 #endif
 label_BFC06AF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06AF8u);
@@ -169509,7 +169509,7 @@ label_BFC06B2C:
     cosim_block(0x1FC06B2Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06B2Cu);
@@ -169843,7 +169843,7 @@ label_BFC06B60:
     cosim_block(0x1FC06B60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06B60u);
@@ -169936,7 +169936,7 @@ label_BFC06B70:
     cosim_block(0x1FC06B70u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06B70u);
@@ -170258,7 +170258,7 @@ label_BFC06BA4:
     cosim_block(0x1FC06BA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06BA4u);
@@ -171017,7 +171017,7 @@ label_BFC06C20:
     cosim_block(0x1FC06C20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06C20u);
@@ -173035,7 +173035,7 @@ label_BFC06D20: ;
 #endif
 label_BFC06D24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06D24u);
@@ -173510,7 +173510,7 @@ label_BFC06D78:
     cosim_block(0x1FC06D78u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06D78u);
@@ -173693,7 +173693,7 @@ label_BFC06D94: ;
 #endif
 label_BFC06D98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06D98u);
@@ -174192,7 +174192,7 @@ cpu->gpr[2] = 0xBFC10000u;
 #endif
 label_BFC06DF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06DF0u);
@@ -174275,7 +174275,7 @@ cpu->gpr[4] = 0xBFC10000u;
 #endif
 label_BFC06E00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06E00u);
@@ -174296,7 +174296,7 @@ label_BFC06E00: ;
 #endif
 label_BFC06E04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06E04u);
@@ -174758,7 +174758,7 @@ label_BFC06E54:
     cosim_block(0x1FC06E54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06E54u);
@@ -174827,7 +174827,7 @@ label_BFC06E60:
     cosim_block(0x1FC06E60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06E60u);
@@ -175541,7 +175541,7 @@ label_BFC06ED8:
     cosim_block(0x1FC06ED8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06ED8u);
@@ -175667,7 +175667,7 @@ label_BFC06EEC: ;
 #endif
 label_BFC06EF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06EF0u);
@@ -175688,7 +175688,7 @@ label_BFC06EF0: ;
 #endif
 label_BFC06EF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06EF4u);
@@ -176279,7 +176279,7 @@ label_BFC06F54:
 #endif
 label_BFC06F58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06F58u);
@@ -176600,7 +176600,7 @@ cpu->gpr[3] = 0xBFC10000u;
 #endif
 label_BFC06F8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06F8Cu);
@@ -176683,7 +176683,7 @@ label_BFC06F98: ;
 #endif
 label_BFC06F9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06F9Cu);
@@ -176725,7 +176725,7 @@ label_BFC06FA0: ;
 #endif
 label_BFC06FA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06FA4u);
@@ -176766,7 +176766,7 @@ label_BFC06FA8: ;
 #endif
 label_BFC06FAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC06FACu);
@@ -177453,7 +177453,7 @@ label_BFC0701C:
 #endif
 label_BFC07020: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07020u);
@@ -177522,7 +177522,7 @@ label_BFC0702C:
     cosim_block(0x1FC0702Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0702Cu);
@@ -178383,7 +178383,7 @@ label_BFC070BC:
 #endif
 label_BFC070C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC070C0u);
@@ -178404,7 +178404,7 @@ label_BFC070C0: ;
 #endif
 label_BFC070C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC070C4u);
@@ -178425,7 +178425,7 @@ label_BFC070C4: ;
 #endif
 label_BFC070C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC070C8u);
@@ -178559,7 +178559,7 @@ label_BFC070E0:
     cosim_block(0x1FC070E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC070E0u);
@@ -178580,7 +178580,7 @@ label_BFC070E0:
 #endif
 label_BFC070E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC070E4u);
@@ -178672,7 +178672,7 @@ label_BFC070F4:
     cosim_block(0x1FC070F4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC070F4u);
@@ -179236,7 +179236,7 @@ label_BFC07154:
     cosim_block(0x1FC07154u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07154u);
@@ -179496,7 +179496,7 @@ cpu->gpr[16] = 0x00010000u;
 #endif
 label_BFC07180: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07180u);
@@ -179728,7 +179728,7 @@ label_BFC071A4: ;
 #endif
 label_BFC071A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC071A8u);
@@ -180702,7 +180702,7 @@ label_BFC07250:
     cosim_block(0x1FC07250u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07250u);
@@ -180866,7 +180866,7 @@ label_BFC0726C:
     cosim_block(0x1FC0726Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0726Cu);
@@ -181465,7 +181465,7 @@ label_BFC072C8:
     cosim_block(0x1FC072C8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC072C8u);
@@ -182335,7 +182335,7 @@ label_BFC07354:
 #endif
 label_BFC07358: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07358u);
@@ -183390,7 +183390,7 @@ label_BFC073FC: ;
 #endif
 label_BFC07400: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07400u);
@@ -183450,7 +183450,7 @@ label_BFC07408: ;
 #endif
 label_BFC0740C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0740Cu);
@@ -183510,7 +183510,7 @@ label_BFC07414: ;
 #endif
 label_BFC07418: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07418u);
@@ -183696,7 +183696,7 @@ cpu->gpr[2] = 0xBFC00000u;
 #endif
 label_BFC07430: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07430u);
@@ -183862,7 +183862,7 @@ label_BFC0744C:
     cosim_block(0x1FC0744Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0744Cu);
@@ -183883,7 +183883,7 @@ label_BFC0744C:
 #endif
 label_BFC07450: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07450u);
@@ -184054,7 +184054,7 @@ cpu->gpr[2] = 0x1F000000u;
 #endif
 label_BFC0746C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0746Cu);
@@ -184248,7 +184248,7 @@ cpu->gpr[2] = 0xBFC00000u;
 #endif
 label_BFC07488: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07488u);
@@ -184414,7 +184414,7 @@ label_BFC074A4:
     cosim_block(0x1FC074A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC074A4u);
@@ -184435,7 +184435,7 @@ label_BFC074A4:
 #endif
 label_BFC074A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC074A8u);
@@ -184606,7 +184606,7 @@ cpu->gpr[2] = 0x1F000000u;
 #endif
 label_BFC074C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC074C4u);
@@ -185173,7 +185173,7 @@ label_BFC07520:
     cosim_block(0x1FC07520u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07520u);
@@ -185194,7 +185194,7 @@ label_BFC07520:
 #endif
 label_BFC07524: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07524u);
@@ -185215,7 +185215,7 @@ label_BFC07524: ;
 #endif
 label_BFC07528: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07528u);
@@ -185257,7 +185257,7 @@ label_BFC0752C: ;
 #endif
 label_BFC07530: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07530u);
@@ -185518,7 +185518,7 @@ label_BFC0755C:
     cosim_block(0x1FC0755Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0755Cu);
@@ -185539,7 +185539,7 @@ label_BFC0755C:
 #endif
 label_BFC07560: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07560u);
@@ -185560,7 +185560,7 @@ label_BFC07560: ;
 #endif
 label_BFC07564: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07564u);
@@ -186325,7 +186325,7 @@ label_BFC075E0:
 #endif
 label_BFC075E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC075E4u);
@@ -186388,7 +186388,7 @@ label_BFC075EC: ;
 #endif
 label_BFC075F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC075F0u);
@@ -186409,7 +186409,7 @@ label_BFC075F0: ;
 #endif
 label_BFC075F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC075F4u);
@@ -186638,7 +186638,7 @@ label_BFC07614:
     cosim_block(0x1FC07614u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07614u);
@@ -186808,7 +186808,7 @@ label_BFC07630:
     cosim_block(0x1FC07630u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07630u);
@@ -186923,7 +186923,7 @@ label_BFC07644:
     cosim_block(0x1FC07644u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07644u);
@@ -187088,7 +187088,7 @@ label_BFC07660:
     cosim_block(0x1FC07660u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07660u);
@@ -187458,7 +187458,7 @@ label_BFC07694:
     cosim_block(0x1FC07694u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07694u);
@@ -187628,7 +187628,7 @@ label_BFC076B0:
     cosim_block(0x1FC076B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC076B0u);
@@ -187649,7 +187649,7 @@ label_BFC076B0:
 #endif
 label_BFC076B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC076B4u);
@@ -187745,7 +187745,7 @@ label_BFC076C4:
     cosim_block(0x1FC076C4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC076C4u);
@@ -188996,7 +188996,7 @@ label_BFC07778: ;
 #endif
 label_BFC0777C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0777Cu);
@@ -189984,7 +189984,7 @@ label_BFC07820: ;
 #endif
 label_BFC07824: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07824u);
@@ -190965,7 +190965,7 @@ label_BFC078C8: ;
 #endif
 label_BFC078CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC078CCu);
@@ -191655,7 +191655,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC07948: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07948u);
@@ -191760,7 +191760,7 @@ label_BFC07958: ;
 #endif
 label_BFC0795C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0795Cu);
@@ -191949,7 +191949,7 @@ label_BFC07974: ;
 #endif
 label_BFC07978: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07978u);
@@ -192094,7 +192094,7 @@ cpu->gpr[4] = 0xBFC00000u;
 #endif
 label_BFC07994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07994u);
@@ -192156,7 +192156,7 @@ label_BFC0799C: ;
 #endif
 label_BFC079A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC079A0u);
@@ -192237,7 +192237,7 @@ label_BFC079AC: ;
 #endif
 label_BFC079B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC079B0u);
@@ -192469,7 +192469,7 @@ label_BFC079D0: ;
 #endif
 label_BFC079D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC079D4u);
@@ -192585,7 +192585,7 @@ label_BFC079E8:
     cosim_block(0x1FC079E8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC079E8u);
@@ -192963,7 +192963,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC07A28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A28u);
@@ -193005,7 +193005,7 @@ label_BFC07A2C: ;
 #endif
 label_BFC07A30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A30u);
@@ -193121,7 +193121,7 @@ label_BFC07A44:
     cosim_block(0x1FC07A44u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A44u);
@@ -193142,7 +193142,7 @@ label_BFC07A44:
 #endif
 label_BFC07A48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A48u);
@@ -193204,7 +193204,7 @@ label_BFC07A50: ;
 #endif
 label_BFC07A54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A54u);
@@ -193308,7 +193308,7 @@ cpu->gpr[3] = 0xBFC00000u;
 #endif
 label_BFC07A68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A68u);
@@ -193741,7 +193741,7 @@ label_BFC07A94: ;
 #endif
 label_BFC07A98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07A98u);
@@ -194089,7 +194089,7 @@ cpu->gpr[4] = 0xBFC10000u;
 #endif
 label_BFC07AD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07AD0u);
@@ -194110,7 +194110,7 @@ label_BFC07AD0: ;
 #endif
 label_BFC07AD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07AD4u);
@@ -194131,7 +194131,7 @@ label_BFC07AD4: ;
 #endif
 label_BFC07AD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07AD8u);
@@ -194152,7 +194152,7 @@ label_BFC07AD8: ;
 #endif
 label_BFC07ADC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07ADCu);
@@ -194173,7 +194173,7 @@ label_BFC07ADC: ;
 #endif
 label_BFC07AE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07AE0u);
@@ -194194,7 +194194,7 @@ label_BFC07AE0: ;
 #endif
 label_BFC07AE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07AE4u);
@@ -194215,7 +194215,7 @@ label_BFC07AE4: ;
 #endif
 label_BFC07AE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07AE8u);
@@ -194502,7 +194502,7 @@ label_BFC07B18:
     cosim_block(0x1FC07B18u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B18u);
@@ -194616,7 +194616,7 @@ label_BFC07B2C:
     cosim_block(0x1FC07B2Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B2Cu);
@@ -194637,7 +194637,7 @@ label_BFC07B2C:
 #endif
 label_BFC07B30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B30u);
@@ -194830,7 +194830,7 @@ label_BFC07B50:
     cosim_block(0x1FC07B50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B50u);
@@ -194851,7 +194851,7 @@ label_BFC07B50:
 #endif
 label_BFC07B54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B54u);
@@ -195025,7 +195025,7 @@ label_BFC07B70:
     cosim_block(0x1FC07B70u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B70u);
@@ -195126,7 +195126,7 @@ label_BFC07B80: ;
 #endif
 label_BFC07B84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B84u);
@@ -195241,7 +195241,7 @@ label_BFC07B98:
     cosim_block(0x1FC07B98u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B98u);
@@ -195262,7 +195262,7 @@ label_BFC07B98:
 #endif
 label_BFC07B9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07B9Cu);
@@ -195357,7 +195357,7 @@ label_BFC07BAC:
     cosim_block(0x1FC07BACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BACu);
@@ -195424,7 +195424,7 @@ label_BFC07BB8:
     cosim_block(0x1FC07BB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BB8u);
@@ -195445,7 +195445,7 @@ label_BFC07BB8:
 #endif
 label_BFC07BBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BBCu);
@@ -195466,7 +195466,7 @@ label_BFC07BBC: ;
 #endif
 label_BFC07BC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BC0u);
@@ -195487,7 +195487,7 @@ label_BFC07BC0: ;
 #endif
 label_BFC07BC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BC4u);
@@ -195508,7 +195508,7 @@ label_BFC07BC4: ;
 #endif
 label_BFC07BC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BC8u);
@@ -195529,7 +195529,7 @@ label_BFC07BC8: ;
 #endif
 label_BFC07BCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BCCu);
@@ -195571,7 +195571,7 @@ label_BFC07BD0: ;
 #endif
 label_BFC07BD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BD4u);
@@ -195640,7 +195640,7 @@ label_BFC07BE0:
     cosim_block(0x1FC07BE0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07BE0u);
@@ -195897,7 +195897,7 @@ label_BFC07C0C:
     cosim_block(0x1FC07C0Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C0Cu);
@@ -195978,7 +195978,7 @@ label_BFC07C18: ;
 #endif
 label_BFC07C1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C1Cu);
@@ -196005,7 +196005,7 @@ label_BFC07C20:
     cosim_block(0x1FC07C20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C20u);
@@ -196121,7 +196121,7 @@ label_BFC07C34:
     cosim_block(0x1FC07C34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C34u);
@@ -196161,7 +196161,7 @@ label_BFC07C38: ;
 #endif
 label_BFC07C3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C3Cu);
@@ -196297,7 +196297,7 @@ label_BFC07C50:
 #endif
 label_BFC07C54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C54u);
@@ -196337,7 +196337,7 @@ label_BFC07C58: ;
 #endif
 label_BFC07C5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C5Cu);
@@ -196418,7 +196418,7 @@ label_BFC07C68: ;
 #endif
 label_BFC07C6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C6Cu);
@@ -196460,7 +196460,7 @@ cpu->gpr[2] = 0xBFC00000u;
 #endif
 label_BFC07C74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07C74u);
@@ -197336,7 +197336,7 @@ label_BFC07CF4:
     cosim_block(0x1FC07CF4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07CF4u);
@@ -197357,7 +197357,7 @@ label_BFC07CF4:
 #endif
 label_BFC07CF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07CF8u);
@@ -197378,7 +197378,7 @@ label_BFC07CF8: ;
 #endif
 label_BFC07CFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07CFCu);
@@ -197857,7 +197857,7 @@ label_BFC07D4C:
     cosim_block(0x1FC07D4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07D4Cu);
@@ -198974,7 +198974,7 @@ label_BFC07DFC:
     cosim_block(0x1FC07DFCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07DFCu);
@@ -199050,7 +199050,7 @@ label_BFC07E08:
     cosim_block(0x1FC07E08u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07E08u);
@@ -199951,7 +199951,7 @@ label_BFC07E84:
     cosim_block(0x1FC07E84u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07E84u);
@@ -200044,7 +200044,7 @@ label_BFC07E94:
     cosim_block(0x1FC07E94u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07E94u);
@@ -200137,7 +200137,7 @@ label_BFC07EA4:
     cosim_block(0x1FC07EA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07EA4u);
@@ -200878,7 +200878,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC07F24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F24u);
@@ -200899,7 +200899,7 @@ label_BFC07F24: ;
 #endif
 label_BFC07F28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F28u);
@@ -200975,7 +200975,7 @@ label_BFC07F34:
     cosim_block(0x1FC07F34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F34u);
@@ -200996,7 +200996,7 @@ label_BFC07F34:
 #endif
 label_BFC07F38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F38u);
@@ -201017,7 +201017,7 @@ label_BFC07F38: ;
 #endif
 label_BFC07F3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F3Cu);
@@ -201038,7 +201038,7 @@ label_BFC07F3C: ;
 #endif
 label_BFC07F40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F40u);
@@ -201059,7 +201059,7 @@ label_BFC07F40: ;
 #endif
 label_BFC07F44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F44u);
@@ -201080,7 +201080,7 @@ label_BFC07F44: ;
 #endif
 label_BFC07F48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F48u);
@@ -201510,7 +201510,7 @@ label_BFC07F94:
     cosim_block(0x1FC07F94u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07F94u);
@@ -201605,7 +201605,7 @@ label_BFC07FA4:
     cosim_block(0x1FC07FA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FA4u);
@@ -201716,7 +201716,7 @@ label_BFC07FB8:
     cosim_block(0x1FC07FB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FB8u);
@@ -201808,7 +201808,7 @@ label_BFC07FC8:
     cosim_block(0x1FC07FC8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FC8u);
@@ -201979,7 +201979,7 @@ label_BFC07FE0: ;
 #endif
 label_BFC07FE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FE4u);
@@ -202000,7 +202000,7 @@ label_BFC07FE4: ;
 #endif
 label_BFC07FE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FE8u);
@@ -202021,7 +202021,7 @@ label_BFC07FE8: ;
 #endif
 label_BFC07FEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FECu);
@@ -202042,7 +202042,7 @@ label_BFC07FEC: ;
 #endif
 label_BFC07FF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FF0u);
@@ -202063,7 +202063,7 @@ label_BFC07FF0: ;
 #endif
 label_BFC07FF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FF4u);
@@ -202084,7 +202084,7 @@ label_BFC07FF4: ;
 #endif
 label_BFC07FF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC07FF8u);
@@ -202473,7 +202473,7 @@ label_BFC08038:
     cosim_block(0x1FC08038u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08038u);
@@ -202494,7 +202494,7 @@ label_BFC08038:
 #endif
 label_BFC0803C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0803Cu);
@@ -202515,7 +202515,7 @@ label_BFC0803C: ;
 #endif
 label_BFC08040: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08040u);
@@ -202536,7 +202536,7 @@ label_BFC08040: ;
 #endif
 label_BFC08044: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08044u);
@@ -202557,7 +202557,7 @@ label_BFC08044: ;
 #endif
 label_BFC08048: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08048u);
@@ -202578,7 +202578,7 @@ label_BFC08048: ;
 #endif
 label_BFC0804C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0804Cu);
@@ -203937,7 +203937,7 @@ label_BFC0811C:
     cosim_block(0x1FC0811Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0811Cu);
@@ -203977,7 +203977,7 @@ label_BFC08120: ;
 #endif
 label_BFC08124: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08124u);
@@ -203998,7 +203998,7 @@ label_BFC08124: ;
 #endif
 label_BFC08128: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08128u);
@@ -204123,7 +204123,7 @@ label_BFC0813C: ;
 #endif
 label_BFC08140: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08140u);
@@ -204144,7 +204144,7 @@ label_BFC08140: ;
 #endif
 label_BFC08144: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08144u);
@@ -204351,7 +204351,7 @@ label_BFC08168: ;
 #endif
 label_BFC0816C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0816Cu);
@@ -204574,7 +204574,7 @@ label_BFC0818C:
     cosim_block(0x1FC0818Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0818Cu);
@@ -204614,7 +204614,7 @@ label_BFC08190: ;
 #endif
 label_BFC08194: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08194u);
@@ -204635,7 +204635,7 @@ label_BFC08194: ;
 #endif
 label_BFC08198: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08198u);
@@ -204760,7 +204760,7 @@ label_BFC081AC: ;
 #endif
 label_BFC081B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC081B0u);
@@ -204781,7 +204781,7 @@ label_BFC081B0: ;
 #endif
 label_BFC081B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC081B4u);
@@ -204988,7 +204988,7 @@ label_BFC081D8: ;
 #endif
 label_BFC081DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC081DCu);
@@ -205196,7 +205196,7 @@ label_BFC081FC:
     cosim_block(0x1FC081FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC081FCu);
@@ -205299,7 +205299,7 @@ label_BFC0820C: ;
 #endif
 label_BFC08210: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08210u);
@@ -205507,7 +205507,7 @@ label_BFC08230:
     cosim_block(0x1FC08230u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08230u);
@@ -205610,7 +205610,7 @@ label_BFC08240: ;
 #endif
 label_BFC08244: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08244u);
@@ -205818,7 +205818,7 @@ label_BFC08264:
     cosim_block(0x1FC08264u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08264u);
@@ -205921,7 +205921,7 @@ label_BFC08274: ;
 #endif
 label_BFC08278: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08278u);
@@ -206137,7 +206137,7 @@ label_BFC08298:
     cosim_block(0x1FC08298u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08298u);
@@ -206177,7 +206177,7 @@ label_BFC0829C: ;
 #endif
 label_BFC082A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC082A0u);
@@ -206198,7 +206198,7 @@ label_BFC082A0: ;
 #endif
 label_BFC082A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC082A4u);
@@ -206405,7 +206405,7 @@ label_BFC082C8: ;
 #endif
 label_BFC082CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC082CCu);
@@ -206621,7 +206621,7 @@ label_BFC082EC:
     cosim_block(0x1FC082ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC082ECu);
@@ -206661,7 +206661,7 @@ label_BFC082F0: ;
 #endif
 label_BFC082F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC082F4u);
@@ -206682,7 +206682,7 @@ label_BFC082F4: ;
 #endif
 label_BFC082F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC082F8u);
@@ -206889,7 +206889,7 @@ label_BFC0831C: ;
 #endif
 label_BFC08320: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08320u);
@@ -207089,7 +207089,7 @@ label_BFC0833C:
     cosim_block(0x1FC0833Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0833Cu);
@@ -208515,7 +208515,7 @@ label_BFC08414:
     cosim_block(0x1FC08414u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08414u);
@@ -208536,7 +208536,7 @@ label_BFC08414:
 #endif
 label_BFC08418: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08418u);
@@ -208557,7 +208557,7 @@ label_BFC08418: ;
 #endif
 label_BFC0841C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0841Cu);
@@ -208578,7 +208578,7 @@ label_BFC0841C: ;
 #endif
 label_BFC08420: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08420u);
@@ -208599,7 +208599,7 @@ label_BFC08420: ;
 #endif
 label_BFC08424: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08424u);
@@ -208667,7 +208667,7 @@ label_BFC08430:
     cosim_block(0x1FC08430u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08430u);
@@ -208886,7 +208886,7 @@ label_BFC08454:
     cosim_block(0x1FC08454u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08454u);
@@ -210045,7 +210045,7 @@ label_BFC08504:
     cosim_block(0x1FC08504u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08504u);
@@ -210066,7 +210066,7 @@ label_BFC08504:
 #endif
 label_BFC08508: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08508u);
@@ -210087,7 +210087,7 @@ label_BFC08508: ;
 #endif
 label_BFC0850C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0850Cu);
@@ -210108,7 +210108,7 @@ label_BFC0850C: ;
 #endif
 label_BFC08510: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08510u);
@@ -210129,7 +210129,7 @@ label_BFC08510: ;
 #endif
 label_BFC08514: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08514u);
@@ -210150,7 +210150,7 @@ label_BFC08514: ;
 #endif
 label_BFC08518: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08518u);
@@ -210171,7 +210171,7 @@ label_BFC08518: ;
 #endif
 label_BFC0851C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0851Cu);
@@ -210192,7 +210192,7 @@ label_BFC0851C: ;
 #endif
 label_BFC08520: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08520u);
@@ -210213,7 +210213,7 @@ label_BFC08520: ;
 #endif
 label_BFC08524: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08524u);
@@ -210524,7 +210524,7 @@ label_BFC08558:
     cosim_block(0x1FC08558u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08558u);
@@ -210545,7 +210545,7 @@ label_BFC08558:
 #endif
 label_BFC0855C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0855Cu);
@@ -210926,7 +210926,7 @@ label_BFC08598:
     cosim_block(0x1FC08598u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08598u);
@@ -210947,7 +210947,7 @@ label_BFC08598:
 #endif
 label_BFC0859C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0859Cu);
@@ -211487,7 +211487,7 @@ label_BFC085F0:
     cosim_block(0x1FC085F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC085F0u);
@@ -212002,7 +212002,7 @@ label_BFC0863C:
     cosim_block(0x1FC0863Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0863Cu);
@@ -212247,7 +212247,7 @@ label_BFC08664:
     cosim_block(0x1FC08664u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08664u);
@@ -212540,7 +212540,7 @@ label_BFC08688:
 #endif
 label_BFC0868C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0868Cu);
@@ -212561,7 +212561,7 @@ label_BFC0868C: ;
 #endif
 label_BFC08690: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08690u);
@@ -213527,7 +213527,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC0870C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0870Cu);
@@ -214166,7 +214166,7 @@ label_BFC08778:
     cosim_block(0x1FC08778u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08778u);
@@ -215305,7 +215305,7 @@ cpu->gpr[6] = 0x00000000u;
 #endif
 label_BFC08830: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08830u);
@@ -217311,7 +217311,7 @@ label_BFC08958:
     cosim_block(0x1FC08958u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08958u);
@@ -217526,7 +217526,7 @@ label_BFC08978:
 #endif
 label_BFC0897C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0897Cu);
@@ -217701,7 +217701,7 @@ label_BFC08998:
     cosim_block(0x1FC08998u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08998u);
@@ -217898,7 +217898,7 @@ label_BFC089B8:
     cosim_block(0x1FC089B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089B8u);
@@ -217993,7 +217993,7 @@ label_BFC089C8:
     cosim_block(0x1FC089C8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089C8u);
@@ -218135,7 +218135,7 @@ label_BFC089E0:
     cosim_block(0x1FC089E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089E0u);
@@ -218156,7 +218156,7 @@ label_BFC089E0:
 #endif
 label_BFC089E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089E4u);
@@ -218177,7 +218177,7 @@ label_BFC089E4: ;
 #endif
 label_BFC089E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089E8u);
@@ -218198,7 +218198,7 @@ label_BFC089E8: ;
 #endif
 label_BFC089EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089ECu);
@@ -218219,7 +218219,7 @@ label_BFC089EC: ;
 #endif
 label_BFC089F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089F0u);
@@ -218240,7 +218240,7 @@ label_BFC089F0: ;
 #endif
 label_BFC089F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089F4u);
@@ -218261,7 +218261,7 @@ label_BFC089F4: ;
 #endif
 label_BFC089F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089F8u);
@@ -218282,7 +218282,7 @@ label_BFC089F8: ;
 #endif
 label_BFC089FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC089FCu);
@@ -218303,7 +218303,7 @@ label_BFC089FC: ;
 #endif
 label_BFC08A00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08A00u);
@@ -218345,7 +218345,7 @@ label_BFC08A04: ;
 #endif
 label_BFC08A08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08A08u);
@@ -219061,7 +219061,7 @@ label_BFC08A80:
     cosim_block(0x1FC08A80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08A80u);
@@ -219204,7 +219204,7 @@ label_BFC08A98:
     cosim_block(0x1FC08A98u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08A98u);
@@ -219452,7 +219452,7 @@ label_BFC08AC0:
     cosim_block(0x1FC08AC0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08AC0u);
@@ -219778,7 +219778,7 @@ label_BFC08AF4: ;
 #endif
 label_BFC08AF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08AF8u);
@@ -219987,7 +219987,7 @@ label_BFC08B18:
     cosim_block(0x1FC08B18u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08B18u);
@@ -220538,7 +220538,7 @@ label_BFC08B6C: ;
 #endif
 label_BFC08B70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08B70u);
@@ -220789,7 +220789,7 @@ label_BFC08B98:
     cosim_block(0x1FC08B98u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08B98u);
@@ -220894,7 +220894,7 @@ label_BFC08BA8: ;
 #endif
 label_BFC08BAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08BACu);
@@ -221117,7 +221117,7 @@ label_BFC08BD0:
     cosim_block(0x1FC08BD0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08BD0u);
@@ -221165,7 +221165,7 @@ label_BFC08BD8:
     cosim_block(0x1FC08BD8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08BD8u);
@@ -221276,7 +221276,7 @@ label_BFC08BEC:
     cosim_block(0x1FC08BECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08BECu);
@@ -221476,7 +221476,7 @@ label_BFC08C0C: ;
 #endif
 label_BFC08C10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08C10u);
@@ -221695,7 +221695,7 @@ label_BFC08C34:
     cosim_block(0x1FC08C34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08C34u);
@@ -221756,7 +221756,7 @@ label_BFC08C3C: ;
 #endif
 label_BFC08C40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08C40u);
@@ -221997,7 +221997,7 @@ label_BFC08C60: ;
 #endif
 label_BFC08C64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08C64u);
@@ -222172,7 +222172,7 @@ label_BFC08C84:
     cosim_block(0x1FC08C84u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08C84u);
@@ -222193,7 +222193,7 @@ label_BFC08C84:
 #endif
 label_BFC08C88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08C88u);
@@ -222558,7 +222558,7 @@ label_BFC08C9C:
 #endif
 label_BFC08CA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08CA0u);
@@ -222621,7 +222621,7 @@ label_BFC08CA8: ;
 #endif
 label_BFC08CAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08CACu);
@@ -222850,7 +222850,7 @@ label_BFC08CD0: ;
 #endif
 label_BFC08CD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08CD4u);
@@ -223863,7 +223863,7 @@ label_BFC08D74: ;
 #endif
 label_BFC08D78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08D78u);
@@ -224038,7 +224038,7 @@ label_BFC08D90: ;
 #endif
 label_BFC08D94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08D94u);
@@ -224664,7 +224664,7 @@ label_BFC08DFC: ;
 #endif
 label_BFC08E00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08E00u);
@@ -224757,7 +224757,7 @@ label_BFC08E10:
     cosim_block(0x1FC08E10u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08E10u);
@@ -224778,7 +224778,7 @@ label_BFC08E10:
 #endif
 label_BFC08E14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08E14u);
@@ -224871,7 +224871,7 @@ label_BFC08E24:
     cosim_block(0x1FC08E24u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08E24u);
@@ -225417,7 +225417,7 @@ cpu->gpr[4] = 0xBFC20000u;
 #endif
 label_BFC08E7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08E7Cu);
@@ -225545,7 +225545,7 @@ label_BFC08E90:
     cosim_block(0x1FC08E90u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08E90u);
@@ -225972,7 +225972,7 @@ cpu->gpr[4] = 0xBFC20000u;
 #endif
 label_BFC08ED4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08ED4u);
@@ -226789,7 +226789,7 @@ label_BFC08F4C:
     cosim_block(0x1FC08F4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08F4Cu);
@@ -227253,7 +227253,7 @@ label_BFC08F8C:
     cosim_block(0x1FC08F8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08F8Cu);
@@ -227431,7 +227431,7 @@ label_BFC08FA8:
     cosim_block(0x1FC08FA8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08FA8u);
@@ -227750,7 +227750,7 @@ label_BFC08FD4:
     cosim_block(0x1FC08FD4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08FD4u);
@@ -227941,7 +227941,7 @@ label_BFC08FF0:
 #endif
 label_BFC08FF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC08FF4u);
@@ -228364,7 +228364,7 @@ label_BFC09028:
     cosim_block(0x1FC09028u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09028u);
@@ -228475,7 +228475,7 @@ label_BFC0903C:
     cosim_block(0x1FC0903Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0903Cu);
@@ -229235,7 +229235,7 @@ label_BFC090B8:
     cosim_block(0x1FC090B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC090B8u);
@@ -229256,7 +229256,7 @@ label_BFC090B8:
 #endif
 label_BFC090BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC090BCu);
@@ -229384,7 +229384,7 @@ label_BFC090D0:
     cosim_block(0x1FC090D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC090D0u);
@@ -229405,7 +229405,7 @@ label_BFC090D0:
 #endif
 label_BFC090D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC090D4u);
@@ -230906,7 +230906,7 @@ label_BFC091B8:
     cosim_block(0x1FC091B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC091B8u);
@@ -230927,7 +230927,7 @@ label_BFC091B8:
 #endif
 label_BFC091BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC091BCu);
@@ -230948,7 +230948,7 @@ label_BFC091BC: ;
 #endif
 label_BFC091C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC091C0u);
@@ -231017,7 +231017,7 @@ label_BFC091CC:
     cosim_block(0x1FC091CCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC091CCu);
@@ -231163,7 +231163,7 @@ label_BFC091E0:
     cosim_block(0x1FC091E0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC091E0u);
@@ -232003,7 +232003,7 @@ label_BFC09240:
     cosim_block(0x1FC09240u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09240u);
@@ -232096,7 +232096,7 @@ label_BFC09250:
     cosim_block(0x1FC09250u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09250u);
@@ -232323,7 +232323,7 @@ label_BFC09274:
     cosim_block(0x1FC09274u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09274u);
@@ -233286,7 +233286,7 @@ label_BFC09310:
     cosim_block(0x1FC09310u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09310u);
@@ -233326,7 +233326,7 @@ label_BFC09314: ;
 #endif
 label_BFC09318: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09318u);
@@ -233520,7 +233520,7 @@ label_BFC09338:
     cosim_block(0x1FC09338u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09338u);
@@ -233615,7 +233615,7 @@ label_BFC09348:
     cosim_block(0x1FC09348u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09348u);
@@ -233676,7 +233676,7 @@ label_BFC09350: ;
 #endif
 label_BFC09354: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09354u);
@@ -233939,7 +233939,7 @@ label_BFC0937C: ;
 #endif
 label_BFC09380: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09380u);
@@ -234120,7 +234120,7 @@ label_BFC0939C:
 #endif
 label_BFC093A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC093A0u);
@@ -234559,7 +234559,7 @@ label_BFC093E4:
     cosim_block(0x1FC093E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC093E4u);
@@ -234599,7 +234599,7 @@ label_BFC093E8: ;
 #endif
 label_BFC093EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC093ECu);
@@ -235019,7 +235019,7 @@ label_BFC09430:
     cosim_block(0x1FC09430u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09430u);
@@ -235080,7 +235080,7 @@ label_BFC09438: ;
 #endif
 label_BFC0943C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0943Cu);
@@ -235760,7 +235760,7 @@ label_BFC094AC:
     cosim_block(0x1FC094ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC094ACu);
@@ -235821,7 +235821,7 @@ label_BFC094B4: ;
 #endif
 label_BFC094B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC094B8u);
@@ -235964,7 +235964,7 @@ label_BFC094CC:
 #endif
 label_BFC094D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC094D0u);
@@ -236204,7 +236204,7 @@ label_BFC094F4:
 #endif
 label_BFC094F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC094F8u);
@@ -236617,7 +236617,7 @@ label_BFC09538:
     cosim_block(0x1FC09538u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09538u);
@@ -236743,7 +236743,7 @@ cpu->gpr[21] = 0xBFC20000u;
 #endif
 label_BFC09550: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09550u);
@@ -237155,7 +237155,7 @@ label_BFC09594:
     cosim_block(0x1FC09594u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09594u);
@@ -237176,7 +237176,7 @@ label_BFC09594:
 #endif
 label_BFC09598: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC09598u);
@@ -237197,7 +237197,7 @@ label_BFC09598: ;
 #endif
 label_BFC0959C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC0959Cu);
@@ -237218,7 +237218,7 @@ label_BFC0959C: ;
 #endif
 label_BFC095A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095A0u);
@@ -237239,7 +237239,7 @@ label_BFC095A0: ;
 #endif
 label_BFC095A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095A4u);
@@ -237260,7 +237260,7 @@ label_BFC095A4: ;
 #endif
 label_BFC095A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095A8u);
@@ -237281,7 +237281,7 @@ label_BFC095A8: ;
 #endif
 label_BFC095AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095ACu);
@@ -237302,7 +237302,7 @@ label_BFC095AC: ;
 #endif
 label_BFC095B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095B0u);
@@ -237323,7 +237323,7 @@ label_BFC095B0: ;
 #endif
 label_BFC095B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(10u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095B4u);
@@ -237550,7 +237550,7 @@ label_BFC095D8:
     cosim_block(0x1FC095D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(7u);
+    psx_native_span_charge(12u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0xBFC095D8u);
@@ -237813,7 +237813,7 @@ cpu->gpr[10] = 0x1F800000u;
 #endif
 label_BFC0A504: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030004u);
@@ -237855,7 +237855,7 @@ cpu->gpr[8] = 0x00080000u;
 #endif
 label_BFC0A50C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003000Cu);
@@ -239627,7 +239627,7 @@ label_BFC0A5AC: ;
 #endif
 label_BFC0A5B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800300B0u);
@@ -239669,7 +239669,7 @@ label_BFC0A5B4: ;
 #endif
 label_BFC0A5B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800300B8u);
@@ -239857,7 +239857,7 @@ label_BFC0A5D8:
     cosim_block(0x1FC0A5D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800300D8u);
@@ -239899,7 +239899,7 @@ cpu->gpr[2] = 0x04000000u;
 #endif
 label_BFC0A5E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800300E0u);
@@ -240208,7 +240208,7 @@ label_BFC0A614: ;
 #endif
 label_BFC0A618: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030118u);
@@ -240248,7 +240248,7 @@ label_BFC0A61C: ;
 #endif
 label_BFC0A620: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030120u);
@@ -240690,7 +240690,7 @@ label_BFC0A66C: ;
 #endif
 label_BFC0A670: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030170u);
@@ -240711,7 +240711,7 @@ label_BFC0A670: ;
 #endif
 label_BFC0A674: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030174u);
@@ -240732,7 +240732,7 @@ label_BFC0A674: ;
 #endif
 label_BFC0A678: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030178u);
@@ -240784,7 +240784,7 @@ label_BFC0A680:
     cosim_block(0x1FC0A680u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030180u);
@@ -240824,7 +240824,7 @@ label_BFC0A684: ;
 #endif
 label_BFC0A688: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030188u);
@@ -240897,7 +240897,7 @@ cpu->gpr[4] = 0x80040000u;
 #endif
 label_BFC0A694: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030194u);
@@ -240937,7 +240937,7 @@ label_BFC0A698: ;
 #endif
 label_BFC0A69C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003019Cu);
@@ -241371,7 +241371,7 @@ label_BFC0A6E8:
     cosim_block(0x1FC0A6E8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800301E8u);
@@ -241411,7 +241411,7 @@ label_BFC0A6EC: ;
 #endif
 label_BFC0A6F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800301F0u);
@@ -241461,7 +241461,7 @@ label_BFC0A6F8:
     cosim_block(0x1FC0A6F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800301F8u);
@@ -241501,7 +241501,7 @@ label_BFC0A6FC: ;
 #endif
 label_BFC0A700: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030200u);
@@ -241598,7 +241598,7 @@ label_BFC0A710:
     cosim_block(0x1FC0A710u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030210u);
@@ -241638,7 +241638,7 @@ label_BFC0A714: ;
 #endif
 label_BFC0A718: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030218u);
@@ -241742,7 +241742,7 @@ label_BFC0A728:
     cosim_block(0x1FC0A728u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030228u);
@@ -241784,7 +241784,7 @@ label_BFC0A72C: ;
 #endif
 label_BFC0A730: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030230u);
@@ -241805,7 +241805,7 @@ label_BFC0A730: ;
 #endif
 label_BFC0A734: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030234u);
@@ -241828,7 +241828,7 @@ label_BFC0A734: ;
 #endif
 label_BFC0A738: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030238u);
@@ -241849,7 +241849,7 @@ label_BFC0A738: ;
 #endif
 label_BFC0A73C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003023Cu);
@@ -241894,7 +241894,7 @@ cpu->gpr[2] = cpu->lo;
 #endif
 label_BFC0A744: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030244u);
@@ -241913,7 +241913,7 @@ label_BFC0A744: ;
 #endif
 label_BFC0A748: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030248u);
@@ -241932,7 +241932,7 @@ label_BFC0A748: ;
 #endif
 label_BFC0A74C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003024Cu);
@@ -241955,7 +241955,7 @@ label_BFC0A74C: ;
 #endif
 label_BFC0A750: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030250u);
@@ -241979,7 +241979,7 @@ cpu->gpr[3] = cpu->lo;
 #endif
 label_BFC0A754: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030254u);
@@ -242047,7 +242047,7 @@ label_BFC0A760:
     cosim_block(0x1FC0A760u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030260u);
@@ -242087,7 +242087,7 @@ label_BFC0A764: ;
 #endif
 label_BFC0A768: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030268u);
@@ -242305,7 +242305,7 @@ label_BFC0A78C:
     cosim_block(0x1FC0A78Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003028Cu);
@@ -242326,7 +242326,7 @@ label_BFC0A78C:
 #endif
 label_BFC0A790: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030290u);
@@ -242368,7 +242368,7 @@ label_BFC0A794: ;
 #endif
 label_BFC0A798: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030298u);
@@ -242388,7 +242388,7 @@ label_BFC0A798: ;
 #endif
 label_BFC0A79C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003029Cu);
@@ -242490,7 +242490,7 @@ label_BFC0A7AC:
     cosim_block(0x1FC0A7ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800302ACu);
@@ -242532,7 +242532,7 @@ label_BFC0A7B0: ;
 #endif
 label_BFC0A7B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800302B4u);
@@ -242553,7 +242553,7 @@ label_BFC0A7B4: ;
 #endif
 label_BFC0A7B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800302B8u);
@@ -242574,7 +242574,7 @@ label_BFC0A7B8: ;
 #endif
 label_BFC0A7BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800302BCu);
@@ -242981,7 +242981,7 @@ label_BFC0A800:
     cosim_block(0x1FC0A800u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030300u);
@@ -243023,7 +243023,7 @@ label_BFC0A804: ;
 #endif
 label_BFC0A808: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030308u);
@@ -243963,7 +243963,7 @@ label_BFC0A8B0:
     cosim_block(0x1FC0A8B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303B0u);
@@ -244005,7 +244005,7 @@ label_BFC0A8B4: ;
 #endif
 label_BFC0A8B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303B8u);
@@ -244026,7 +244026,7 @@ label_BFC0A8B8: ;
 #endif
 label_BFC0A8BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303BCu);
@@ -244075,7 +244075,7 @@ label_BFC0A8C4:
     cosim_block(0x1FC0A8C4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303C4u);
@@ -244096,7 +244096,7 @@ label_BFC0A8C4:
 #endif
 label_BFC0A8C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303C8u);
@@ -244148,7 +244148,7 @@ label_BFC0A8D0:
     cosim_block(0x1FC0A8D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303D0u);
@@ -244188,7 +244188,7 @@ label_BFC0A8D4: ;
 #endif
 label_BFC0A8D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303D8u);
@@ -244208,7 +244208,7 @@ label_BFC0A8D8: ;
 #endif
 label_BFC0A8DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303DCu);
@@ -244274,7 +244274,7 @@ label_BFC0A8E4:
 #endif
 label_BFC0A8E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303E8u);
@@ -244316,7 +244316,7 @@ label_BFC0A8EC: ;
 #endif
 label_BFC0A8F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303F0u);
@@ -244357,7 +244357,7 @@ label_BFC0A8F4: ;
 #endif
 label_BFC0A8F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800303F8u);
@@ -244397,7 +244397,7 @@ label_BFC0A8FC: ;
 #endif
 label_BFC0A900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030400u);
@@ -244499,7 +244499,7 @@ label_BFC0A910:
     cosim_block(0x1FC0A910u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030410u);
@@ -244539,7 +244539,7 @@ label_BFC0A914: ;
 #endif
 label_BFC0A918: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030418u);
@@ -244686,7 +244686,7 @@ label_BFC0A934:
     cosim_block(0x1FC0A934u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030434u);
@@ -244707,7 +244707,7 @@ label_BFC0A934:
 #endif
 label_BFC0A938: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030438u);
@@ -244896,7 +244896,7 @@ label_BFC0A958:
     cosim_block(0x1FC0A958u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030458u);
@@ -244936,7 +244936,7 @@ label_BFC0A95C: ;
 #endif
 label_BFC0A960: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030460u);
@@ -245287,7 +245287,7 @@ label_BFC0A99C:
     cosim_block(0x1FC0A99Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003049Cu);
@@ -245308,7 +245308,7 @@ label_BFC0A99C:
 #endif
 label_BFC0A9A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304A0u);
@@ -245376,7 +245376,7 @@ cpu->gpr[11] = 0x80040000u;
 #endif
 label_BFC0A9AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304ACu);
@@ -245416,7 +245416,7 @@ label_BFC0A9B0: ;
 #endif
 label_BFC0A9B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304B4u);
@@ -245489,7 +245489,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0A9C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304C0u);
@@ -245531,7 +245531,7 @@ label_BFC0A9C4: ;
 #endif
 label_BFC0A9C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304C8u);
@@ -245593,7 +245593,7 @@ label_BFC0A9D0: ;
 #endif
 label_BFC0A9D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304D4u);
@@ -245635,7 +245635,7 @@ label_BFC0A9D8: ;
 #endif
 label_BFC0A9DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304DCu);
@@ -245656,7 +245656,7 @@ label_BFC0A9DC: ;
 #endif
 label_BFC0A9E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304E0u);
@@ -245756,7 +245756,7 @@ label_BFC0A9F0:
     cosim_block(0x1FC0A9F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304F0u);
@@ -245801,7 +245801,7 @@ cpu->gpr[2] = cpu->lo;
 #endif
 label_BFC0A9F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304F8u);
@@ -245821,7 +245821,7 @@ label_BFC0A9F8: ;
 #endif
 label_BFC0A9FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800304FCu);
@@ -245842,7 +245842,7 @@ label_BFC0A9FC: ;
 #endif
 label_BFC0AA00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030500u);
@@ -245882,7 +245882,7 @@ label_BFC0AA04: ;
 #endif
 label_BFC0AA08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030508u);
@@ -245902,7 +245902,7 @@ label_BFC0AA08: ;
 #endif
 label_BFC0AA0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003050Cu);
@@ -245942,7 +245942,7 @@ label_BFC0AA10: ;
 #endif
 label_BFC0AA14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030514u);
@@ -245962,7 +245962,7 @@ label_BFC0AA14: ;
 #endif
 label_BFC0AA18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030518u);
@@ -246002,7 +246002,7 @@ label_BFC0AA1C: ;
 #endif
 label_BFC0AA20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030520u);
@@ -246022,7 +246022,7 @@ label_BFC0AA20: ;
 #endif
 label_BFC0AA24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030524u);
@@ -246043,7 +246043,7 @@ label_BFC0AA24: ;
 #endif
 label_BFC0AA28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030528u);
@@ -246064,7 +246064,7 @@ label_BFC0AA28: ;
 #endif
 label_BFC0AA2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003052Cu);
@@ -246114,7 +246114,7 @@ label_BFC0AA34:
     cosim_block(0x1FC0AA34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030534u);
@@ -246135,7 +246135,7 @@ label_BFC0AA34:
 #endif
 label_BFC0AA38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030538u);
@@ -246177,7 +246177,7 @@ label_BFC0AA3C: ;
 #endif
 label_BFC0AA40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030540u);
@@ -246288,7 +246288,7 @@ label_BFC0AA54:
     cosim_block(0x1FC0AA54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030554u);
@@ -246328,7 +246328,7 @@ label_BFC0AA58: ;
 #endif
 label_BFC0AA5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003055Cu);
@@ -246419,7 +246419,7 @@ label_BFC0AA68:
 #endif
 label_BFC0AA6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003056Cu);
@@ -246461,7 +246461,7 @@ label_BFC0AA70: ;
 #endif
 label_BFC0AA74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030574u);
@@ -247272,7 +247272,7 @@ label_BFC0AB00:
     cosim_block(0x1FC0AB00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030600u);
@@ -247312,7 +247312,7 @@ label_BFC0AB04: ;
 #endif
 label_BFC0AB08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030608u);
@@ -247767,7 +247767,7 @@ label_BFC0AB54:
     cosim_block(0x1FC0AB54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030654u);
@@ -247788,7 +247788,7 @@ label_BFC0AB54:
 #endif
 label_BFC0AB58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030658u);
@@ -247830,7 +247830,7 @@ label_BFC0AB5C: ;
 #endif
 label_BFC0AB60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030660u);
@@ -247851,7 +247851,7 @@ label_BFC0AB60: ;
 #endif
 label_BFC0AB64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030664u);
@@ -247891,7 +247891,7 @@ label_BFC0AB68: ;
 #endif
 label_BFC0AB6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003066Cu);
@@ -247911,7 +247911,7 @@ label_BFC0AB6C: ;
 #endif
 label_BFC0AB70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030670u);
@@ -247951,7 +247951,7 @@ label_BFC0AB74: ;
 #endif
 label_BFC0AB78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030678u);
@@ -247971,7 +247971,7 @@ label_BFC0AB78: ;
 #endif
 label_BFC0AB7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003067Cu);
@@ -248011,7 +248011,7 @@ label_BFC0AB80: ;
 #endif
 label_BFC0AB84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030684u);
@@ -248031,7 +248031,7 @@ label_BFC0AB84: ;
 #endif
 label_BFC0AB88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030688u);
@@ -248071,7 +248071,7 @@ label_BFC0AB8C: ;
 #endif
 label_BFC0AB90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030690u);
@@ -248091,7 +248091,7 @@ label_BFC0AB90: ;
 #endif
 label_BFC0AB94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030694u);
@@ -248131,7 +248131,7 @@ label_BFC0AB98: ;
 #endif
 label_BFC0AB9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003069Cu);
@@ -248152,7 +248152,7 @@ label_BFC0AB9C: ;
 #endif
 label_BFC0ABA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306A0u);
@@ -248173,7 +248173,7 @@ label_BFC0ABA0: ;
 #endif
 label_BFC0ABA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306A4u);
@@ -248220,7 +248220,7 @@ label_BFC0ABAC:
     cosim_block(0x1FC0ABACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306ACu);
@@ -248241,7 +248241,7 @@ label_BFC0ABAC:
 #endif
 label_BFC0ABB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306B0u);
@@ -248283,7 +248283,7 @@ label_BFC0ABB4: ;
 #endif
 label_BFC0ABB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306B8u);
@@ -248352,7 +248352,7 @@ label_BFC0ABC4:
     cosim_block(0x1FC0ABC4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306C4u);
@@ -248392,7 +248392,7 @@ label_BFC0ABC8: ;
 #endif
 label_BFC0ABCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306CCu);
@@ -248483,7 +248483,7 @@ label_BFC0ABD8:
 #endif
 label_BFC0ABDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306DCu);
@@ -248525,7 +248525,7 @@ label_BFC0ABE0: ;
 #endif
 label_BFC0ABE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306E4u);
@@ -248546,7 +248546,7 @@ label_BFC0ABE4: ;
 #endif
 label_BFC0ABE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306E8u);
@@ -248588,7 +248588,7 @@ label_BFC0ABEC: ;
 #endif
 label_BFC0ABF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306F0u);
@@ -248656,7 +248656,7 @@ label_BFC0ABFC:
     cosim_block(0x1FC0ABFCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800306FCu);
@@ -248698,7 +248698,7 @@ label_BFC0AC00: ;
 #endif
 label_BFC0AC04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030704u);
@@ -248766,7 +248766,7 @@ label_BFC0AC10:
     cosim_block(0x1FC0AC10u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030710u);
@@ -248806,7 +248806,7 @@ label_BFC0AC14: ;
 #endif
 label_BFC0AC18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030718u);
@@ -248877,7 +248877,7 @@ label_BFC0AC24:
     cosim_block(0x1FC0AC24u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030724u);
@@ -248917,7 +248917,7 @@ label_BFC0AC28: ;
 #endif
 label_BFC0AC2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003072Cu);
@@ -249481,7 +249481,7 @@ label_BFC0AC88:
     cosim_block(0x1FC0AC88u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030788u);
@@ -249521,7 +249521,7 @@ label_BFC0AC8C: ;
 #endif
 label_BFC0AC90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030790u);
@@ -249598,7 +249598,7 @@ label_BFC0AC9C:
     cosim_block(0x1FC0AC9Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003079Cu);
@@ -249619,7 +249619,7 @@ label_BFC0AC9C:
 #endif
 label_BFC0ACA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307A0u);
@@ -249640,7 +249640,7 @@ label_BFC0ACA0: ;
 #endif
 label_BFC0ACA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307A4u);
@@ -249661,7 +249661,7 @@ label_BFC0ACA4: ;
 #endif
 label_BFC0ACA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307A8u);
@@ -249682,7 +249682,7 @@ label_BFC0ACA8: ;
 #endif
 label_BFC0ACAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307ACu);
@@ -249703,7 +249703,7 @@ label_BFC0ACAC: ;
 #endif
 label_BFC0ACB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307B0u);
@@ -249724,7 +249724,7 @@ label_BFC0ACB0: ;
 #endif
 label_BFC0ACB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307B4u);
@@ -249745,7 +249745,7 @@ label_BFC0ACB4: ;
 #endif
 label_BFC0ACB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307B8u);
@@ -249766,7 +249766,7 @@ label_BFC0ACB8: ;
 #endif
 label_BFC0ACBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307BCu);
@@ -249787,7 +249787,7 @@ label_BFC0ACBC: ;
 #endif
 label_BFC0ACC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307C0u);
@@ -249829,7 +249829,7 @@ label_BFC0ACC4: ;
 #endif
 label_BFC0ACC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307C8u);
@@ -249946,7 +249946,7 @@ label_BFC0ACD8:
 #endif
 label_BFC0ACDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307DCu);
@@ -249986,7 +249986,7 @@ label_BFC0ACE0: ;
 #endif
 label_BFC0ACE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307E4u);
@@ -250006,7 +250006,7 @@ label_BFC0ACE4: ;
 #endif
 label_BFC0ACE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307E8u);
@@ -250046,7 +250046,7 @@ label_BFC0ACEC: ;
 #endif
 label_BFC0ACF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307F0u);
@@ -250066,7 +250066,7 @@ label_BFC0ACF0: ;
 #endif
 label_BFC0ACF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307F4u);
@@ -250106,7 +250106,7 @@ label_BFC0ACF8: ;
 #endif
 label_BFC0ACFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800307FCu);
@@ -250126,7 +250126,7 @@ label_BFC0ACFC: ;
 #endif
 label_BFC0AD00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030800u);
@@ -250147,7 +250147,7 @@ label_BFC0AD00: ;
 #endif
 label_BFC0AD04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030804u);
@@ -250168,7 +250168,7 @@ label_BFC0AD04: ;
 #endif
 label_BFC0AD08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030808u);
@@ -250189,7 +250189,7 @@ label_BFC0AD08: ;
 #endif
 label_BFC0AD0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003080Cu);
@@ -250210,7 +250210,7 @@ label_BFC0AD0C: ;
 #endif
 label_BFC0AD10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030810u);
@@ -250305,7 +250305,7 @@ label_BFC0AD20:
     cosim_block(0x1FC0AD20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030820u);
@@ -250347,7 +250347,7 @@ cpu->gpr[2] = 0x01000000u;
 #endif
 label_BFC0AD28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030828u);
@@ -250368,7 +250368,7 @@ label_BFC0AD28: ;
 #endif
 label_BFC0AD2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003082Cu);
@@ -250391,7 +250391,7 @@ label_BFC0AD2C: ;
 #endif
 label_BFC0AD30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030830u);
@@ -250436,7 +250436,7 @@ cpu->gpr[4] = cpu->lo;
 #endif
 label_BFC0AD38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030838u);
@@ -250457,7 +250457,7 @@ label_BFC0AD38: ;
 #endif
 label_BFC0AD3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003083Cu);
@@ -250481,7 +250481,7 @@ cpu->gpr[5] = cpu->hi;
 #endif
 label_BFC0AD40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030840u);
@@ -250502,7 +250502,7 @@ label_BFC0AD40: ;
 #endif
 label_BFC0AD44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030844u);
@@ -250523,7 +250523,7 @@ label_BFC0AD44: ;
 #endif
 label_BFC0AD48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030848u);
@@ -250563,7 +250563,7 @@ label_BFC0AD4C: ;
 #endif
 label_BFC0AD50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030850u);
@@ -250793,7 +250793,7 @@ cpu->gpr[18] = 0x80040000u;
 #endif
 label_BFC0AD78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030878u);
@@ -250835,7 +250835,7 @@ label_BFC0AD7C: ;
 #endif
 label_BFC0AD80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030880u);
@@ -250924,7 +250924,7 @@ cpu->gpr[7] = 0x80040000u;
 #endif
 label_BFC0AD90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030890u);
@@ -250966,7 +250966,7 @@ label_BFC0AD94: ;
 #endif
 label_BFC0AD98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030898u);
@@ -251164,7 +251164,7 @@ label_BFC0ADBC:
     cosim_block(0x1FC0ADBCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800308BCu);
@@ -251206,7 +251206,7 @@ label_BFC0ADC0: ;
 #endif
 label_BFC0ADC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800308C4u);
@@ -251384,7 +251384,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0ADE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800308E4u);
@@ -251405,7 +251405,7 @@ label_BFC0ADE4: ;
 #endif
 label_BFC0ADE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800308E8u);
@@ -251494,7 +251494,7 @@ cpu->gpr[5] = 0x80040000u;
 #endif
 label_BFC0ADF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800308F8u);
@@ -251515,7 +251515,7 @@ label_BFC0ADF8: ;
 #endif
 label_BFC0ADFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800308FCu);
@@ -251557,7 +251557,7 @@ cpu->gpr[9] = 0x80040000u;
 #endif
 label_BFC0AE04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030904u);
@@ -251619,7 +251619,7 @@ cpu->gpr[5] = 0x80040000u;
 #endif
 label_BFC0AE10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030910u);
@@ -251640,7 +251640,7 @@ label_BFC0AE10: ;
 #endif
 label_BFC0AE14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030914u);
@@ -251661,7 +251661,7 @@ label_BFC0AE14: ;
 #endif
 label_BFC0AE18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030918u);
@@ -251703,7 +251703,7 @@ label_BFC0AE1C: ;
 #endif
 label_BFC0AE20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030920u);
@@ -251724,7 +251724,7 @@ cpu->gpr[6] = 0x80040000u;
 #endif
 label_BFC0AE24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030924u);
@@ -251744,7 +251744,7 @@ label_BFC0AE24: ;
 #endif
 label_BFC0AE28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030928u);
@@ -251765,7 +251765,7 @@ cpu->gpr[5] = 0x80040000u;
 #endif
 label_BFC0AE2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003092Cu);
@@ -251786,7 +251786,7 @@ label_BFC0AE2C: ;
 #endif
 label_BFC0AE30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030930u);
@@ -251807,7 +251807,7 @@ label_BFC0AE30: ;
 #endif
 label_BFC0AE34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030934u);
@@ -251828,7 +251828,7 @@ label_BFC0AE34: ;
 #endif
 label_BFC0AE38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030938u);
@@ -251849,7 +251849,7 @@ label_BFC0AE38: ;
 #endif
 label_BFC0AE3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003093Cu);
@@ -251891,7 +251891,7 @@ label_BFC0AE40: ;
 #endif
 label_BFC0AE44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030944u);
@@ -253736,7 +253736,7 @@ label_BFC0AF78:
     cosim_block(0x1FC0AF78u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030A78u);
@@ -253776,7 +253776,7 @@ label_BFC0AF7C: ;
 #endif
 label_BFC0AF80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030A80u);
@@ -253864,7 +253864,7 @@ label_BFC0AF90:
     cosim_block(0x1FC0AF90u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030A90u);
@@ -253885,7 +253885,7 @@ label_BFC0AF90:
 #endif
 label_BFC0AF94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030A94u);
@@ -253929,7 +253929,7 @@ label_BFC0AF98: ;
 #endif
 label_BFC0AF9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030A9Cu);
@@ -253953,7 +253953,7 @@ cpu->gpr[6] = cpu->lo;
 #endif
 label_BFC0AFA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030AA0u);
@@ -253974,7 +253974,7 @@ label_BFC0AFA0: ;
 #endif
 label_BFC0AFA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030AA4u);
@@ -253998,7 +253998,7 @@ cpu->gpr[7] = cpu->hi;
 #endif
 label_BFC0AFA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030AA8u);
@@ -254019,7 +254019,7 @@ label_BFC0AFA8: ;
 #endif
 label_BFC0AFAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030AACu);
@@ -254060,7 +254060,7 @@ label_BFC0AFB0: ;
 #endif
 label_BFC0AFB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030AB4u);
@@ -254100,7 +254100,7 @@ label_BFC0AFB8: ;
 #endif
 label_BFC0AFBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030ABCu);
@@ -254463,7 +254463,7 @@ label_BFC0AFFC:
     cosim_block(0x1FC0AFFCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030AFCu);
@@ -254484,7 +254484,7 @@ label_BFC0AFFC:
 #endif
 label_BFC0B000: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B00u);
@@ -254526,7 +254526,7 @@ label_BFC0B004: ;
 #endif
 label_BFC0B008: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B08u);
@@ -254546,7 +254546,7 @@ label_BFC0B008: ;
 #endif
 label_BFC0B00C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B0Cu);
@@ -254733,7 +254733,7 @@ label_BFC0B028:
     cosim_block(0x1FC0B028u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B28u);
@@ -254773,7 +254773,7 @@ label_BFC0B02C: ;
 #endif
 label_BFC0B030: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B30u);
@@ -254970,7 +254970,7 @@ label_BFC0B050:
     cosim_block(0x1FC0B050u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B50u);
@@ -254991,7 +254991,7 @@ label_BFC0B050:
 #endif
 label_BFC0B054: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B54u);
@@ -255035,7 +255035,7 @@ label_BFC0B058: ;
 #endif
 label_BFC0B05C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B5Cu);
@@ -255056,7 +255056,7 @@ label_BFC0B05C: ;
 #endif
 label_BFC0B060: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B60u);
@@ -255077,7 +255077,7 @@ label_BFC0B060: ;
 #endif
 label_BFC0B064: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B64u);
@@ -255101,7 +255101,7 @@ cpu->gpr[14] = cpu->lo;
 #endif
 label_BFC0B068: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B68u);
@@ -255122,7 +255122,7 @@ label_BFC0B068: ;
 #endif
 label_BFC0B06C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030B6Cu);
@@ -255443,7 +255443,7 @@ label_BFC0B0A4:
     cosim_block(0x1FC0B0A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030BA4u);
@@ -255464,7 +255464,7 @@ label_BFC0B0A4:
 #endif
 label_BFC0B0A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030BA8u);
@@ -255506,7 +255506,7 @@ label_BFC0B0AC: ;
 #endif
 label_BFC0B0B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030BB0u);
@@ -255569,7 +255569,7 @@ label_BFC0B0B8: ;
 #endif
 label_BFC0B0BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030BBCu);
@@ -255590,7 +255590,7 @@ label_BFC0B0BC: ;
 #endif
 label_BFC0B0C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030BC0u);
@@ -255630,7 +255630,7 @@ label_BFC0B0C4: ;
 #endif
 label_BFC0B0C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030BC8u);
@@ -256088,7 +256088,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0B114: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030C14u);
@@ -256128,7 +256128,7 @@ label_BFC0B118: ;
 #endif
 label_BFC0B11C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030C1Cu);
@@ -256371,7 +256371,7 @@ label_BFC0B144:
     cosim_block(0x1FC0B144u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030C44u);
@@ -256392,7 +256392,7 @@ label_BFC0B144:
 #endif
 label_BFC0B148: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030C48u);
@@ -256998,7 +256998,7 @@ label_BFC0B19C: ;
 #endif
 label_BFC0B1A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CA0u);
@@ -257039,7 +257039,7 @@ label_BFC0B1A4: ;
 #endif
 label_BFC0B1A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CA8u);
@@ -257081,7 +257081,7 @@ label_BFC0B1AC: ;
 #endif
 label_BFC0B1B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CB0u);
@@ -257101,7 +257101,7 @@ label_BFC0B1B0: ;
 #endif
 label_BFC0B1B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CB4u);
@@ -257121,7 +257121,7 @@ label_BFC0B1B4: ;
 #endif
 label_BFC0B1B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CB8u);
@@ -257163,7 +257163,7 @@ cpu->gpr[4] = 0x00FF0000u;
 #endif
 label_BFC0B1C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CC0u);
@@ -257184,7 +257184,7 @@ label_BFC0B1C0: ;
 #endif
 label_BFC0B1C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CC4u);
@@ -257267,7 +257267,7 @@ label_BFC0B1D0: ;
 #endif
 label_BFC0B1D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CD4u);
@@ -257307,7 +257307,7 @@ label_BFC0B1D8: ;
 #endif
 label_BFC0B1DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030CDCu);
@@ -257985,7 +257985,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0B254: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D54u);
@@ -258025,7 +258025,7 @@ label_BFC0B258: ;
 #endif
 label_BFC0B25C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D5Cu);
@@ -258101,7 +258101,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0B268: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D68u);
@@ -258141,7 +258141,7 @@ label_BFC0B26C: ;
 #endif
 label_BFC0B270: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D70u);
@@ -258274,7 +258274,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0B284: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D84u);
@@ -258314,7 +258314,7 @@ label_BFC0B288: ;
 #endif
 label_BFC0B28C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D8Cu);
@@ -258422,7 +258422,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0B29C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030D9Cu);
@@ -258462,7 +258462,7 @@ label_BFC0B2A0: ;
 #endif
 label_BFC0B2A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DA4u);
@@ -258664,7 +258664,7 @@ cpu->gpr[16] = 0x80040000u;
 #endif
 label_BFC0B2BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DBCu);
@@ -258706,7 +258706,7 @@ label_BFC0B2C0: ;
 #endif
 label_BFC0B2C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DC4u);
@@ -258726,7 +258726,7 @@ label_BFC0B2C4: ;
 #endif
 label_BFC0B2C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DC8u);
@@ -258746,7 +258746,7 @@ label_BFC0B2C8: ;
 #endif
 label_BFC0B2CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DCCu);
@@ -258766,7 +258766,7 @@ label_BFC0B2CC: ;
 #endif
 label_BFC0B2D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DD0u);
@@ -258786,7 +258786,7 @@ label_BFC0B2D0: ;
 #endif
 label_BFC0B2D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DD4u);
@@ -258985,7 +258985,7 @@ label_BFC0B2F4:
     cosim_block(0x1FC0B2F4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DF4u);
@@ -259027,7 +259027,7 @@ cpu->gpr[3] = 0x01000000u;
 #endif
 label_BFC0B2FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030DFCu);
@@ -259098,7 +259098,7 @@ label_BFC0B308:
     cosim_block(0x1FC0B308u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E08u);
@@ -259140,7 +259140,7 @@ label_BFC0B30C: ;
 #endif
 label_BFC0B310: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E10u);
@@ -259303,7 +259303,7 @@ label_BFC0B32C:
     cosim_block(0x1FC0B32Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E2Cu);
@@ -259343,7 +259343,7 @@ label_BFC0B330: ;
 #endif
 label_BFC0B334: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E34u);
@@ -259502,7 +259502,7 @@ label_BFC0B34C:
     cosim_block(0x1FC0B34Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E4Cu);
@@ -259544,7 +259544,7 @@ label_BFC0B350: ;
 #endif
 label_BFC0B354: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E54u);
@@ -259787,7 +259787,7 @@ label_BFC0B378:
     cosim_block(0x1FC0B378u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E78u);
@@ -259808,7 +259808,7 @@ label_BFC0B378:
 #endif
 label_BFC0B37C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E7Cu);
@@ -259829,7 +259829,7 @@ label_BFC0B37C: ;
 #endif
 label_BFC0B380: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E80u);
@@ -259850,7 +259850,7 @@ label_BFC0B380: ;
 #endif
 label_BFC0B384: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E84u);
@@ -259871,7 +259871,7 @@ label_BFC0B384: ;
 #endif
 label_BFC0B388: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E88u);
@@ -259892,7 +259892,7 @@ label_BFC0B388: ;
 #endif
 label_BFC0B38C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E8Cu);
@@ -259913,7 +259913,7 @@ label_BFC0B38C: ;
 #endif
 label_BFC0B390: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E90u);
@@ -259934,7 +259934,7 @@ label_BFC0B390: ;
 #endif
 label_BFC0B394: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030E94u);
@@ -260034,7 +260034,7 @@ cpu->gpr[5] = 0x1F800000u;
 #endif
 label_BFC0B3A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EA0u);
@@ -260076,7 +260076,7 @@ cpu->gpr[3] = 0x01000000u;
 #endif
 label_BFC0B3A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EA8u);
@@ -260152,7 +260152,7 @@ label_BFC0B3B4:
     cosim_block(0x1FC0B3B4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EB4u);
@@ -260194,7 +260194,7 @@ label_BFC0B3B8: ;
 #endif
 label_BFC0B3BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EBCu);
@@ -260509,7 +260509,7 @@ label_BFC0B3EC:
     cosim_block(0x1FC0B3ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EECu);
@@ -260530,7 +260530,7 @@ label_BFC0B3EC:
 #endif
 label_BFC0B3F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EF0u);
@@ -260551,7 +260551,7 @@ label_BFC0B3F0: ;
 #endif
 label_BFC0B3F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EF4u);
@@ -260572,7 +260572,7 @@ label_BFC0B3F4: ;
 #endif
 label_BFC0B3F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EF8u);
@@ -260593,7 +260593,7 @@ label_BFC0B3F8: ;
 #endif
 label_BFC0B3FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030EFCu);
@@ -260614,7 +260614,7 @@ label_BFC0B3FC: ;
 #endif
 label_BFC0B400: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F00u);
@@ -260635,7 +260635,7 @@ label_BFC0B400: ;
 #endif
 label_BFC0B404: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F04u);
@@ -260656,7 +260656,7 @@ label_BFC0B404: ;
 #endif
 label_BFC0B408: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F08u);
@@ -260809,7 +260809,7 @@ label_BFC0B418: ;
 #endif
 label_BFC0B41C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F1Cu);
@@ -260849,7 +260849,7 @@ label_BFC0B420: ;
 #endif
 label_BFC0B424: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F24u);
@@ -261305,7 +261305,7 @@ label_BFC0B470: ;
 #endif
 label_BFC0B474: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F74u);
@@ -261345,7 +261345,7 @@ label_BFC0B478: ;
 #endif
 label_BFC0B47C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F7Cu);
@@ -261490,7 +261490,7 @@ cpu->gpr[2] = 0xBF800000u;
 #endif
 label_BFC0B490: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F90u);
@@ -261511,7 +261511,7 @@ label_BFC0B490: ;
 #endif
 label_BFC0B494: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F94u);
@@ -261553,7 +261553,7 @@ label_BFC0B498: ;
 #endif
 label_BFC0B49C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030F9Cu);
@@ -261984,7 +261984,7 @@ cpu->gpr[2] = 0xBF800000u;
 #endif
 label_BFC0B4DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030FDCu);
@@ -262005,7 +262005,7 @@ label_BFC0B4DC: ;
 #endif
 label_BFC0B4E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030FE0u);
@@ -262045,7 +262045,7 @@ label_BFC0B4E4: ;
 #endif
 label_BFC0B4E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80030FE8u);
@@ -262202,7 +262202,7 @@ label_BFC0B500: ;
 #endif
 label_BFC0B504: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031004u);
@@ -262242,7 +262242,7 @@ label_BFC0B508: ;
 #endif
 label_BFC0B50C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003100Cu);
@@ -262868,7 +262868,7 @@ label_BFC0B568:
 #endif
 label_BFC0B56C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003106Cu);
@@ -262889,7 +262889,7 @@ label_BFC0B56C: ;
 #endif
 label_BFC0B570: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031070u);
@@ -263293,7 +263293,7 @@ label_BFC0B598: ;
 #endif
 label_BFC0B59C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003109Cu);
@@ -263335,7 +263335,7 @@ label_BFC0B5A0: ;
 #endif
 label_BFC0B5A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310A4u);
@@ -263387,7 +263387,7 @@ label_BFC0B5AC:
     cosim_block(0x1FC0B5ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310ACu);
@@ -263427,7 +263427,7 @@ label_BFC0B5B0: ;
 #endif
 label_BFC0B5B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310B4u);
@@ -263479,7 +263479,7 @@ label_BFC0B5BC:
     cosim_block(0x1FC0B5BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310BCu);
@@ -263519,7 +263519,7 @@ label_BFC0B5C0: ;
 #endif
 label_BFC0B5C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310C4u);
@@ -263569,7 +263569,7 @@ label_BFC0B5CC:
     cosim_block(0x1FC0B5CCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310CCu);
@@ -263609,7 +263609,7 @@ label_BFC0B5D0: ;
 #endif
 label_BFC0B5D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310D4u);
@@ -263661,7 +263661,7 @@ label_BFC0B5DC:
     cosim_block(0x1FC0B5DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310DCu);
@@ -263701,7 +263701,7 @@ label_BFC0B5E0: ;
 #endif
 label_BFC0B5E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310E4u);
@@ -263751,7 +263751,7 @@ label_BFC0B5EC:
     cosim_block(0x1FC0B5ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310ECu);
@@ -263793,7 +263793,7 @@ label_BFC0B5F0: ;
 #endif
 label_BFC0B5F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800310F4u);
@@ -263943,7 +263943,7 @@ label_BFC0B60C:
     cosim_block(0x1FC0B60Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003110Cu);
@@ -263985,7 +263985,7 @@ label_BFC0B610: ;
 #endif
 label_BFC0B614: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031114u);
@@ -264026,7 +264026,7 @@ label_BFC0B618: ;
 #endif
 label_BFC0B61C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003111Cu);
@@ -264046,7 +264046,7 @@ label_BFC0B61C: ;
 #endif
 label_BFC0B620: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031120u);
@@ -264088,7 +264088,7 @@ label_BFC0B624: ;
 #endif
 label_BFC0B628: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031128u);
@@ -265271,7 +265271,7 @@ label_BFC0B6F0:
     cosim_block(0x1FC0B6F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800311F0u);
@@ -265311,7 +265311,7 @@ label_BFC0B6F4: ;
 #endif
 label_BFC0B6F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800311F8u);
@@ -265527,7 +265527,7 @@ label_BFC0B71C:
     cosim_block(0x1FC0B71Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003121Cu);
@@ -265567,7 +265567,7 @@ label_BFC0B720: ;
 #endif
 label_BFC0B724: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031224u);
@@ -266147,7 +266147,7 @@ label_BFC0B780:
     cosim_block(0x1FC0B780u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031280u);
@@ -266187,7 +266187,7 @@ label_BFC0B784: ;
 #endif
 label_BFC0B788: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031288u);
@@ -266375,7 +266375,7 @@ label_BFC0B7A0:
     cosim_block(0x1FC0B7A0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312A0u);
@@ -266415,7 +266415,7 @@ label_BFC0B7A4: ;
 #endif
 label_BFC0B7A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312A8u);
@@ -266572,7 +266572,7 @@ label_BFC0B7C0: ;
 #endif
 label_BFC0B7C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312C4u);
@@ -266612,7 +266612,7 @@ label_BFC0B7C8: ;
 #endif
 label_BFC0B7CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312CCu);
@@ -266741,7 +266741,7 @@ cpu->gpr[2] = 0xBF800000u;
 #endif
 label_BFC0B7E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312E0u);
@@ -266762,7 +266762,7 @@ label_BFC0B7E0: ;
 #endif
 label_BFC0B7E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312E4u);
@@ -266903,7 +266903,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC0B7F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312F8u);
@@ -266924,7 +266924,7 @@ label_BFC0B7F8: ;
 #endif
 label_BFC0B7FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800312FCu);
@@ -266945,7 +266945,7 @@ label_BFC0B7FC: ;
 #endif
 label_BFC0B800: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031300u);
@@ -266987,7 +266987,7 @@ label_BFC0B804: ;
 #endif
 label_BFC0B808: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031308u);
@@ -267133,7 +267133,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC0B81C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003131Cu);
@@ -267175,7 +267175,7 @@ label_BFC0B820: ;
 #endif
 label_BFC0B824: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031324u);
@@ -267442,7 +267442,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC0B850: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031350u);
@@ -267670,7 +267670,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC0B874: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031374u);
@@ -267691,7 +267691,7 @@ label_BFC0B874: ;
 #endif
 label_BFC0B878: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031378u);
@@ -267909,7 +267909,7 @@ cpu->gpr[2] = 0xBF800000u;
 #endif
 label_BFC0B894: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031394u);
@@ -267951,7 +267951,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0B89C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003139Cu);
@@ -267972,7 +267972,7 @@ label_BFC0B89C: ;
 #endif
 label_BFC0B8A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800313A0u);
@@ -268012,7 +268012,7 @@ label_BFC0B8A4: ;
 #endif
 label_BFC0B8A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800313A8u);
@@ -268439,7 +268439,7 @@ label_BFC0B8EC:
     cosim_block(0x1FC0B8ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800313ECu);
@@ -268481,7 +268481,7 @@ label_BFC0B8F0: ;
 #endif
 label_BFC0B8F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800313F4u);
@@ -268615,7 +268615,7 @@ label_BFC0B908: ;
 #endif
 label_BFC0B90C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003140Cu);
@@ -268655,7 +268655,7 @@ label_BFC0B910: ;
 #endif
 label_BFC0B914: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031414u);
@@ -268844,7 +268844,7 @@ label_BFC0B930:
     cosim_block(0x1FC0B930u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031430u);
@@ -268884,7 +268884,7 @@ label_BFC0B934: ;
 #endif
 label_BFC0B938: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031438u);
@@ -269221,7 +269221,7 @@ cpu->gpr[6] = 0x80040000u;
 #endif
 label_BFC0B960: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031460u);
@@ -269263,7 +269263,7 @@ label_BFC0B964: ;
 #endif
 label_BFC0B968: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031468u);
@@ -269466,7 +269466,7 @@ label_BFC0B988: ;
 #endif
 label_BFC0B98C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003148Cu);
@@ -269506,7 +269506,7 @@ label_BFC0B990: ;
 #endif
 label_BFC0B994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031494u);
@@ -269864,7 +269864,7 @@ label_BFC0B9D0:
 #endif
 label_BFC0B9D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800314D4u);
@@ -269906,7 +269906,7 @@ cpu->gpr[2] = 0xE5000000u;
 #endif
 label_BFC0B9DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800314DCu);
@@ -270036,7 +270036,7 @@ label_BFC0B9F0:
 #endif
 label_BFC0B9F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800314F4u);
@@ -270057,7 +270057,7 @@ label_BFC0B9F4: ;
 #endif
 label_BFC0B9F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800314F8u);
@@ -270078,7 +270078,7 @@ label_BFC0B9F8: ;
 #endif
 label_BFC0B9FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800314FCu);
@@ -270099,7 +270099,7 @@ label_BFC0B9FC: ;
 #endif
 label_BFC0BA00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031500u);
@@ -270120,7 +270120,7 @@ label_BFC0BA00: ;
 #endif
 label_BFC0BA04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031504u);
@@ -270443,7 +270443,7 @@ label_BFC0BA40:
     cosim_block(0x1FC0BA40u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031540u);
@@ -270483,7 +270483,7 @@ label_BFC0BA44: ;
 #endif
 label_BFC0BA48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031548u);
@@ -270601,7 +270601,7 @@ label_BFC0BA5C:
     cosim_block(0x1FC0BA5Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003155Cu);
@@ -270622,7 +270622,7 @@ label_BFC0BA5C:
 #endif
 label_BFC0BA60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031560u);
@@ -270643,7 +270643,7 @@ label_BFC0BA60: ;
 #endif
 label_BFC0BA64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031564u);
@@ -270664,7 +270664,7 @@ label_BFC0BA64: ;
 #endif
 label_BFC0BA68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031568u);
@@ -271277,7 +271277,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC0BAC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800315C8u);
@@ -271319,7 +271319,7 @@ cpu->gpr[2] = 0x58530000u;
 #endif
 label_BFC0BAD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800315D0u);
@@ -271340,7 +271340,7 @@ label_BFC0BAD0: ;
 #endif
 label_BFC0BAD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800315D4u);
@@ -271419,7 +271419,7 @@ label_BFC0BAE0:
     cosim_block(0x1FC0BAE0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800315E0u);
@@ -271440,7 +271440,7 @@ label_BFC0BAE0:
 #endif
 label_BFC0BAE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800315E4u);
@@ -271480,7 +271480,7 @@ label_BFC0BAE8: ;
 #endif
 label_BFC0BAEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800315ECu);
@@ -271731,7 +271731,7 @@ cpu->gpr[2] = 0xBF800000u;
 #endif
 label_BFC0BB14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031614u);
@@ -271773,7 +271773,7 @@ cpu->gpr[17] = 0xBF800000u;
 #endif
 label_BFC0BB1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003161Cu);
@@ -271820,7 +271820,7 @@ label_BFC0BB24:
     cosim_block(0x1FC0BB24u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031624u);
@@ -271860,7 +271860,7 @@ label_BFC0BB28: ;
 #endif
 label_BFC0BB2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003162Cu);
@@ -271931,7 +271931,7 @@ label_BFC0BB38:
     cosim_block(0x1FC0BB38u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031638u);
@@ -271973,7 +271973,7 @@ label_BFC0BB3C: ;
 #endif
 label_BFC0BB40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031640u);
@@ -272040,7 +272040,7 @@ label_BFC0BB4C:
     cosim_block(0x1FC0BB4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003164Cu);
@@ -272061,7 +272061,7 @@ label_BFC0BB4C:
 #endif
 label_BFC0BB50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031650u);
@@ -272082,7 +272082,7 @@ label_BFC0BB50: ;
 #endif
 label_BFC0BB54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031654u);
@@ -272103,7 +272103,7 @@ label_BFC0BB54: ;
 #endif
 label_BFC0BB58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031658u);
@@ -272124,7 +272124,7 @@ label_BFC0BB58: ;
 #endif
 label_BFC0BB5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003165Cu);
@@ -273203,7 +273203,7 @@ label_BFC0BC10: ;
 #endif
 label_BFC0BC14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031714u);
@@ -273243,7 +273243,7 @@ label_BFC0BC18: ;
 #endif
 label_BFC0BC1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003171Cu);
@@ -273333,7 +273333,7 @@ label_BFC0BC24:
     cosim_block(0x1FC0BC24u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031724u);
@@ -273375,7 +273375,7 @@ label_BFC0BC28: ;
 #endif
 label_BFC0BC2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003172Cu);
@@ -273396,7 +273396,7 @@ label_BFC0BC2C: ;
 #endif
 label_BFC0BC30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031730u);
@@ -273417,7 +273417,7 @@ label_BFC0BC30: ;
 #endif
 label_BFC0BC34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031734u);
@@ -273503,7 +273503,7 @@ label_BFC0BC40: ;
 #endif
 label_BFC0BC44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031744u);
@@ -273545,7 +273545,7 @@ label_BFC0BC48: ;
 #endif
 label_BFC0BC4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003174Cu);
@@ -274063,7 +274063,7 @@ label_BFC0BC94: ;
 #endif
 label_BFC0BC98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031798u);
@@ -274105,7 +274105,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0BCA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317A0u);
@@ -274125,7 +274125,7 @@ label_BFC0BCA0: ;
 #endif
 label_BFC0BCA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317A4u);
@@ -274146,7 +274146,7 @@ label_BFC0BCA4: ;
 #endif
 label_BFC0BCA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317A8u);
@@ -274187,7 +274187,7 @@ label_BFC0BCAC: ;
 #endif
 label_BFC0BCB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317B0u);
@@ -274208,7 +274208,7 @@ label_BFC0BCB0: ;
 #endif
 label_BFC0BCB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317B4u);
@@ -274250,7 +274250,7 @@ label_BFC0BCB8: ;
 #endif
 label_BFC0BCBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317BCu);
@@ -274271,7 +274271,7 @@ label_BFC0BCBC: ;
 #endif
 label_BFC0BCC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317C0u);
@@ -274292,7 +274292,7 @@ label_BFC0BCC0: ;
 #endif
 label_BFC0BCC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317C4u);
@@ -274392,7 +274392,7 @@ label_BFC0BCD4:
     cosim_block(0x1FC0BCD4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317D4u);
@@ -274413,7 +274413,7 @@ label_BFC0BCD4:
 #endif
 label_BFC0BCD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317D8u);
@@ -274455,7 +274455,7 @@ label_BFC0BCDC: ;
 #endif
 label_BFC0BCE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317E0u);
@@ -274541,7 +274541,7 @@ label_BFC0BCEC: ;
 #endif
 label_BFC0BCF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317F0u);
@@ -274562,7 +274562,7 @@ label_BFC0BCF0: ;
 #endif
 label_BFC0BCF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317F4u);
@@ -274604,7 +274604,7 @@ label_BFC0BCF8: ;
 #endif
 label_BFC0BCFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800317FCu);
@@ -275090,7 +275090,7 @@ label_BFC0BD54:
     cosim_block(0x1FC0BD54u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031854u);
@@ -275130,7 +275130,7 @@ label_BFC0BD58: ;
 #endif
 label_BFC0BD5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003185Cu);
@@ -275651,7 +275651,7 @@ label_BFC0BDA8:
     cosim_block(0x1FC0BDA8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318A8u);
@@ -275672,7 +275672,7 @@ label_BFC0BDA8:
 #endif
 label_BFC0BDAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318ACu);
@@ -275693,7 +275693,7 @@ label_BFC0BDAC: ;
 #endif
 label_BFC0BDB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318B0u);
@@ -275714,7 +275714,7 @@ label_BFC0BDB0: ;
 #endif
 label_BFC0BDB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318B4u);
@@ -275735,7 +275735,7 @@ label_BFC0BDB4: ;
 #endif
 label_BFC0BDB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318B8u);
@@ -275756,7 +275756,7 @@ label_BFC0BDB8: ;
 #endif
 label_BFC0BDBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318BCu);
@@ -275777,7 +275777,7 @@ label_BFC0BDBC: ;
 #endif
 label_BFC0BDC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318C0u);
@@ -275798,7 +275798,7 @@ label_BFC0BDC0: ;
 #endif
 label_BFC0BDC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318C4u);
@@ -276088,7 +276088,7 @@ label_BFC0BDF4:
     cosim_block(0x1FC0BDF4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318F4u);
@@ -276109,7 +276109,7 @@ label_BFC0BDF4:
 #endif
 label_BFC0BDF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800318F8u);
@@ -276150,7 +276150,7 @@ label_BFC0BDFC: ;
 #endif
 label_BFC0BE00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031900u);
@@ -276171,7 +276171,7 @@ label_BFC0BE00: ;
 #endif
 label_BFC0BE04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031904u);
@@ -276211,7 +276211,7 @@ label_BFC0BE08: ;
 #endif
 label_BFC0BE0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003190Cu);
@@ -277432,7 +277432,7 @@ label_BFC0BEB8: ;
 #endif
 label_BFC0BEBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319BCu);
@@ -277474,7 +277474,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0BEC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319C4u);
@@ -277495,7 +277495,7 @@ label_BFC0BEC4: ;
 #endif
 label_BFC0BEC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319C8u);
@@ -277516,7 +277516,7 @@ label_BFC0BEC8: ;
 #endif
 label_BFC0BECC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319CCu);
@@ -277536,7 +277536,7 @@ label_BFC0BECC: ;
 #endif
 label_BFC0BED0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319D0u);
@@ -277557,7 +277557,7 @@ label_BFC0BED0: ;
 #endif
 label_BFC0BED4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319D4u);
@@ -277760,7 +277760,7 @@ label_BFC0BEF4: ;
 #endif
 label_BFC0BEF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319F8u);
@@ -277781,7 +277781,7 @@ label_BFC0BEF8: ;
 #endif
 label_BFC0BEFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800319FCu);
@@ -277822,7 +277822,7 @@ label_BFC0BF00: ;
 #endif
 label_BFC0BF04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A04u);
@@ -277862,7 +277862,7 @@ label_BFC0BF08: ;
 #endif
 label_BFC0BF0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A0Cu);
@@ -278245,7 +278245,7 @@ label_BFC0BF4C:
     cosim_block(0x1FC0BF4Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A4Cu);
@@ -278287,7 +278287,7 @@ label_BFC0BF50: ;
 #endif
 label_BFC0BF54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A54u);
@@ -278307,7 +278307,7 @@ label_BFC0BF54: ;
 #endif
 label_BFC0BF58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A58u);
@@ -278349,7 +278349,7 @@ label_BFC0BF5C: ;
 #endif
 label_BFC0BF60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A60u);
@@ -278369,7 +278369,7 @@ label_BFC0BF60: ;
 #endif
 label_BFC0BF64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A64u);
@@ -278411,7 +278411,7 @@ label_BFC0BF68: ;
 #endif
 label_BFC0BF6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A6Cu);
@@ -278431,7 +278431,7 @@ label_BFC0BF6C: ;
 #endif
 label_BFC0BF70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A70u);
@@ -278473,7 +278473,7 @@ label_BFC0BF74: ;
 #endif
 label_BFC0BF78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A78u);
@@ -278493,7 +278493,7 @@ label_BFC0BF78: ;
 #endif
 label_BFC0BF7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A7Cu);
@@ -278535,7 +278535,7 @@ label_BFC0BF80: ;
 #endif
 label_BFC0BF84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A84u);
@@ -278555,7 +278555,7 @@ label_BFC0BF84: ;
 #endif
 label_BFC0BF88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A88u);
@@ -278597,7 +278597,7 @@ label_BFC0BF8C: ;
 #endif
 label_BFC0BF90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031A90u);
@@ -278730,7 +278730,7 @@ label_BFC0BFA4:
     cosim_block(0x1FC0BFA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031AA4u);
@@ -278770,7 +278770,7 @@ label_BFC0BFA8: ;
 #endif
 label_BFC0BFAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031AACu);
@@ -278914,7 +278914,7 @@ label_BFC0BFC0:
 #endif
 label_BFC0BFC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031AC4u);
@@ -278935,7 +278935,7 @@ label_BFC0BFC4: ;
 #endif
 label_BFC0BFC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031AC8u);
@@ -278975,7 +278975,7 @@ label_BFC0BFCC: ;
 #endif
 label_BFC0BFD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031AD0u);
@@ -279347,7 +279347,7 @@ label_BFC0C00C:
     cosim_block(0x1FC0C00Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B0Cu);
@@ -279387,7 +279387,7 @@ label_BFC0C010: ;
 #endif
 label_BFC0C014: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B14u);
@@ -279407,7 +279407,7 @@ label_BFC0C014: ;
 #endif
 label_BFC0C018: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B18u);
@@ -279447,7 +279447,7 @@ label_BFC0C01C: ;
 #endif
 label_BFC0C020: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B20u);
@@ -279467,7 +279467,7 @@ label_BFC0C020: ;
 #endif
 label_BFC0C024: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B24u);
@@ -279488,7 +279488,7 @@ label_BFC0C024: ;
 #endif
 label_BFC0C028: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B28u);
@@ -279509,7 +279509,7 @@ label_BFC0C028: ;
 #endif
 label_BFC0C02C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B2Cu);
@@ -279530,7 +279530,7 @@ label_BFC0C02C: ;
 #endif
 label_BFC0C030: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B30u);
@@ -279551,7 +279551,7 @@ label_BFC0C030: ;
 #endif
 label_BFC0C034: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B34u);
@@ -279649,7 +279649,7 @@ label_BFC0C044:
     cosim_block(0x1FC0C044u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B44u);
@@ -279691,7 +279691,7 @@ label_BFC0C048: ;
 #endif
 label_BFC0C04C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B4Cu);
@@ -279712,7 +279712,7 @@ label_BFC0C04C: ;
 #endif
 label_BFC0C050: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B50u);
@@ -279732,7 +279732,7 @@ label_BFC0C050: ;
 #endif
 label_BFC0C054: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B54u);
@@ -279774,7 +279774,7 @@ label_BFC0C058: ;
 #endif
 label_BFC0C05C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B5Cu);
@@ -279876,7 +279876,7 @@ label_BFC0C06C:
     cosim_block(0x1FC0C06Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B6Cu);
@@ -279916,7 +279916,7 @@ label_BFC0C070: ;
 #endif
 label_BFC0C074: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B74u);
@@ -279936,7 +279936,7 @@ label_BFC0C074: ;
 #endif
 label_BFC0C078: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B78u);
@@ -279976,7 +279976,7 @@ label_BFC0C07C: ;
 #endif
 label_BFC0C080: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B80u);
@@ -279996,7 +279996,7 @@ label_BFC0C080: ;
 #endif
 label_BFC0C084: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B84u);
@@ -280017,7 +280017,7 @@ label_BFC0C084: ;
 #endif
 label_BFC0C088: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B88u);
@@ -280038,7 +280038,7 @@ label_BFC0C088: ;
 #endif
 label_BFC0C08C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B8Cu);
@@ -280059,7 +280059,7 @@ label_BFC0C08C: ;
 #endif
 label_BFC0C090: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B90u);
@@ -280080,7 +280080,7 @@ label_BFC0C090: ;
 #endif
 label_BFC0C094: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031B94u);
@@ -280261,7 +280261,7 @@ label_BFC0C0B0: ;
 #endif
 label_BFC0C0B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BB4u);
@@ -280303,7 +280303,7 @@ label_BFC0C0B8: ;
 #endif
 label_BFC0C0BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BBCu);
@@ -280384,7 +280384,7 @@ label_BFC0C0C8:
     cosim_block(0x1FC0C0C8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BC8u);
@@ -280405,7 +280405,7 @@ label_BFC0C0C8:
 #endif
 label_BFC0C0CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BCCu);
@@ -280426,7 +280426,7 @@ label_BFC0C0CC: ;
 #endif
 label_BFC0C0D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BD0u);
@@ -280447,7 +280447,7 @@ label_BFC0C0D0: ;
 #endif
 label_BFC0C0D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BD4u);
@@ -280520,7 +280520,7 @@ label_BFC0C0DC:
     cosim_block(0x1FC0C0DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BDCu);
@@ -280541,7 +280541,7 @@ label_BFC0C0DC:
 #endif
 label_BFC0C0E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BE0u);
@@ -280583,7 +280583,7 @@ label_BFC0C0E4: ;
 #endif
 label_BFC0C0E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031BE8u);
@@ -280961,7 +280961,7 @@ label_BFC0C114: ;
 #endif
 label_BFC0C118: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C18u);
@@ -281003,7 +281003,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0C120: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C20u);
@@ -281024,7 +281024,7 @@ label_BFC0C120: ;
 #endif
 label_BFC0C124: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C24u);
@@ -281065,7 +281065,7 @@ label_BFC0C128: ;
 #endif
 label_BFC0C12C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C2Cu);
@@ -281106,7 +281106,7 @@ label_BFC0C130: ;
 #endif
 label_BFC0C134: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C34u);
@@ -281147,7 +281147,7 @@ label_BFC0C138: ;
 #endif
 label_BFC0C13C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C3Cu);
@@ -281167,7 +281167,7 @@ label_BFC0C13C: ;
 #endif
 label_BFC0C140: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C40u);
@@ -281208,7 +281208,7 @@ label_BFC0C144: ;
 #endif
 label_BFC0C148: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C48u);
@@ -281249,7 +281249,7 @@ label_BFC0C14C: ;
 #endif
 label_BFC0C150: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C50u);
@@ -281269,7 +281269,7 @@ label_BFC0C150: ;
 #endif
 label_BFC0C154: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C54u);
@@ -281310,7 +281310,7 @@ label_BFC0C158: ;
 #endif
 label_BFC0C15C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C5Cu);
@@ -281351,7 +281351,7 @@ label_BFC0C160: ;
 #endif
 label_BFC0C164: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C64u);
@@ -281371,7 +281371,7 @@ label_BFC0C164: ;
 #endif
 label_BFC0C168: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C68u);
@@ -281412,7 +281412,7 @@ label_BFC0C16C: ;
 #endif
 label_BFC0C170: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C70u);
@@ -281453,7 +281453,7 @@ label_BFC0C174: ;
 #endif
 label_BFC0C178: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C78u);
@@ -281473,7 +281473,7 @@ label_BFC0C178: ;
 #endif
 label_BFC0C17C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C7Cu);
@@ -281514,7 +281514,7 @@ label_BFC0C180: ;
 #endif
 label_BFC0C184: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C84u);
@@ -281555,7 +281555,7 @@ label_BFC0C188: ;
 #endif
 label_BFC0C18C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031C8Cu);
@@ -283207,7 +283207,7 @@ label_BFC0C2BC:
     cosim_block(0x1FC0C2BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DBCu);
@@ -283228,7 +283228,7 @@ label_BFC0C2BC:
 #endif
 label_BFC0C2C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DC0u);
@@ -283322,7 +283322,7 @@ label_BFC0C2C8:
     cosim_block(0x1FC0C2C8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DC8u);
@@ -283364,7 +283364,7 @@ label_BFC0C2CC: ;
 #endif
 label_BFC0C2D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DD0u);
@@ -283408,7 +283408,7 @@ label_BFC0C2D4: ;
 #endif
 label_BFC0C2D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DD8u);
@@ -283450,7 +283450,7 @@ label_BFC0C2DC: ;
 #endif
 label_BFC0C2E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DE0u);
@@ -283474,7 +283474,7 @@ cpu->gpr[4] = cpu->lo;
 #endif
 label_BFC0C2E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DE4u);
@@ -283493,7 +283493,7 @@ label_BFC0C2E4: ;
 #endif
 label_BFC0C2E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DE8u);
@@ -283512,7 +283512,7 @@ label_BFC0C2E8: ;
 #endif
 label_BFC0C2EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DECu);
@@ -283580,7 +283580,7 @@ label_BFC0C2F4: ;
 #endif
 label_BFC0C2F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031DF8u);
@@ -283624,7 +283624,7 @@ label_BFC0C2FC: ;
 #endif
 label_BFC0C300: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E00u);
@@ -283645,7 +283645,7 @@ label_BFC0C300: ;
 #endif
 label_BFC0C304: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E04u);
@@ -283665,7 +283665,7 @@ label_BFC0C304: ;
 #endif
 label_BFC0C308: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E08u);
@@ -283689,7 +283689,7 @@ cpu->gpr[4] = cpu->lo;
 #endif
 label_BFC0C30C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E0Cu);
@@ -283708,7 +283708,7 @@ label_BFC0C30C: ;
 #endif
 label_BFC0C310: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E10u);
@@ -283859,7 +283859,7 @@ label_BFC0C328: ;
 #endif
 label_BFC0C32C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E2Cu);
@@ -283904,7 +283904,7 @@ cpu->gpr[3] = cpu->lo;
 #endif
 label_BFC0C334: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E34u);
@@ -283923,7 +283923,7 @@ label_BFC0C334: ;
 #endif
 label_BFC0C338: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E38u);
@@ -283942,7 +283942,7 @@ label_BFC0C338: ;
 #endif
 label_BFC0C33C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E3Cu);
@@ -284283,7 +284283,7 @@ label_BFC0C36C: ;
 #endif
 label_BFC0C370: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E70u);
@@ -284304,7 +284304,7 @@ label_BFC0C370: ;
 #endif
 label_BFC0C374: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E74u);
@@ -284489,7 +284489,7 @@ label_BFC0C390: ;
 #endif
 label_BFC0C394: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E94u);
@@ -284510,7 +284510,7 @@ label_BFC0C394: ;
 #endif
 label_BFC0C398: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031E98u);
@@ -285526,7 +285526,7 @@ label_BFC0C438:
     cosim_block(0x1FC0C438u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031F38u);
@@ -285566,7 +285566,7 @@ label_BFC0C43C: ;
 #endif
 label_BFC0C440: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031F40u);
@@ -286534,7 +286534,7 @@ label_BFC0C4C4: ;
 #endif
 label_BFC0C4C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FC8u);
@@ -286555,7 +286555,7 @@ label_BFC0C4C8: ;
 #endif
 label_BFC0C4CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FCCu);
@@ -286576,7 +286576,7 @@ label_BFC0C4CC: ;
 #endif
 label_BFC0C4D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FD0u);
@@ -286620,7 +286620,7 @@ label_BFC0C4D4: ;
 #endif
 label_BFC0C4D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FD8u);
@@ -286641,7 +286641,7 @@ label_BFC0C4D8: ;
 #endif
 label_BFC0C4DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FDCu);
@@ -286662,7 +286662,7 @@ label_BFC0C4DC: ;
 #endif
 label_BFC0C4E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FE0u);
@@ -286683,7 +286683,7 @@ label_BFC0C4E0: ;
 #endif
 label_BFC0C4E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FE4u);
@@ -286704,7 +286704,7 @@ label_BFC0C4E4: ;
 #endif
 label_BFC0C4E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FE8u);
@@ -286725,7 +286725,7 @@ label_BFC0C4E8: ;
 #endif
 label_BFC0C4EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FECu);
@@ -286746,7 +286746,7 @@ label_BFC0C4EC: ;
 #endif
 label_BFC0C4F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FF0u);
@@ -286767,7 +286767,7 @@ label_BFC0C4F0: ;
 #endif
 label_BFC0C4F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FF4u);
@@ -286788,7 +286788,7 @@ label_BFC0C4F4: ;
 #endif
 label_BFC0C4F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FF8u);
@@ -286809,7 +286809,7 @@ label_BFC0C4F8: ;
 #endif
 label_BFC0C4FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80031FFCu);
@@ -286830,7 +286830,7 @@ label_BFC0C4FC: ;
 #endif
 label_BFC0C500: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032000u);
@@ -286851,7 +286851,7 @@ label_BFC0C500: ;
 #endif
 label_BFC0C504: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032004u);
@@ -286872,7 +286872,7 @@ label_BFC0C504: ;
 #endif
 label_BFC0C508: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032008u);
@@ -286893,7 +286893,7 @@ label_BFC0C508: ;
 #endif
 label_BFC0C50C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003200Cu);
@@ -286914,7 +286914,7 @@ label_BFC0C50C: ;
 #endif
 label_BFC0C510: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032010u);
@@ -286959,7 +286959,7 @@ cpu->gpr[4] = cpu->lo;
 #endif
 label_BFC0C518: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032018u);
@@ -286980,7 +286980,7 @@ label_BFC0C518: ;
 #endif
 label_BFC0C51C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003201Cu);
@@ -287004,7 +287004,7 @@ cpu->gpr[5] = cpu->hi;
 #endif
 label_BFC0C520: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032020u);
@@ -287025,7 +287025,7 @@ label_BFC0C520: ;
 #endif
 label_BFC0C524: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032024u);
@@ -287046,7 +287046,7 @@ label_BFC0C524: ;
 #endif
 label_BFC0C528: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032028u);
@@ -289719,7 +289719,7 @@ label_BFC0C708: ;
 #endif
 label_BFC0C70C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003220Cu);
@@ -289740,7 +289740,7 @@ label_BFC0C70C: ;
 #endif
 label_BFC0C710: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032210u);
@@ -289761,7 +289761,7 @@ label_BFC0C710: ;
 #endif
 label_BFC0C714: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032214u);
@@ -289782,7 +289782,7 @@ label_BFC0C714: ;
 #endif
 label_BFC0C718: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032218u);
@@ -289803,7 +289803,7 @@ label_BFC0C718: ;
 #endif
 label_BFC0C71C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003221Cu);
@@ -289824,7 +289824,7 @@ label_BFC0C71C: ;
 #endif
 label_BFC0C720: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032220u);
@@ -289845,7 +289845,7 @@ label_BFC0C720: ;
 #endif
 label_BFC0C724: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032224u);
@@ -289887,7 +289887,7 @@ label_BFC0C728: ;
 #endif
 label_BFC0C72C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003222Cu);
@@ -289911,7 +289911,7 @@ cpu->gpr[4] = cpu->lo;
 #endif
 label_BFC0C730: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032230u);
@@ -289932,7 +289932,7 @@ label_BFC0C730: ;
 #endif
 label_BFC0C734: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032234u);
@@ -289956,7 +289956,7 @@ cpu->gpr[5] = cpu->hi;
 #endif
 label_BFC0C738: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032238u);
@@ -289977,7 +289977,7 @@ label_BFC0C738: ;
 #endif
 label_BFC0C73C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003223Cu);
@@ -291377,7 +291377,7 @@ label_BFC0C828:
     cosim_block(0x1FC0C828u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032328u);
@@ -291417,7 +291417,7 @@ label_BFC0C82C: ;
 #endif
 label_BFC0C830: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032330u);
@@ -291571,7 +291571,7 @@ label_BFC0C848: ;
 #endif
 label_BFC0C84C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003234Cu);
@@ -291611,7 +291611,7 @@ label_BFC0C850: ;
 #endif
 label_BFC0C854: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032354u);
@@ -291765,7 +291765,7 @@ label_BFC0C86C: ;
 #endif
 label_BFC0C870: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032370u);
@@ -291805,7 +291805,7 @@ label_BFC0C874: ;
 #endif
 label_BFC0C878: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032378u);
@@ -291959,7 +291959,7 @@ label_BFC0C890: ;
 #endif
 label_BFC0C894: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032394u);
@@ -291999,7 +291999,7 @@ label_BFC0C898: ;
 #endif
 label_BFC0C89C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003239Cu);
@@ -292153,7 +292153,7 @@ label_BFC0C8B4: ;
 #endif
 label_BFC0C8B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800323B8u);
@@ -292193,7 +292193,7 @@ label_BFC0C8BC: ;
 #endif
 label_BFC0C8C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800323C0u);
@@ -292347,7 +292347,7 @@ label_BFC0C8D8: ;
 #endif
 label_BFC0C8DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800323DCu);
@@ -292387,7 +292387,7 @@ label_BFC0C8E0: ;
 #endif
 label_BFC0C8E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800323E4u);
@@ -292541,7 +292541,7 @@ label_BFC0C8FC: ;
 #endif
 label_BFC0C900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032400u);
@@ -292581,7 +292581,7 @@ label_BFC0C904: ;
 #endif
 label_BFC0C908: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032408u);
@@ -292735,7 +292735,7 @@ label_BFC0C920: ;
 #endif
 label_BFC0C924: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032424u);
@@ -292775,7 +292775,7 @@ label_BFC0C928: ;
 #endif
 label_BFC0C92C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003242Cu);
@@ -292929,7 +292929,7 @@ label_BFC0C944: ;
 #endif
 label_BFC0C948: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032448u);
@@ -292969,7 +292969,7 @@ label_BFC0C94C: ;
 #endif
 label_BFC0C950: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032450u);
@@ -293242,7 +293242,7 @@ label_BFC0C970:
     cosim_block(0x1FC0C970u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032470u);
@@ -293263,7 +293263,7 @@ label_BFC0C970:
 #endif
 label_BFC0C974: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032474u);
@@ -293284,7 +293284,7 @@ label_BFC0C974: ;
 #endif
 label_BFC0C978: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032478u);
@@ -293328,7 +293328,7 @@ label_BFC0C97C: ;
 #endif
 label_BFC0C980: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032480u);
@@ -293373,7 +293373,7 @@ cpu->gpr[8] = cpu->lo;
 #endif
 label_BFC0C988: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032488u);
@@ -293394,7 +293394,7 @@ label_BFC0C988: ;
 #endif
 label_BFC0C98C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003248Cu);
@@ -293418,7 +293418,7 @@ cpu->gpr[9] = cpu->hi;
 #endif
 label_BFC0C990: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032490u);
@@ -293439,7 +293439,7 @@ label_BFC0C990: ;
 #endif
 label_BFC0C994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032494u);
@@ -293460,7 +293460,7 @@ label_BFC0C994: ;
 #endif
 label_BFC0C998: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032498u);
@@ -293500,7 +293500,7 @@ label_BFC0C99C: ;
 #endif
 label_BFC0C9A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800324A0u);
@@ -293634,7 +293634,7 @@ label_BFC0C9B4: ;
 #endif
 label_BFC0C9B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800324B8u);
@@ -293676,7 +293676,7 @@ label_BFC0C9BC: ;
 #endif
 label_BFC0C9C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800324C0u);
@@ -293831,7 +293831,7 @@ label_BFC0C9D8: ;
 #endif
 label_BFC0C9DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800324DCu);
@@ -293871,7 +293871,7 @@ label_BFC0C9E0: ;
 #endif
 label_BFC0C9E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800324E4u);
@@ -294005,7 +294005,7 @@ label_BFC0C9F8: ;
 #endif
 label_BFC0C9FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800324FCu);
@@ -294045,7 +294045,7 @@ label_BFC0CA00: ;
 #endif
 label_BFC0CA04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032504u);
@@ -294179,7 +294179,7 @@ label_BFC0CA18: ;
 #endif
 label_BFC0CA1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003251Cu);
@@ -294221,7 +294221,7 @@ label_BFC0CA20: ;
 #endif
 label_BFC0CA24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032524u);
@@ -294355,7 +294355,7 @@ label_BFC0CA38: ;
 #endif
 label_BFC0CA3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003253Cu);
@@ -294397,7 +294397,7 @@ label_BFC0CA40: ;
 #endif
 label_BFC0CA44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032544u);
@@ -294531,7 +294531,7 @@ label_BFC0CA58: ;
 #endif
 label_BFC0CA5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003255Cu);
@@ -294571,7 +294571,7 @@ label_BFC0CA60: ;
 #endif
 label_BFC0CA64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032564u);
@@ -294705,7 +294705,7 @@ label_BFC0CA78: ;
 #endif
 label_BFC0CA7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003257Cu);
@@ -294747,7 +294747,7 @@ label_BFC0CA80: ;
 #endif
 label_BFC0CA84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032584u);
@@ -295029,7 +295029,7 @@ label_BFC0CAB0:
     cosim_block(0x1FC0CAB0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325B0u);
@@ -295050,7 +295050,7 @@ label_BFC0CAB0:
 #endif
 label_BFC0CAB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325B4u);
@@ -295090,7 +295090,7 @@ label_BFC0CAB8: ;
 #endif
 label_BFC0CABC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325BCu);
@@ -295158,7 +295158,7 @@ label_BFC0CAC4: ;
 #endif
 label_BFC0CAC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325C8u);
@@ -295203,7 +295203,7 @@ cpu->gpr[7] = cpu->hi;
 #endif
 label_BFC0CAD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325D0u);
@@ -295224,7 +295224,7 @@ label_BFC0CAD0: ;
 #endif
 label_BFC0CAD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325D4u);
@@ -295245,7 +295245,7 @@ label_BFC0CAD4: ;
 #endif
 label_BFC0CAD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325D8u);
@@ -295266,7 +295266,7 @@ label_BFC0CAD8: ;
 #endif
 label_BFC0CADC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325DCu);
@@ -295310,7 +295310,7 @@ label_BFC0CAE0: ;
 #endif
 label_BFC0CAE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325E4u);
@@ -295334,7 +295334,7 @@ cpu->gpr[7] = cpu->hi;
 #endif
 label_BFC0CAE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325E8u);
@@ -295355,7 +295355,7 @@ label_BFC0CAE8: ;
 #endif
 label_BFC0CAEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325ECu);
@@ -295379,7 +295379,7 @@ cpu->gpr[6] = cpu->lo;
 #endif
 label_BFC0CAF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325F0u);
@@ -295400,7 +295400,7 @@ label_BFC0CAF0: ;
 #endif
 label_BFC0CAF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325F4u);
@@ -295421,7 +295421,7 @@ label_BFC0CAF4: ;
 #endif
 label_BFC0CAF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800325F8u);
@@ -295463,7 +295463,7 @@ label_BFC0CAFC: ;
 #endif
 label_BFC0CB00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032600u);
@@ -297600,7 +297600,7 @@ cpu->gpr[16] = 0xBF800000u;
 #endif
 label_BFC0CC50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032750u);
@@ -297642,7 +297642,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CC58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032758u);
@@ -297792,7 +297792,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0CC74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032774u);
@@ -297813,7 +297813,7 @@ label_BFC0CC74: ;
 #endif
 label_BFC0CC78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032778u);
@@ -297834,7 +297834,7 @@ label_BFC0CC78: ;
 #endif
 label_BFC0CC7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003277Cu);
@@ -297876,7 +297876,7 @@ label_BFC0CC80: ;
 #endif
 label_BFC0CC84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032784u);
@@ -297897,7 +297897,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0CC88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032788u);
@@ -297938,7 +297938,7 @@ label_BFC0CC8C: ;
 #endif
 label_BFC0CC90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032790u);
@@ -298162,7 +298162,7 @@ cpu->gpr[16] = 0x80040000u;
 #endif
 label_BFC0CCAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327ACu);
@@ -298183,7 +298183,7 @@ label_BFC0CCAC: ;
 #endif
 label_BFC0CCB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327B0u);
@@ -298223,7 +298223,7 @@ label_BFC0CCB4: ;
 #endif
 label_BFC0CCB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327B8u);
@@ -298405,7 +298405,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CCD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327D8u);
@@ -298426,7 +298426,7 @@ label_BFC0CCD8: ;
 #endif
 label_BFC0CCDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327DCu);
@@ -298466,7 +298466,7 @@ label_BFC0CCE0: ;
 #endif
 label_BFC0CCE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327E4u);
@@ -298528,7 +298528,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CCF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327F0u);
@@ -298568,7 +298568,7 @@ label_BFC0CCF4: ;
 #endif
 label_BFC0CCF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800327F8u);
@@ -298620,7 +298620,7 @@ label_BFC0CD00:
     cosim_block(0x1FC0CD00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032800u);
@@ -298662,7 +298662,7 @@ label_BFC0CD04: ;
 #endif
 label_BFC0CD08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032808u);
@@ -298788,7 +298788,7 @@ label_BFC0CD1C:
     cosim_block(0x1FC0CD1Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003281Cu);
@@ -298809,7 +298809,7 @@ label_BFC0CD1C:
 #endif
 label_BFC0CD20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032820u);
@@ -298851,7 +298851,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0CD28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032828u);
@@ -298893,7 +298893,7 @@ cpu->gpr[5] = 0x80040000u;
 #endif
 label_BFC0CD30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032830u);
@@ -298945,7 +298945,7 @@ label_BFC0CD38:
     cosim_block(0x1FC0CD38u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032838u);
@@ -298985,7 +298985,7 @@ label_BFC0CD3C: ;
 #endif
 label_BFC0CD40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032840u);
@@ -299035,7 +299035,7 @@ label_BFC0CD48:
     cosim_block(0x1FC0CD48u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032848u);
@@ -299075,7 +299075,7 @@ label_BFC0CD4C: ;
 #endif
 label_BFC0CD50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032850u);
@@ -299191,7 +299191,7 @@ label_BFC0CD64:
     cosim_block(0x1FC0CD64u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032864u);
@@ -299212,7 +299212,7 @@ label_BFC0CD64:
 #endif
 label_BFC0CD68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032868u);
@@ -299233,7 +299233,7 @@ label_BFC0CD68: ;
 #endif
 label_BFC0CD6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003286Cu);
@@ -299322,7 +299322,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CD78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032878u);
@@ -299364,7 +299364,7 @@ cpu->gpr[2] = 0xBF800000u;
 #endif
 label_BFC0CD80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032880u);
@@ -299490,7 +299490,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CD90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032890u);
@@ -299530,7 +299530,7 @@ label_BFC0CD94: ;
 #endif
 label_BFC0CD98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032898u);
@@ -299582,7 +299582,7 @@ label_BFC0CDA0:
     cosim_block(0x1FC0CDA0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800328A0u);
@@ -299622,7 +299622,7 @@ label_BFC0CDA4: ;
 #endif
 label_BFC0CDA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800328A8u);
@@ -299726,7 +299726,7 @@ label_BFC0CDB8:
     cosim_block(0x1FC0CDB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800328B8u);
@@ -299766,7 +299766,7 @@ label_BFC0CDBC: ;
 #endif
 label_BFC0CDC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800328C0u);
@@ -300060,7 +300060,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0CDF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800328F0u);
@@ -300100,7 +300100,7 @@ label_BFC0CDF4: ;
 #endif
 label_BFC0CDF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800328F8u);
@@ -300426,7 +300426,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CE2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003292Cu);
@@ -300466,7 +300466,7 @@ label_BFC0CE30: ;
 #endif
 label_BFC0CE34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032934u);
@@ -300573,7 +300573,7 @@ label_BFC0CE44:
     cosim_block(0x1FC0CE44u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032944u);
@@ -300613,7 +300613,7 @@ label_BFC0CE48: ;
 #endif
 label_BFC0CE4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003294Cu);
@@ -301136,7 +301136,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC0CEA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800329A0u);
@@ -301178,7 +301178,7 @@ cpu->gpr[4] = 0x000B0000u;
 #endif
 label_BFC0CEA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800329A8u);
@@ -302119,7 +302119,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0CF54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032A54u);
@@ -302161,7 +302161,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC0CF5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032A5Cu);
@@ -302594,7 +302594,7 @@ label_BFC0CFA4:
     cosim_block(0x1FC0CFA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032AA4u);
@@ -302634,7 +302634,7 @@ label_BFC0CFA8: ;
 #endif
 label_BFC0CFAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032AACu);
@@ -302857,7 +302857,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC0CFCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032ACCu);
@@ -302899,7 +302899,7 @@ cpu->gpr[5] = 0x00100000u;
 #endif
 label_BFC0CFD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032AD4u);
@@ -302920,7 +302920,7 @@ cpu->gpr[3] = 0xBFC70000u;
 #endif
 label_BFC0CFD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032AD8u);
@@ -302941,7 +302941,7 @@ label_BFC0CFD8: ;
 #endif
 label_BFC0CFDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032ADCu);
@@ -302962,7 +302962,7 @@ label_BFC0CFDC: ;
 #endif
 label_BFC0CFE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032AE0u);
@@ -302983,7 +302983,7 @@ label_BFC0CFE0: ;
 #endif
 label_BFC0CFE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032AE4u);
@@ -303456,7 +303456,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0D028: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B28u);
@@ -303498,7 +303498,7 @@ cpu->gpr[7] = 0x80040000u;
 #endif
 label_BFC0D030: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B30u);
@@ -303519,7 +303519,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0D034: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B34u);
@@ -303540,7 +303540,7 @@ label_BFC0D034: ;
 #endif
 label_BFC0D038: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B38u);
@@ -303561,7 +303561,7 @@ cpu->gpr[9] = 0x1F800000u;
 #endif
 label_BFC0D03C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B3Cu);
@@ -303582,7 +303582,7 @@ cpu->gpr[12] = 0x80040000u;
 #endif
 label_BFC0D040: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B40u);
@@ -303603,7 +303603,7 @@ cpu->gpr[10] = 0x006C0000u;
 #endif
 label_BFC0D044: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B44u);
@@ -303645,7 +303645,7 @@ label_BFC0D048: ;
 #endif
 label_BFC0D04C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B4Cu);
@@ -303666,7 +303666,7 @@ label_BFC0D04C: ;
 #endif
 label_BFC0D050: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B50u);
@@ -303687,7 +303687,7 @@ label_BFC0D050: ;
 #endif
 label_BFC0D054: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B54u);
@@ -303708,7 +303708,7 @@ label_BFC0D054: ;
 #endif
 label_BFC0D058: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B58u);
@@ -303729,7 +303729,7 @@ label_BFC0D058: ;
 #endif
 label_BFC0D05C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B5Cu);
@@ -303871,7 +303871,7 @@ label_BFC0D070:
     cosim_block(0x1FC0D070u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B70u);
@@ -303892,7 +303892,7 @@ label_BFC0D070:
 #endif
 label_BFC0D074: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B74u);
@@ -303934,7 +303934,7 @@ label_BFC0D078: ;
 #endif
 label_BFC0D07C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B7Cu);
@@ -303955,7 +303955,7 @@ label_BFC0D07C: ;
 #endif
 label_BFC0D080: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B80u);
@@ -304096,7 +304096,7 @@ label_BFC0D090: ;
 #endif
 label_BFC0D094: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B94u);
@@ -304136,7 +304136,7 @@ label_BFC0D098: ;
 #endif
 label_BFC0D09C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032B9Cu);
@@ -304284,7 +304284,7 @@ label_BFC0D0AC:
     cosim_block(0x1FC0D0ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032BACu);
@@ -304326,7 +304326,7 @@ label_BFC0D0B0: ;
 #endif
 label_BFC0D0B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032BB4u);
@@ -304573,7 +304573,7 @@ label_BFC0D0DC:
     cosim_block(0x1FC0D0DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032BDCu);
@@ -305122,7 +305122,7 @@ label_BFC0D130:
     cosim_block(0x1FC0D130u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C30u);
@@ -305162,7 +305162,7 @@ label_BFC0D134: ;
 #endif
 label_BFC0D138: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C38u);
@@ -305232,7 +305232,7 @@ label_BFC0D140:
     cosim_block(0x1FC0D140u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C40u);
@@ -305272,7 +305272,7 @@ label_BFC0D144: ;
 #endif
 label_BFC0D148: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C48u);
@@ -305383,7 +305383,7 @@ label_BFC0D158: ;
 #endif
 label_BFC0D15C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C5Cu);
@@ -305404,7 +305404,7 @@ label_BFC0D15C: ;
 #endif
 label_BFC0D160: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C60u);
@@ -305479,7 +305479,7 @@ label_BFC0D168:
     cosim_block(0x1FC0D168u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C68u);
@@ -305500,7 +305500,7 @@ label_BFC0D168:
 #endif
 label_BFC0D16C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C6Cu);
@@ -305585,7 +305585,7 @@ label_BFC0D174:
     cosim_block(0x1FC0D174u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C74u);
@@ -305625,7 +305625,7 @@ label_BFC0D178: ;
 #endif
 label_BFC0D17C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C7Cu);
@@ -305824,7 +305824,7 @@ label_BFC0D198:
     cosim_block(0x1FC0D198u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032C98u);
@@ -305864,7 +305864,7 @@ label_BFC0D19C: ;
 #endif
 label_BFC0D1A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032CA0u);
@@ -306075,7 +306075,7 @@ label_BFC0D1B8:
 #endif
 label_BFC0D1BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032CBCu);
@@ -306096,7 +306096,7 @@ label_BFC0D1BC: ;
 #endif
 label_BFC0D1C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032CC0u);
@@ -306310,7 +306310,7 @@ label_BFC0D1E0: ;
 #endif
 label_BFC0D1E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032CE4u);
@@ -306352,7 +306352,7 @@ label_BFC0D1E8: ;
 #endif
 label_BFC0D1EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032CECu);
@@ -306658,7 +306658,7 @@ label_BFC0D214:
     cosim_block(0x1FC0D214u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D14u);
@@ -306679,7 +306679,7 @@ label_BFC0D214:
 #endif
 label_BFC0D218: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D18u);
@@ -306719,7 +306719,7 @@ label_BFC0D21C: ;
 #endif
 label_BFC0D220: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D20u);
@@ -306790,7 +306790,7 @@ label_BFC0D22C:
     cosim_block(0x1FC0D22Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D2Cu);
@@ -306830,7 +306830,7 @@ label_BFC0D230: ;
 #endif
 label_BFC0D234: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D34u);
@@ -307359,7 +307359,7 @@ label_BFC0D288:
     cosim_block(0x1FC0D288u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D88u);
@@ -307399,7 +307399,7 @@ label_BFC0D28C: ;
 #endif
 label_BFC0D290: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032D90u);
@@ -307539,7 +307539,7 @@ label_BFC0D29C:
 #endif
 label_BFC0D2A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032DA0u);
@@ -307560,7 +307560,7 @@ label_BFC0D2A0: ;
 #endif
 label_BFC0D2A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032DA4u);
@@ -307777,7 +307777,7 @@ label_BFC0D2C4: ;
 #endif
 label_BFC0D2C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032DC8u);
@@ -307819,7 +307819,7 @@ label_BFC0D2CC: ;
 #endif
 label_BFC0D2D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032DD0u);
@@ -308127,7 +308127,7 @@ label_BFC0D2F8:
     cosim_block(0x1FC0D2F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032DF8u);
@@ -308148,7 +308148,7 @@ label_BFC0D2F8:
 #endif
 label_BFC0D2FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032DFCu);
@@ -308190,7 +308190,7 @@ label_BFC0D300: ;
 #endif
 label_BFC0D304: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E04u);
@@ -308378,7 +308378,7 @@ label_BFC0D320: ;
 #endif
 label_BFC0D324: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E24u);
@@ -308405,7 +308405,7 @@ label_BFC0D328:
     cosim_block(0x1FC0D328u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E28u);
@@ -308426,7 +308426,7 @@ label_BFC0D328:
 #endif
 label_BFC0D32C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E2Cu);
@@ -308468,7 +308468,7 @@ label_BFC0D330: ;
 #endif
 label_BFC0D334: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E34u);
@@ -308491,7 +308491,7 @@ label_BFC0D334: ;
 #endif
 label_BFC0D338: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E38u);
@@ -308515,7 +308515,7 @@ cpu->gpr[5] = cpu->lo;
 #endif
 label_BFC0D33C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E3Cu);
@@ -308536,7 +308536,7 @@ label_BFC0D33C: ;
 #endif
 label_BFC0D340: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032E40u);
@@ -309252,7 +309252,7 @@ label_BFC0D3A8:
     cosim_block(0x1FC0D3A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EA8u);
@@ -309273,7 +309273,7 @@ label_BFC0D3A8:
 #endif
 label_BFC0D3AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EACu);
@@ -309315,7 +309315,7 @@ label_BFC0D3B0: ;
 #endif
 label_BFC0D3B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EB4u);
@@ -309336,7 +309336,7 @@ label_BFC0D3B4: ;
 #endif
 label_BFC0D3B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EB8u);
@@ -309357,7 +309357,7 @@ label_BFC0D3B8: ;
 #endif
 label_BFC0D3BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EBCu);
@@ -309378,7 +309378,7 @@ label_BFC0D3BC: ;
 #endif
 label_BFC0D3C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EC0u);
@@ -309569,7 +309569,7 @@ label_BFC0D3DC: ;
 #endif
 label_BFC0D3E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EE0u);
@@ -309596,7 +309596,7 @@ label_BFC0D3E4:
     cosim_block(0x1FC0D3E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EE4u);
@@ -309617,7 +309617,7 @@ label_BFC0D3E4:
 #endif
 label_BFC0D3E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EE8u);
@@ -309659,7 +309659,7 @@ label_BFC0D3EC: ;
 #endif
 label_BFC0D3F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EF0u);
@@ -309682,7 +309682,7 @@ label_BFC0D3F0: ;
 #endif
 label_BFC0D3F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EF4u);
@@ -309706,7 +309706,7 @@ cpu->gpr[4] = cpu->lo;
 #endif
 label_BFC0D3F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EF8u);
@@ -309727,7 +309727,7 @@ label_BFC0D3F8: ;
 #endif
 label_BFC0D3FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032EFCu);
@@ -309809,7 +309809,7 @@ label_BFC0D408:
     cosim_block(0x1FC0D408u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032F08u);
@@ -309851,7 +309851,7 @@ label_BFC0D40C: ;
 #endif
 label_BFC0D410: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032F10u);
@@ -310218,7 +310218,7 @@ label_BFC0D44C: ;
 #endif
 label_BFC0D450: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032F50u);
@@ -310260,7 +310260,7 @@ label_BFC0D454: ;
 #endif
 label_BFC0D458: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032F58u);
@@ -310759,7 +310759,7 @@ label_BFC0D4A0:
 #endif
 label_BFC0D4A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032FA4u);
@@ -310780,7 +310780,7 @@ label_BFC0D4A4: ;
 #endif
 label_BFC0D4A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032FA8u);
@@ -311311,7 +311311,7 @@ label_BFC0D4F0:
     cosim_block(0x1FC0D4F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032FF0u);
@@ -311351,7 +311351,7 @@ label_BFC0D4F4: ;
 #endif
 label_BFC0D4F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80032FF8u);
@@ -311496,7 +311496,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0D510: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033010u);
@@ -311536,7 +311536,7 @@ label_BFC0D514: ;
 #endif
 label_BFC0D518: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033018u);
@@ -311846,7 +311846,7 @@ label_BFC0D54C:
     cosim_block(0x1FC0D54Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003304Cu);
@@ -311867,7 +311867,7 @@ label_BFC0D54C:
 #endif
 label_BFC0D550: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033050u);
@@ -311909,7 +311909,7 @@ label_BFC0D554: ;
 #endif
 label_BFC0D558: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033058u);
@@ -311930,7 +311930,7 @@ label_BFC0D558: ;
 #endif
 label_BFC0D55C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003305Cu);
@@ -312397,7 +312397,7 @@ label_BFC0D5A0: ;
 #endif
 label_BFC0D5A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330A4u);
@@ -312439,7 +312439,7 @@ label_BFC0D5A8: ;
 #endif
 label_BFC0D5AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330ACu);
@@ -312570,7 +312570,7 @@ label_BFC0D5C4:
     cosim_block(0x1FC0D5C4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330C4u);
@@ -312610,7 +312610,7 @@ label_BFC0D5C8: ;
 #endif
 label_BFC0D5CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330CCu);
@@ -312681,7 +312681,7 @@ label_BFC0D5D8:
     cosim_block(0x1FC0D5D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330D8u);
@@ -312723,7 +312723,7 @@ cpu->gpr[6] = 0xF0FF0000u;
 #endif
 label_BFC0D5E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330E0u);
@@ -312744,7 +312744,7 @@ label_BFC0D5E0: ;
 #endif
 label_BFC0D5E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800330E4u);
@@ -312935,7 +312935,7 @@ label_BFC0D608:
     cosim_block(0x1FC0D608u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033108u);
@@ -312975,7 +312975,7 @@ label_BFC0D60C: ;
 #endif
 label_BFC0D610: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033110u);
@@ -313142,7 +313142,7 @@ label_BFC0D624:
     cosim_block(0x1FC0D624u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033124u);
@@ -313184,7 +313184,7 @@ label_BFC0D628: ;
 #endif
 label_BFC0D62C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003312Cu);
@@ -313282,7 +313282,7 @@ label_BFC0D63C:
     cosim_block(0x1FC0D63Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003313Cu);
@@ -313324,7 +313324,7 @@ label_BFC0D640: ;
 #endif
 label_BFC0D644: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033144u);
@@ -313374,7 +313374,7 @@ label_BFC0D64C:
     cosim_block(0x1FC0D64Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003314Cu);
@@ -313416,7 +313416,7 @@ label_BFC0D650: ;
 #endif
 label_BFC0D654: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033154u);
@@ -313466,7 +313466,7 @@ label_BFC0D65C:
     cosim_block(0x1FC0D65Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003315Cu);
@@ -313612,7 +313612,7 @@ label_BFC0D674:
     cosim_block(0x1FC0D674u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033174u);
@@ -313652,7 +313652,7 @@ label_BFC0D678: ;
 #endif
 label_BFC0D67C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003317Cu);
@@ -313715,7 +313715,7 @@ label_BFC0D684: ;
 #endif
 label_BFC0D688: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033188u);
@@ -313757,7 +313757,7 @@ label_BFC0D68C: ;
 #endif
 label_BFC0D690: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033190u);
@@ -314383,7 +314383,7 @@ label_BFC0D6E0: ;
 #endif
 label_BFC0D6E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800331E4u);
@@ -314425,7 +314425,7 @@ label_BFC0D6E8: ;
 #endif
 label_BFC0D6EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800331ECu);
@@ -314445,7 +314445,7 @@ label_BFC0D6EC: ;
 #endif
 label_BFC0D6F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800331F0u);
@@ -314487,7 +314487,7 @@ label_BFC0D6F4: ;
 #endif
 label_BFC0D6F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800331F8u);
@@ -314507,7 +314507,7 @@ label_BFC0D6F8: ;
 #endif
 label_BFC0D6FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800331FCu);
@@ -314528,7 +314528,7 @@ label_BFC0D6FC: ;
 #endif
 label_BFC0D700: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033200u);
@@ -314570,7 +314570,7 @@ label_BFC0D704: ;
 #endif
 label_BFC0D708: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033208u);
@@ -314646,7 +314646,7 @@ label_BFC0D714:
     cosim_block(0x1FC0D714u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033214u);
@@ -314688,7 +314688,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0D71C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003321Cu);
@@ -314798,7 +314798,7 @@ label_BFC0D730:
     cosim_block(0x1FC0D730u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033230u);
@@ -314838,7 +314838,7 @@ label_BFC0D734: ;
 #endif
 label_BFC0D738: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033238u);
@@ -315282,7 +315282,7 @@ label_BFC0D780: ;
 #endif
 label_BFC0D784: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033284u);
@@ -315324,7 +315324,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0D78C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003328Cu);
@@ -315488,7 +315488,7 @@ label_BFC0D7A8: ;
 #endif
 label_BFC0D7AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800332ACu);
@@ -315530,7 +315530,7 @@ label_BFC0D7B0: ;
 #endif
 label_BFC0D7B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800332B4u);
@@ -316255,7 +316255,7 @@ label_BFC0D838:
     cosim_block(0x1FC0D838u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033338u);
@@ -316295,7 +316295,7 @@ label_BFC0D83C: ;
 #endif
 label_BFC0D840: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033340u);
@@ -316390,7 +316390,7 @@ label_BFC0D850:
     cosim_block(0x1FC0D850u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033350u);
@@ -316411,7 +316411,7 @@ label_BFC0D850:
 #endif
 label_BFC0D854: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033354u);
@@ -316432,7 +316432,7 @@ label_BFC0D854: ;
 #endif
 label_BFC0D858: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033358u);
@@ -316453,7 +316453,7 @@ label_BFC0D858: ;
 #endif
 label_BFC0D85C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003335Cu);
@@ -317023,7 +317023,7 @@ label_BFC0D8B4:
     cosim_block(0x1FC0D8B4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333B4u);
@@ -317063,7 +317063,7 @@ label_BFC0D8B8: ;
 #endif
 label_BFC0D8BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333BCu);
@@ -317466,7 +317466,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0D8CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333CCu);
@@ -317507,7 +317507,7 @@ label_BFC0D8D0: ;
 #endif
 label_BFC0D8D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333D4u);
@@ -317528,7 +317528,7 @@ cpu->gpr[23] = 0x80040000u;
 #endif
 label_BFC0D8D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333D8u);
@@ -317570,7 +317570,7 @@ label_BFC0D8DC: ;
 #endif
 label_BFC0D8E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333E0u);
@@ -317591,7 +317591,7 @@ cpu->gpr[25] = 0x80040000u;
 #endif
 label_BFC0D8E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333E4u);
@@ -317611,7 +317611,7 @@ label_BFC0D8E4: ;
 #endif
 label_BFC0D8E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333E8u);
@@ -317672,7 +317672,7 @@ label_BFC0D8F0: ;
 #endif
 label_BFC0D8F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333F4u);
@@ -317713,7 +317713,7 @@ label_BFC0D8F8: ;
 #endif
 label_BFC0D8FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800333FCu);
@@ -317733,7 +317733,7 @@ label_BFC0D8FC: ;
 #endif
 label_BFC0D900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033400u);
@@ -317753,7 +317753,7 @@ label_BFC0D900: ;
 #endif
 label_BFC0D904: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033404u);
@@ -317773,7 +317773,7 @@ label_BFC0D904: ;
 #endif
 label_BFC0D908: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033408u);
@@ -317793,7 +317793,7 @@ label_BFC0D908: ;
 #endif
 label_BFC0D90C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003340Cu);
@@ -318031,7 +318031,7 @@ cpu->gpr[20] = 0x80040000u;
 #endif
 label_BFC0D934: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033434u);
@@ -318073,7 +318073,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0D93C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003343Cu);
@@ -318115,7 +318115,7 @@ cpu->gpr[15] = 0x80040000u;
 #endif
 label_BFC0D944: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033444u);
@@ -318136,7 +318136,7 @@ cpu->gpr[18] = 0x80040000u;
 #endif
 label_BFC0D948: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033448u);
@@ -318230,7 +318230,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0D958: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033458u);
@@ -318251,7 +318251,7 @@ label_BFC0D958: ;
 #endif
 label_BFC0D95C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003345Cu);
@@ -318292,7 +318292,7 @@ label_BFC0D960: ;
 #endif
 label_BFC0D964: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033464u);
@@ -318396,7 +318396,7 @@ label_BFC0D974: ;
 #endif
 label_BFC0D978: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033478u);
@@ -318436,7 +318436,7 @@ label_BFC0D97C: ;
 #endif
 label_BFC0D980: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033480u);
@@ -318457,7 +318457,7 @@ label_BFC0D980: ;
 #endif
 label_BFC0D984: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033484u);
@@ -318497,7 +318497,7 @@ label_BFC0D988: ;
 #endif
 label_BFC0D98C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003348Cu);
@@ -318544,7 +318544,7 @@ cpu->gpr[16] = 0x80040000u;
 #endif
 label_BFC0D994: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033494u);
@@ -318584,7 +318584,7 @@ label_BFC0D998: ;
 #endif
 label_BFC0D99C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003349Cu);
@@ -318639,7 +318639,7 @@ label_BFC0D9A4:
     cosim_block(0x1FC0D9A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800334A4u);
@@ -318679,7 +318679,7 @@ label_BFC0D9A8: ;
 #endif
 label_BFC0D9AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800334ACu);
@@ -318940,7 +318940,7 @@ cpu->gpr[4] = 0x80040000u;
 #endif
 label_BFC0D9DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800334DCu);
@@ -318982,7 +318982,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0D9E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800334E4u);
@@ -319024,7 +319024,7 @@ label_BFC0D9E8: ;
 #endif
 label_BFC0D9EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800334ECu);
@@ -319142,7 +319142,7 @@ label_BFC0D9FC:
 #endif
 label_BFC0DA00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033500u);
@@ -319182,7 +319182,7 @@ label_BFC0DA04: ;
 #endif
 label_BFC0DA08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033508u);
@@ -319203,7 +319203,7 @@ label_BFC0DA08: ;
 #endif
 label_BFC0DA0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003350Cu);
@@ -319243,7 +319243,7 @@ label_BFC0DA10: ;
 #endif
 label_BFC0DA14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033514u);
@@ -319269,7 +319269,7 @@ label_BFC0DA18:
     cosim_block(0x1FC0DA18u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033518u);
@@ -319290,7 +319290,7 @@ label_BFC0DA18:
 #endif
 label_BFC0DA1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003351Cu);
@@ -319332,7 +319332,7 @@ label_BFC0DA20: ;
 #endif
 label_BFC0DA24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033524u);
@@ -319376,7 +319376,7 @@ label_BFC0DA28: ;
 #endif
 label_BFC0DA2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003352Cu);
@@ -319418,7 +319418,7 @@ cpu->gpr[21] = 0x80040000u;
 #endif
 label_BFC0DA34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033534u);
@@ -319439,7 +319439,7 @@ cpu->gpr[7] = 0x80040000u;
 #endif
 label_BFC0DA38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033538u);
@@ -319460,7 +319460,7 @@ cpu->gpr[14] = 0x1F800000u;
 #endif
 label_BFC0DA3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003353Cu);
@@ -319481,7 +319481,7 @@ cpu->gpr[17] = 0x80040000u;
 #endif
 label_BFC0DA40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033540u);
@@ -319501,7 +319501,7 @@ label_BFC0DA40: ;
 #endif
 label_BFC0DA44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033544u);
@@ -319830,7 +319830,7 @@ label_BFC0DA80:
     cosim_block(0x1FC0DA80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033580u);
@@ -319851,7 +319851,7 @@ label_BFC0DA80:
 #endif
 label_BFC0DA84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033584u);
@@ -319893,7 +319893,7 @@ label_BFC0DA88: ;
 #endif
 label_BFC0DA8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003358Cu);
@@ -319914,7 +319914,7 @@ label_BFC0DA8C: ;
 #endif
 label_BFC0DA90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033590u);
@@ -319966,7 +319966,7 @@ label_BFC0DA98:
     cosim_block(0x1FC0DA98u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033598u);
@@ -320006,7 +320006,7 @@ label_BFC0DA9C: ;
 #endif
 label_BFC0DAA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335A0u);
@@ -320082,7 +320082,7 @@ label_BFC0DAAC:
     cosim_block(0x1FC0DAACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335ACu);
@@ -320103,7 +320103,7 @@ label_BFC0DAAC:
 #endif
 label_BFC0DAB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335B0u);
@@ -320124,7 +320124,7 @@ label_BFC0DAB0: ;
 #endif
 label_BFC0DAB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335B4u);
@@ -320145,7 +320145,7 @@ label_BFC0DAB4: ;
 #endif
 label_BFC0DAB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335B8u);
@@ -320166,7 +320166,7 @@ label_BFC0DAB8: ;
 #endif
 label_BFC0DABC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335BCu);
@@ -320187,7 +320187,7 @@ label_BFC0DABC: ;
 #endif
 label_BFC0DAC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335C0u);
@@ -320208,7 +320208,7 @@ label_BFC0DAC0: ;
 #endif
 label_BFC0DAC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335C4u);
@@ -320229,7 +320229,7 @@ label_BFC0DAC4: ;
 #endif
 label_BFC0DAC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335C8u);
@@ -320250,7 +320250,7 @@ label_BFC0DAC8: ;
 #endif
 label_BFC0DACC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335CCu);
@@ -320291,7 +320291,7 @@ label_BFC0DAD0: ;
 #endif
 label_BFC0DAD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335D4u);
@@ -320312,7 +320312,7 @@ label_BFC0DAD4: ;
 #endif
 label_BFC0DAD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335D8u);
@@ -320409,7 +320409,7 @@ label_BFC0DAE8:
     cosim_block(0x1FC0DAE8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335E8u);
@@ -320430,7 +320430,7 @@ label_BFC0DAE8:
 #endif
 label_BFC0DAEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335ECu);
@@ -320451,7 +320451,7 @@ label_BFC0DAEC: ;
 #endif
 label_BFC0DAF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335F0u);
@@ -320493,7 +320493,7 @@ label_BFC0DAF4: ;
 #endif
 label_BFC0DAF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335F8u);
@@ -320514,7 +320514,7 @@ label_BFC0DAF8: ;
 #endif
 label_BFC0DAFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800335FCu);
@@ -320556,7 +320556,7 @@ label_BFC0DB00: ;
 #endif
 label_BFC0DB04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033604u);
@@ -320577,7 +320577,7 @@ label_BFC0DB04: ;
 #endif
 label_BFC0DB08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033608u);
@@ -320598,7 +320598,7 @@ label_BFC0DB08: ;
 #endif
 label_BFC0DB0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003360Cu);
@@ -320619,7 +320619,7 @@ label_BFC0DB0C: ;
 #endif
 label_BFC0DB10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033610u);
@@ -320640,7 +320640,7 @@ label_BFC0DB10: ;
 #endif
 label_BFC0DB14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033614u);
@@ -320897,7 +320897,7 @@ label_BFC0DB3C: ;
 #endif
 label_BFC0DB40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033640u);
@@ -320918,7 +320918,7 @@ label_BFC0DB40: ;
 #endif
 label_BFC0DB44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033644u);
@@ -320958,7 +320958,7 @@ label_BFC0DB48: ;
 #endif
 label_BFC0DB4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003364Cu);
@@ -321192,7 +321192,7 @@ label_BFC0DB70: ;
 #endif
 label_BFC0DB74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033674u);
@@ -321234,7 +321234,7 @@ label_BFC0DB78: ;
 #endif
 label_BFC0DB7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003367Cu);
@@ -321484,7 +321484,7 @@ label_BFC0DBA4:
     cosim_block(0x1FC0DBA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336A4u);
@@ -321526,7 +321526,7 @@ label_BFC0DBA8: ;
 #endif
 label_BFC0DBAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336ACu);
@@ -321568,7 +321568,7 @@ label_BFC0DBB0: ;
 #endif
 label_BFC0DBB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336B4u);
@@ -321778,7 +321778,7 @@ label_BFC0DBD8:
     cosim_block(0x1FC0DBD8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336D8u);
@@ -321818,7 +321818,7 @@ label_BFC0DBDC: ;
 #endif
 label_BFC0DBE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336E0u);
@@ -321944,7 +321944,7 @@ label_BFC0DBF4:
     cosim_block(0x1FC0DBF4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336F4u);
@@ -321984,7 +321984,7 @@ label_BFC0DBF8: ;
 #endif
 label_BFC0DBFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800336FCu);
@@ -322026,7 +322026,7 @@ label_BFC0DC00: ;
 #endif
 label_BFC0DC04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033704u);
@@ -322066,7 +322066,7 @@ label_BFC0DC08: ;
 #endif
 label_BFC0DC0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003370Cu);
@@ -322170,7 +322170,7 @@ label_BFC0DC1C: ;
 #endif
 label_BFC0DC20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033720u);
@@ -322210,7 +322210,7 @@ label_BFC0DC24: ;
 #endif
 label_BFC0DC28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033728u);
@@ -322652,7 +322652,7 @@ label_BFC0DC70: ;
 #endif
 label_BFC0DC74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033774u);
@@ -322692,7 +322692,7 @@ label_BFC0DC78: ;
 #endif
 label_BFC0DC7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003377Cu);
@@ -322734,7 +322734,7 @@ label_BFC0DC80: ;
 #endif
 label_BFC0DC84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033784u);
@@ -322774,7 +322774,7 @@ label_BFC0DC88: ;
 #endif
 label_BFC0DC8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003378Cu);
@@ -322800,7 +322800,7 @@ label_BFC0DC90:
     cosim_block(0x1FC0DC90u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033790u);
@@ -322842,7 +322842,7 @@ cpu->gpr[3] = 0x006C0000u;
 #endif
 label_BFC0DC98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033798u);
@@ -323298,7 +323298,7 @@ label_BFC0DCE4:
     cosim_block(0x1FC0DCE4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800337E4u);
@@ -323338,7 +323338,7 @@ label_BFC0DCE8: ;
 #endif
 label_BFC0DCEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800337ECu);
@@ -323359,7 +323359,7 @@ label_BFC0DCEC: ;
 #endif
 label_BFC0DCF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800337F0u);
@@ -323399,7 +323399,7 @@ label_BFC0DCF4: ;
 #endif
 label_BFC0DCF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800337F8u);
@@ -323602,7 +323602,7 @@ label_BFC0DD14:
     cosim_block(0x1FC0DD14u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033814u);
@@ -323642,7 +323642,7 @@ label_BFC0DD18: ;
 #endif
 label_BFC0DD1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003381Cu);
@@ -323705,7 +323705,7 @@ label_BFC0DD24: ;
 #endif
 label_BFC0DD28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033828u);
@@ -323745,7 +323745,7 @@ label_BFC0DD2C: ;
 #endif
 label_BFC0DD30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033830u);
@@ -324004,7 +324004,7 @@ label_BFC0DD50:
     cosim_block(0x1FC0DD50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033850u);
@@ -324044,7 +324044,7 @@ label_BFC0DD54: ;
 #endif
 label_BFC0DD58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033858u);
@@ -324164,7 +324164,7 @@ label_BFC0DD6C:
     cosim_block(0x1FC0DD6Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003386Cu);
@@ -324204,7 +324204,7 @@ label_BFC0DD70: ;
 #endif
 label_BFC0DD74: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033874u);
@@ -324387,7 +324387,7 @@ label_BFC0DD8C:
     cosim_block(0x1FC0DD8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x8003388Cu);
@@ -324427,7 +324427,7 @@ label_BFC0DD90: ;
 #endif
 label_BFC0DD94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033894u);
@@ -324547,7 +324547,7 @@ label_BFC0DDA8:
     cosim_block(0x1FC0DDA8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800338A8u);
@@ -324587,7 +324587,7 @@ label_BFC0DDAC: ;
 #endif
 label_BFC0DDB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800338B0u);
@@ -324837,7 +324837,7 @@ label_BFC0DDD0:
     cosim_block(0x1FC0DDD0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800338D0u);
@@ -324877,7 +324877,7 @@ label_BFC0DDD4: ;
 #endif
 label_BFC0DDD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800338D8u);
@@ -325299,7 +325299,7 @@ label_BFC0DE14: ;
 #endif
 label_BFC0DE18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033918u);
@@ -325341,7 +325341,7 @@ label_BFC0DE1C: ;
 #endif
 label_BFC0DE20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033920u);
@@ -325663,7 +325663,7 @@ label_BFC0DE50:
     cosim_block(0x1FC0DE50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033950u);
@@ -325703,7 +325703,7 @@ label_BFC0DE54: ;
 #endif
 label_BFC0DE58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033958u);
@@ -326061,7 +326061,7 @@ label_BFC0DE8C: ;
 #endif
 label_BFC0DE90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033990u);
@@ -326101,7 +326101,7 @@ label_BFC0DE94: ;
 #endif
 label_BFC0DE98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033998u);
@@ -326182,7 +326182,7 @@ label_BFC0DEA0:
     cosim_block(0x1FC0DEA0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800339A0u);
@@ -326222,7 +326222,7 @@ label_BFC0DEA4: ;
 #endif
 label_BFC0DEA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800339A8u);
@@ -326700,7 +326700,7 @@ label_BFC0DEF4:
     cosim_block(0x1FC0DEF4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800339F4u);
@@ -326721,7 +326721,7 @@ label_BFC0DEF4:
 #endif
 label_BFC0DEF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x800339F8u);
@@ -326799,7 +326799,7 @@ label_BFC0DF00:
     cosim_block(0x1FC0DF00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A00u);
@@ -326839,7 +326839,7 @@ label_BFC0DF04: ;
 #endif
 label_BFC0DF08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A08u);
@@ -327151,7 +327151,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0DF34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A34u);
@@ -327191,7 +327191,7 @@ label_BFC0DF38: ;
 #endif
 label_BFC0DF3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A3Cu);
@@ -327343,7 +327343,7 @@ cpu->gpr[2] = 0x80040000u;
 #endif
 label_BFC0DF54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A54u);
@@ -327364,7 +327364,7 @@ label_BFC0DF54: ;
 #endif
 label_BFC0DF58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A58u);
@@ -327493,7 +327493,7 @@ label_BFC0DF68:
     cosim_block(0x1FC0DF68u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A68u);
@@ -327535,7 +327535,7 @@ label_BFC0DF6C: ;
 #endif
 label_BFC0DF70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A70u);
@@ -327660,7 +327660,7 @@ label_BFC0DF80:
     cosim_block(0x1FC0DF80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A80u);
@@ -327700,7 +327700,7 @@ label_BFC0DF84: ;
 #endif
 label_BFC0DF88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033A88u);
@@ -327943,7 +327943,7 @@ label_BFC0DFAC:
     cosim_block(0x1FC0DFACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033AACu);
@@ -327983,7 +327983,7 @@ label_BFC0DFB0: ;
 #endif
 label_BFC0DFB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033AB4u);
@@ -328555,7 +328555,7 @@ label_BFC0E004:
     cosim_block(0x1FC0E004u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B04u);
@@ -328597,7 +328597,7 @@ cpu->gpr[3] = 0x80040000u;
 #endif
 label_BFC0E00C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B0Cu);
@@ -328639,7 +328639,7 @@ label_BFC0E010: ;
 #endif
 label_BFC0E014: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B14u);
@@ -328758,7 +328758,7 @@ label_BFC0E024:
 #endif
 label_BFC0E028: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B28u);
@@ -328798,7 +328798,7 @@ label_BFC0E02C: ;
 #endif
 label_BFC0E030: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B30u);
@@ -328819,7 +328819,7 @@ label_BFC0E030: ;
 #endif
 label_BFC0E034: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B34u);
@@ -328840,7 +328840,7 @@ label_BFC0E034: ;
 #endif
 label_BFC0E038: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x80033B38u);
@@ -329726,7 +329726,7 @@ label_BFC1E568: ;
 #endif
 label_BFC1E56C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000598u);
@@ -329768,7 +329768,7 @@ label_BFC1E570: ;
 #endif
 label_BFC1E574: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000005A0u);
@@ -332109,7 +332109,7 @@ label_BFC1E724:
 #endif
 label_BFC1E728: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000754u);
@@ -332151,7 +332151,7 @@ label_BFC1E72C: ;
 #endif
 label_BFC1E730: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000075Cu);
@@ -332172,7 +332172,7 @@ label_BFC1E730: ;
 #endif
 label_BFC1E734: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000760u);
@@ -332193,7 +332193,7 @@ label_BFC1E734: ;
 #endif
 label_BFC1E738: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000764u);
@@ -332235,7 +332235,7 @@ label_BFC1E73C: ;
 #endif
 label_BFC1E740: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000076Cu);
@@ -333028,7 +333028,7 @@ label_BFC1E7C0:
 #endif
 label_BFC1E7C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000007F0u);
@@ -333070,7 +333070,7 @@ label_BFC1E7C8: ;
 #endif
 label_BFC1E7CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000007F8u);
@@ -333091,7 +333091,7 @@ label_BFC1E7CC: ;
 #endif
 label_BFC1E7D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000007FCu);
@@ -333139,7 +333139,7 @@ label_BFC1E7D4:
     cosim_block(0x00000800u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000800u);
@@ -333303,7 +333303,7 @@ label_BFC1E7E8:
     cosim_block(0x00000814u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000814u);
@@ -333530,7 +333530,7 @@ label_BFC1E800: ;
 #endif
 label_BFC1E804: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000830u);
@@ -333590,7 +333590,7 @@ label_BFC1E80C:
     cosim_block(0x00000838u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000838u);
@@ -333827,7 +333827,7 @@ label_BFC1E82C: ;
 #endif
 label_BFC1E830: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000085Cu);
@@ -333940,7 +333940,7 @@ label_BFC1E83C: ;
 #endif
 label_BFC1E840: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000086Cu);
@@ -334147,7 +334147,7 @@ label_BFC1E858: ;
 #endif
 label_BFC1E85C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000888u);
@@ -334168,7 +334168,7 @@ label_BFC1E85C: ;
 #endif
 label_BFC1E860: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000088Cu);
@@ -334209,7 +334209,7 @@ label_BFC1E864: ;
 #endif
 label_BFC1E868: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000894u);
@@ -334249,7 +334249,7 @@ label_BFC1E86C: ;
 #endif
 label_BFC1E870: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000089Cu);
@@ -334413,7 +334413,7 @@ label_BFC1E88C: ;
 #endif
 label_BFC1E890: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000008BCu);
@@ -334434,7 +334434,7 @@ label_BFC1E890: ;
 #endif
 label_BFC1E894: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000008C0u);
@@ -334476,7 +334476,7 @@ label_BFC1E898: ;
 #endif
 label_BFC1E89C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000008C8u);
@@ -334518,7 +334518,7 @@ label_BFC1E8A0: ;
 #endif
 label_BFC1E8A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000008D0u);
@@ -335240,7 +335240,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1E920: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000094Cu);
@@ -335282,7 +335282,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1E928: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000954u);
@@ -335552,7 +335552,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1E950: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000097Cu);
@@ -335592,7 +335592,7 @@ label_BFC1E954: ;
 #endif
 label_BFC1E958: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000984u);
@@ -335663,7 +335663,7 @@ label_BFC1E964:
     cosim_block(0x00000990u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000990u);
@@ -335703,7 +335703,7 @@ label_BFC1E968: ;
 #endif
 label_BFC1E96C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000998u);
@@ -335779,7 +335779,7 @@ label_BFC1E978:
     cosim_block(0x000009A4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000009A4u);
@@ -335821,7 +335821,7 @@ cpu->gpr[3] = 0x00FF0000u;
 #endif
 label_BFC1E980: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000009ACu);
@@ -335842,7 +335842,7 @@ label_BFC1E980: ;
 #endif
 label_BFC1E984: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000009B0u);
@@ -335946,7 +335946,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1E998: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000009C4u);
@@ -335986,7 +335986,7 @@ label_BFC1E99C: ;
 #endif
 label_BFC1E9A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000009CCu);
@@ -336232,7 +336232,7 @@ label_BFC1E9CC:
     cosim_block(0x000009F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000009F8u);
@@ -336274,7 +336274,7 @@ label_BFC1E9D0: ;
 #endif
 label_BFC1E9D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A00u);
@@ -336445,7 +336445,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1E9EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A18u);
@@ -336485,7 +336485,7 @@ label_BFC1E9F0: ;
 #endif
 label_BFC1E9F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A20u);
@@ -336804,7 +336804,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1EA28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A54u);
@@ -336844,7 +336844,7 @@ label_BFC1EA2C: ;
 #endif
 label_BFC1EA30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A5Cu);
@@ -337217,7 +337217,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1EA64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A90u);
@@ -337257,7 +337257,7 @@ label_BFC1EA68: ;
 #endif
 label_BFC1EA6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000A98u);
@@ -337331,7 +337331,7 @@ label_BFC1EA78:
     cosim_block(0x00000AA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000AA4u);
@@ -337371,7 +337371,7 @@ label_BFC1EA7C: ;
 #endif
 label_BFC1EA80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000AACu);
@@ -337504,7 +337504,7 @@ label_BFC1EA94: ;
 #endif
 label_BFC1EA98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000AC4u);
@@ -337546,7 +337546,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1EAA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000ACCu);
@@ -337786,7 +337786,7 @@ label_BFC1EACC:
     cosim_block(0x00000AF8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000AF8u);
@@ -337826,7 +337826,7 @@ label_BFC1EAD0: ;
 #endif
 label_BFC1EAD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B00u);
@@ -337940,7 +337940,7 @@ label_BFC1EAE4: ;
 #endif
 label_BFC1EAE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B14u);
@@ -337980,7 +337980,7 @@ label_BFC1EAEC: ;
 #endif
 label_BFC1EAF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B1Cu);
@@ -338128,7 +338128,7 @@ label_BFC1EB0C:
     cosim_block(0x00000B38u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B38u);
@@ -338168,7 +338168,7 @@ label_BFC1EB10: ;
 #endif
 label_BFC1EB14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B40u);
@@ -338367,7 +338367,7 @@ label_BFC1EB34: ;
 #endif
 label_BFC1EB38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B64u);
@@ -338409,7 +338409,7 @@ label_BFC1EB3C: ;
 #endif
 label_BFC1EB40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B6Cu);
@@ -338429,7 +338429,7 @@ label_BFC1EB40: ;
 #endif
 label_BFC1EB44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B70u);
@@ -338449,7 +338449,7 @@ label_BFC1EB44: ;
 #endif
 label_BFC1EB48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B74u);
@@ -338571,7 +338571,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1EB54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B80u);
@@ -338613,7 +338613,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1EB5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B88u);
@@ -338655,7 +338655,7 @@ label_BFC1EB60: ;
 #endif
 label_BFC1EB64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000B90u);
@@ -338890,7 +338890,7 @@ label_BFC1EB88:
     cosim_block(0x00000BB4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000BB4u);
@@ -338932,7 +338932,7 @@ label_BFC1EB8C: ;
 #endif
 label_BFC1EB90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000BBCu);
@@ -339370,7 +339370,7 @@ label_BFC1EBD4:
     cosim_block(0x00000C00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C00u);
@@ -339410,7 +339410,7 @@ label_BFC1EBD8:
     cosim_block(0x00000C04u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C04u);
@@ -339461,7 +339461,7 @@ label_BFC1EBDC:
     cosim_block(0x00000C08u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C08u);
@@ -339503,7 +339503,7 @@ label_BFC1EBE0: ;
 #endif
 label_BFC1EBE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C10u);
@@ -340333,7 +340333,7 @@ cpu->gpr[3] = 0x1F800000u;
 #endif
 label_BFC1EC40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C6Cu);
@@ -340441,7 +340441,7 @@ label_BFC1EC48: ;
 #endif
 label_BFC1EC4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C78u);
@@ -340481,7 +340481,7 @@ label_BFC1EC50: ;
 #endif
 label_BFC1EC54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C80u);
@@ -340501,7 +340501,7 @@ label_BFC1EC54: ;
 #endif
 label_BFC1EC58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C84u);
@@ -340541,7 +340541,7 @@ label_BFC1EC5C: ;
 #endif
 label_BFC1EC60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C8Cu);
@@ -340561,7 +340561,7 @@ label_BFC1EC60: ;
 #endif
 label_BFC1EC64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C90u);
@@ -340601,7 +340601,7 @@ label_BFC1EC68: ;
 #endif
 label_BFC1EC6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C98u);
@@ -340621,7 +340621,7 @@ label_BFC1EC6C: ;
 #endif
 label_BFC1EC70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000C9Cu);
@@ -340661,7 +340661,7 @@ label_BFC1EC74: ;
 #endif
 label_BFC1EC78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CA4u);
@@ -340681,7 +340681,7 @@ label_BFC1EC78: ;
 #endif
 label_BFC1EC7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CA8u);
@@ -340721,7 +340721,7 @@ label_BFC1EC80: ;
 #endif
 label_BFC1EC84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CB0u);
@@ -340741,7 +340741,7 @@ label_BFC1EC84: ;
 #endif
 label_BFC1EC88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CB4u);
@@ -340762,7 +340762,7 @@ label_BFC1EC88: ;
 #endif
 label_BFC1EC8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CB8u);
@@ -340877,7 +340877,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1EC9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CC8u);
@@ -340940,7 +340940,7 @@ label_BFC1ECA0:
     cosim_block(0x00000CCCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CCCu);
@@ -340982,7 +340982,7 @@ label_BFC1ECA4: ;
 #endif
 label_BFC1ECA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000CD4u);
@@ -341879,7 +341879,7 @@ label_BFC1ED24:
     cosim_block(0x00000D50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000D50u);
@@ -341919,7 +341919,7 @@ label_BFC1ED28: ;
 #endif
 label_BFC1ED2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000D58u);
@@ -342152,7 +342152,7 @@ label_BFC1ED54:
     cosim_block(0x00000D80u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000D80u);
@@ -342194,7 +342194,7 @@ label_BFC1ED58: ;
 #endif
 label_BFC1ED5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000D88u);
@@ -342589,7 +342589,7 @@ label_BFC1ED9C:
     cosim_block(0x00000DC8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000DC8u);
@@ -342630,7 +342630,7 @@ label_BFC1EDA0: ;
 #endif
 label_BFC1EDA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000DD0u);
@@ -342938,7 +342938,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1EDC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000DF4u);
@@ -342980,7 +342980,7 @@ label_BFC1EDCC: ;
 #endif
 label_BFC1EDD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000DFCu);
@@ -343108,7 +343108,7 @@ label_BFC1EDE0:
 #endif
 label_BFC1EDE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E10u);
@@ -343129,7 +343129,7 @@ label_BFC1EDE4: ;
 #endif
 label_BFC1EDE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E14u);
@@ -343392,7 +343392,7 @@ label_BFC1EE10: ;
 #endif
 label_BFC1EE14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E40u);
@@ -343432,7 +343432,7 @@ label_BFC1EE18: ;
 #endif
 label_BFC1EE1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E48u);
@@ -343496,7 +343496,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1EE28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E54u);
@@ -343537,7 +343537,7 @@ label_BFC1EE2C: ;
 #endif
 label_BFC1EE30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E5Cu);
@@ -343583,7 +343583,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1EE38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E64u);
@@ -343623,7 +343623,7 @@ label_BFC1EE3C: ;
 #endif
 label_BFC1EE40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E6Cu);
@@ -343664,7 +343664,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1EE48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E74u);
@@ -343685,7 +343685,7 @@ label_BFC1EE48: ;
 #endif
 label_BFC1EE4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E78u);
@@ -343706,7 +343706,7 @@ label_BFC1EE4C: ;
 #endif
 label_BFC1EE50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E7Cu);
@@ -343727,7 +343727,7 @@ label_BFC1EE50: ;
 #endif
 label_BFC1EE54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E80u);
@@ -343748,7 +343748,7 @@ label_BFC1EE54: ;
 #endif
 label_BFC1EE58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E84u);
@@ -343789,7 +343789,7 @@ label_BFC1EE5C: ;
 #endif
 label_BFC1EE60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000E8Cu);
@@ -344518,7 +344518,7 @@ label_BFC1EED4:
     cosim_block(0x00000F00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F00u);
@@ -344539,7 +344539,7 @@ label_BFC1EED4:
 #endif
 label_BFC1EED8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F04u);
@@ -344819,7 +344819,7 @@ label_BFC1EEFC:
     cosim_block(0x00000F28u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F28u);
@@ -345027,7 +345027,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1EF18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F44u);
@@ -345048,7 +345048,7 @@ label_BFC1EF18: ;
 #endif
 label_BFC1EF1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F48u);
@@ -345297,7 +345297,7 @@ cpu->gpr[6] = 0x00000000u;
 #endif
 label_BFC1EF38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F64u);
@@ -345339,7 +345339,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC1EF40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F6Cu);
@@ -345381,7 +345381,7 @@ label_BFC1EF44: ;
 #endif
 label_BFC1EF48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F74u);
@@ -345402,7 +345402,7 @@ label_BFC1EF48: ;
 #endif
 label_BFC1EF4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F78u);
@@ -345422,7 +345422,7 @@ label_BFC1EF4C: ;
 #endif
 label_BFC1EF50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F7Cu);
@@ -345462,7 +345462,7 @@ label_BFC1EF54: ;
 #endif
 label_BFC1EF58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F84u);
@@ -345503,7 +345503,7 @@ cpu->gpr[5] = 0x00000000u;
 #endif
 label_BFC1EF60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F8Cu);
@@ -345543,7 +345543,7 @@ label_BFC1EF64: ;
 #endif
 label_BFC1EF68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000F94u);
@@ -345614,7 +345614,7 @@ label_BFC1EF74:
     cosim_block(0x00000FA0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000FA0u);
@@ -345654,7 +345654,7 @@ label_BFC1EF78: ;
 #endif
 label_BFC1EF7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000FA8u);
@@ -345748,7 +345748,7 @@ label_BFC1EF88:
 #endif
 label_BFC1EF8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000FB8u);
@@ -345788,7 +345788,7 @@ label_BFC1EF90: ;
 #endif
 label_BFC1EF94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000FC0u);
@@ -346177,7 +346177,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1EFD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00000FFCu);
@@ -346323,7 +346323,7 @@ cpu->gpr[5] = 0x1F800000u;
 #endif
 label_BFC1EFE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000100Cu);
@@ -346633,7 +346633,7 @@ label_BFC1F004:
     cosim_block(0x00001030u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001030u);
@@ -346673,7 +346673,7 @@ label_BFC1F008: ;
 #endif
 label_BFC1F00C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001038u);
@@ -346892,7 +346892,7 @@ label_BFC1F028: ;
 #endif
 label_BFC1F02C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001058u);
@@ -347214,7 +347214,7 @@ label_BFC1F054:
 #endif
 label_BFC1F058: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001084u);
@@ -347254,7 +347254,7 @@ label_BFC1F05C: ;
 #endif
 label_BFC1F060: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000108Cu);
@@ -347618,7 +347618,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F0A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000010CCu);
@@ -347639,7 +347639,7 @@ label_BFC1F0A0: ;
 #endif
 label_BFC1F0A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000010D0u);
@@ -347681,7 +347681,7 @@ label_BFC1F0A8: ;
 #endif
 label_BFC1F0AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000010D8u);
@@ -348145,7 +348145,7 @@ label_BFC1F0F0:
     cosim_block(0x0000111Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000111Cu);
@@ -348186,7 +348186,7 @@ label_BFC1F0F4: ;
 #endif
 label_BFC1F0F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001124u);
@@ -348328,7 +348328,7 @@ cpu->gpr[17] = 0x00000000u;
 #endif
 label_BFC1F100: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000112Cu);
@@ -348370,7 +348370,7 @@ label_BFC1F104: ;
 #endif
 label_BFC1F108: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001134u);
@@ -348493,7 +348493,7 @@ label_BFC1F11C:
     cosim_block(0x00001148u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001148u);
@@ -348533,7 +348533,7 @@ label_BFC1F120: ;
 #endif
 label_BFC1F124: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001150u);
@@ -348656,7 +348656,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F138: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001164u);
@@ -348696,7 +348696,7 @@ label_BFC1F13C: ;
 #endif
 label_BFC1F140: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000116Cu);
@@ -348863,7 +348863,7 @@ label_BFC1F15C:
     cosim_block(0x00001188u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001188u);
@@ -348905,7 +348905,7 @@ label_BFC1F160: ;
 #endif
 label_BFC1F164: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001190u);
@@ -349056,7 +349056,7 @@ label_BFC1F17C:
     cosim_block(0x000011A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000011A8u);
@@ -349098,7 +349098,7 @@ label_BFC1F180: ;
 #endif
 label_BFC1F184: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000011B0u);
@@ -349833,7 +349833,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1F1F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001220u);
@@ -349875,7 +349875,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1F1FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001228u);
@@ -349895,7 +349895,7 @@ label_BFC1F1FC: ;
 #endif
 label_BFC1F200: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000122Cu);
@@ -349937,7 +349937,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1F208: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001234u);
@@ -349978,7 +349978,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC1F210: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000123Cu);
@@ -350020,7 +350020,7 @@ label_BFC1F214: ;
 #endif
 label_BFC1F218: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001244u);
@@ -350127,7 +350127,7 @@ label_BFC1F228:
     cosim_block(0x00001254u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001254u);
@@ -350167,7 +350167,7 @@ label_BFC1F22C: ;
 #endif
 label_BFC1F230: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000125Cu);
@@ -350857,7 +350857,7 @@ cpu->gpr[16] = 0x00000000u;
 #endif
 label_BFC1F29C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000012C8u);
@@ -350899,7 +350899,7 @@ label_BFC1F2A0: ;
 #endif
 label_BFC1F2A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000012D0u);
@@ -351047,7 +351047,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F2BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000012E8u);
@@ -351087,7 +351087,7 @@ label_BFC1F2C0: ;
 #endif
 label_BFC1F2C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000012F0u);
@@ -351166,7 +351166,7 @@ label_BFC1F2D0:
     cosim_block(0x000012FCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000012FCu);
@@ -351187,7 +351187,7 @@ label_BFC1F2D0:
 #endif
 label_BFC1F2D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001300u);
@@ -351208,7 +351208,7 @@ label_BFC1F2D4: ;
 #endif
 label_BFC1F2D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001304u);
@@ -351308,7 +351308,7 @@ label_BFC1F2E8:
     cosim_block(0x00001314u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001314u);
@@ -351348,7 +351348,7 @@ label_BFC1F2EC: ;
 #endif
 label_BFC1F2F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000131Cu);
@@ -351465,7 +351465,7 @@ label_BFC1F304:
     cosim_block(0x00001330u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001330u);
@@ -351507,7 +351507,7 @@ label_BFC1F308: ;
 #endif
 label_BFC1F30C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001338u);
@@ -351528,7 +351528,7 @@ label_BFC1F30C: ;
 #endif
 label_BFC1F310: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000133Cu);
@@ -351721,7 +351721,7 @@ label_BFC1F32C: ;
 #endif
 label_BFC1F330: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000135Cu);
@@ -351761,7 +351761,7 @@ label_BFC1F334: ;
 #endif
 label_BFC1F338: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001364u);
@@ -351781,7 +351781,7 @@ label_BFC1F338: ;
 #endif
 label_BFC1F33C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001368u);
@@ -351821,7 +351821,7 @@ label_BFC1F340: ;
 #endif
 label_BFC1F344: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001370u);
@@ -351841,7 +351841,7 @@ label_BFC1F344: ;
 #endif
 label_BFC1F348: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001374u);
@@ -351881,7 +351881,7 @@ label_BFC1F34C: ;
 #endif
 label_BFC1F350: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000137Cu);
@@ -352141,7 +352141,7 @@ cpu->gpr[16] = 0x00000000u;
 #endif
 label_BFC1F378: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013A4u);
@@ -352183,7 +352183,7 @@ label_BFC1F37C: ;
 #endif
 label_BFC1F380: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013ACu);
@@ -352203,7 +352203,7 @@ label_BFC1F380: ;
 #endif
 label_BFC1F384: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013B0u);
@@ -352403,7 +352403,7 @@ label_BFC1F3A4: ;
 #endif
 label_BFC1F3A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013D4u);
@@ -352445,7 +352445,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F3B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013DCu);
@@ -352492,7 +352492,7 @@ label_BFC1F3B8:
     cosim_block(0x000013E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013E4u);
@@ -352513,7 +352513,7 @@ label_BFC1F3B8:
 #endif
 label_BFC1F3BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013E8u);
@@ -352534,7 +352534,7 @@ label_BFC1F3BC: ;
 #endif
 label_BFC1F3C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000013ECu);
@@ -352669,7 +352669,7 @@ cpu->gpr[16] = 0x00000000u;
 #endif
 label_BFC1F3D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001400u);
@@ -352711,7 +352711,7 @@ label_BFC1F3D8: ;
 #endif
 label_BFC1F3DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001408u);
@@ -352789,7 +352789,7 @@ label_BFC1F3E8:
     cosim_block(0x00001414u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001414u);
@@ -352810,7 +352810,7 @@ label_BFC1F3E8:
 #endif
 label_BFC1F3EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001418u);
@@ -353123,7 +353123,7 @@ label_BFC1F410:
     cosim_block(0x0000143Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000143Cu);
@@ -353144,7 +353144,7 @@ label_BFC1F410:
 #endif
 label_BFC1F414: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001440u);
@@ -353186,7 +353186,7 @@ label_BFC1F418: ;
 #endif
 label_BFC1F41C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001448u);
@@ -353207,7 +353207,7 @@ label_BFC1F41C: ;
 #endif
 label_BFC1F420: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000144Cu);
@@ -353629,7 +353629,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1F46C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001498u);
@@ -353669,7 +353669,7 @@ label_BFC1F470: ;
 #endif
 label_BFC1F474: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000014A0u);
@@ -354009,7 +354009,7 @@ cpu->gpr[16] = 0x00000000u;
 #endif
 label_BFC1F4A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000014D4u);
@@ -354051,7 +354051,7 @@ label_BFC1F4AC: ;
 #endif
 label_BFC1F4B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000014DCu);
@@ -354132,7 +354132,7 @@ label_BFC1F4BC:
     cosim_block(0x000014E8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000014E8u);
@@ -354153,7 +354153,7 @@ label_BFC1F4BC:
 #endif
 label_BFC1F4C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000014ECu);
@@ -354174,7 +354174,7 @@ label_BFC1F4C0: ;
 #endif
 label_BFC1F4C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000014F0u);
@@ -354265,7 +354265,7 @@ label_BFC1F4D4:
     cosim_block(0x00001500u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001500u);
@@ -354307,7 +354307,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F4DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001508u);
@@ -354348,7 +354348,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC1F4E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001510u);
@@ -354388,7 +354388,7 @@ label_BFC1F4E8: ;
 #endif
 label_BFC1F4EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001518u);
@@ -355404,7 +355404,7 @@ cpu->gpr[4] = 0xBF800000u;
 #endif
 label_BFC1F58C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015B8u);
@@ -355446,7 +355446,7 @@ label_BFC1F590: ;
 #endif
 label_BFC1F594: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015C0u);
@@ -355487,7 +355487,7 @@ label_BFC1F598: ;
 #endif
 label_BFC1F59C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015C8u);
@@ -355529,7 +355529,7 @@ label_BFC1F5A0: ;
 #endif
 label_BFC1F5A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015D0u);
@@ -355570,7 +355570,7 @@ label_BFC1F5A8: ;
 #endif
 label_BFC1F5AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015D8u);
@@ -355610,7 +355610,7 @@ label_BFC1F5B0: ;
 #endif
 label_BFC1F5B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015E0u);
@@ -355651,7 +355651,7 @@ label_BFC1F5B8: ;
 #endif
 label_BFC1F5BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015E8u);
@@ -355691,7 +355691,7 @@ label_BFC1F5C0: ;
 #endif
 label_BFC1F5C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000015F0u);
@@ -355897,7 +355897,7 @@ label_BFC1F5E8: ;
 #endif
 label_BFC1F5EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001618u);
@@ -355939,7 +355939,7 @@ cpu->gpr[3] = 0x00FF0000u;
 #endif
 label_BFC1F5F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001620u);
@@ -355960,7 +355960,7 @@ label_BFC1F5F4: ;
 #endif
 label_BFC1F5F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001624u);
@@ -356279,7 +356279,7 @@ label_BFC1F634:
     cosim_block(0x00001660u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001660u);
@@ -356319,7 +356319,7 @@ label_BFC1F638: ;
 #endif
 label_BFC1F63C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001668u);
@@ -356360,7 +356360,7 @@ label_BFC1F640: ;
 #endif
 label_BFC1F644: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001670u);
@@ -356400,7 +356400,7 @@ label_BFC1F648: ;
 #endif
 label_BFC1F64C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001678u);
@@ -356441,7 +356441,7 @@ label_BFC1F650: ;
 #endif
 label_BFC1F654: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001680u);
@@ -356481,7 +356481,7 @@ label_BFC1F658: ;
 #endif
 label_BFC1F65C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001688u);
@@ -356677,7 +356677,7 @@ label_BFC1F680:
     cosim_block(0x000016ACu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000016ACu);
@@ -356717,7 +356717,7 @@ label_BFC1F684: ;
 #endif
 label_BFC1F688: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000016B4u);
@@ -356918,7 +356918,7 @@ label_BFC1F6A8:
     cosim_block(0x000016D4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000016D4u);
@@ -356958,7 +356958,7 @@ label_BFC1F6AC: ;
 #endif
 label_BFC1F6B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000016DCu);
@@ -357180,7 +357180,7 @@ cpu->gpr[16] = 0xBF800000u;
 #endif
 label_BFC1F6C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000016F4u);
@@ -357201,7 +357201,7 @@ label_BFC1F6C8: ;
 #endif
 label_BFC1F6CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000016F8u);
@@ -357241,7 +357241,7 @@ label_BFC1F6D0: ;
 #endif
 label_BFC1F6D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001700u);
@@ -357424,7 +357424,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F6F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001720u);
@@ -357464,7 +357464,7 @@ label_BFC1F6F8: ;
 #endif
 label_BFC1F6FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001728u);
@@ -357514,7 +357514,7 @@ label_BFC1F704:
     cosim_block(0x00001730u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001730u);
@@ -357556,7 +357556,7 @@ label_BFC1F708: ;
 #endif
 label_BFC1F70C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001738u);
@@ -357630,7 +357630,7 @@ label_BFC1F718:
     cosim_block(0x00001744u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001744u);
@@ -357651,7 +357651,7 @@ label_BFC1F718:
 #endif
 label_BFC1F71C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001748u);
@@ -357691,7 +357691,7 @@ label_BFC1F720: ;
 #endif
 label_BFC1F724: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001750u);
@@ -357874,7 +357874,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F744: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001770u);
@@ -357914,7 +357914,7 @@ label_BFC1F748: ;
 #endif
 label_BFC1F74C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001778u);
@@ -357964,7 +357964,7 @@ label_BFC1F754:
     cosim_block(0x00001780u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001780u);
@@ -358006,7 +358006,7 @@ label_BFC1F758: ;
 #endif
 label_BFC1F75C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001788u);
@@ -358074,7 +358074,7 @@ cpu->gpr[16] = 0xBF800000u;
 #endif
 label_BFC1F768: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001794u);
@@ -358095,7 +358095,7 @@ label_BFC1F768: ;
 #endif
 label_BFC1F76C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001798u);
@@ -358135,7 +358135,7 @@ label_BFC1F770: ;
 #endif
 label_BFC1F774: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017A0u);
@@ -358318,7 +358318,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F794: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017C0u);
@@ -358358,7 +358358,7 @@ label_BFC1F798: ;
 #endif
 label_BFC1F79C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017C8u);
@@ -358408,7 +358408,7 @@ label_BFC1F7A4:
     cosim_block(0x000017D0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017D0u);
@@ -358450,7 +358450,7 @@ label_BFC1F7A8: ;
 #endif
 label_BFC1F7AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017D8u);
@@ -358524,7 +358524,7 @@ label_BFC1F7B8:
     cosim_block(0x000017E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017E4u);
@@ -358545,7 +358545,7 @@ label_BFC1F7B8:
 #endif
 label_BFC1F7BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017E8u);
@@ -358585,7 +358585,7 @@ label_BFC1F7C0: ;
 #endif
 label_BFC1F7C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000017F0u);
@@ -358864,7 +358864,7 @@ label_BFC1F7E4:
     cosim_block(0x00001810u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001810u);
@@ -359017,7 +359017,7 @@ label_BFC1F7F4:
     cosim_block(0x00001820u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001820u);
@@ -359059,7 +359059,7 @@ label_BFC1F7F8: ;
 #endif
 label_BFC1F7FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001828u);
@@ -359159,7 +359159,7 @@ label_BFC1F808:
     cosim_block(0x00001834u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001834u);
@@ -359207,7 +359207,7 @@ label_BFC1F80C:
     cosim_block(0x00001838u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001838u);
@@ -359542,7 +359542,7 @@ label_BFC1F834:
     cosim_block(0x00001860u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001860u);
@@ -359582,7 +359582,7 @@ label_BFC1F838: ;
 #endif
 label_BFC1F83C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001868u);
@@ -359653,7 +359653,7 @@ label_BFC1F844:
     cosim_block(0x00001870u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001870u);
@@ -359953,7 +359953,7 @@ label_BFC1F858:
     cosim_block(0x00001884u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001884u);
@@ -359974,7 +359974,7 @@ label_BFC1F858:
 #endif
 label_BFC1F85C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001888u);
@@ -360014,7 +360014,7 @@ label_BFC1F860: ;
 #endif
 label_BFC1F864: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001890u);
@@ -360197,7 +360197,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F884: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018B0u);
@@ -360237,7 +360237,7 @@ label_BFC1F888: ;
 #endif
 label_BFC1F88C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018B8u);
@@ -360287,7 +360287,7 @@ label_BFC1F894:
     cosim_block(0x000018C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018C0u);
@@ -360329,7 +360329,7 @@ label_BFC1F898: ;
 #endif
 label_BFC1F89C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018C8u);
@@ -360397,7 +360397,7 @@ cpu->gpr[16] = 0xBF800000u;
 #endif
 label_BFC1F8A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018D4u);
@@ -360418,7 +360418,7 @@ label_BFC1F8A8: ;
 #endif
 label_BFC1F8AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018D8u);
@@ -360458,7 +360458,7 @@ label_BFC1F8B0: ;
 #endif
 label_BFC1F8B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000018E0u);
@@ -360641,7 +360641,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F8D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001900u);
@@ -360681,7 +360681,7 @@ label_BFC1F8D8: ;
 #endif
 label_BFC1F8DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001908u);
@@ -360731,7 +360731,7 @@ label_BFC1F8E4:
     cosim_block(0x00001910u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001910u);
@@ -360773,7 +360773,7 @@ label_BFC1F8E8: ;
 #endif
 label_BFC1F8EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001918u);
@@ -360847,7 +360847,7 @@ label_BFC1F8F8:
     cosim_block(0x00001924u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001924u);
@@ -360868,7 +360868,7 @@ label_BFC1F8F8:
 #endif
 label_BFC1F8FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001928u);
@@ -360908,7 +360908,7 @@ label_BFC1F900: ;
 #endif
 label_BFC1F904: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001930u);
@@ -361091,7 +361091,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F924: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001950u);
@@ -361131,7 +361131,7 @@ label_BFC1F928: ;
 #endif
 label_BFC1F92C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001958u);
@@ -361181,7 +361181,7 @@ label_BFC1F934:
     cosim_block(0x00001960u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001960u);
@@ -361223,7 +361223,7 @@ label_BFC1F938: ;
 #endif
 label_BFC1F93C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001968u);
@@ -361291,7 +361291,7 @@ cpu->gpr[16] = 0xBF800000u;
 #endif
 label_BFC1F948: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001974u);
@@ -361312,7 +361312,7 @@ label_BFC1F948: ;
 #endif
 label_BFC1F94C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001978u);
@@ -361352,7 +361352,7 @@ label_BFC1F950: ;
 #endif
 label_BFC1F954: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001980u);
@@ -361535,7 +361535,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F974: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019A0u);
@@ -361575,7 +361575,7 @@ label_BFC1F978: ;
 #endif
 label_BFC1F97C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019A8u);
@@ -361625,7 +361625,7 @@ label_BFC1F984:
     cosim_block(0x000019B0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019B0u);
@@ -361667,7 +361667,7 @@ label_BFC1F988: ;
 #endif
 label_BFC1F98C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019B8u);
@@ -361741,7 +361741,7 @@ label_BFC1F998:
     cosim_block(0x000019C4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019C4u);
@@ -361762,7 +361762,7 @@ label_BFC1F998:
 #endif
 label_BFC1F99C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019C8u);
@@ -361802,7 +361802,7 @@ label_BFC1F9A0: ;
 #endif
 label_BFC1F9A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019D0u);
@@ -361985,7 +361985,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1F9C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019F0u);
@@ -362025,7 +362025,7 @@ label_BFC1F9C8: ;
 #endif
 label_BFC1F9CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000019F8u);
@@ -362075,7 +362075,7 @@ label_BFC1F9D4:
     cosim_block(0x00001A00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A00u);
@@ -362117,7 +362117,7 @@ label_BFC1F9D8: ;
 #endif
 label_BFC1F9DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A08u);
@@ -362185,7 +362185,7 @@ cpu->gpr[16] = 0xBF800000u;
 #endif
 label_BFC1F9E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A14u);
@@ -362206,7 +362206,7 @@ label_BFC1F9E8: ;
 #endif
 label_BFC1F9EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A18u);
@@ -362246,7 +362246,7 @@ label_BFC1F9F0: ;
 #endif
 label_BFC1F9F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A20u);
@@ -362429,7 +362429,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FA14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A40u);
@@ -362469,7 +362469,7 @@ label_BFC1FA18: ;
 #endif
 label_BFC1FA1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A48u);
@@ -362519,7 +362519,7 @@ label_BFC1FA24:
     cosim_block(0x00001A50u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A50u);
@@ -362561,7 +362561,7 @@ label_BFC1FA28: ;
 #endif
 label_BFC1FA2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A58u);
@@ -362608,7 +362608,7 @@ label_BFC1FA34:
     cosim_block(0x00001A60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A60u);
@@ -362629,7 +362629,7 @@ label_BFC1FA34:
 #endif
 label_BFC1FA38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A64u);
@@ -362671,7 +362671,7 @@ label_BFC1FA3C: ;
 #endif
 label_BFC1FA40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A6Cu);
@@ -362780,7 +362780,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1FA4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A78u);
@@ -362820,7 +362820,7 @@ label_BFC1FA50: ;
 #endif
 label_BFC1FA54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A80u);
@@ -362891,7 +362891,7 @@ label_BFC1FA60:
     cosim_block(0x00001A8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A8Cu);
@@ -362931,7 +362931,7 @@ label_BFC1FA64: ;
 #endif
 label_BFC1FA68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001A94u);
@@ -363116,7 +363116,7 @@ label_BFC1FA88:
     cosim_block(0x00001AB4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001AB4u);
@@ -363158,7 +363158,7 @@ label_BFC1FA8C: ;
 #endif
 label_BFC1FA90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001ABCu);
@@ -363310,7 +363310,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1FAA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001AD0u);
@@ -363350,7 +363350,7 @@ label_BFC1FAA8: ;
 #endif
 label_BFC1FAAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001AD8u);
@@ -363424,7 +363424,7 @@ label_BFC1FAB8:
     cosim_block(0x00001AE4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001AE4u);
@@ -363464,7 +363464,7 @@ label_BFC1FABC: ;
 #endif
 label_BFC1FAC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001AECu);
@@ -363646,7 +363646,7 @@ label_BFC1FAE0:
     cosim_block(0x00001B0Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B0Cu);
@@ -363688,7 +363688,7 @@ label_BFC1FAE4: ;
 #endif
 label_BFC1FAE8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B14u);
@@ -363840,7 +363840,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1FAFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B28u);
@@ -363880,7 +363880,7 @@ label_BFC1FB00: ;
 #endif
 label_BFC1FB04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B30u);
@@ -363951,7 +363951,7 @@ label_BFC1FB10:
     cosim_block(0x00001B3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B3Cu);
@@ -363991,7 +363991,7 @@ label_BFC1FB14: ;
 #endif
 label_BFC1FB18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B44u);
@@ -364176,7 +364176,7 @@ label_BFC1FB38:
     cosim_block(0x00001B64u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B64u);
@@ -364218,7 +364218,7 @@ label_BFC1FB3C: ;
 #endif
 label_BFC1FB40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B6Cu);
@@ -364369,7 +364369,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1FB54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B80u);
@@ -364409,7 +364409,7 @@ label_BFC1FB58: ;
 #endif
 label_BFC1FB5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B88u);
@@ -364483,7 +364483,7 @@ label_BFC1FB68:
     cosim_block(0x00001B94u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B94u);
@@ -364523,7 +364523,7 @@ label_BFC1FB6C: ;
 #endif
 label_BFC1FB70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001B9Cu);
@@ -364684,7 +364684,7 @@ label_BFC1FB8C:
     cosim_block(0x00001BB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001BB8u);
@@ -364726,7 +364726,7 @@ label_BFC1FB90: ;
 #endif
 label_BFC1FB94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001BC0u);
@@ -364864,7 +364864,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FBA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001BD4u);
@@ -364904,7 +364904,7 @@ label_BFC1FBAC: ;
 #endif
 label_BFC1FBB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001BDCu);
@@ -365207,7 +365207,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FBDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001C08u);
@@ -365247,7 +365247,7 @@ label_BFC1FBE0: ;
 #endif
 label_BFC1FBE4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001C10u);
@@ -365619,7 +365619,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FC10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001C3Cu);
@@ -366046,7 +366046,7 @@ label_BFC1FC44:
     cosim_block(0x00001C70u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001C70u);
@@ -366925,7 +366925,7 @@ label_BFC1FCC8: ;
 #endif
 label_BFC1FCCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001CF8u);
@@ -366967,7 +366967,7 @@ label_BFC1FCD0: ;
 #endif
 label_BFC1FCD4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D00u);
@@ -366988,7 +366988,7 @@ cpu->gpr[16] = 0x00000000u;
 #endif
 label_BFC1FCD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D04u);
@@ -367226,7 +367226,7 @@ label_BFC1FD04:
     cosim_block(0x00001D30u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D30u);
@@ -367268,7 +367268,7 @@ label_BFC1FD08: ;
 #endif
 label_BFC1FD0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D38u);
@@ -367289,7 +367289,7 @@ label_BFC1FD0C: ;
 #endif
 label_BFC1FD10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D3Cu);
@@ -367545,7 +367545,7 @@ label_BFC1FD3C: ;
 #endif
 label_BFC1FD40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D6Cu);
@@ -367566,7 +367566,7 @@ label_BFC1FD40: ;
 #endif
 label_BFC1FD44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D70u);
@@ -367587,7 +367587,7 @@ label_BFC1FD44: ;
 #endif
 label_BFC1FD48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D74u);
@@ -367608,7 +367608,7 @@ label_BFC1FD48: ;
 #endif
 label_BFC1FD4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D78u);
@@ -367629,7 +367629,7 @@ label_BFC1FD4C: ;
 #endif
 label_BFC1FD50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D7Cu);
@@ -367783,7 +367783,7 @@ label_BFC1FD64: ;
 #endif
 label_BFC1FD68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D94u);
@@ -367804,7 +367804,7 @@ label_BFC1FD68: ;
 #endif
 label_BFC1FD6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001D98u);
@@ -368009,7 +368009,7 @@ label_BFC1FD88: ;
 #endif
 label_BFC1FD8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001DB8u);
@@ -368815,7 +368815,7 @@ label_BFC1FE0C: ;
 #endif
 label_BFC1FE10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001E3Cu);
@@ -368836,7 +368836,7 @@ label_BFC1FE10: ;
 #endif
 label_BFC1FE14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001E40u);
@@ -368878,7 +368878,7 @@ label_BFC1FE18: ;
 #endif
 label_BFC1FE1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001E48u);
@@ -369116,7 +369116,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC1FE44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001E70u);
@@ -369137,7 +369137,7 @@ label_BFC1FE44: ;
 #endif
 label_BFC1FE48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001E74u);
@@ -369179,7 +369179,7 @@ label_BFC1FE4C: ;
 #endif
 label_BFC1FE50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001E7Cu);
@@ -369584,7 +369584,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FE90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EBCu);
@@ -369626,7 +369626,7 @@ label_BFC1FE94: ;
 #endif
 label_BFC1FE98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EC4u);
@@ -369647,7 +369647,7 @@ label_BFC1FE98: ;
 #endif
 label_BFC1FE9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EC8u);
@@ -369688,7 +369688,7 @@ label_BFC1FEA0: ;
 #endif
 label_BFC1FEA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001ED0u);
@@ -369834,7 +369834,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FEB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EE0u);
@@ -369876,7 +369876,7 @@ label_BFC1FEB8: ;
 #endif
 label_BFC1FEBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EE8u);
@@ -369897,7 +369897,7 @@ label_BFC1FEBC: ;
 #endif
 label_BFC1FEC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EECu);
@@ -369937,7 +369937,7 @@ label_BFC1FEC4: ;
 #endif
 label_BFC1FEC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001EF4u);
@@ -370040,7 +370040,7 @@ label_BFC1FED8:
     cosim_block(0x00001F04u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F04u);
@@ -370061,7 +370061,7 @@ label_BFC1FED8:
 #endif
 label_BFC1FEDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F08u);
@@ -370105,7 +370105,7 @@ label_BFC1FEE4:
     cosim_block(0x00001F10u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F10u);
@@ -370145,7 +370145,7 @@ label_BFC1FEE8: ;
 #endif
 label_BFC1FEEC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F18u);
@@ -370265,7 +370265,7 @@ label_BFC1FF00:
     cosim_block(0x00001F2Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F2Cu);
@@ -370305,7 +370305,7 @@ label_BFC1FF04: ;
 #endif
 label_BFC1FF08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F34u);
@@ -370434,7 +370434,7 @@ label_BFC1FF1C:
     cosim_block(0x00001F48u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F48u);
@@ -370474,7 +370474,7 @@ label_BFC1FF20: ;
 #endif
 label_BFC1FF24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F50u);
@@ -370728,7 +370728,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC1FF44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F70u);
@@ -370768,7 +370768,7 @@ label_BFC1FF48: ;
 #endif
 label_BFC1FF4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F78u);
@@ -370808,7 +370808,7 @@ label_BFC1FF50: ;
 #endif
 label_BFC1FF54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F80u);
@@ -370848,7 +370848,7 @@ label_BFC1FF58: ;
 #endif
 label_BFC1FF5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001F88u);
@@ -371018,7 +371018,7 @@ label_BFC1FF78:
     cosim_block(0x00001FA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001FA4u);
@@ -371060,7 +371060,7 @@ label_BFC1FF7C: ;
 #endif
 label_BFC1FF80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001FACu);
@@ -371101,7 +371101,7 @@ label_BFC1FF84: ;
 #endif
 label_BFC1FF88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001FB4u);
@@ -371141,7 +371141,7 @@ label_BFC1FF8C: ;
 #endif
 label_BFC1FF90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001FBCu);
@@ -371538,7 +371538,7 @@ label_BFC1FFD0:
     cosim_block(0x00001FFCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00001FFCu);
@@ -371923,7 +371923,7 @@ label_BFC1FFF8:
     cosim_block(0x00002024u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002024u);
@@ -371963,7 +371963,7 @@ label_BFC1FFFC: ;
 #endif
 label_BFC20000: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000202Cu);
@@ -372064,7 +372064,7 @@ label_BFC2000C:
     cosim_block(0x00002038u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002038u);
@@ -372415,7 +372415,7 @@ label_BFC20034:
 #endif
 label_BFC20038: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002064u);
@@ -372457,7 +372457,7 @@ label_BFC2003C: ;
 #endif
 label_BFC20040: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000206Cu);
@@ -372855,7 +372855,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC20068: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002094u);
@@ -373233,7 +373233,7 @@ label_BFC200A8:
     cosim_block(0x000020D4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000020D4u);
@@ -373254,7 +373254,7 @@ label_BFC200A8:
 #endif
 label_BFC200AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000020D8u);
@@ -373275,7 +373275,7 @@ label_BFC200AC: ;
 #endif
 label_BFC200B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000020DCu);
@@ -373549,7 +373549,7 @@ label_BFC200DC:
     cosim_block(0x00002108u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002108u);
@@ -373570,7 +373570,7 @@ label_BFC200DC:
 #endif
 label_BFC200E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000210Cu);
@@ -373625,7 +373625,7 @@ label_BFC200E8:
     cosim_block(0x00002114u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002114u);
@@ -373665,7 +373665,7 @@ label_BFC200EC: ;
 #endif
 label_BFC200F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000211Cu);
@@ -373786,7 +373786,7 @@ label_BFC20104:
     cosim_block(0x00002130u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002130u);
@@ -373826,7 +373826,7 @@ label_BFC20108: ;
 #endif
 label_BFC2010C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002138u);
@@ -373969,7 +373969,7 @@ label_BFC20120: ;
 #endif
 label_BFC20124: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002150u);
@@ -373990,7 +373990,7 @@ label_BFC20124: ;
 #endif
 label_BFC20128: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002154u);
@@ -374836,7 +374836,7 @@ cpu->gpr[6] = 0x00000000u;
 #endif
 label_BFC2019C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000021C8u);
@@ -374876,7 +374876,7 @@ label_BFC201A0: ;
 #endif
 label_BFC201A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000021D0u);
@@ -375020,7 +375020,7 @@ cpu->gpr[6] = 0x00000000u;
 #endif
 label_BFC201BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000021E8u);
@@ -375060,7 +375060,7 @@ label_BFC201C0: ;
 #endif
 label_BFC201C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000021F0u);
@@ -375213,7 +375213,7 @@ label_BFC201DC:
     cosim_block(0x00002208u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002208u);
@@ -375234,7 +375234,7 @@ label_BFC201DC:
 #endif
 label_BFC201E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000220Cu);
@@ -375358,7 +375358,7 @@ label_BFC201F4:
     cosim_block(0x00002220u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002220u);
@@ -375398,7 +375398,7 @@ label_BFC201F8: ;
 #endif
 label_BFC201FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002228u);
@@ -375439,7 +375439,7 @@ label_BFC20200: ;
 #endif
 label_BFC20204: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002230u);
@@ -375700,7 +375700,7 @@ label_BFC20230:
     cosim_block(0x0000225Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000225Cu);
@@ -375740,7 +375740,7 @@ label_BFC20234: ;
 #endif
 label_BFC20238: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002264u);
@@ -375904,7 +375904,7 @@ label_BFC20254:
     cosim_block(0x00002280u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002280u);
@@ -375944,7 +375944,7 @@ label_BFC20258: ;
 #endif
 label_BFC2025C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002288u);
@@ -375985,7 +375985,7 @@ label_BFC20260: ;
 #endif
 label_BFC20264: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002290u);
@@ -376006,7 +376006,7 @@ label_BFC20264: ;
 #endif
 label_BFC20268: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002294u);
@@ -376121,7 +376121,7 @@ label_BFC2027C:
     cosim_block(0x000022A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022A8u);
@@ -376161,7 +376161,7 @@ label_BFC20280: ;
 #endif
 label_BFC20284: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022B0u);
@@ -376181,7 +376181,7 @@ label_BFC20284: ;
 #endif
 label_BFC20288: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022B4u);
@@ -376221,7 +376221,7 @@ label_BFC2028C: ;
 #endif
 label_BFC20290: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022BCu);
@@ -376358,7 +376358,7 @@ label_BFC202A4:
 #endif
 label_BFC202A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022D4u);
@@ -376398,7 +376398,7 @@ label_BFC202AC: ;
 #endif
 label_BFC202B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022DCu);
@@ -376453,7 +376453,7 @@ label_BFC202B8:
     cosim_block(0x000022E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022E4u);
@@ -376493,7 +376493,7 @@ label_BFC202BC: ;
 #endif
 label_BFC202C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000022ECu);
@@ -377114,7 +377114,7 @@ label_BFC20308:
     cosim_block(0x00002334u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002334u);
@@ -377156,7 +377156,7 @@ label_BFC2030C: ;
 #endif
 label_BFC20310: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000233Cu);
@@ -377246,7 +377246,7 @@ label_BFC2031C: ;
 #endif
 label_BFC20320: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000234Cu);
@@ -377288,7 +377288,7 @@ label_BFC20324: ;
 #endif
 label_BFC20328: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002354u);
@@ -377416,7 +377416,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC2033C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002368u);
@@ -377802,7 +377802,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC2037C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000023A8u);
@@ -377823,7 +377823,7 @@ label_BFC2037C: ;
 #endif
 label_BFC20380: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000023ACu);
@@ -378097,7 +378097,7 @@ label_BFC203AC:
     cosim_block(0x000023D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000023D8u);
@@ -378137,7 +378137,7 @@ label_BFC203B0: ;
 #endif
 label_BFC203B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000023E0u);
@@ -378163,7 +378163,7 @@ label_BFC203B8:
     cosim_block(0x000023E4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000023E4u);
@@ -378184,7 +378184,7 @@ label_BFC203B8:
 #endif
 label_BFC203BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000023E8u);
@@ -378339,7 +378339,7 @@ label_BFC203D4:
     cosim_block(0x00002400u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002400u);
@@ -378381,7 +378381,7 @@ label_BFC203D8: ;
 #endif
 label_BFC203DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002408u);
@@ -378455,7 +378455,7 @@ label_BFC203E8:
     cosim_block(0x00002414u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002414u);
@@ -378476,7 +378476,7 @@ label_BFC203E8:
 #endif
 label_BFC203EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002418u);
@@ -379052,7 +379052,7 @@ label_BFC20448:
     cosim_block(0x00002474u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002474u);
@@ -379092,7 +379092,7 @@ label_BFC2044C: ;
 #endif
 label_BFC20450: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000247Cu);
@@ -379312,7 +379312,7 @@ label_BFC20470:
 #endif
 label_BFC20474: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000024A0u);
@@ -379354,7 +379354,7 @@ label_BFC20478: ;
 #endif
 label_BFC2047C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000024A8u);
@@ -379773,7 +379773,7 @@ label_BFC204C0:
     cosim_block(0x000024ECu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000024ECu);
@@ -379813,7 +379813,7 @@ label_BFC204C4: ;
 #endif
 label_BFC204C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000024F4u);
@@ -379833,7 +379833,7 @@ label_BFC204C8: ;
 #endif
 label_BFC204CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000024F8u);
@@ -379873,7 +379873,7 @@ label_BFC204D0: ;
 #endif
 label_BFC204D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002500u);
@@ -380195,7 +380195,7 @@ label_BFC20500:
     cosim_block(0x0000252Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000252Cu);
@@ -380235,7 +380235,7 @@ label_BFC20504: ;
 #endif
 label_BFC20508: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002534u);
@@ -380306,7 +380306,7 @@ label_BFC20514:
     cosim_block(0x00002540u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002540u);
@@ -380327,7 +380327,7 @@ label_BFC20514:
 #endif
 label_BFC20518: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002544u);
@@ -380399,7 +380399,7 @@ label_BFC20520:
 #endif
 label_BFC20524: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002550u);
@@ -380441,7 +380441,7 @@ label_BFC20528: ;
 #endif
 label_BFC2052C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002558u);
@@ -380560,7 +380560,7 @@ label_BFC20540:
     cosim_block(0x0000256Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000256Cu);
@@ -380602,7 +380602,7 @@ label_BFC20544: ;
 #endif
 label_BFC20548: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002574u);
@@ -381776,7 +381776,7 @@ label_BFC205FC: ;
 #endif
 label_BFC20600: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000262Cu);
@@ -381797,7 +381797,7 @@ label_BFC20600: ;
 #endif
 label_BFC20604: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002630u);
@@ -381839,7 +381839,7 @@ label_BFC20608: ;
 #endif
 label_BFC2060C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002638u);
@@ -381937,7 +381937,7 @@ label_BFC2061C:
     cosim_block(0x00002648u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002648u);
@@ -381958,7 +381958,7 @@ label_BFC2061C:
 #endif
 label_BFC20620: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000264Cu);
@@ -381979,7 +381979,7 @@ label_BFC20620: ;
 #endif
 label_BFC20624: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002650u);
@@ -382000,7 +382000,7 @@ label_BFC20624: ;
 #endif
 label_BFC20628: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002654u);
@@ -382021,7 +382021,7 @@ label_BFC20628: ;
 #endif
 label_BFC2062C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002658u);
@@ -382066,7 +382066,7 @@ label_BFC20634:
     cosim_block(0x00002660u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002660u);
@@ -382106,7 +382106,7 @@ label_BFC20638: ;
 #endif
 label_BFC2063C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002668u);
@@ -382156,7 +382156,7 @@ label_BFC20644:
     cosim_block(0x00002670u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002670u);
@@ -382196,7 +382196,7 @@ label_BFC20648: ;
 #endif
 label_BFC2064C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002678u);
@@ -382246,7 +382246,7 @@ label_BFC20654:
     cosim_block(0x00002680u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002680u);
@@ -382286,7 +382286,7 @@ label_BFC20658: ;
 #endif
 label_BFC2065C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002688u);
@@ -382336,7 +382336,7 @@ label_BFC20664:
     cosim_block(0x00002690u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002690u);
@@ -382376,7 +382376,7 @@ label_BFC20668: ;
 #endif
 label_BFC2066C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002698u);
@@ -382577,7 +382577,7 @@ label_BFC2068C:
     cosim_block(0x000026B8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026B8u);
@@ -382617,7 +382617,7 @@ label_BFC20690: ;
 #endif
 label_BFC20694: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026C0u);
@@ -382738,7 +382738,7 @@ label_BFC206A8:
     cosim_block(0x000026D4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026D4u);
@@ -382759,7 +382759,7 @@ label_BFC206A8:
 #endif
 label_BFC206AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026D8u);
@@ -382780,7 +382780,7 @@ label_BFC206AC: ;
 #endif
 label_BFC206B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026DCu);
@@ -382933,7 +382933,7 @@ label_BFC206BC: ;
 #endif
 label_BFC206C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026ECu);
@@ -382954,7 +382954,7 @@ label_BFC206C0: ;
 #endif
 label_BFC206C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026F0u);
@@ -382996,7 +382996,7 @@ label_BFC206C8: ;
 #endif
 label_BFC206CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000026F8u);
@@ -383137,7 +383137,7 @@ label_BFC206E4:
     cosim_block(0x00002710u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002710u);
@@ -383177,7 +383177,7 @@ label_BFC206E8: ;
 #endif
 label_BFC206EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002718u);
@@ -383227,7 +383227,7 @@ label_BFC206F4:
     cosim_block(0x00002720u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002720u);
@@ -383267,7 +383267,7 @@ label_BFC206F8: ;
 #endif
 label_BFC206FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002728u);
@@ -383317,7 +383317,7 @@ label_BFC20704:
     cosim_block(0x00002730u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002730u);
@@ -383357,7 +383357,7 @@ label_BFC20708: ;
 #endif
 label_BFC2070C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002738u);
@@ -383409,7 +383409,7 @@ label_BFC20714:
     cosim_block(0x00002740u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002740u);
@@ -383449,7 +383449,7 @@ label_BFC20718: ;
 #endif
 label_BFC2071C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002748u);
@@ -383789,7 +383789,7 @@ label_BFC2074C:
 #endif
 label_BFC20750: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000277Cu);
@@ -383831,7 +383831,7 @@ label_BFC20754: ;
 #endif
 label_BFC20758: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002784u);
@@ -383873,7 +383873,7 @@ label_BFC2075C: ;
 #endif
 label_BFC20760: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000278Cu);
@@ -383894,7 +383894,7 @@ label_BFC20760: ;
 #endif
 label_BFC20764: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002790u);
@@ -383915,7 +383915,7 @@ label_BFC20764: ;
 #endif
 label_BFC20768: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002794u);
@@ -384327,7 +384327,7 @@ label_BFC20794:
     cosim_block(0x000027C0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000027C0u);
@@ -384423,7 +384423,7 @@ label_BFC2079C:
     cosim_block(0x000027C8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000027C8u);
@@ -384854,7 +384854,7 @@ label_BFC207CC:
     cosim_block(0x000027F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000027F8u);
@@ -384894,7 +384894,7 @@ label_BFC207D0: ;
 #endif
 label_BFC207D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002800u);
@@ -386399,7 +386399,7 @@ label_BFC208CC: ;
 #endif
 label_BFC208D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000028FCu);
@@ -386420,7 +386420,7 @@ label_BFC208D0: ;
 #endif
 label_BFC208D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002900u);
@@ -386462,7 +386462,7 @@ cpu->gpr[28] = 0x00000000u;
 #endif
 label_BFC208DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002908u);
@@ -386483,7 +386483,7 @@ label_BFC208DC: ;
 #endif
 label_BFC208E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000290Cu);
@@ -386504,7 +386504,7 @@ label_BFC208E0: ;
 #endif
 label_BFC208E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002910u);
@@ -386531,7 +386531,7 @@ label_BFC208E8:
     cosim_block(0x00002914u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002914u);
@@ -386571,7 +386571,7 @@ label_BFC208EC: ;
 #endif
 label_BFC208F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000291Cu);
@@ -386624,7 +386624,7 @@ label_BFC208F8:
     cosim_block(0x00002924u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002924u);
@@ -386645,7 +386645,7 @@ label_BFC208F8:
 #endif
 label_BFC208FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002928u);
@@ -386666,7 +386666,7 @@ label_BFC208FC: ;
 #endif
 label_BFC20900: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000292Cu);
@@ -386921,7 +386921,7 @@ label_BFC20928:
     cosim_block(0x00002954u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002954u);
@@ -386961,7 +386961,7 @@ label_BFC2092C: ;
 #endif
 label_BFC20930: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000295Cu);
@@ -387167,7 +387167,7 @@ label_BFC20944:
 #endif
 label_BFC20948: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002974u);
@@ -387209,7 +387209,7 @@ cpu->gpr[4] = 0x00000000u;
 #endif
 label_BFC20950: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000297Cu);
@@ -387251,7 +387251,7 @@ label_BFC20954: ;
 #endif
 label_BFC20958: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002984u);
@@ -387293,7 +387293,7 @@ label_BFC2095C: ;
 #endif
 label_BFC20960: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000298Cu);
@@ -387314,7 +387314,7 @@ label_BFC20960: ;
 #endif
 label_BFC20964: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002990u);
@@ -387335,7 +387335,7 @@ label_BFC20964: ;
 #endif
 label_BFC20968: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002994u);
@@ -387356,7 +387356,7 @@ label_BFC20968: ;
 #endif
 label_BFC2096C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002998u);
@@ -387377,7 +387377,7 @@ label_BFC2096C: ;
 #endif
 label_BFC20970: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000299Cu);
@@ -387398,7 +387398,7 @@ label_BFC20970: ;
 #endif
 label_BFC20974: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029A0u);
@@ -387419,7 +387419,7 @@ label_BFC20974: ;
 #endif
 label_BFC20978: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029A4u);
@@ -387440,7 +387440,7 @@ label_BFC20978: ;
 #endif
 label_BFC2097C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029A8u);
@@ -387461,7 +387461,7 @@ label_BFC2097C: ;
 #endif
 label_BFC20980: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029ACu);
@@ -387482,7 +387482,7 @@ label_BFC20980: ;
 #endif
 label_BFC20984: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029B0u);
@@ -387503,7 +387503,7 @@ label_BFC20984: ;
 #endif
 label_BFC20988: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029B4u);
@@ -387524,7 +387524,7 @@ label_BFC20988: ;
 #endif
 label_BFC2098C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029B8u);
@@ -387545,7 +387545,7 @@ label_BFC2098C: ;
 #endif
 label_BFC20990: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029BCu);
@@ -387587,7 +387587,7 @@ label_BFC20994: ;
 #endif
 label_BFC20998: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029C4u);
@@ -387712,7 +387712,7 @@ label_BFC209A0:
 #endif
 label_BFC209A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029D0u);
@@ -387752,7 +387752,7 @@ label_BFC209A8: ;
 #endif
 label_BFC209AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029D8u);
@@ -387792,7 +387792,7 @@ label_BFC209B0: ;
 #endif
 label_BFC209B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029E0u);
@@ -387834,7 +387834,7 @@ label_BFC209B8: ;
 #endif
 label_BFC209BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029E8u);
@@ -387854,7 +387854,7 @@ cpu->lo = cpu->gpr[2];
 #endif
 label_BFC209C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029ECu);
@@ -387875,7 +387875,7 @@ label_BFC209C0: ;
 #endif
 label_BFC209C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029F0u);
@@ -387916,7 +387916,7 @@ cpu->hi = cpu->gpr[3];
 #endif
 label_BFC209CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029F8u);
@@ -387937,7 +387937,7 @@ label_BFC209CC: ;
 #endif
 label_BFC209D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000029FCu);
@@ -387977,7 +387977,7 @@ cpu->cop0[12] = cpu->gpr[5];
 #endif
 label_BFC209D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A04u);
@@ -387998,7 +387998,7 @@ label_BFC209D8: ;
 #endif
 label_BFC209DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A08u);
@@ -388019,7 +388019,7 @@ label_BFC209DC: ;
 #endif
 label_BFC209E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A0Cu);
@@ -388040,7 +388040,7 @@ label_BFC209E0: ;
 #endif
 label_BFC209E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A10u);
@@ -388061,7 +388061,7 @@ label_BFC209E4: ;
 #endif
 label_BFC209E8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A14u);
@@ -388082,7 +388082,7 @@ label_BFC209E8: ;
 #endif
 label_BFC209EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A18u);
@@ -388103,7 +388103,7 @@ label_BFC209EC: ;
 #endif
 label_BFC209F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A1Cu);
@@ -388124,7 +388124,7 @@ label_BFC209F0: ;
 #endif
 label_BFC209F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A20u);
@@ -388145,7 +388145,7 @@ label_BFC209F4: ;
 #endif
 label_BFC209F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A24u);
@@ -388166,7 +388166,7 @@ label_BFC209F8: ;
 #endif
 label_BFC209FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A28u);
@@ -388187,7 +388187,7 @@ label_BFC209FC: ;
 #endif
 label_BFC20A00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A2Cu);
@@ -388208,7 +388208,7 @@ label_BFC20A00: ;
 #endif
 label_BFC20A04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A30u);
@@ -388229,7 +388229,7 @@ label_BFC20A04: ;
 #endif
 label_BFC20A08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A34u);
@@ -388250,7 +388250,7 @@ label_BFC20A08: ;
 #endif
 label_BFC20A0C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A38u);
@@ -388271,7 +388271,7 @@ label_BFC20A0C: ;
 #endif
 label_BFC20A10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A3Cu);
@@ -388292,7 +388292,7 @@ label_BFC20A10: ;
 #endif
 label_BFC20A14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A40u);
@@ -388313,7 +388313,7 @@ label_BFC20A14: ;
 #endif
 label_BFC20A18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A44u);
@@ -388334,7 +388334,7 @@ label_BFC20A18: ;
 #endif
 label_BFC20A1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A48u);
@@ -388355,7 +388355,7 @@ label_BFC20A1C: ;
 #endif
 label_BFC20A20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A4Cu);
@@ -388376,7 +388376,7 @@ label_BFC20A20: ;
 #endif
 label_BFC20A24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A50u);
@@ -388397,7 +388397,7 @@ label_BFC20A24: ;
 #endif
 label_BFC20A28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A54u);
@@ -388418,7 +388418,7 @@ label_BFC20A28: ;
 #endif
 label_BFC20A2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A58u);
@@ -388439,7 +388439,7 @@ label_BFC20A2C: ;
 #endif
 label_BFC20A30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A5Cu);
@@ -388460,7 +388460,7 @@ label_BFC20A30: ;
 #endif
 label_BFC20A34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A60u);
@@ -388481,7 +388481,7 @@ label_BFC20A34: ;
 #endif
 label_BFC20A38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A64u);
@@ -388502,7 +388502,7 @@ label_BFC20A38: ;
 #endif
 label_BFC20A3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A68u);
@@ -388523,7 +388523,7 @@ label_BFC20A3C: ;
 #endif
 label_BFC20A40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A6Cu);
@@ -388544,7 +388544,7 @@ label_BFC20A40: ;
 #endif
 label_BFC20A44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A70u);
@@ -388565,7 +388565,7 @@ label_BFC20A44: ;
 #endif
 label_BFC20A48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A74u);
@@ -388586,7 +388586,7 @@ label_BFC20A48: ;
 #endif
 label_BFC20A4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A78u);
@@ -388731,7 +388731,7 @@ label_BFC20A60: ;
 #endif
 label_BFC20A64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A90u);
@@ -388773,7 +388773,7 @@ label_BFC20A68: ;
 #endif
 label_BFC20A6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002A98u);
@@ -388923,7 +388923,7 @@ label_BFC20A80: ;
 #endif
 label_BFC20A84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002AB0u);
@@ -388965,7 +388965,7 @@ label_BFC20A88: ;
 #endif
 label_BFC20A8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002AB8u);
@@ -389115,7 +389115,7 @@ label_BFC20AA0: ;
 #endif
 label_BFC20AA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002AD0u);
@@ -389157,7 +389157,7 @@ label_BFC20AA8: ;
 #endif
 label_BFC20AAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002AD8u);
@@ -389285,7 +389285,7 @@ label_BFC20ABC: ;
 #endif
 label_BFC20AC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002AECu);
@@ -389325,7 +389325,7 @@ label_BFC20AC4: ;
 #endif
 label_BFC20AC8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002AF4u);
@@ -389657,7 +389657,7 @@ label_BFC20AF4:
 #endif
 label_BFC20AF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B24u);
@@ -389678,7 +389678,7 @@ label_BFC20AF8: ;
 #endif
 label_BFC20AFC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B28u);
@@ -389718,7 +389718,7 @@ label_BFC20B00: ;
 #endif
 label_BFC20B04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B30u);
@@ -389790,7 +389790,7 @@ label_BFC20B10:
     cosim_block(0x00002B3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B3Cu);
@@ -389811,7 +389811,7 @@ label_BFC20B10:
 #endif
 label_BFC20B14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B40u);
@@ -389851,7 +389851,7 @@ label_BFC20B18: ;
 #endif
 label_BFC20B1C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B48u);
@@ -390047,7 +390047,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC20B38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B64u);
@@ -390068,7 +390068,7 @@ label_BFC20B38: ;
 #endif
 label_BFC20B3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B68u);
@@ -390110,7 +390110,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC20B44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B70u);
@@ -390131,7 +390131,7 @@ label_BFC20B44: ;
 #endif
 label_BFC20B48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B74u);
@@ -390152,7 +390152,7 @@ label_BFC20B48: ;
 #endif
 label_BFC20B4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B78u);
@@ -390215,7 +390215,7 @@ label_BFC20B54: ;
 #endif
 label_BFC20B58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B84u);
@@ -390236,7 +390236,7 @@ label_BFC20B58: ;
 #endif
 label_BFC20B5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B88u);
@@ -390351,7 +390351,7 @@ label_BFC20B6C: ;
 #endif
 label_BFC20B70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002B9Cu);
@@ -390391,7 +390391,7 @@ label_BFC20B74: ;
 #endif
 label_BFC20B78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BA4u);
@@ -390686,7 +390686,7 @@ label_BFC20BA4: ;
 #endif
 label_BFC20BA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BD4u);
@@ -390707,7 +390707,7 @@ label_BFC20BA8: ;
 #endif
 label_BFC20BAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BD8u);
@@ -390749,7 +390749,7 @@ label_BFC20BB0: ;
 #endif
 label_BFC20BB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BE0u);
@@ -390770,7 +390770,7 @@ label_BFC20BB4: ;
 #endif
 label_BFC20BB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BE4u);
@@ -390790,7 +390790,7 @@ label_BFC20BB8: ;
 #endif
 label_BFC20BBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BE8u);
@@ -390830,7 +390830,7 @@ label_BFC20BC0: ;
 #endif
 label_BFC20BC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002BF0u);
@@ -391095,7 +391095,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC20BF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C1Cu);
@@ -391137,7 +391137,7 @@ label_BFC20BF4: ;
 #endif
 label_BFC20BF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C24u);
@@ -391163,7 +391163,7 @@ label_BFC20BFC:
     cosim_block(0x00002C28u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C28u);
@@ -391203,7 +391203,7 @@ label_BFC20C00: ;
 #endif
 label_BFC20C04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C30u);
@@ -391443,7 +391443,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC20C24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C50u);
@@ -391484,7 +391484,7 @@ label_BFC20C28: ;
 #endif
 label_BFC20C2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C58u);
@@ -391524,7 +391524,7 @@ label_BFC20C30: ;
 #endif
 label_BFC20C34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C60u);
@@ -391648,7 +391648,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC20C4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C78u);
@@ -391688,7 +391688,7 @@ label_BFC20C50: ;
 #endif
 label_BFC20C54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002C80u);
@@ -391957,7 +391957,7 @@ label_BFC20C80: ;
 #endif
 label_BFC20C84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CB0u);
@@ -391999,7 +391999,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC20C8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CB8u);
@@ -392197,7 +392197,7 @@ label_BFC20CB0:
     cosim_block(0x00002CDCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CDCu);
@@ -392239,7 +392239,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC20CB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CE4u);
@@ -392260,7 +392260,7 @@ label_BFC20CB8: ;
 #endif
 label_BFC20CBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CE8u);
@@ -392280,7 +392280,7 @@ label_BFC20CBC: ;
 #endif
 label_BFC20CC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CECu);
@@ -392301,7 +392301,7 @@ label_BFC20CC0: ;
 #endif
 label_BFC20CC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CF0u);
@@ -392395,7 +392395,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC20CD0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002CFCu);
@@ -392436,7 +392436,7 @@ label_BFC20CD4: ;
 #endif
 label_BFC20CD8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D04u);
@@ -392478,7 +392478,7 @@ label_BFC20CDC: ;
 #endif
 label_BFC20CE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D0Cu);
@@ -392723,7 +392723,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC20D08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D34u);
@@ -392770,7 +392770,7 @@ label_BFC20D10:
     cosim_block(0x00002D3Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D3Cu);
@@ -392812,7 +392812,7 @@ label_BFC20D14: ;
 #endif
 label_BFC20D18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D44u);
@@ -393013,7 +393013,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC20D38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D64u);
@@ -393054,7 +393054,7 @@ label_BFC20D3C: ;
 #endif
 label_BFC20D40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D6Cu);
@@ -393153,7 +393153,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC20D4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D78u);
@@ -393194,7 +393194,7 @@ label_BFC20D50: ;
 #endif
 label_BFC20D54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D80u);
@@ -393297,7 +393297,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC20D60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D8Cu);
@@ -393338,7 +393338,7 @@ label_BFC20D64: ;
 #endif
 label_BFC20D68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D94u);
@@ -393380,7 +393380,7 @@ label_BFC20D6C: ;
 #endif
 label_BFC20D70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002D9Cu);
@@ -393581,7 +393581,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC20D90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002DBCu);
@@ -393622,7 +393622,7 @@ label_BFC20D94: ;
 #endif
 label_BFC20D98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002DC4u);
@@ -393737,7 +393737,7 @@ cpu->gpr[7] = 0x1F800000u;
 #endif
 label_BFC20DA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002DD0u);
@@ -393778,7 +393778,7 @@ label_BFC20DA8: ;
 #endif
 label_BFC20DAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002DD8u);
@@ -393818,7 +393818,7 @@ label_BFC20DB0: ;
 #endif
 label_BFC20DB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002DE0u);
@@ -394315,7 +394315,7 @@ label_BFC20E04: ;
 #endif
 label_BFC20E08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E34u);
@@ -394357,7 +394357,7 @@ cpu->gpr[3] = 0x1F800000u;
 #endif
 label_BFC20E10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E3Cu);
@@ -394398,7 +394398,7 @@ label_BFC20E14: ;
 #endif
 label_BFC20E18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E44u);
@@ -394440,7 +394440,7 @@ label_BFC20E1C: ;
 #endif
 label_BFC20E20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E4Cu);
@@ -394776,7 +394776,7 @@ label_BFC20E50: ;
 #endif
 label_BFC20E54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E80u);
@@ -394818,7 +394818,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC20E5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E88u);
@@ -394859,7 +394859,7 @@ label_BFC20E60: ;
 #endif
 label_BFC20E64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E90u);
@@ -394899,7 +394899,7 @@ label_BFC20E68: ;
 #endif
 label_BFC20E6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002E98u);
@@ -395085,7 +395085,7 @@ label_BFC20E8C: ;
 #endif
 label_BFC20E90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002EBCu);
@@ -395125,7 +395125,7 @@ label_BFC20E94: ;
 #endif
 label_BFC20E98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002EC4u);
@@ -395270,7 +395270,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC20EA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002ED4u);
@@ -395311,7 +395311,7 @@ label_BFC20EAC: ;
 #endif
 label_BFC20EB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002EDCu);
@@ -395351,7 +395351,7 @@ label_BFC20EB4: ;
 #endif
 label_BFC20EB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002EE4u);
@@ -395517,7 +395517,7 @@ label_BFC20ED4: ;
 #endif
 label_BFC20ED8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F04u);
@@ -395557,7 +395557,7 @@ label_BFC20EDC: ;
 #endif
 label_BFC20EE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F0Cu);
@@ -395612,7 +395612,7 @@ label_BFC20EE8:
     cosim_block(0x00002F14u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F14u);
@@ -395652,7 +395652,7 @@ label_BFC20EEC: ;
 #endif
 label_BFC20EF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F1Cu);
@@ -395723,7 +395723,7 @@ label_BFC20EFC:
     cosim_block(0x00002F28u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F28u);
@@ -395765,7 +395765,7 @@ label_BFC20F00: ;
 #endif
 label_BFC20F04: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F30u);
@@ -395970,7 +395970,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC20F20: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F4Cu);
@@ -395991,7 +395991,7 @@ label_BFC20F20: ;
 #endif
 label_BFC20F24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F50u);
@@ -396033,7 +396033,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC20F2C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F58u);
@@ -396054,7 +396054,7 @@ label_BFC20F2C: ;
 #endif
 label_BFC20F30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F5Cu);
@@ -396075,7 +396075,7 @@ label_BFC20F30: ;
 #endif
 label_BFC20F34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F60u);
@@ -396138,7 +396138,7 @@ label_BFC20F3C: ;
 #endif
 label_BFC20F40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F6Cu);
@@ -396159,7 +396159,7 @@ label_BFC20F40: ;
 #endif
 label_BFC20F44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F70u);
@@ -396293,7 +396293,7 @@ label_BFC20F58: ;
 #endif
 label_BFC20F5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F88u);
@@ -396335,7 +396335,7 @@ label_BFC20F60: ;
 #endif
 label_BFC20F64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F90u);
@@ -396356,7 +396356,7 @@ cpu->gpr[3] = 0x1F800000u;
 #endif
 label_BFC20F68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002F94u);
@@ -396647,7 +396647,7 @@ label_BFC20F94: ;
 #endif
 label_BFC20F98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002FC4u);
@@ -396668,7 +396668,7 @@ label_BFC20F98: ;
 #endif
 label_BFC20F9C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002FC8u);
@@ -396710,7 +396710,7 @@ label_BFC20FA0: ;
 #endif
 label_BFC20FA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002FD0u);
@@ -396731,7 +396731,7 @@ label_BFC20FA4: ;
 #endif
 label_BFC20FA8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002FD4u);
@@ -396751,7 +396751,7 @@ label_BFC20FA8: ;
 #endif
 label_BFC20FAC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002FD8u);
@@ -396791,7 +396791,7 @@ label_BFC20FB0: ;
 #endif
 label_BFC20FB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00002FE0u);
@@ -397015,7 +397015,7 @@ label_BFC20FD8:
     cosim_block(0x00003004u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003004u);
@@ -397239,7 +397239,7 @@ label_BFC20FEC:
     cosim_block(0x00003018u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003018u);
@@ -397281,7 +397281,7 @@ label_BFC20FF0: ;
 #endif
 label_BFC20FF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003020u);
@@ -397307,7 +397307,7 @@ label_BFC20FF8:
     cosim_block(0x00003024u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003024u);
@@ -397347,7 +397347,7 @@ label_BFC20FFC: ;
 #endif
 label_BFC21000: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000302Cu);
@@ -397614,7 +397614,7 @@ label_BFC21020:
     cosim_block(0x0000304Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000304Cu);
@@ -397655,7 +397655,7 @@ label_BFC21024: ;
 #endif
 label_BFC21028: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003054u);
@@ -398043,7 +398043,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21058: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003084u);
@@ -398083,7 +398083,7 @@ label_BFC2105C: ;
 #endif
 label_BFC21060: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000308Cu);
@@ -398273,7 +398273,7 @@ label_BFC2107C: ;
 #endif
 label_BFC21080: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000030ACu);
@@ -398315,7 +398315,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21088: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000030B4u);
@@ -398687,7 +398687,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC210C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000030F0u);
@@ -398728,7 +398728,7 @@ label_BFC210C8: ;
 #endif
 label_BFC210CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000030F8u);
@@ -398770,7 +398770,7 @@ label_BFC210D0: ;
 #endif
 label_BFC210D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003100u);
@@ -399017,7 +399017,7 @@ label_BFC210F8: ;
 #endif
 label_BFC210FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003128u);
@@ -399099,7 +399099,7 @@ label_BFC21104:
     cosim_block(0x00003130u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003130u);
@@ -399139,7 +399139,7 @@ label_BFC21108: ;
 #endif
 label_BFC2110C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003138u);
@@ -399470,7 +399470,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC21140: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000316Cu);
@@ -399511,7 +399511,7 @@ label_BFC21144: ;
 #endif
 label_BFC21148: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003174u);
@@ -399553,7 +399553,7 @@ label_BFC2114C: ;
 #endif
 label_BFC21150: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000317Cu);
@@ -399719,7 +399719,7 @@ label_BFC2116C: ;
 #endif
 label_BFC21170: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000319Cu);
@@ -399759,7 +399759,7 @@ label_BFC21174: ;
 #endif
 label_BFC21178: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031A4u);
@@ -399944,7 +399944,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC21194: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031C0u);
@@ -399986,7 +399986,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC2119C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031C8u);
@@ -400028,7 +400028,7 @@ label_BFC211A0: ;
 #endif
 label_BFC211A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031D0u);
@@ -400049,7 +400049,7 @@ label_BFC211A4: ;
 #endif
 label_BFC211A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031D4u);
@@ -400090,7 +400090,7 @@ label_BFC211AC: ;
 #endif
 label_BFC211B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031DCu);
@@ -400189,7 +400189,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC211BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031E8u);
@@ -400230,7 +400230,7 @@ label_BFC211C0: ;
 #endif
 label_BFC211C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031F0u);
@@ -400333,7 +400333,7 @@ cpu->gpr[4] = 0x1F800000u;
 #endif
 label_BFC211D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000031FCu);
@@ -400374,7 +400374,7 @@ label_BFC211D4: ;
 #endif
 label_BFC211D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003204u);
@@ -400416,7 +400416,7 @@ label_BFC211DC: ;
 #endif
 label_BFC211E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000320Cu);
@@ -400676,7 +400676,7 @@ cpu->gpr[5] = 0x1F800000u;
 #endif
 label_BFC21200: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000322Cu);
@@ -400717,7 +400717,7 @@ label_BFC21204: ;
 #endif
 label_BFC21208: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003234u);
@@ -400757,7 +400757,7 @@ label_BFC2120C: ;
 #endif
 label_BFC21210: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000323Cu);
@@ -400933,7 +400933,7 @@ label_BFC21230:
     cosim_block(0x0000325Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000325Cu);
@@ -400973,7 +400973,7 @@ label_BFC21234: ;
 #endif
 label_BFC21238: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003264u);
@@ -401046,7 +401046,7 @@ label_BFC21244:
     cosim_block(0x00003270u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003270u);
@@ -401086,7 +401086,7 @@ label_BFC21248: ;
 #endif
 label_BFC2124C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003278u);
@@ -401180,7 +401180,7 @@ label_BFC21258: ;
 #endif
 label_BFC2125C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003288u);
@@ -401220,7 +401220,7 @@ label_BFC21260: ;
 #endif
 label_BFC21264: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003290u);
@@ -401293,7 +401293,7 @@ label_BFC21270:
     cosim_block(0x0000329Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000329Cu);
@@ -401333,7 +401333,7 @@ label_BFC21274: ;
 #endif
 label_BFC21278: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000032A4u);
@@ -401724,7 +401724,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC212C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000032ECu);
@@ -401766,7 +401766,7 @@ label_BFC212C4: ;
 #endif
 label_BFC212C8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000032F4u);
@@ -402097,7 +402097,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC212E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003310u);
@@ -402139,7 +402139,7 @@ cpu->gpr[6] = 0x00000000u;
 #endif
 label_BFC212EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003318u);
@@ -402160,7 +402160,7 @@ label_BFC212EC: ;
 #endif
 label_BFC212F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000331Cu);
@@ -402181,7 +402181,7 @@ label_BFC212F0: ;
 #endif
 label_BFC212F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003320u);
@@ -402548,7 +402548,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC21330: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000335Cu);
@@ -402590,7 +402590,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC21338: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003364u);
@@ -402611,7 +402611,7 @@ label_BFC21338: ;
 #endif
 label_BFC2133C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003368u);
@@ -402708,7 +402708,7 @@ cpu->gpr[3] = 0x1F800000u;
 #endif
 label_BFC2134C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003378u);
@@ -402748,7 +402748,7 @@ label_BFC21350: ;
 #endif
 label_BFC21354: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003380u);
@@ -403175,7 +403175,7 @@ label_BFC213A0: ;
 #endif
 label_BFC213A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000033D0u);
@@ -403196,7 +403196,7 @@ label_BFC213A4: ;
 #endif
 label_BFC213A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000033D4u);
@@ -403238,7 +403238,7 @@ label_BFC213AC: ;
 #endif
 label_BFC213B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000033DCu);
@@ -403259,7 +403259,7 @@ label_BFC213B0: ;
 #endif
 label_BFC213B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000033E0u);
@@ -403279,7 +403279,7 @@ label_BFC213B4: ;
 #endif
 label_BFC213B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000033E4u);
@@ -403321,7 +403321,7 @@ label_BFC213BC: ;
 #endif
 label_BFC213C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000033ECu);
@@ -403516,7 +403516,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC213E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003410u);
@@ -403558,7 +403558,7 @@ label_BFC213E8: ;
 #endif
 label_BFC213EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003418u);
@@ -403578,7 +403578,7 @@ label_BFC213EC: ;
 #endif
 label_BFC213F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000341Cu);
@@ -403618,7 +403618,7 @@ label_BFC213F4: ;
 #endif
 label_BFC213F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003424u);
@@ -403792,7 +403792,7 @@ cpu->gpr[2] = 0x1F800000u;
 #endif
 label_BFC21418: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003444u);
@@ -403833,7 +403833,7 @@ label_BFC2141C: ;
 #endif
 label_BFC21420: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000344Cu);
@@ -403873,7 +403873,7 @@ label_BFC21424: ;
 #endif
 label_BFC21428: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003454u);
@@ -403997,7 +403997,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21440: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000346Cu);
@@ -404037,7 +404037,7 @@ label_BFC21444: ;
 #endif
 label_BFC21448: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003474u);
@@ -404303,7 +404303,7 @@ label_BFC21474: ;
 #endif
 label_BFC21478: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034A4u);
@@ -404345,7 +404345,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21480: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034ACu);
@@ -404366,7 +404366,7 @@ label_BFC21480: ;
 #endif
 label_BFC21484: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034B0u);
@@ -404601,7 +404601,7 @@ label_BFC214AC:
     cosim_block(0x000034D8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034D8u);
@@ -404643,7 +404643,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC214B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034E0u);
@@ -404664,7 +404664,7 @@ label_BFC214B4: ;
 #endif
 label_BFC214B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034E4u);
@@ -404684,7 +404684,7 @@ label_BFC214B8: ;
 #endif
 label_BFC214BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034E8u);
@@ -404705,7 +404705,7 @@ label_BFC214BC: ;
 #endif
 label_BFC214C0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000034ECu);
@@ -404986,7 +404986,7 @@ label_BFC214E8: ;
 #endif
 label_BFC214EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003518u);
@@ -405007,7 +405007,7 @@ label_BFC214EC: ;
 #endif
 label_BFC214F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000351Cu);
@@ -405151,7 +405151,7 @@ label_BFC21504:
     cosim_block(0x00003530u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003530u);
@@ -405191,7 +405191,7 @@ label_BFC21508: ;
 #endif
 label_BFC2150C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003538u);
@@ -405510,7 +405510,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC2152C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003558u);
@@ -405552,7 +405552,7 @@ cpu->gpr[3] = 0x1F800000u;
 #endif
 label_BFC21534: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003560u);
@@ -405602,7 +405602,7 @@ label_BFC2153C:
     cosim_block(0x00003568u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003568u);
@@ -405642,7 +405642,7 @@ label_BFC21540: ;
 #endif
 label_BFC21544: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003570u);
@@ -405727,7 +405727,7 @@ label_BFC21550:
     cosim_block(0x0000357Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000357Cu);
@@ -405919,7 +405919,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21568: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003594u);
@@ -405961,7 +405961,7 @@ label_BFC2156C: ;
 #endif
 label_BFC21570: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000359Cu);
@@ -406003,7 +406003,7 @@ cpu->gpr[26] = 0x00000000u;
 #endif
 label_BFC21578: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035A4u);
@@ -406108,7 +406108,7 @@ label_BFC21588:
     cosim_block(0x000035B4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035B4u);
@@ -406150,7 +406150,7 @@ label_BFC2158C: ;
 #endif
 label_BFC21590: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035BCu);
@@ -406192,7 +406192,7 @@ label_BFC21594: ;
 #endif
 label_BFC21598: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035C4u);
@@ -406212,7 +406212,7 @@ label_BFC21598: ;
 #endif
 label_BFC2159C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035C8u);
@@ -406248,7 +406248,7 @@ label_BFC215A0: ;
 #endif
 label_BFC215A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035D0u);
@@ -406290,7 +406290,7 @@ cpu->gpr[1] = 0x00000000u;
 #endif
 label_BFC215AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035D8u);
@@ -406331,7 +406331,7 @@ label_BFC215B0: ;
 #endif
 label_BFC215B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035E0u);
@@ -406371,7 +406371,7 @@ label_BFC215B8: ;
 #endif
 label_BFC215BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035E8u);
@@ -406411,7 +406411,7 @@ label_BFC215C0: ;
 #endif
 label_BFC215C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000035F0u);
@@ -406514,7 +406514,7 @@ cpu->gpr[1] = 0x00000000u;
 #endif
 label_BFC215D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003604u);
@@ -406554,7 +406554,7 @@ label_BFC215DC: ;
 #endif
 label_BFC215E0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000360Cu);
@@ -406719,7 +406719,7 @@ label_BFC215FC:
     cosim_block(0x00003628u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003628u);
@@ -406740,7 +406740,7 @@ label_BFC215FC:
 #endif
 label_BFC21600: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000362Cu);
@@ -406782,7 +406782,7 @@ label_BFC21604: ;
 #endif
 label_BFC21608: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003634u);
@@ -406863,7 +406863,7 @@ label_BFC21614: ;
 #endif
 label_BFC21618: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003644u);
@@ -406905,7 +406905,7 @@ cpu->gpr[1] = 0x00000000u;
 #endif
 label_BFC21620: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000364Cu);
@@ -406946,7 +406946,7 @@ label_BFC21624: ;
 #endif
 label_BFC21628: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003654u);
@@ -406986,7 +406986,7 @@ label_BFC2162C: ;
 #endif
 label_BFC21630: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000365Cu);
@@ -407026,7 +407026,7 @@ label_BFC21634: ;
 #endif
 label_BFC21638: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003664u);
@@ -407129,7 +407129,7 @@ cpu->gpr[1] = 0x00000000u;
 #endif
 label_BFC2164C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003678u);
@@ -407169,7 +407169,7 @@ label_BFC21650: ;
 #endif
 label_BFC21654: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003680u);
@@ -407404,7 +407404,7 @@ label_BFC21678:
 #endif
 label_BFC2167C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036A8u);
@@ -407444,7 +407444,7 @@ label_BFC21680: ;
 #endif
 label_BFC21684: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036B0u);
@@ -407484,7 +407484,7 @@ label_BFC21688: ;
 #endif
 label_BFC2168C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036B8u);
@@ -407505,7 +407505,7 @@ label_BFC2168C: ;
 #endif
 label_BFC21690: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036BCu);
@@ -407526,7 +407526,7 @@ label_BFC21690: ;
 #endif
 label_BFC21694: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036C0u);
@@ -407547,7 +407547,7 @@ label_BFC21694: ;
 #endif
 label_BFC21698: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036C4u);
@@ -407568,7 +407568,7 @@ label_BFC21698: ;
 #endif
 label_BFC2169C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036C8u);
@@ -407608,7 +407608,7 @@ label_BFC216A0: ;
 #endif
 label_BFC216A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036D0u);
@@ -407701,7 +407701,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC216B0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036DCu);
@@ -407741,7 +407741,7 @@ label_BFC216B4: ;
 #endif
 label_BFC216B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036E4u);
@@ -407812,7 +407812,7 @@ label_BFC216C4:
     cosim_block(0x000036F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036F0u);
@@ -407852,7 +407852,7 @@ label_BFC216C8: ;
 #endif
 label_BFC216CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000036F8u);
@@ -407947,7 +407947,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC216DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003708u);
@@ -407987,7 +407987,7 @@ label_BFC216E0: ;
 #endif
 label_BFC216E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003710u);
@@ -408105,7 +408105,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC216F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003720u);
@@ -408145,7 +408145,7 @@ label_BFC216F8: ;
 #endif
 label_BFC216FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003728u);
@@ -408219,7 +408219,7 @@ label_BFC21708:
     cosim_block(0x00003734u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003734u);
@@ -408259,7 +408259,7 @@ label_BFC2170C: ;
 #endif
 label_BFC21710: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000373Cu);
@@ -408461,7 +408461,7 @@ label_BFC21728: ;
 #endif
 label_BFC2172C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003758u);
@@ -408503,7 +408503,7 @@ label_BFC21730: ;
 #endif
 label_BFC21734: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003760u);
@@ -408544,7 +408544,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC2173C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003768u);
@@ -408584,7 +408584,7 @@ label_BFC21740: ;
 #endif
 label_BFC21744: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003770u);
@@ -408867,7 +408867,7 @@ label_BFC21770: ;
 #endif
 label_BFC21774: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000037A0u);
@@ -408907,7 +408907,7 @@ label_BFC21778: ;
 #endif
 label_BFC2177C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000037A8u);
@@ -409592,7 +409592,7 @@ label_BFC217EC:
 #endif
 label_BFC217F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000381Cu);
@@ -409634,7 +409634,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC217F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003824u);
@@ -409675,7 +409675,7 @@ label_BFC217FC: ;
 #endif
 label_BFC21800: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000382Cu);
@@ -409832,7 +409832,7 @@ cpu->gpr[18] = 0x00000000u;
 #endif
 label_BFC21814: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003840u);
@@ -409874,7 +409874,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC2181C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003848u);
@@ -410057,7 +410057,7 @@ cpu->gpr[5] = 0x1F800000u;
 #endif
 label_BFC21840: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000386Cu);
@@ -410262,7 +410262,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC21858: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003884u);
@@ -410365,7 +410365,7 @@ label_BFC21868:
     cosim_block(0x00003894u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003894u);
@@ -410407,7 +410407,7 @@ label_BFC2186C: ;
 #endif
 label_BFC21870: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000389Cu);
@@ -410511,7 +410511,7 @@ label_BFC21880: ;
 #endif
 label_BFC21884: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000038B0u);
@@ -410551,7 +410551,7 @@ label_BFC21888: ;
 #endif
 label_BFC2188C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000038B8u);
@@ -410826,7 +410826,7 @@ label_BFC218B8: ;
 #endif
 label_BFC218BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000038E8u);
@@ -410866,7 +410866,7 @@ label_BFC218C0: ;
 #endif
 label_BFC218C4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000038F0u);
@@ -410918,7 +410918,7 @@ label_BFC218CC:
     cosim_block(0x000038F8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000038F8u);
@@ -410959,7 +410959,7 @@ label_BFC218D0: ;
 #endif
 label_BFC218D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003900u);
@@ -410980,7 +410980,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC218D8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003904u);
@@ -411001,7 +411001,7 @@ label_BFC218D8: ;
 #endif
 label_BFC218DC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003908u);
@@ -411521,7 +411521,7 @@ label_BFC2192C: ;
 #endif
 label_BFC21930: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000395Cu);
@@ -411542,7 +411542,7 @@ label_BFC21930: ;
 #endif
 label_BFC21934: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003960u);
@@ -411708,7 +411708,7 @@ label_BFC2194C: ;
 #endif
 label_BFC21950: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000397Cu);
@@ -411748,7 +411748,7 @@ label_BFC21954: ;
 #endif
 label_BFC21958: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003984u);
@@ -411801,7 +411801,7 @@ label_BFC21960:
     cosim_block(0x0000398Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000398Cu);
@@ -411822,7 +411822,7 @@ label_BFC21960:
 #endif
 label_BFC21964: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003990u);
@@ -411843,7 +411843,7 @@ label_BFC21964: ;
 #endif
 label_BFC21968: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003994u);
@@ -411864,7 +411864,7 @@ label_BFC21968: ;
 #endif
 label_BFC2196C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003998u);
@@ -411885,7 +411885,7 @@ label_BFC2196C: ;
 #endif
 label_BFC21970: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000399Cu);
@@ -411906,7 +411906,7 @@ label_BFC21970: ;
 #endif
 label_BFC21974: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039A0u);
@@ -411927,7 +411927,7 @@ label_BFC21974: ;
 #endif
 label_BFC21978: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039A4u);
@@ -412214,7 +412214,7 @@ label_BFC219A0: ;
 #endif
 label_BFC219A4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039D0u);
@@ -412254,7 +412254,7 @@ label_BFC219A8: ;
 #endif
 label_BFC219AC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039D8u);
@@ -412295,7 +412295,7 @@ label_BFC219B0: ;
 #endif
 label_BFC219B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039E0u);
@@ -412335,7 +412335,7 @@ label_BFC219B8: ;
 #endif
 label_BFC219BC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039E8u);
@@ -412387,7 +412387,7 @@ label_BFC219C4:
     cosim_block(0x000039F0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039F0u);
@@ -412428,7 +412428,7 @@ label_BFC219C8: ;
 #endif
 label_BFC219CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039F8u);
@@ -412449,7 +412449,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC219D0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000039FCu);
@@ -412470,7 +412470,7 @@ label_BFC219D0: ;
 #endif
 label_BFC219D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A00u);
@@ -412641,7 +412641,7 @@ label_BFC219F4:
     cosim_block(0x00003A20u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A20u);
@@ -412662,7 +412662,7 @@ label_BFC219F4:
 #endif
 label_BFC219F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A24u);
@@ -412683,7 +412683,7 @@ label_BFC219F8: ;
 #endif
 label_BFC219FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A28u);
@@ -412704,7 +412704,7 @@ label_BFC219FC: ;
 #endif
 label_BFC21A00: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A2Cu);
@@ -412757,7 +412757,7 @@ label_BFC21A04:
     cosim_block(0x00003A30u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A30u);
@@ -412778,7 +412778,7 @@ label_BFC21A04:
 #endif
 label_BFC21A08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A34u);
@@ -412820,7 +412820,7 @@ cpu->gpr[4] = 0xF0000000u;
 #endif
 label_BFC21A10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A3Cu);
@@ -412841,7 +412841,7 @@ label_BFC21A10: ;
 #endif
 label_BFC21A14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A40u);
@@ -412862,7 +412862,7 @@ label_BFC21A14: ;
 #endif
 label_BFC21A18: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A44u);
@@ -413341,7 +413341,7 @@ label_BFC21A58: ;
 #endif
 label_BFC21A5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A88u);
@@ -413383,7 +413383,7 @@ label_BFC21A60: ;
 #endif
 label_BFC21A64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A90u);
@@ -413404,7 +413404,7 @@ label_BFC21A64: ;
 #endif
 label_BFC21A68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A94u);
@@ -413425,7 +413425,7 @@ label_BFC21A68: ;
 #endif
 label_BFC21A6C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003A98u);
@@ -413570,7 +413570,7 @@ label_BFC21A84: ;
 #endif
 label_BFC21A88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003AB4u);
@@ -413612,7 +413612,7 @@ label_BFC21A8C: ;
 #endif
 label_BFC21A90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003ABCu);
@@ -413667,7 +413667,7 @@ label_BFC21A98:
     cosim_block(0x00003AC4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003AC4u);
@@ -413707,7 +413707,7 @@ label_BFC21A9C: ;
 #endif
 label_BFC21AA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003ACCu);
@@ -413797,7 +413797,7 @@ label_BFC21AAC: ;
 #endif
 label_BFC21AB0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003ADCu);
@@ -413818,7 +413818,7 @@ label_BFC21AB0: ;
 #endif
 label_BFC21AB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003AE0u);
@@ -413910,7 +413910,7 @@ label_BFC21AC4:
     cosim_block(0x00003AF0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003AF0u);
@@ -413950,7 +413950,7 @@ label_BFC21AC8: ;
 #endif
 label_BFC21ACC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003AF8u);
@@ -414155,7 +414155,7 @@ label_BFC21AF0:
     cosim_block(0x00003B1Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B1Cu);
@@ -414197,7 +414197,7 @@ label_BFC21AF4: ;
 #endif
 label_BFC21AF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B24u);
@@ -414306,7 +414306,7 @@ label_BFC21B0C:
     cosim_block(0x00003B38u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B38u);
@@ -414346,7 +414346,7 @@ label_BFC21B10: ;
 #endif
 label_BFC21B14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B40u);
@@ -414438,7 +414438,7 @@ label_BFC21B20:
 #endif
 label_BFC21B24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B50u);
@@ -414459,7 +414459,7 @@ label_BFC21B24: ;
 #endif
 label_BFC21B28: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B54u);
@@ -414533,7 +414533,7 @@ label_BFC21B34:
     cosim_block(0x00003B60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B60u);
@@ -414573,7 +414573,7 @@ label_BFC21B38: ;
 #endif
 label_BFC21B3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B68u);
@@ -414779,7 +414779,7 @@ label_BFC21B60:
     cosim_block(0x00003B8Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B8Cu);
@@ -414819,7 +414819,7 @@ label_BFC21B64: ;
 #endif
 label_BFC21B68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003B94u);
@@ -414907,7 +414907,7 @@ label_BFC21B78:
     cosim_block(0x00003BA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003BA4u);
@@ -414947,7 +414947,7 @@ label_BFC21B7C: ;
 #endif
 label_BFC21B80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003BACu);
@@ -415020,7 +415020,7 @@ label_BFC21B8C:
     cosim_block(0x00003BB8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003BB8u);
@@ -415060,7 +415060,7 @@ label_BFC21B90: ;
 #endif
 label_BFC21B94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003BC0u);
@@ -415207,7 +415207,7 @@ label_BFC21BAC:
     cosim_block(0x00003BD8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003BD8u);
@@ -415247,7 +415247,7 @@ label_BFC21BB0: ;
 #endif
 label_BFC21BB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003BE0u);
@@ -415445,7 +415445,7 @@ label_BFC21BD4:
     cosim_block(0x00003C00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C00u);
@@ -415652,7 +415652,7 @@ label_BFC21BEC:
     cosim_block(0x00003C18u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C18u);
@@ -415692,7 +415692,7 @@ label_BFC21BF0: ;
 #endif
 label_BFC21BF4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C20u);
@@ -415805,7 +415805,7 @@ label_BFC21C00:
     cosim_block(0x00003C2Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C2Cu);
@@ -416077,7 +416077,7 @@ label_BFC21C1C:
     cosim_block(0x00003C48u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C48u);
@@ -416294,7 +416294,7 @@ cpu->gpr[5] = 0x00010000u;
 #endif
 label_BFC21C38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C64u);
@@ -416334,7 +416334,7 @@ label_BFC21C3C: ;
 #endif
 label_BFC21C40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C6Cu);
@@ -416508,7 +416508,7 @@ label_BFC21C48:
     cosim_block(0x00003C74u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C74u);
@@ -416548,7 +416548,7 @@ label_BFC21C4C: ;
 #endif
 label_BFC21C50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C7Cu);
@@ -416684,7 +416684,7 @@ label_BFC21C68:
     cosim_block(0x00003C94u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C94u);
@@ -416726,7 +416726,7 @@ label_BFC21C6C: ;
 #endif
 label_BFC21C70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003C9Cu);
@@ -416808,7 +416808,7 @@ label_BFC21C7C: ;
 #endif
 label_BFC21C80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CACu);
@@ -416856,7 +416856,7 @@ label_BFC21C88:
     cosim_block(0x00003CB4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CB4u);
@@ -416896,7 +416896,7 @@ label_BFC21C8C: ;
 #endif
 label_BFC21C90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CBCu);
@@ -416967,7 +416967,7 @@ label_BFC21C9C:
     cosim_block(0x00003CC8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CC8u);
@@ -417009,7 +417009,7 @@ label_BFC21CA0: ;
 #endif
 label_BFC21CA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CD0u);
@@ -417056,7 +417056,7 @@ label_BFC21CAC:
     cosim_block(0x00003CD8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CD8u);
@@ -417096,7 +417096,7 @@ label_BFC21CB0: ;
 #endif
 label_BFC21CB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CE0u);
@@ -417190,7 +417190,7 @@ label_BFC21CC0:
 #endif
 label_BFC21CC4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CF0u);
@@ -417230,7 +417230,7 @@ label_BFC21CC8: ;
 #endif
 label_BFC21CCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003CF8u);
@@ -417282,7 +417282,7 @@ label_BFC21CD4:
     cosim_block(0x00003D00u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D00u);
@@ -417322,7 +417322,7 @@ label_BFC21CD8: ;
 #endif
 label_BFC21CDC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D08u);
@@ -417437,7 +417437,7 @@ label_BFC21CF0:
     cosim_block(0x00003D1Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D1Cu);
@@ -417479,7 +417479,7 @@ label_BFC21CF4: ;
 #endif
 label_BFC21CF8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D24u);
@@ -417567,7 +417567,7 @@ label_BFC21D08:
     cosim_block(0x00003D34u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D34u);
@@ -417607,7 +417607,7 @@ label_BFC21D0C: ;
 #endif
 label_BFC21D10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D3Cu);
@@ -417678,7 +417678,7 @@ label_BFC21D1C:
     cosim_block(0x00003D48u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D48u);
@@ -417720,7 +417720,7 @@ label_BFC21D20: ;
 #endif
 label_BFC21D24: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D50u);
@@ -417792,7 +417792,7 @@ label_BFC21D2C:
 #endif
 label_BFC21D30: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D5Cu);
@@ -417832,7 +417832,7 @@ label_BFC21D34: ;
 #endif
 label_BFC21D38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D64u);
@@ -417872,7 +417872,7 @@ label_BFC21D3C: ;
 #endif
 label_BFC21D40: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D6Cu);
@@ -417893,7 +417893,7 @@ label_BFC21D40: ;
 #endif
 label_BFC21D44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D70u);
@@ -417914,7 +417914,7 @@ label_BFC21D44: ;
 #endif
 label_BFC21D48: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D74u);
@@ -417935,7 +417935,7 @@ label_BFC21D48: ;
 #endif
 label_BFC21D4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D78u);
@@ -417956,7 +417956,7 @@ label_BFC21D4C: ;
 #endif
 label_BFC21D50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D7Cu);
@@ -417977,7 +417977,7 @@ label_BFC21D50: ;
 #endif
 label_BFC21D54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D80u);
@@ -417998,7 +417998,7 @@ label_BFC21D54: ;
 #endif
 label_BFC21D58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D84u);
@@ -418019,7 +418019,7 @@ label_BFC21D58: ;
 #endif
 label_BFC21D5C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D88u);
@@ -418040,7 +418040,7 @@ label_BFC21D5C: ;
 #endif
 label_BFC21D60: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D8Cu);
@@ -418061,7 +418061,7 @@ label_BFC21D60: ;
 #endif
 label_BFC21D64: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D90u);
@@ -418082,7 +418082,7 @@ label_BFC21D64: ;
 #endif
 label_BFC21D68: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003D94u);
@@ -418210,7 +418210,7 @@ label_BFC21D78:
     cosim_block(0x00003DA4u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DA4u);
@@ -418231,7 +418231,7 @@ label_BFC21D78:
 #endif
 label_BFC21D7C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DA8u);
@@ -418252,7 +418252,7 @@ label_BFC21D7C: ;
 #endif
 label_BFC21D80: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DACu);
@@ -418273,7 +418273,7 @@ label_BFC21D80: ;
 #endif
 label_BFC21D84: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DB0u);
@@ -418294,7 +418294,7 @@ label_BFC21D84: ;
 #endif
 label_BFC21D88: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DB4u);
@@ -418315,7 +418315,7 @@ label_BFC21D88: ;
 #endif
 label_BFC21D8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DB8u);
@@ -418336,7 +418336,7 @@ label_BFC21D8C: ;
 #endif
 label_BFC21D90: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DBCu);
@@ -418357,7 +418357,7 @@ label_BFC21D90: ;
 #endif
 label_BFC21D94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DC0u);
@@ -418378,7 +418378,7 @@ label_BFC21D94: ;
 #endif
 label_BFC21D98: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DC4u);
@@ -418420,7 +418420,7 @@ label_BFC21D9C: ;
 #endif
 label_BFC21DA0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DCCu);
@@ -418441,7 +418441,7 @@ label_BFC21DA0: ;
 #endif
 label_BFC21DA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003DD0u);
@@ -418861,7 +418861,7 @@ label_BFC21DDC:
     cosim_block(0x00003E08u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E08u);
@@ -418882,7 +418882,7 @@ label_BFC21DDC:
 #endif
 label_BFC21DE0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E0Cu);
@@ -418937,7 +418937,7 @@ label_BFC21DE8:
     cosim_block(0x00003E14u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E14u);
@@ -418977,7 +418977,7 @@ label_BFC21DEC: ;
 #endif
 label_BFC21DF0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E1Cu);
@@ -419075,7 +419075,7 @@ label_BFC21E00:
     cosim_block(0x00003E2Cu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E2Cu);
@@ -419115,7 +419115,7 @@ label_BFC21E04: ;
 #endif
 label_BFC21E08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E34u);
@@ -419435,7 +419435,7 @@ label_BFC21E34:
     cosim_block(0x00003E60u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E60u);
@@ -419456,7 +419456,7 @@ label_BFC21E34:
 #endif
 label_BFC21E38: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E64u);
@@ -419657,7 +419657,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC21E44: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E70u);
@@ -419699,7 +419699,7 @@ label_BFC21E48: ;
 #endif
 label_BFC21E4C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E78u);
@@ -419719,7 +419719,7 @@ label_BFC21E4C: ;
 #endif
 label_BFC21E50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E7Cu);
@@ -419739,7 +419739,7 @@ label_BFC21E50: ;
 #endif
 label_BFC21E54: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E80u);
@@ -419905,7 +419905,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21E70: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003E9Cu);
@@ -419945,7 +419945,7 @@ label_BFC21E74: ;
 #endif
 label_BFC21E78: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003EA4u);
@@ -420064,7 +420064,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC21E8C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003EB8u);
@@ -420104,7 +420104,7 @@ label_BFC21E90: ;
 #endif
 label_BFC21E94: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003EC0u);
@@ -420156,7 +420156,7 @@ label_BFC21E9C:
     cosim_block(0x00003EC8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003EC8u);
@@ -420196,7 +420196,7 @@ label_BFC21EA0: ;
 #endif
 label_BFC21EA4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003ED0u);
@@ -420316,7 +420316,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC21EB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003EE4u);
@@ -420356,7 +420356,7 @@ label_BFC21EBC: ;
 #endif
 label_BFC21EC0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003EECu);
@@ -420775,7 +420775,7 @@ cpu->gpr[3] = 0x00000000u;
 #endif
 label_BFC21F08: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F34u);
@@ -420817,7 +420817,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC21F10: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F3Cu);
@@ -420838,7 +420838,7 @@ cpu->gpr[4] = 0x00000000u;
 #endif
 label_BFC21F14: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F40u);
@@ -421013,7 +421013,7 @@ label_BFC21F30: ;
 #endif
 label_BFC21F34: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F60u);
@@ -421055,7 +421055,7 @@ cpu->gpr[17] = 0x1F800000u;
 #endif
 label_BFC21F3C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F68u);
@@ -421157,7 +421157,7 @@ label_BFC21F4C: ;
 #endif
 label_BFC21F50: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F7Cu);
@@ -421199,7 +421199,7 @@ label_BFC21F54: ;
 #endif
 label_BFC21F58: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003F84u);
@@ -421679,7 +421679,7 @@ label_BFC21FB0:
     cosim_block(0x00003FDCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003FDCu);
@@ -421700,7 +421700,7 @@ label_BFC21FB0:
 #endif
 label_BFC21FB4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003FE0u);
@@ -421721,7 +421721,7 @@ label_BFC21FB4: ;
 #endif
 label_BFC21FB8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003FE4u);
@@ -421742,7 +421742,7 @@ label_BFC21FB8: ;
 #endif
 label_BFC21FBC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003FE8u);
@@ -421787,7 +421787,7 @@ label_BFC21FC4:
     cosim_block(0x00003FF0u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003FF0u);
@@ -421829,7 +421829,7 @@ label_BFC21FC8: ;
 #endif
 label_BFC21FCC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00003FF8u);
@@ -421929,7 +421929,7 @@ label_BFC21FD8:
     cosim_block(0x00004004u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004004u);
@@ -422313,7 +422313,7 @@ label_BFC22004:
 #endif
 label_BFC22008: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004034u);
@@ -422355,7 +422355,7 @@ cpu->gpr[4] = 0x00000000u;
 #endif
 label_BFC22010: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000403Cu);
@@ -422776,7 +422776,7 @@ label_BFC2204C:
     cosim_block(0x00004078u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004078u);
@@ -422797,7 +422797,7 @@ label_BFC2204C:
 #endif
 label_BFC22050: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000407Cu);
@@ -422818,7 +422818,7 @@ label_BFC22050: ;
 #endif
 label_BFC22054: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004080u);
@@ -422860,7 +422860,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC2205C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004088u);
@@ -422880,7 +422880,7 @@ label_BFC2205C: ;
 #endif
 label_BFC22060: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000408Cu);
@@ -422901,7 +422901,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC22064: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004090u);
@@ -422922,7 +422922,7 @@ label_BFC22064: ;
 #endif
 label_BFC22068: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004094u);
@@ -422943,7 +422943,7 @@ label_BFC22068: ;
 #endif
 label_BFC2206C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004098u);
@@ -423026,7 +423026,7 @@ cpu->gpr[3] = 0x00010000u;
 #endif
 label_BFC22078: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000040A4u);
@@ -423047,7 +423047,7 @@ label_BFC22078: ;
 #endif
 label_BFC2207C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000040A8u);
@@ -423698,7 +423698,7 @@ label_BFC220E0: ;
 #endif
 label_BFC220E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004110u);
@@ -423740,7 +423740,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC220EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004118u);
@@ -423760,7 +423760,7 @@ label_BFC220EC: ;
 #endif
 label_BFC220F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000411Cu);
@@ -423781,7 +423781,7 @@ label_BFC220F0: ;
 #endif
 label_BFC220F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004120u);
@@ -423802,7 +423802,7 @@ label_BFC220F4: ;
 #endif
 label_BFC220F8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004124u);
@@ -424448,7 +424448,7 @@ label_BFC22164: ;
 #endif
 label_BFC22168: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004194u);
@@ -424490,7 +424490,7 @@ cpu->gpr[2] = 0x00010000u;
 #endif
 label_BFC22170: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000419Cu);
@@ -424511,7 +424511,7 @@ label_BFC22170: ;
 #endif
 label_BFC22174: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000041A0u);
@@ -424532,7 +424532,7 @@ label_BFC22174: ;
 #endif
 label_BFC22178: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000041A4u);
@@ -424573,7 +424573,7 @@ label_BFC2217C: ;
 #endif
 label_BFC22180: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000041ACu);
@@ -424594,7 +424594,7 @@ label_BFC22180: ;
 #endif
 label_BFC22184: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000041B0u);
@@ -425037,7 +425037,7 @@ label_BFC221C8: ;
 #endif
 label_BFC221CC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000041F8u);
@@ -425079,7 +425079,7 @@ label_BFC221D0: ;
 #endif
 label_BFC221D4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004200u);
@@ -425275,7 +425275,7 @@ label_BFC221F8:
     cosim_block(0x00004224u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004224u);
@@ -425296,7 +425296,7 @@ label_BFC221F8:
 #endif
 label_BFC221FC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004228u);
@@ -425317,7 +425317,7 @@ label_BFC221FC: ;
 #endif
 label_BFC22200: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000422Cu);
@@ -425687,7 +425687,7 @@ label_BFC2223C:
     cosim_block(0x00004268u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004268u);
@@ -425727,7 +425727,7 @@ label_BFC22240: ;
 #endif
 label_BFC22244: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004270u);
@@ -426637,7 +426637,7 @@ label_BFC222E0:
 #endif
 label_BFC222E4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004310u);
@@ -426679,7 +426679,7 @@ label_BFC222E8: ;
 #endif
 label_BFC222EC: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004318u);
@@ -426700,7 +426700,7 @@ label_BFC222EC: ;
 #endif
 label_BFC222F0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000431Cu);
@@ -426867,7 +426867,7 @@ cpu->gpr[3] = 0x00010000u;
 #endif
 label_BFC2230C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004338u);
@@ -426909,7 +426909,7 @@ label_BFC22310: ;
 #endif
 label_BFC22314: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004340u);
@@ -426950,7 +426950,7 @@ label_BFC22318: ;
 #endif
 label_BFC2231C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004348u);
@@ -426971,7 +426971,7 @@ cpu->gpr[3] = 0x00010000u;
 #endif
 label_BFC22320: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000434Cu);
@@ -426991,7 +426991,7 @@ label_BFC22320: ;
 #endif
 label_BFC22324: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(7u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004350u);
@@ -427012,7 +427012,7 @@ label_BFC22324: ;
 #endif
 label_BFC22328: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004354u);
@@ -427418,7 +427418,7 @@ cpu->gpr[3] = 0xBF800000u;
 #endif
 label_BFC22368: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004394u);
@@ -427460,7 +427460,7 @@ label_BFC2236C: ;
 #endif
 label_BFC22370: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000439Cu);
@@ -427697,7 +427697,7 @@ label_BFC2239C:
     cosim_block(0x000043C8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000043C8u);
@@ -427718,7 +427718,7 @@ label_BFC2239C:
 #endif
 label_BFC223A0: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000043CCu);
@@ -427760,7 +427760,7 @@ label_BFC223A4: ;
 #endif
 label_BFC223A8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000043D4u);
@@ -428195,7 +428195,7 @@ label_BFC223EC:
     cosim_block(0x00004418u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004418u);
@@ -428237,7 +428237,7 @@ label_BFC223F0: ;
 #endif
 label_BFC223F4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004420u);
@@ -428301,7 +428301,7 @@ label_BFC223FC:
     cosim_block(0x00004428u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004428u);
@@ -428341,7 +428341,7 @@ label_BFC22400: ;
 #endif
 label_BFC22404: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004430u);
@@ -428412,7 +428412,7 @@ label_BFC2240C:
     cosim_block(0x00004438u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004438u);
@@ -428644,7 +428644,7 @@ label_BFC22428:
     cosim_block(0x00004454u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004454u);
@@ -428684,7 +428684,7 @@ label_BFC2242C: ;
 #endif
 label_BFC22430: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000445Cu);
@@ -428933,7 +428933,7 @@ label_BFC22458:
 #endif
 label_BFC2245C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004488u);
@@ -428973,7 +428973,7 @@ label_BFC22460: ;
 #endif
 label_BFC22464: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004490u);
@@ -429114,7 +429114,7 @@ label_BFC2247C:
     cosim_block(0x000044A8u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000044A8u);
@@ -429154,7 +429154,7 @@ label_BFC22480: ;
 #endif
 label_BFC22484: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000044B0u);
@@ -429225,7 +429225,7 @@ label_BFC22490:
     cosim_block(0x000044BCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000044BCu);
@@ -429246,7 +429246,7 @@ label_BFC22490:
 #endif
 label_BFC22494: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000044C0u);
@@ -430218,7 +430218,7 @@ label_BFC22534:
     cosim_block(0x00004560u);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004560u);
@@ -430239,7 +430239,7 @@ label_BFC22534:
 #endif
 label_BFC22538: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004564u);
@@ -430260,7 +430260,7 @@ label_BFC22538: ;
 #endif
 label_BFC2253C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004568u);
@@ -430281,7 +430281,7 @@ label_BFC2253C: ;
 #endif
 label_BFC22540: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x0000456Cu);
@@ -430302,7 +430302,7 @@ label_BFC22540: ;
 #endif
 label_BFC22544: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x00004570u);
@@ -430673,7 +430673,7 @@ cpu->gpr[2] = 0x00000000u;
 #endif
 label_BFC2257C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045A8u);
@@ -430715,7 +430715,7 @@ label_BFC22580: ;
 #endif
 label_BFC22584: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045B0u);
@@ -430736,7 +430736,7 @@ label_BFC22584: ;
 #endif
 label_BFC22588: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045B4u);
@@ -430757,7 +430757,7 @@ cpu->gpr[5] = 0x00010000u;
 #endif
 label_BFC2258C: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045B8u);
@@ -430778,7 +430778,7 @@ label_BFC2258C: ;
 #endif
 label_BFC22590: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045BCu);
@@ -430798,7 +430798,7 @@ label_BFC22590: ;
 #endif
 label_BFC22594: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(1u);
+    psx_native_span_charge(0u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045C0u);
@@ -430954,7 +430954,7 @@ label_BFC225B0:
     cosim_block(0x000045DCu);
 #endif
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(8u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045DCu);
@@ -430975,7 +430975,7 @@ label_BFC225B0:
 #endif
 label_BFC225B4: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(3u);
+    psx_native_span_charge(6u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045E0u);
@@ -430996,7 +430996,7 @@ label_BFC225B4: ;
 #endif
 label_BFC225B8: ;
 #if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)
-    psx_native_span_charge(2u);
+    psx_native_span_charge(1u);
 #endif
 #ifdef PSX_SOURCE_BUS_BOUNDARY
     psx_source_bus_boundary(cpu, 0x000045E4u);

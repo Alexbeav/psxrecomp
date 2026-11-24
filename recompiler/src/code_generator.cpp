@@ -173,9 +173,11 @@ std::string CodeGenerator::emit_mid_block_cycle_charge(uint32_t addr,
 
     std::stringstream ss;
     uint32_t native_cycles = 0;
+    PsxNativeSpanModel span_model;
+    psx_native_span_model_init(&span_model);
     for (uint32_t a = addr, n = 0; n < cycles; ++n, a += 4u) {
         auto word = exe_.read_word(a);
-        if (word) native_cycles += psx_native_instr_cycles(*word, runtime_pc(a));
+        if (word) native_cycles += psx_native_span_model_step(&span_model, *word, runtime_pc(a));
     }
     ss << "#if defined(PSX_ENABLE_BLOCK_CYCLES) && defined(PSX_NATIVE_CPU_SPANS)\n";
     ss << indent << fmt::format("psx_native_span_charge({}u);\n", native_cycles);
@@ -2168,16 +2170,19 @@ std::string CodeGenerator::translate_basic_block(
     // edits ONLY psx_instr_base_cycles and both backends update together.
     uint32_t block_exec_cycles = 0;
     uint32_t native_span_cycles = 0;
+    PsxNativeSpanModel span_model;
+    psx_native_span_model_init(&span_model);
     for (uint32_t a = block.start_addr; a <= block.end_addr; a += 4) {
         auto w = exe_.read_word(a);
         if (!w.has_value()) break;
         block_exec_cycles += psx_instr_base_cycles(*w);
-        native_span_cycles += psx_native_instr_cycles(*w, runtime_pc(a));
+        native_span_cycles += psx_native_span_model_step(&span_model, *w, runtime_pc(a));
     }
     if (exit_delay_slot_outside) {
         auto dw = exe_.read_word(block.end_addr + 4u);  // the delay-slot clone
         if (dw.has_value()) block_exec_cycles += psx_instr_base_cycles(*dw);
-        if (dw.has_value()) native_span_cycles += psx_native_instr_cycles(*dw, runtime_pc(block.end_addr + 4u));
+        if (dw.has_value())
+            native_span_cycles += psx_native_span_model_step(&span_model, *dw, runtime_pc(block.end_addr + 4u));
     }
 
     {

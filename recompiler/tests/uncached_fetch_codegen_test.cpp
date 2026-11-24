@@ -117,8 +117,11 @@ void check_segment(const char* name, uint32_t segment,
     for(uint32_t i=0;i<kCount;++i)all.push_back(base+i*4u);
     check(boundaries==all,std::string(name)+" optional source CPU boundaries must include every instruction and delay slot");
     const std::vector<uint32_t> got = fetch_tags(code);
+    // Entry span +00..+08 under the reference interlock (PS1B-695): addiu 1,
+    // lw 1 + ReadFudge 2 + wait 5 = 8, addu 1 = 10 cached; KSEG1 adds the
+    // uncached fetch +4 to each = 22.
     const char* native_charge = segment == 0xA0000000u
-        ? "psx_native_span_charge(17u)" : "psx_native_span_charge(5u)";
+        ? "psx_native_span_charge(22u)" : "psx_native_span_charge(10u)";
     check(code.find(native_charge) != std::string::npos,
           std::string(name) + " native entry span includes its load and address policy");
     check(got == want, std::string(name) + " fetch tags: got [" + hex_list(got) +
