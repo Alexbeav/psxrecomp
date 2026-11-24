@@ -5840,6 +5840,16 @@ static const char* host_argv_value(int argc, char** argv, const char* flag) {
             return argv[i + 1];
     return NULL;
 }
+
+/* Every value given for a repeated flag, in order (a set's discs). */
+static int host_argv_values(int argc, char** argv, const char* flag,
+                            const char** out, int cap) {
+    int i, n = 0;
+    for (i = 1; i + 1 < argc && argv && argv[i]; ++i)
+        if (strcmp(argv[i], flag) == 0 && n < cap)
+            out[n++] = argv[++i];
+    return n;
+}
 #endif
 
 static void host_prepare_or_return(const PsxrecompCodegenHostConfig* cfg,
@@ -5859,17 +5869,32 @@ static void host_prepare_or_return(const PsxrecompCodegenHostConfig* cfg,
 #else
     RecompLauncherCGameInfo gi;
     HostPrepareSpan span;
-    const char* disc = host_argv_value(argc, argv, "--disc");
+    /* One --disc per disc of the set, in order; the first is the boot disc. */
+    const char* discs[PSX_HOST_MAX_DISCS + 1];
+    const int disc_count = host_argv_values(argc, argv, "--disc", discs,
+                                            PSX_HOST_MAX_DISCS + 1);
     const char* bios = host_argv_value(argc, argv, "--bios");
-    char disc_abs[1100], bios_abs[1100], out[1300], err[1024], msg[1600];
+    char set_abs[PSX_HOST_MAX_DISCS][1100];
+    const char* set_paths[PSX_HOST_MAX_DISCS];
+    char* disc_abs = set_abs[0];
+    char bios_abs[1100], out[1300], err[1024], msg[1600];
     char self[1100];
+    int d;
 
     g_prepare_headless = 1;
-    if (!disc || !disc[0])
+    if (disc_count < 1 || !discs[0][0])
         host_prepare_fail(2, "--prepare needs --disc <your disc image>");
-    if (!absolutize_existing_file(disc_abs, sizeof(disc_abs), disc)) {
-        snprintf(msg, sizeof(msg), "disc image not found: %s", disc);
+    if (disc_count > PSX_HOST_MAX_DISCS) {
+        snprintf(msg, sizeof(msg), "at most %d discs (--disc once per disc)",
+                 PSX_HOST_MAX_DISCS);
         host_prepare_fail(2, msg);
+    }
+    for (d = 0; d < disc_count; ++d) {
+        if (!absolutize_existing_file(set_abs[d], sizeof(set_abs[d]), discs[d])) {
+            snprintf(msg, sizeof(msg), "disc image not found: %s", discs[d]);
+            host_prepare_fail(2, msg);
+        }
+        set_paths[d] = set_abs[d];
     }
 
     /* The wizard's own wiring: project root, CLI, game.toml, build paths. */
@@ -5915,6 +5940,11 @@ static void host_prepare_or_return(const PsxrecompCodegenHostConfig* cfg,
         host_prepare_fail(2, msg);
     }
 
+    /* A set: recorded as the wizard records it (disc.cfg, one line per
+     * disc), so generate writes every disc into [game] discs. */
+    if (disc_count > 1)
+        host_persist_setup_discs(NULL, set_paths, disc_count, NULL);
+
     err[0] = '\0';
     span.base = 0.0f;
     span.span = 0.45f;
@@ -5933,7 +5963,8 @@ static void host_prepare_or_return(const PsxrecompCodegenHostConfig* cfg,
         host_prepare_fail(1, "the build was deferred instead of run");
 #endif
     /* What the wizard leaves beside the product before its first start. */
-    persist_relaunch_sidecars(g_exe_path, disc_abs);
+    /* A set keeps its multi-line disc.cfg (copied from the project). */
+    persist_relaunch_sidecars(g_exe_path, disc_count > 1 ? NULL : disc_abs);
     fprintf(stderr, "psxrecomp-codegen: prepare built %s\n", g_exe_path);
     span.base = 0.0f;
     span.span = 1.0f;

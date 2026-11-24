@@ -53,8 +53,9 @@ class ManifestTest(unittest.TestCase):
         disc, = m['inputs']
         self.assertEqual(disc['id'], 'game')
         self.assertEqual(disc['check'], {'ids': ['SCES-01438']})
-        self.assertEqual(disc['dumps'], [{'name': 'Europe', 'crc32': 'adb35999',
-                                          'size': 732391632}])
+        # The launcher CRCs the picked .cue/.chd itself, never Redump's tracks.
+        self.assertNotIn('dumps', disc)
+        self.assertIn('.cue', disc['label'])
         self.assertEqual(m['start']['program'], ['Spyro_the_Dragon_Recompiled.exe',
                                                  'Spyro_the_Dragon_Recompiled'])
         self.assertEqual(m['start']['args'], ['--disc', '{input:game}'])
@@ -64,7 +65,7 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(m['prepare']['args'], ['--prepare', '--disc', '{input:game}'])
         self.assertEqual(m['prepare']['done'],
                          ['{install}/build-release/Spyro_the_Dragon_Recompiled.exe'])
-        lobby, = m['settings']
+        lobby = m['settings'][0]
         self.assertEqual(lobby['in'], 'args')
         self.assertEqual(lobby['choices'][0], {'label': 'No', 'args': ['--no-launcher']})
         self.assertEqual(lobby['choices'][1]['args'], [])
@@ -76,17 +77,46 @@ class ManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(rm.ManifestError, '--os'):
             rm.build_manifest(root, 'X', 'o/x', 'windows-x64')
 
-    def test_multi_track_disc_has_no_dumps(self):
-        toml = ONE_TRACK.replace('required_tracks = 1', 'required_tracks = 3')
-        m = rm.build_manifest(self.title(toml, {'rom_identity': {'track_counts': [3]}}),
-                              'X', 'o/x')
-        self.assertNotIn('dumps', m['inputs'][0])
+    def test_video_settings_pass_one_run_switches(self):
+        m = rm.build_manifest(self.title(ONE_TRACK), 'X', 'o/x')
+        rows = {r['id']: r for r in m['settings']}
+        self.assertEqual(set(rows), {'lobby', 'renderer', 'display', 'vsync',
+                                     'antialiasing', 'dithering'})
+        for row in rows.values():
+            self.assertEqual(row['in'], 'args')
+        for key in ('renderer', 'display', 'vsync', 'antialiasing', 'dithering'):
+            self.assertEqual(rows[key]['choices'][0]['args'], [], key)
+            self.assertEqual(rows[key]['group'], 'Video')
+        args = [c['args'] for c in rows['vsync']['choices']]
+        self.assertIn(['--set', 'video.vsync=vrr'], args)
+        self.assertIn(['--renderer', 'vulkan'],
+                      [c['args'] for c in rows['renderer']['choices']])
 
-    def test_multi_disc_is_refused(self):
+    def test_multi_disc_set(self):
+        toml = ONE_TRACK.replace('discs = ["disc/Spyro.cue"]',
+                                 'discs = ["disc/a.cue", "disc/b.cue"]').replace(
+            'disc_serials = ["SCES-01438"]', 'disc_serials = ["SLUS-1", "SLUS-2"]')
+        m = rm.build_manifest(self.title(toml), 'X', 'o/x')
+        d1, d2 = m['inputs']
+        self.assertEqual((d1['id'], d1['role'], d1['check']), ('disc1', 'disc', {'ids': ['SLUS-1']}))
+        self.assertEqual((d2['id'], d2['role'], d2['check']), ('disc2', 'disc', {'ids': ['SLUS-2']}))
+        self.assertTrue(d1['label'].startswith('Disc 1') and '.cue' in d1['label'])
+        self.assertEqual(m['prepare']['args'], ['--prepare', '--disc', '{input:disc1}',
+                                                '--disc', '{input:disc2}'])
+        self.assertEqual(m['start']['args'], ['--disc', '{input:disc1}'])
+
+    def test_multi_disc_without_per_disc_serials_checks_all(self):
         toml = ONE_TRACK.replace('discs = ["disc/Spyro.cue"]',
                                  'discs = ["disc/a.cue", "disc/b.cue"]')
+        m = rm.build_manifest(self.title(toml), 'X', 'o/x')
+        self.assertEqual([i['check'] for i in m['inputs']],
+                         [{'ids': ['SCES-01438']}, {'ids': ['SCES-01438']}])
+
+    def test_program_set_is_refused(self):
+        toml = ONE_TRACK.replace('discs = ["disc/Spyro.cue"]',
+                                 'discs = ["disc/a.cue", "disc/b.cue"]\nprogram_discs = [1]')
         root = self.title(toml)
-        with self.assertRaisesRegex(rm.Unsupported, 'multi-disc'):
+        with self.assertRaisesRegex(rm.Unsupported, 'program_discs'):
             rm.build_manifest(root, 'X', 'o/x')
         out = root / 'out.json'
         self.assertEqual(rm.main(['write', '--root', str(root), '--exe-name', 'X',
