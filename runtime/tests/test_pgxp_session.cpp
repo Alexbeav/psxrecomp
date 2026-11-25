@@ -190,12 +190,19 @@ static std::string replace_once(std::string s, const std::string& from,
     return s;
 }
 
+/* Both executables built from this file run at the same time under CTest, so
+ * each stages under a folder named after itself. */
+#ifndef PGXP_SESSION_TEST_TAG
+#define PGXP_SESSION_TEST_TAG "pgxp-session"
+#endif
+
 /* A mods root holding the builtin manifest as `manifest` (verbatim, or a
  * title's default-on override of it) and an optional state.toml. */
 static fs::path stage(const char* name, const std::string& manifest,
                       const std::string& state) {
     const fs::path root = fs::temp_directory_path() /
-                          (std::string("psxrecomp-pgxp-session-") + name);
+                          (std::string("psxrecomp-") + PGXP_SESSION_TEST_TAG +
+                           "-" + name);
     std::error_code ec;
     fs::remove_all(root, ec);
     write_text(root / "packages/psx.enhancement.pgxp/1.0.0/manifest.toml",
