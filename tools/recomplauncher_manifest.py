@@ -225,7 +225,7 @@ def write(args):
                               args.build_dir_name)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8', newline='\n')
+    out.write_bytes((json.dumps(manifest, indent=2) + '\n').encode('utf-8'))
     print('wrote %s' % out)
     return 0
 
