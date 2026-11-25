@@ -2013,8 +2013,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             include
             ../recompiler/include
             ../recompiler/lib/toml11)
+        # Each flavour stages under its own temp folder: CTest runs both at once.
         target_compile_definitions(${_pgxp_session_test} PRIVATE
-            PSX_BUILTIN_PGXP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../mods/builtin/packages/psx.enhancement.pgxp/1.0.0/manifest.toml")
+            PSX_BUILTIN_PGXP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../mods/builtin/packages/psx.enhancement.pgxp/1.0.0/manifest.toml"
+            PGXP_SESSION_TEST_TAG="${_pgxp_session_test}")
         target_link_libraries(${_pgxp_session_test} PRIVATE chdr-static)
         target_sources(${_pgxp_session_test} PRIVATE src/mod_netplay.c)
         psxrecomp_sha256_file(${_pgxp_session_test})
