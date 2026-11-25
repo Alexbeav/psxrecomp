@@ -8,7 +8,7 @@ debug server, so this is the only place where a start says it.
 
 ```json
 "interp_detail": {
-    "text_guard": {"armed": 1, "lo": "0x00010000", "hi": "0x000AE800",
+    "text_guard": {"armed": 1, "lo": "0x00010000", "hi": "0x000AE800", "foreign_pages": 0,
                    "native_blocked": 1204, "diverged_pages": 0, "exact_mismatches": 1204,
                    "last_mismatch": {"range": "0x00064D80", "len": 844, "at": "0x00065070",
                                      "live_byte": 33, "image_byte": 37}},
@@ -57,6 +57,7 @@ executable before a statically compiled function runs.
 | --- | --- |
 | `armed` | 1 when the guard has its reference image. 0 means that no statically compiled game function runs at all: every one is refused, and the game's own code is interpreted. |
 | `lo`, `hi` | The physical range of the reference image. |
+| `foreign_pages` | Pages where the loaded executable differs from the one the build was generated from. Code on them runs from RAM. |
 | `native_blocked` | How often the guard refused a static function. |
 | `diverged_pages` | Pages marked as changed for good by the page-level check. |
 | `exact_mismatches` | How often a function's own byte ranges differed from the image. |
@@ -151,6 +152,8 @@ sums of the reasons, taken when the report is written.
 | `diff_gate` | Held back by the native-against-interpreter comparison (development). |
 | `rank` | Held back by the native rank filter (debug tools only). |
 | `bad_entry` | The unit ran and refused a foreign interior entry. |
+| `modified_text_backoff` | The address is in a text page the game rewrote with CPU stores, and that page reached its limit of take-outs: it is left to the interpreter for the rest of the process. |
+| `modified_text_load_bound` | The address is an exact entry of a cached unit in a text page the game rewrote with CPU stores, no loaded unit matches it, and that page has had its limit of loads: no further unit is loaded for the page. |
 | `kernel_patch` | The unit matches but its code covers a declared kernel patch range. The interpreter runs those words in every tier and hands the rest of the body to its static function, so the unit never runs natively (PS1B-238). |
 | `static_text` | The unit matches but a word of its code is a static game entry or continuation whose emitted ranges still match RAM. The interpreter runs the patched words and hands that code to the static function, so the unit does not run natively while it matches (PS1B-238). |
 | `mod_entry_hook` | A configured function-entry hook owns the address, so dispatch preserves that hook through the interpreter. |
@@ -167,6 +170,39 @@ Thus old readers keep their totals, while new readers can compare game work
 without the BIOS start-up share. Before game entry, `disp_interp_preload` and
 `loader_miss_preload` equal the legacy totals, and their after-entry values are
 zero.
+
+## overlay_capture_queue
+
+A second object, next to `interp_detail`: the queue of outgoing overlay
+snapshots. Before a disc read overwrites a page where interpreted code ran,
+the runtime keeps the outgoing code. It queues a copy for a writer thread, up
+to a cap; at the cap it writes on the emulation thread instead.
+
+```json
+"overlay_capture_queue": {"cap": 64, "queued": 310, "held_now": 0, "most_at_once": 64,
+                          "committed_at_cap": 2390, "commit_at_cap_failed": 0,
+                          "writer_failed_attempts": 0, "dropped": 0, "given_up_at_quit": 0}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `cap` | The most snapshots the queue holds. |
+| `queued` | Snapshots queued in this start. |
+| `held_now`, `most_at_once` | Snapshots queued or being written when the report was made, and the most there ever were. Each holds a copy of guest RAM. |
+| `committed_at_cap` | Snapshots written on the emulation thread because the queue was at its cap. Each is a file write during play. |
+| `commit_at_cap_failed` | Writes on the emulation thread at the cap that failed. The store could not be written; the snapshot was dropped. |
+| `writer_failed_attempts` | Failed write attempts of the writer thread. It tries a held snapshot again. |
+| `dropped` | Snapshots that could be neither written nor queued. The outgoing code of that moment is not kept. |
+| `given_up_at_quit` | Held snapshots the writer gave up at shutdown. After five failed writes in a row it takes the store as unwritable and gives each held snapshot up at its next failed write. |
+
+During play the queue never holds more than `cap` snapshots, also when the
+store cannot be written (a read-only folder, a full disk). At shutdown the
+periodic snapshot can be queued on top of that, one entry.
+
+A write at the cap that fails is dropped even when the reason passes (a file
+that another program holds for a moment). It was queued and tried again
+before; that retry is what made the queue unbounded. The snapshots already in
+the queue are still tried again.
 
 ## Cost
 

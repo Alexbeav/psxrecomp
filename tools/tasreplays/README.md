@@ -24,13 +24,19 @@ Internet access is needed for the original TAS and the pinned SDL3/zlib sources.
 
 The original CPU watcher compares PC, SR, Cause, EPC, HI, LO and GPR1–31. Raw GPR0 is retained but is outside that comparison. Sparse-image passivity checks require the caller's actual input endpoint; no title-specific length is assumed.
 
-The checkpoint tools drive and check checkpoint capture and resume in a debug build (`docs/TAS_CHECKPOINTS.md`). `run_checkpoint.py` runs a game command once with capture and an optional resume. `compare_boot_states.py` compares two state images section by section. `compare_checkpoint_runs.py` compares a resumed run with an uninterrupted one at every later capture. `verify_checkpoint_cohort.py` records cold runs, three resumes and a timer-2 negative control, and checks them all. `test_checkpoint_tools.py` runs them against a stand-in game.
+The checkpoint tools drive and check checkpoint capture and resume in a debug build (`docs/TAS_CHECKPOINTS.md`). `run_checkpoint.py` runs a game command once with capture and an optional resume through the debug server. `compare_boot_states.py` compares two state images section by section. `compare_checkpoint_runs.py` and `verify_checkpoint_cohort.py` work on `run_native.py` runs: the first compares a resumed run with an uninterrupted one at every later return and capture, the second records cold runs, three resumes and a timer-2 negative control, and checks them all. `test_checkpoint_tools.py` was written for other versions of those two tools and does not import on this branch.
 
 Run the synthetic controls without retail files or optional Python packages:
 
 ```console
 python3 -B tools/tasreplays/test_stream_compare.py
-python3 -B tools/tasreplays/test_checkpoint_tools.py
+```
+
+```powershell
+git clone --branch stage/pin-j https://github.com/Alexbeav/psxrecomp.git
+cd psxrecomp
+python tools/tasreplays/tekken3.py setup --disc "D:/Games/Tekken 3 (USA).cue" --bios "D:/BIOS/SCPH1001.BIN"
+python tools/tasreplays/tekken3.py run
 ```
 
 The setup verifies all three original disc tracks and the BIOS before building.

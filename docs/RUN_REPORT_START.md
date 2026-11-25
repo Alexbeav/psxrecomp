@@ -22,9 +22,17 @@ Once the game runs, `start_refused` and `launcher_status` are `null`.
 `disc_warning` is `null`, or a nonfatal known-disc missing-SBI sentence. It uses
 the mounted disc's detected serial and basename, not the expected config ID.
 It persists while the game runs, so a later black screen or crash report still
-contains the warning. It is set when the launch mounts the disc and again after a
-successful disc change while the game runs. A loaded SBI removes it; this field does not qualify the
-disc pressing, companion identity or protection/gameplay result.
+contains the warning. It is set when the launch mounts the disc. A successful
+disc change or committed save-state disc mount refreshes it from the active
+reader; a refused change keeps the old value. A loaded SBI removes it; this
+field does not qualify the disc pressing, companion identity or
+protection/gameplay result.
+
+If setup refused the selected disc, the host updates `launcher_status.disc`
+after its final check. The row records `verdict=refused`, the serial, expected
+serials and track count, followed by `setup refused the selected disc`.
+This replaces the game check's earlier verdict for that file. Checking another
+file or successfully preparing it clears the remembered refusal.
 
 ## File names
 
@@ -45,6 +53,13 @@ text that is not an address at all. The listen port stays when it is a plain
 number ("UDP port 47810 on (address)"). The box and the log line keep the full
 sentence.
 
+## What a player typed that can still reach the report
+
+A file's base name (a disc image called after its owner keeps that name), a
+mod's name, and a line of `game.toml` that the TOML reader quotes in its
+error (a full path in that line is cut to its base name like any other). No
+host name, no address and no folder.
+
 ## Kinds
 
 | `kind` | When |
@@ -52,7 +67,7 @@ sentence.
 | `config_unreadable` | `game.toml` cannot be read. |
 | `memcard_dir` | The folder given with `--memcard-dir` cannot be created. |
 | `overlay_cache` | The cache of compiled game code cannot be set up. |
-| `no_disc` | No usable disc: the image does not open, or the picker was cancelled. |
+| `no_disc` | No usable disc: the image does not open, its `.sbi` is missing, or the picker was cancelled. |
 | `wrong_disc` | The disc is not the one this build needs: its serial is another game's or another release's, or no serial was found on it. The message is the sentence the launcher's disc panel shows for the same disc: "This disc is SLES-02913. This build needs SLES-01156." The launcher's PLAY refuses such a disc; a start that skips the launcher is refused here. |
 | `already_running` | Another program of the same multi-program set is running from this folder. The programs share the memory cards, so one runs at a time. |
 | `mods` | The selected mods cannot be applied, or cannot be switched off for a netplay match. |
