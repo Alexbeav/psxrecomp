@@ -22722,6 +22722,7 @@ int main(int argc, char** argv) {
         if (!turbo_loads_offered)
             g_turbo_loads_enabled = 0;
         /* Restore player presentation preferences before plugin activation. */
+        static_assert(!skip_fmv_offered, "FMV skipping remains mod-owned");
         reset_mod_owned_presentation();
         /* Reassert this process's explicit overrides after launcher Apply and
          * preference restore, before trusted plugin activation. */

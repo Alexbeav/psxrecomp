@@ -266,7 +266,7 @@ inline bool disc_roster_wrong_disc(DiscSetSerial judgement) {
 
 // What a player is told about a disc that is refused for its serial. The
 // launcher's panel prints the same sentences (recomp-ui,
-// launcher_model_disc_note). `needs` is the
+// launcher_model_disc_note); they are Alex's, word for word. `needs` is the
 // serial the build expects of this image, or every serial of its list.
 inline std::string disc_roster_wrong_disc_sentence(const std::string& read,
                                                    const std::string& needs) {
