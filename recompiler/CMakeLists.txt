@@ -1714,6 +1714,13 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_recomplauncher_manifest.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The Linux release job runs Python 3.8: the release tools must not use
+        # newer keywords (PS1B-673).
+        add_test(
+            NAME release_tools_py38
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_release_tools_py38.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME setup_package_payload_filter
             COMMAND ${Python3_EXECUTABLE} -B
