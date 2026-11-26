@@ -19069,14 +19069,13 @@ const char* const kOvlIres[] = {"1x", "2x", "3x", "4x", "5x", "6x", "8x"};
 const char* const kOvlOnOff[] = {"off", "on"};
 const char* const kOvlSmooth[] = {"default", "smooth", "sharp"};
 const char* const kOvlTexture[] = {"default", "nearest", "bilinear", "xbr"};
-const char* const kOvlPgxp = "psx.enhancement.pgxp";
 const char* const kOvlCrt = "psx.enhancement.crt-filter";
 const char* const kOvlImage = "psx.enhancement.image-filtering";
 const char* const kOvlIresPkg = "psx.enhancement.internal-resolution";
 const OvlLookRow* ovl_look_row(int setting) {
     static const OvlLookRow rows[] = {
         {kOvlIresPkg, "internal-resolution", "resolution", kOvlIres, 7},
-        {kOvlPgxp, "pgxp", nullptr, nullptr, 2},
+        {nullptr, nullptr, nullptr, nullptr, 2},  /* PGXP: player settings */
         {kOvlCrt, "crt-filter", nullptr, nullptr, 2},
         {nullptr, nullptr, nullptr, nullptr, 3},  /* antialiasing: runtime */
         {kOvlCrt, "crt-filter", "scanlines", kOvlOnOff, 2},
@@ -19093,7 +19092,16 @@ void ovl_look_posted_reset(void) {
     for (auto& v : g_ovl_look_posted) v = -1;
     g_ovl_look_posted_init = true;
 }
-std::atomic<int> g_ovl_sess_aa{-1}, g_ovl_sess_dither{-1};
+std::atomic<int> g_ovl_sess_aa{-1}, g_ovl_sess_dither{-1}, g_ovl_sess_pgxp{-1};
+/* The PGXP row is the player's vertex and texture corrections
+ * (video.geometry_correction / perspective_texturing), the switches the
+ * launcher's Display page and its presets save. An explicit false there
+ * overrides the psx.enhancement.pgxp feature (pgxp_session.h), so switching
+ * that feature from the menu could leave PGXP off; the feature keeps only its
+ * CPU-mode and culling options. Shown as what this session armed. */
+int ovl_pgxp_armed(void) {
+    return gte_geometry_correction_enabled() || gpu_texture_correction_enabled() ? 1 : 0;
+}
 int ovl_look_get(int setting, int* out) {
     if (!g_ovl_look_posted_init) ovl_look_posted_reset();
     const int posted = g_ovl_look_posted[setting].load();
@@ -19101,6 +19109,7 @@ int ovl_look_get(int setting, int* out) {
     switch (setting) {
     case PSX_MENU_SESSION_ANTIALIASING: *out = g_video_post_aa; return 1;
     case PSX_MENU_SESSION_DITHERING: *out = gl_renderer_dithering(); return 1;
+    case PSX_MENU_SESSION_PGXP: *out = ovl_pgxp_armed(); return 1;
     }
     const OvlLookRow* row = ovl_look_row(setting);
     if (!row) return 0;
@@ -19125,6 +19134,11 @@ int ovl_look_set(int setting, int value) {
     case PSX_MENU_SESSION_DITHERING:
         if (value < 0 || value > 2) return 0;
         g_ovl_sess_dither = value;
+        break;
+    case PSX_MENU_SESSION_PGXP:
+        if (value != 0 && value != 1) return 0;
+        g_ovl_sess_pgxp = value;
+        rc = value == ovl_pgxp_armed() ? 1 : PSX_MENU_SESSION_AT_RESTART;
         break;
     default: {
         const OvlLookRow* row = ovl_look_row(setting);
@@ -19161,7 +19175,8 @@ int ovl_look_set(int setting, int value) {
 void ovl_look_service(void) {
     const int aa = g_ovl_sess_aa.exchange(-1);
     const int dither = g_ovl_sess_dither.exchange(-1);
-    if (aa < 0 && dither < 0) return;
+    const int pgxp = g_ovl_sess_pgxp.exchange(-1);
+    if (aa < 0 && dither < 0 && pgxp < 0) return;
     if (aa >= 0) { g_video_post_aa = aa; (void)gl_renderer_set_post_aa(aa); }
     if (dither >= 0) { g_video_dithering = dither; gl_renderer_set_dithering(dither); }
     if (g_overlay_settings_path.empty()) return;
@@ -19171,6 +19186,10 @@ void ovl_look_service(void) {
             us.extra_player_settings["video.antialiasing_mode"] = aa == 0 ? "off" : aa == 1 ? "fxaa" : "fxaa_hq";
         if (dither >= 0)
             us.extra_player_settings["video.dithering"] = dither == 0 ? "off" : dither == 1 ? "on" : "fine";
+        if (pgxp >= 0) {
+            us.extra_player_settings["video.geometry_correction"] = pgxp ? "true" : "false";
+            us.extra_player_settings["video.perspective_texturing"] = pgxp ? "true" : "false";
+        }
         (void)PSXRecompV4::save_user_settings(g_overlay_settings_path, us);
     } catch (...) {
     }

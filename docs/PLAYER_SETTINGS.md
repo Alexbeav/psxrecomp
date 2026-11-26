@@ -22,6 +22,13 @@ preferences override those visual choices independently; the mod's CPU and
 culling choices remain separate. Netplay and environment restrictions still
 take precedence.
 
+The in-game menu's Graphics > PGXP precision row is these two preferences: it
+shows whether this session armed vertex or texture correction, and switching it
+saves both `video.geometry_correction` and `video.perspective_texturing` for the
+quick restart. It used to switch the PGXP Precision feature instead, which an
+explicit `false` here (the Faithful preset writes one) overrode, so the row
+read On while PGXP stayed off.
+
 The paired UI offers Faithful, Best and derived Custom states. Faithful uses
 native 1x resolution, sharp presentation, nearest texture/FMV filtering, normal
 dithering, and no PGXP vertex or perspective correction. Best uses 4x resolution,
