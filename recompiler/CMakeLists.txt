@@ -1677,6 +1677,12 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_cmake_comments.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The setup host lookup prefers the name with .exe (PS1B-381).
+        add_test(
+            NAME package_setup_host_lookup
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_host_lookup.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # A set whose discs boot different programs, set up as one folder
         # (PS1B-333): the set file, the disc check, the join, the start
         # scripts, the host project, and the unchanged single-program path.

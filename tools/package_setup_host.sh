@@ -306,17 +306,25 @@ STAGE="${DIST}/stage-setup-${ARTIFACT}"
 rm -rf "${STAGE}"
 mkdir -p "${STAGE}" "${DIST}"
 
+# --- Setup host lookup ------------------------------------------------------
+# The names with .exe come FIRST (PS1B-381). Under Git Bash and MSYS2,
+# [[ -f X ]] is also true when only X.exe exists, so with the bare name first a
+# Windows build settled on a path without the extension: EXE_BASENAME had no
+# .exe, and every "*.exe" branch below (sibling DLLs, Authenticode signing,
+# the readme's program name) silently never ran. A Linux or macOS host has no
+# .exe and still finds the bare name.
 EXE=""
 for cand in \
-  "${BUILD_DIR}/${EXE_NAME}" \
   "${BUILD_DIR}/${EXE_NAME}.exe" \
-  "${BUILD_DIR}/Release/${EXE_NAME}.exe"
+  "${BUILD_DIR}/Release/${EXE_NAME}.exe" \
+  "${BUILD_DIR}/${EXE_NAME}"
 do
   if [[ -f "${cand}" ]]; then
     EXE="${cand}"
     break
   fi
 done
+# --- End setup host lookup --------------------------------------------------
 if [[ -z "${EXE}" ]]; then
   echo "error: setup host executable '${EXE_NAME}' not found under ${BUILD_DIR}" >&2
   ls -la "${BUILD_DIR}" >&2 || true
@@ -1083,8 +1091,8 @@ plain_start_gate() {
     exit 1
   fi
   # The name with .exe comes FIRST. Under Git Bash and MSYS2, [[ -f X ]] is
-  # also true when only X.exe exists, and EXE_BASENAME is then the name without
-  # the extension (the host lookup above meets the same rule). A path without
+  # also true when only X.exe exists (the host lookup above puts .exe first for
+  # the same reason, PS1B-381). A path without
   # .exe names no file for a Windows program such as python: the gate reported
   # "no such file" and stopped every Windows setup package (PS1B-366).
   for candidate in "${STAGE}/${EXE_NAME}.exe" "${STAGE}/${EXE_BASENAME}" "${STAGE}/${EXE_NAME}"; do
