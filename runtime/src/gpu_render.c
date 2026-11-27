@@ -176,7 +176,9 @@ void gr_refresh_backend(void) {
 
 /* ---- Dispatch wrappers (one line each; forward to the active backend) ---- */
 void gr_init(uint16_t *vram)                         { g_skip_field_sent = -2; gpu_hd_textures_set_vram(vram); g_b->init(vram); g_hd_offset_x = g_hd_offset_y = 0; g_hd_texture_window = 0; g_hd_semi = g_hd_perspective = 0; }
-void gr_set_scale(int scale)                         { g_b->set_scale(scale); }
+static int g_native_scale_locked = 0;
+void gr_lock_native_scale(void)                     { g_native_scale_locked = 1; g_b->set_scale(1); }
+void gr_set_scale(int scale)                         { g_b->set_scale(g_native_scale_locked ? 1 : scale); }
 int  gr_scale(void)                                  { return g_b->scale(); }
 void gr_set_texture_filter(int bilinear)             { g_b->set_texture_filter(bilinear); }
 int  gr_texture_filter(void)                         { return g_b->texture_filter(); }

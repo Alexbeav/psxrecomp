@@ -23307,6 +23307,21 @@ session_reboot:
             if(!field || std::strcmp(field,"octoshock-2.2.2-ntsc-raster")!=0)
                 psx_fatal_halt("source GPU model requires the source NTSC raster selector");
             source_gpu_runtime_init();
+            /* The source GPU model draws only through the software rasteriser
+             * at 1x (gr_draw_source_* refuse any other backend and the first
+             * source primitive halts). With OpenGL requested, keep the raster
+             * in software at 1x and let OpenGL present that CPU picture
+             * (PS1B-448, first landed as 41309837 on stage/pin-i). */
+            if (gr_backend() == GR_BACKEND_OPENGL) {
+                gr_set_backend(GR_BACKEND_SOFTWARE);
+                g_gl_fbo_present = 0;
+                std::fprintf(stdout, "psxrecomp: source GPU model: software raster at 1x; "
+                                     "OpenGL presents the CPU picture\n");
+            }
+            /* A software start with a supersample setting halts the same
+             * way, at the first source block; hold 1x on every backend. */
+            gr_lock_native_scale();
+            g_video_scale = 1;
         }
     }
 
@@ -23707,7 +23722,11 @@ session_reboot:
         gl_renderer_set_bloom(g_video_bloom);
         gl_renderer_set_post_shader(g_video_post_shader.c_str());
         g_gl_active = gl_renderer_init_context(s_headless_gl_window) != 0;
-        if (!g_gl_active || gr_backend() != GR_BACKEND_OPENGL ||
+        /* The source GPU model keeps its raster in software by design (see
+         * source_gpu_runtime_init above); the context still presents. */
+        const bool source_sw_raster = source_gpu_runtime_active() &&
+                                      gr_backend() == GR_BACKEND_SOFTWARE;
+        if (!g_gl_active || (gr_backend() != GR_BACKEND_OPENGL && !source_sw_raster) ||
             !(SDL_GetWindowFlags(s_headless_gl_window) & SDL_WINDOW_HIDDEN)) {
             std::fprintf(stderr, "psxrecomp: hidden OpenGL validation unavailable; refusing fallback\n");
             if (g_gl_active) gl_renderer_shutdown();
@@ -23720,7 +23739,8 @@ session_reboot:
         gl_renderer_set_interpolation(0, 0, 0, 59.94, 0);
         latency_ring_set_backend("opengl");
         latency_ring_set_present_mode(0);
-        std::fprintf(stdout, "psxrecomp: hidden OpenGL headless enabled (backend=opengl hidden=1 audio=0 controllers=0)\n");
+        std::fprintf(stdout, "psxrecomp: hidden OpenGL headless enabled (backend=%s hidden=1 audio=0 controllers=0)\n",
+                     source_sw_raster ? "software raster, OpenGL present" : "opengl");
     } else {
         std::fprintf(stdout, "psxrecomp: headless frontend enabled\n");
     }
