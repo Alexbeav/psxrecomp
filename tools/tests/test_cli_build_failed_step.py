@@ -119,6 +119,30 @@ class FailedStepAloneTest(unittest.TestCase):
         self.assertNotIn("passed on their own", log.text())
 
 
+class StudioBuildFailedStepAloneTest(FailedStepAloneTest):
+    """The same three cases through the studio's Build (project_studio.buildops.build)."""
+
+    def run_build(self, mode: str) -> tuple[Log, str]:
+        sys.path.insert(0, str(ROOT / "tools" / "new_project_layout"))
+        from project_studio import buildops
+
+        os.environ["PS1B342_MODE"] = mode
+        log = Log()
+        real = buildops.detect_host
+
+        def host():
+            h = real()
+            h.cmake = TOOLS["cmake"]
+            return h
+
+        buildops.detect_host = host
+        try:
+            r = buildops.build(self.root, build_dir=str(self.build), target="all", jobs=2, log=log.log)
+        finally:
+            buildops.detect_host = real
+        return log, "" if r.ok else r.message
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cmake")
