@@ -8,7 +8,7 @@
 // check now does: is_regular_file and psx_sha256_file on host_long_path().
 // It also records whether the old narrow spelling could open them; on a host
 // without long-path support it cannot, which is the fault.
-#include "host_path.h"
+#include "psx_host_long_path.h"
 #include "psx_sha256.h"
 #include "psx_sha256_file.h"
 

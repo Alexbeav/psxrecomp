@@ -74,6 +74,7 @@ extern "C" int iso_source_bin_path(void*,char*,uint32_t);
 #include "launcher_record_replay.h"
 #include "psx_sha256.h"
 #include "psx_sha256_file.h"
+#include "psx_host_long_path.h"
 #include "netplay_state_digest.h"
 #include "local_mouse_sdl.h"
 #include "pad_external_input.h"
