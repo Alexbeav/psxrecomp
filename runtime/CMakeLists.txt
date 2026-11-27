@@ -2117,6 +2117,23 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME gpu_ready_cmd_status_test
              COMMAND gpu_ready_cmd_status_test)
 
+    # GP0(1Fh) sets the GPU IRQ flag and raises I_STAT bit 1 (PS1B-603).
+    add_executable(gpu_gp0_irq_request_test
+        tests/test_gpu_gp0_irq_request.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(gpu_gp0_irq_request_test PRIVATE
+        include
+        src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(gpu_gp0_irq_request_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(gpu_gp0_irq_request_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME gpu_gp0_irq_request_test
+             COMMAND gpu_gp0_irq_request_test)
+
     # auto_ui_squash corrects untextured HUD fills with their textured frames.
     add_executable(ws_auto_ui_untextured_exec_test
         tests/test_ws_auto_ui_untextured_exec.c

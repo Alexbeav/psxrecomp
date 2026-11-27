@@ -8105,6 +8105,17 @@ static void gp0_dispatch_command(uint8_t opcode) {
             gp0_exec_vram_to_cpu();
             break;
 
+        case 0x1F:
+            /* GP0(1Fh) interrupt request: sets the GPU IRQ flag (GPUSTAT bit
+             * 24) and raises I_STAT bit 1 on the flag's rising edge; GP1(02h)
+             * acknowledges it (psx-spx GPU Misc Commands; Beetle
+             * Command_IRQ asserts IRQ_GPU, edge-detected). PS1B-603. */
+            if (!irq1_flag) {
+                irq1_flag = 1;
+                psx_irq_raise(1, 0);
+            }
+            break;
+
         default:
             /* NOP range: 0x03-0x1E, 0xE0, 0xE7-0xEF, 0xFF */
             if ((opcode >= 0x03 && opcode <= 0x1E) ||
