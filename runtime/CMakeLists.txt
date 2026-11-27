@@ -172,6 +172,16 @@ if(BUILD_TESTING)
     psxrecomp_sha256_file(host_long_path_test)
     add_test(NAME host_long_path_test COMMAND host_long_path_test)
 
+    # PS1B-574: GCC PGO profiles from a deep build folder stay under MAX_PATH.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME gcc_pgo_deep_folder_test COMMAND "${CMAKE_COMMAND}"
+            "-DPSXRECOMP_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "-DCC=${CMAKE_C_COMPILER}" "-DGEN=${CMAKE_GENERATOR}"
+            "-DMAKE=${CMAKE_MAKE_PROGRAM}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/pgo-deep"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/gcc_pgo_deep_folder_test.cmake")
+        set_tests_properties(gcc_pgo_deep_folder_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+    endif()
+
     add_executable(atomic_file_write_test tests/test_atomic_file_write.cpp)
     target_include_directories(atomic_file_write_test PRIVATE include)
     target_compile_features(atomic_file_write_test PRIVATE cxx_std_17)

@@ -2208,6 +2208,15 @@ def run_pgo_train(
     n_gcda = len(list(build_dir.rglob("*.gcda")))
     n_raw = len(list(pgo_dir.glob("*.profraw")))
     progress.log(f"PGO profiles: {n_gcda} .gcda, {n_raw} .profraw")
+    # GCC writes one .gcda per instrumented object (none for an object without
+    # functions). Far fewer than the target's objects means libgcov could not
+    # create the files, as with names past MAX_PATH (PS1B-574); say so, since
+    # the use build would then optimise without them.
+    target_dir = build_dir / "CMakeFiles" / f"{target}.dir"
+    n_obj = sum(1 for p in target_dir.rglob("*") if p.suffix in (".obj", ".o")) if target_dir.is_dir() else 0
+    if n_gcda and n_obj and n_gcda < n_obj:
+        progress.log(f"PGO warning: {n_gcda} .gcda for {n_obj} objects of {target}; "
+                     "profiles missing for the rest (see -Wmissing-profile in the use build)")
     if n_raw >= 1:
         merge = shutil.which("llvm-profdata")
         if not merge:
