@@ -307,10 +307,13 @@ rm -rf "${STAGE}"
 mkdir -p "${STAGE}" "${DIST}"
 
 EXE=""
+# The .exe names come first. Under Git Bash, [[ -f X ]] is true when only
+# X.exe exists, so a bare name listed first wins on Windows and every later
+# *.exe branch (sibling DLLs, signing, the SDK's Windows emitters) is skipped.
 for cand in \
-  "${BUILD_DIR}/${EXE_NAME}" \
   "${BUILD_DIR}/${EXE_NAME}.exe" \
-  "${BUILD_DIR}/Release/${EXE_NAME}.exe"
+  "${BUILD_DIR}/Release/${EXE_NAME}.exe" \
+  "${BUILD_DIR}/${EXE_NAME}"
 do
   if [[ -f "${cand}" ]]; then
     EXE="${cand}"
