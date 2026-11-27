@@ -6079,6 +6079,7 @@ static void handle_gpu_state(int id, const char *json)
              "\"screen_offset_y\":%d,"
              "\"screen_height\":%u,\"screen_origin_y\":%u,"
              "\"d24_crop\":%d,\"d24_rgb_limit\":%u,"
+             "\"d24_upload_x1\":%u,\"d24_present_hold\":%d,"
              "\"depth\":%d,\"depth24\":%d,"
              "\"disabled\":%d,"
              "\"h_display\":[%u,%u],\"v_display\":[%u,%u],"
@@ -6118,6 +6119,7 @@ static void handle_gpu_state(int id, const char *json)
              di.screen_height, di.screen_origin_y,
              gpu_depth24_crop_to_picture(),
              gpu_depth24_rgb_limit(di.display_x, di.width),
+             gpu_depth24_upload_x1(), gpu_depth24_present_hold(),
              di.depth24 ? 24 : 15, di.depth24,
              di.disabled,
              hx1, hx2, hy1, hy2, hr1, hr2,
@@ -10786,8 +10788,11 @@ static void handle_screenshot_file(int id, const char *json)
     }
     /* Under the OpenGL FBO-present path, CPU VRAM can be stale (the FBO holds
      * the freshest frame and is presented without a readback). Sync it down so
-     * the capture reflects what's on screen. NEVER sync on depth24: FBO
-     * readback clobbers packed RGB888 MDEC bytes in the CPU mirror. */
+     * the capture reflects what's on screen. A 24-bit scanout needs no sync:
+     * there the CPU mirror is the authoritative surface (the GL backend
+     * rasterizes every draw into it while depth24 is on, and the window
+     * presents from it), and an FBO readback would overwrite the packed
+     * RGB888 bytes. The reply says depth24 so the frame stays tagged. */
     if (!di.depth24) {
         extern void gl_renderer_sync_cpu(void);
         gl_renderer_sync_cpu();
@@ -10821,8 +10826,9 @@ static void handle_screenshot_file(int id, const char *json)
     fclose(f);
     if (!ok) { send_err(id, "png encode failed"); return; }
 
-    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,\"height\":%u}",
-             id, path, w, h);
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,\"height\":%u,"
+             "\"depth24\":%d,\"frame\":%llu}",
+             id, path, w, h, di.depth24 ? 1 : 0, (unsigned long long)s_frame_count);
 }
 
 /* screenshot_hires — capture the SUPERSAMPLED surface, not native VRAM.
@@ -10848,7 +10854,46 @@ static void handle_screenshot_hires(int id, const char *json)
     if (di.disabled || di.width == 0 || di.height == 0) {
         send_err(id, "display disabled"); return;
     }
-    if (di.depth24) { send_err(id, "24bpp scanout (unsupported)"); return; }
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_screenshot_hires.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    /* A 24-bit frame has no hi-res surface: every backend presents it at
+     * native size from the CPU staging (main.cpp depth24_stage_scanout).
+     * Capture that staging, so the PNG is the picture the window shows,
+     * canvas, row mask and trailing blank included (PS1B-123). */
+    if (di.depth24) {
+        extern int psx_depth24_present_capture(uint32_t *buf, size_t cap,
+                                               uint32_t *out_w, uint32_t *out_h,
+                                               int *cutover);
+        size_t cap = (size_t)1024 * 512;
+        uint32_t *px = (uint32_t *)malloc(cap * sizeof(uint32_t));
+        if (!px) { send_err(id, "alloc failed"); return; }
+        uint32_t dw = 0, dh = 0;
+        int cutover = 0;
+        if (psx_depth24_present_capture(px, cap, &dw, &dh, &cutover) <= 0) {
+            free(px); send_err(id, "depth24 present staging failed"); return;
+        }
+        uint8_t *rgb = (uint8_t *)malloc((size_t)dw * dh * 3);
+        if (!rgb) { free(px); send_err(id, "alloc failed"); return; }
+        for (size_t i = 0; i < (size_t)dw * dh; i++) {
+            rgb[i * 3 + 0] = (uint8_t)(px[i] >> 16);
+            rgb[i * 3 + 1] = (uint8_t)(px[i] >> 8);
+            rgb[i * 3 + 2] = (uint8_t)px[i];
+        }
+        free(px);
+        FILE *f = fopen(path, "wb");
+        int ok = f && png_write_rgb(f, rgb, dw, dh);
+        if (f) fclose(f);
+        free(rgb);
+        if (!ok) { send_err(id, "png encode failed"); return; }
+        send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,\"height\":%u,"
+                 "\"scale\":1,\"depth24\":1,\"source\":\"depth24_present\","
+                 "\"cutover\":%d,\"frame\":%llu}",
+                 id, path, dw, dh, cutover, (unsigned long long)s_frame_count);
+        return;
+    }
 
     int scale = gr_scale();
     if (scale < 1) scale = 1;
@@ -10856,11 +10901,6 @@ static void handle_screenshot_hires(int id, const char *json)
     if (w > 640) w = 640;
     if (h > 512) h = 512;
     uint32_t ow = w * (uint32_t)scale, oh = h * (uint32_t)scale;
-
-    char path[512];
-    if (!json_get_str(json, "path", path, sizeof(path)))
-        strncpy(path, "psx_screenshot_hires.png", sizeof(path) - 1);
-    path[sizeof(path) - 1] = '\0';
 
     /* calloc, not malloc: any pixel a resolve declines to touch must be a
      * deterministic black, never whatever the allocator handed back. */

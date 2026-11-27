@@ -4742,6 +4742,9 @@ uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
     return rgb;
 }
 
+uint32_t gpu_depth24_upload_x1(void) { return s_d24_upload_x1; }
+int gpu_depth24_present_hold(void) { return s_d24_present_hold; }
+
 void gpu_depth24_upload_span_reset(void) {
     s_d24_upload_x1 = 0;
 }

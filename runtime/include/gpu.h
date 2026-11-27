@@ -128,6 +128,11 @@ int  gpu_depth24_crop_to_picture(void);
  * shrinking the CRTC-derived draw width (avoids a flickering black pillar). */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
+/* Depth24 present state for the debug server (PS1B-123): the raw upload
+ * span edge behind gpu_depth24_rgb_limit, and the vblanks left in the
+ * GP1(07h) present hold. */
+uint32_t gpu_depth24_upload_x1(void);
+int      gpu_depth24_present_hold(void);
 /* MotK intro cuts retarget GP1(07h): the guest-state hold counts down at
  * guest VBlank (gpu_vblank_tick). Returns non-zero while the latest guest
  * VBlank was held (read-only; guest state in the GPU snap): presents should
