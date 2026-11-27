@@ -288,6 +288,12 @@ if(BUILD_TESTING)
         src/start_refusal.c)
     target_include_directories(start_refusal_test PRIVATE include)
     add_test(NAME start_refusal_test COMMAND start_refusal_test)
+    # PS1B-675: a bare replay argument plays; it is never read as the BIOS.
+    add_executable(replay_file_kind_test tests/test_replay_file_kind.c)
+    target_include_directories(replay_file_kind_test PRIVATE include)
+    add_test(NAME replay_file_kind_test
+        COMMAND replay_file_kind_test ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     add_executable(missing_sbi_report_test
         ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_report.cpp
         src/start_refusal.c)

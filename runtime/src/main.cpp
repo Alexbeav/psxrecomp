@@ -13,6 +13,7 @@
 #include "cpu_state.h"
 #include "dirty_ram_interp.h"
 #include "start_refusal.h"
+#include "replay_file_kind.h"
 #include "mod_netplay.h"
 #include "mod_memory.h"
 #include "mod_texture_banks.h"
@@ -19735,7 +19736,8 @@ static int g_player_title_select_allowed=1;
 
 /* --help / -h: the command line this program takes. */
 static const char kCliUsage[] =
-    "Usage: %s [options] [bios-path]\n"
+    "Usage: %s [options] [bios-path | replay-file]\n"
+    "  A bare replay file (.psxrpl) plays as --replay would.\n"
     "\n"
     "Start:\n"
     "  --disc <path>             mount this disc image (.cue/.bin/.chd/.iso)\n"
@@ -19991,7 +19993,8 @@ int main(int argc, char** argv) {
      *   --net-peer H:P      peer host:port
      *   --net-delay N       input delay in sim ticks (default 2)
      *   --net-session-id N  must match peer (default 1)
-     *   <positional>        deprecated alias for --bios
+     *   <positional>        a replay file (by its PSXRTI bytes) plays as --replay;
+     *                       anything else is the deprecated alias for --bios
      * No --game-root flag: that remains config-driven. */
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--replay") == 0 && i + 1 < argc) {
@@ -20080,11 +20083,16 @@ int main(int argc, char** argv) {
             net_cfg.enabled = 1;
             net_cfg.session_id = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (argv[i][0] != '-') {
+            /* A replay dropped on the game, or opened with it, arrives as a
+             * bare argument. Its bytes say it is a replay: play it as
+             * --replay would, never check it as a BIOS (PS1B-675). */
+            if (!g_replay_cli_path && psx_file_is_replay(argv[i])) {
+                g_replay_cli_path = argv[i];
             /* The positional BIOS alias predates the named CLI. Consume it at
              * most once. In particular, never let a stray split argument
              * replace an explicit --bios path (for example when a Windows
              * launcher fails to quote a multi-word --window-title value). */
-            if (!bios_from_cli) {
+            } else if (!bios_from_cli) {
                 bios_path = argv[i];
                 bios_from_cli = true;
                 bios_explicit = true;
