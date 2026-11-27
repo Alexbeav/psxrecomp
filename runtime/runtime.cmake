@@ -16,6 +16,7 @@ endif()
 set(PSX_PGO "" CACHE STRING "PGO mode: empty, generate, or use")
 set_property(CACHE PSX_PGO PROPERTY STRINGS "" generate use)
 include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
+include("${PSXRECOMP_ROOT}/cmake/psx_gcc_pgo.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_execution_profile.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_native_cpu_spans.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_capture_jobs.cmake")
@@ -1791,21 +1792,17 @@ function(psxrecomp_add_runtime_target target)
                     "-fprofile-instr-use=${_psx_pgo_profile}")
             endif()
         elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            # GCC writes .gcda files directly; run_pgo_train already recognizes
-            # those as a completed training run, so no llvm-profdata merge is
-            # required for this branch.
-            if(PSX_PGO STREQUAL "generate")
-                target_compile_options(${target} PRIVATE
-                    "-fprofile-generate=${_psx_pgo_dir}")
-                target_link_options(${target} PRIVATE
-                    "-fprofile-generate=${_psx_pgo_dir}")
-            else()
-                target_compile_options(${target} PRIVATE
-                    "-fprofile-use=${_psx_pgo_dir}"
-                    -Wno-missing-profile)
-                target_link_options(${target} PRIVATE
-                    "-fprofile-use=${_psx_pgo_dir}")
-            endif()
+            # GCC writes .gcda files directly; run_pgo_train counts them
+            # against the instrumented objects, so no llvm-profdata merge is
+            # required for this branch. The prefix keeps profile names short
+            # enough to be written from a deep build folder (PS1B-574), and
+            # the missing-profile warning stays on so a use build without
+            # profiles says so.
+            psx_gcc_pgo_options(${PSX_PGO} "${_psx_pgo_dir}" _psx_pgo_compile _psx_pgo_link)
+            target_compile_options(${target} PRIVATE ${_psx_pgo_compile})
+            target_link_options(${target} PRIVATE ${_psx_pgo_link})
+            unset(_psx_pgo_compile)
+            unset(_psx_pgo_link)
         else()
             message(FATAL_ERROR
                 "PSX_PGO requires a Clang or GNU compiler (got ${CMAKE_C_COMPILER_ID})")
