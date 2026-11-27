@@ -558,6 +558,47 @@ int main(int argc,char **argv)
             err = input_route_v3_read_ex(g, &meta, NULL, dual, markers, checkpoints, &rp);
             fclose(g);
             check(err && !strcmp(err, "replay cards length"), "card mask beyond two slots refused");
+            input_route_put32(bytes + cards_at + 8, 2u);
+            g = as_file(bytes, size);
+            err = input_route_v3_read_ex(g, &meta, NULL, dual, markers, checkpoints, &rp);
+            fclose(g);
+            check(err == NULL, "restored power-on replay admitted again");
+        }
+        /* PS1B-599: the replay player feeds pad records only. A replay that
+         * declares console events or a disc roster must be refused, not played
+         * without them. The entries are valid route entries, spliced at the
+         * start of the extension block. */
+        {
+            unsigned char discs[40] = {0}, events[20] = {0}, ent[8 + 20 + 8 + 40];
+            static unsigned char spliced[sizeof(bytes)];
+            const uint32_t ext_len = input_route_le32(bytes + 24);
+            Buf e = {ent, 0};
+            FILE *g;
+            const char *err;
+            input_route_put32(discs, 1);
+            discs[4] = INPUT_ROUTE_DISC_DIGEST_FILE;
+            input_route_put32(events, 2);
+            input_route_put32(events + 4, 2); events[8] = INPUT_ROUTE_EVENT_TRAY_OPEN;
+            input_route_put32(events + 12, 3); events[16] = INPUT_ROUTE_EVENT_TRAY_CLOSE; events[17] = 1;
+            for (int with_events = 1; with_events >= 0; --with_events) {
+                e.n = 0;
+                if (with_events) bentry(&e, INPUT_ROUTE_TAG_EVENTS, events, sizeof(events));
+                bentry(&e, INPUT_ROUTE_TAG_DISC_SET, discs, sizeof(discs));
+                check(size + e.n <= sizeof(spliced), "splice fits");
+                memcpy(spliced, bytes, 28);
+                memcpy(spliced + 28, ent, e.n);
+                memcpy(spliced + 28 + e.n, bytes + 28, size - 28);
+                input_route_put32(spliced + 24, ext_len + (uint32_t)e.n);
+                g = as_file(spliced, size + e.n);
+                err = input_route_v3_read_ex(g, &meta, NULL, dual, markers, checkpoints, &rp);
+                fclose(g);
+                if (with_events)
+                    check(err && !strcmp(err, "replay console events not supported"),
+                          "power-on replay with console events refused");
+                else
+                    check(err && !strcmp(err, "replay disc set not supported"),
+                          "power-on replay with a disc set refused");
+            }
         }
         /* An anchor and a power-on start cannot both be written. */
         {
@@ -569,7 +610,7 @@ int main(int argc,char **argv)
                   "anchor plus power-on refused by the writer");
             if (f) fclose(f);
         }
-        cases += 9;
+        cases += 12;
     }
 
     /* Full-length DualShock routes need both length and density capacity.
