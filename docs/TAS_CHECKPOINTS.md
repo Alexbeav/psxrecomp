@@ -11,6 +11,8 @@ The runtime has two checkpoint paths, and the run picks one at start:
 - **Source GPU model runs** (`PSX_GPU_DMA_MODEL=octoshock-2.2.2-bounded-quad`, which `run_native.py --gpu-dma-model octoshock-2.2.2-bounded-quad` sets) capture at frontend returns and resume the same input route from the saved return. This is the TAS diagnostic path: see [Replay checkpoints](#replay-checkpoints-run_nativepy) below.
 - **Every other run**, including `run_native.py` with another GPU/DMA model, captures at debug-server frames and resumes without seeking an input route. `run_checkpoint.py` drives it: see [Debug-server checkpoints](#debug-server-checkpoints-run_checkpointpy).
 
+`run_native.py` replays an input route, so its checkpoint options need the source GPU path. It prints `run_native: checkpoint load path: <path> (gpu dma model <model>)` before the run starts and records the path in `manifest.json` as `resume.load_path`: `stateio` under `--gpu-dma-model octoshock-2.2.2-bounded-quad`, `none` without `--save-state-at` or `--resume-from`. With any other model those two options are refused (`load path: refused`) before the product starts, because the debug-server path cannot seek the route. Pin I made no capture under another model either.
+
 Both use the same variables, the same manifest schema and the same state format. The title commands whose own options select the bounded-quad model (`tekken3.py`, `biohazard.py`, `megamanx4.py`, `megamanx5.py`, `redc.py`, `crash.py`) use the replay path.
 
 ## What a checkpoint holds
@@ -63,7 +65,7 @@ python3 tools/tasreplays/compare_boot_states.py runs/A1/tas-state-003000.pst run
 
 `run_checkpoint.py` quits the game through the debug server once the capture at the last frame has its manifest, and writes `captures.json` and `run.json` in the output folder. Use the frame each capture was taken at, from `captures.json`, to pair the states. `compare_boot_states.py` names the first differing section and offset.
 
-`compare_checkpoint_runs.py` and `verify_checkpoint_cohort.py` read the per-return CPU and RAM records that `run_native.py` writes; they do not read `run_checkpoint.py` output. `tools/tasreplays/test_checkpoint_tools.py` was written for other versions of those two tools and does not import on this branch.
+`compare_checkpoint_runs.py` and `verify_checkpoint_cohort.py` read the per-return CPU and RAM records that `run_native.py` writes; they do not read `run_checkpoint.py` output. `tools/tasreplays/test_checkpoint_tools.py` (CTest `checkpoint_tools_test`) covers `run_checkpoint.py` and `compare_boot_states.py` against a stand-in game; it does not cover those two tools.
 
 ## Replay checkpoints (run_native.py)
 

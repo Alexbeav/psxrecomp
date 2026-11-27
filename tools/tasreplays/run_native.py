@@ -29,6 +29,26 @@ def write_json(path, value):
         stream.write("\n")
 
 
+STATEIO_DMA_MODEL = 'octoshock-2.2.2-bounded-quad'
+
+
+def checkpoint_load_path(dma_model, save_state_at, resume_from):
+    """The state path a checkpoint option of this run takes (PS1B-702).
+
+    The runtime saves and resumes a route replay's checkpoint through pin I's
+    stateio only under the source GPU model (STATEIO_DMA_MODEL); pin I made no
+    capture under any other model either. Every other model goes to PR #923's
+    tas_checkpoint, which counts frames, does not seek the input route and needs
+    the inserted cards to match, so a route replay cannot use it: refuse."""
+    if not save_state_at and resume_from is None:
+        return 'none'
+    if dma_model == STATEIO_DMA_MODEL:
+        return 'stateio'
+    raise ValueError(f'checkpoint options need --gpu-dma-model {STATEIO_DMA_MODEL}: under {dma_model} '
+                     "the runtime takes PR #923's frame checkpoint path, which cannot seek the input "
+                     'route (docs/TAS_CHECKPOINTS.md)')
+
+
 def spu_keyoff_resume_environment(model, previous, resume_from, compatible, dma_model):
     if model not in ('default', 'octoshock-1.11.9'):
         raise ValueError('unknown SPU key-off model')
@@ -676,6 +696,12 @@ def main():
         raise ValueError("neutral tail outside 0..60000 ticks")
     if not 1 <= args.checkpoint_every <= 10000:
         raise ValueError("checkpoint interval outside 1..10000")
+    try:
+        load_path = checkpoint_load_path(args.gpu_dma_model, args.save_state_at, args.resume_from)
+    except ValueError:
+        print(f'run_native: checkpoint load path: refused (gpu dma model {args.gpu_dma_model})', flush=True)
+        raise
+    print(f'run_native: checkpoint load path: {load_path} (gpu dma model {args.gpu_dma_model})', flush=True)
     if args.storage_budget_mib is not None and not 1<=args.storage_budget_mib<=16384:
         raise ValueError('storage budget must be in 1..16384 MiB')
     if args.dump_at_frame is not None and args.dump_at_frame < 1:
@@ -1049,7 +1075,7 @@ def main():
     write_json(run / "manifest.json", {
         "schema": "psx-native-tas-run-v1", "command": command,
         "terminal_return_probe": args.terminal_return_probe,
-        "resume": {"from":str(args.resume_from) if args.resume_from else None,
+        "resume": {"from":str(args.resume_from) if args.resume_from else None,"load_path":load_path,
                    "compatible_build":args.resume_compatible_build,
                    "saved_exe_sha256":resume_manifest.get('exe_sha256') if args.resume_from else None,
                    "running_exe_sha256":digest(paths['exe']),"actual_input_audit":args.full_input_audit},
