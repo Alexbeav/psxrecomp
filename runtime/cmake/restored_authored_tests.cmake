@@ -283,7 +283,7 @@ endif()
 if(BUILD_TESTING)
 target_include_directories(text_xlate_kernel_bless_test PRIVATE
         include
-        ../recompiler/lib/toml11)
+        ../recompiler/lib/toml11 ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
 endif()
 
 if(BUILD_TESTING)

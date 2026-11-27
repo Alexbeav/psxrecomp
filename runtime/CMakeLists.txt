@@ -313,7 +313,7 @@ if(BUILD_TESTING)
     add_executable(missing_sbi_report_test
         ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_report.cpp
         src/start_refusal.c)
-    target_include_directories(missing_sbi_report_test PRIVATE include)
+    target_include_directories(missing_sbi_report_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     add_test(NAME missing_sbi_report_test COMMAND missing_sbi_report_test)
     # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
     add_executable(netplay_lan_version_test
@@ -1769,14 +1769,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(hd_texture_pack_test
         tests/test_hd_texture_pack.cpp
         src/hd_texture_pack.cpp)
-    target_include_directories(hd_texture_pack_test PRIVATE include)
+    target_include_directories(hd_texture_pack_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     find_package(Threads REQUIRED)
     target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
     add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
     add_executable(duckstation_texture_pack_test
         tests/test_duckstation_texture_pack.cpp
         src/duckstation_texture_pack.cpp)
-    target_include_directories(duckstation_texture_pack_test PRIVATE include)
+    target_include_directories(duckstation_texture_pack_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     target_link_libraries(duckstation_texture_pack_test PRIVATE Threads::Threads)
     target_link_libraries(duckstation_texture_pack_test PRIVATE psx_texture_image_decode)
     add_test(NAME duckstation_texture_pack_test COMMAND duckstation_texture_pack_test)
@@ -1785,7 +1785,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(duckstation_texture_pack_cpp20_test
         tests/test_duckstation_texture_pack.cpp
         src/duckstation_texture_pack.cpp)
-    target_include_directories(duckstation_texture_pack_cpp20_test PRIVATE include)
+    target_include_directories(duckstation_texture_pack_cpp20_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     set_target_properties(duckstation_texture_pack_cpp20_test PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_link_libraries(duckstation_texture_pack_cpp20_test PRIVATE
@@ -2581,7 +2581,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # A cue, conventional raw image, or Steam .car image is a valid pick; each
     # must mount the same disc and identify off the same data track.
     add_executable(sbi_setup_test tests/test_sbi_setup.cpp src/psx_sha256.c)
-    target_include_directories(sbi_setup_test PRIVATE include)
+    target_include_directories(sbi_setup_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     add_test(NAME sbi_setup_test COMMAND sbi_setup_test ${CMAKE_CURRENT_BINARY_DIR}/sbi-setup-fixture)
 
     add_executable(disc_path_resolve_test
@@ -2749,7 +2749,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         src/psx_ram_geometry.c)
     target_include_directories(text_xlate_fix_only_test PRIVATE
         include
-        ../recompiler/lib/toml11)
+        ../recompiler/lib/toml11 ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
     add_executable(native_text_test tests/test_native_text.cpp
         src/native_text.cpp third_party/json11/json11.cpp)
@@ -2905,7 +2905,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     foreach(_resident_mode 0 1)
         add_executable(resident_preparation_${_resident_mode}_test
             tests/test_resident_preparation.cpp src/psx_sha256.c)
-        target_include_directories(resident_preparation_${_resident_mode}_test PRIVATE include)
+        target_include_directories(resident_preparation_${_resident_mode}_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
         target_compile_features(resident_preparation_${_resident_mode}_test PRIVATE cxx_std_17)
         target_compile_definitions(resident_preparation_${_resident_mode}_test PRIVATE
             PSX_NATIVE_RESIDENT_PREPARATION=${_resident_mode} PSX_DISABLE_NATIVE_SHA256=1)
