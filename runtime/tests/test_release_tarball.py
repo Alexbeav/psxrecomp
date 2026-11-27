@@ -19,6 +19,9 @@ import unittest
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import host_bash  # noqa: E402
+
 PACKAGER = ROOT / "tools" / "package_game_release.sh"
 TEMPLATE = ROOT / "docs" / "ci" / "templates" / "game-release.yml"
 spec = importlib.util.spec_from_file_location(
@@ -57,10 +60,14 @@ def template_tarball_gate():
 
 class ReleaseTarballTests(unittest.TestCase):
     def setUp(self):
-        # On Windows a bare `bash` may be WSL's; CMake passes Git Bash here.
-        self.bash = os.environ.get("PSX_PACKAGE_TEST_BASH") or shutil.which("bash")
+        # On Windows a bare `bash` may be WSL's; CMake passes Git Bash here,
+        # and the shared finder never returns the launcher (PS1B-450).
+        self.bash = os.environ.get("PSX_PACKAGE_TEST_BASH")
         if not self.bash:
-            self.skipTest("bash not on PATH")
+            try:
+                self.bash = host_bash.find_bash("the release tarball test")
+            except AssertionError as exc:
+                self.skipTest(str(exc))
         self.tmp = tempfile.TemporaryDirectory(prefix="psx-release-tarball-")
         self.addCleanup(self.tmp.cleanup)
         self.work = Path(self.tmp.name)

@@ -983,7 +983,7 @@ def write_bios_emitter_stamp(
     proc = subprocess.run(
         [cmake, f"-DROOT={fw}", f"-DPROFILE={profile_rel}",
          "-P", str(fw / "tools" / "bios_emitter_fingerprint.cmake")],
-        cwd=str(fw), capture_output=True, text=True,
+        cwd=str(fw), capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0:
         raise RuntimeError(f"emitter fingerprint failed for {profile_rel}: {proc.stderr.strip()}")

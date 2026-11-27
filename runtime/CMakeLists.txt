@@ -4095,8 +4095,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME release_stage_notices_test
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_notices.py)
-        find_program(PSX_PACKAGE_TEST_BASH NAMES bash
-            HINTS "C:/Program Files/Git/bin")
+        # The shared finder never hands these tests the WSL launcher (PS1B-450).
+        include("${CMAKE_CURRENT_SOURCE_DIR}/host_bash.cmake")
+        psxrecomp_find_bash(PSX_PACKAGE_TEST_BASH _psx_package_test_launcher)
         add_test(NAME package_execution_stage_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_package_execution_stage.py
@@ -4162,7 +4163,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # stages the cache tree, builds the fixture and the test, and runs it — so
     # register THAT rather than reimplementing its fixture staging here.
     if(UNIX)
-        find_program(BASH_EXECUTABLE bash)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/host_bash.cmake")
+        psxrecomp_find_bash(BASH_EXECUTABLE _bash_launcher)
         if(BASH_EXECUTABLE)
             add_test(NAME overlay_posix_test
                      COMMAND ${BASH_EXECUTABLE}

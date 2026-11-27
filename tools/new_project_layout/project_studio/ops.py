@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 
 from fill_tokens import derive_zip_prefix
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from host_bash import find_bash  # noqa: E402
 
 from .models import ApplyResult, MigrateOptions, Plan
 from .naming import (
@@ -1344,10 +1346,13 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
             record = cand
             break
     dst = root / "framework_pins.txt"
-    # Resolve bash through PATH. A bare "bash" given to CreateProcess on
-    # Windows searches System32 first and launches WSL's bash, which cannot
-    # see D:/ paths (and a CRLF checkout of the script breaks any bash).
-    bash = shutil.which("bash")
+    # A bare "bash" given to CreateProcess on Windows searches System32 first
+    # and launches WSL's bash, which cannot see D:/ paths; the first bash on
+    # PATH can be that launcher too (PS1B-450). find_bash never returns one.
+    try:
+        bash = find_bash("recording the framework pins", verify_msys=True)
+    except AssertionError:
+        bash = None
     if record is None or bash is None:
         return _record_pins_via_git(root, dst, options)
 
