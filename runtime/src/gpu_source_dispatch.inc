@@ -122,10 +122,13 @@ static void gpu_queue_consume(void) {
         uint32_t saved_source=gp0_next_source_addr;
         uint16_t saved_rank=gp0_ot_rank;
         gp0_next_source_addr=gpu_queue.sources[0];
+        gp0_next_origin_pc=gpu_queue.origin_pcs[0];gp0_next_origin_ch=gpu_queue.origin_chs[0];
         gp0_ot_rank=(uint16_t)gpu_queue.ranks[0];
         --gpu_queue.count;
         memmove(gpu_queue.words,gpu_queue.words+1,gpu_queue.count*4u);
         memmove(gpu_queue.sources,gpu_queue.sources+1,gpu_queue.count*4u);
+        memmove(gpu_queue.origin_pcs,gpu_queue.origin_pcs+1,gpu_queue.count*4u);
+        memmove(gpu_queue.origin_chs,gpu_queue.origin_chs+1,gpu_queue.count);
         memmove(gpu_queue.ranks,gpu_queue.ranks+1,gpu_queue.count*4u);
         gpu_queue.words[gpu_queue.count]=gpu_queue.sources[gpu_queue.count]=gpu_queue.ranks[gpu_queue.count]=0;
         Gp0State before=gp0_state;

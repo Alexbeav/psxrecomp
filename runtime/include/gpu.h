@@ -182,7 +182,8 @@ typedef struct {
     uint32_t frame;
     uint32_t seq;
     uint32_t src_addr;      /* RAM/MMIO source address of command header, if known */
-    uint32_t pc;            /* g_debug_last_store_pc when command completes */
+    uint32_t pc;            /* the sender of the command's first word: the CPU store
+                             * to GP0, or the kick PC of the DMA channel that fed it */
     uint32_t func;          /* g_debug_current_func_addr at issue (executing guest fn) */
     uint32_t ra;            /* guest $ra at issue: direct caller of the leaf GP0 helper */
     uint8_t  opcode;
@@ -195,6 +196,7 @@ typedef struct {
      * routine that assembled the copy. Zero for non-copy commands. */
     uint32_t bld[6];
     uint32_t csp;           /* raw guest $sp at copy time (diagnostic) */
+    int8_t   dma_ch;        /* DMA channel that fed the command, -1 = CPU store (PS1B-101) */
 } GpuGp0RingEntry;
 
 uint64_t gpu_gp0_ring_total(void);
