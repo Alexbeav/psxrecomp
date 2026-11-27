@@ -9093,6 +9093,11 @@ static void depth24_cutover_tick(int depth24) {
  *
  * Optional short cutover blank: full-frame black for 1–2 presents on movie
  * start / long idle resume only (see depth24_cutover_tick). */
+static uint32_t depth24_present_margin(void) {
+    return (g_video_fmv_crop && !g_video_depth24_trailing_margin_set)
+        ? 0u : (uint32_t)g_video_depth24_trailing_margin;
+}
+
 static void depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
                                   uint32_t w) {
     if (!di || !buf || w == 0u)
@@ -9101,16 +9106,42 @@ static void depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
      * columns (the same code depth24_present_hold_exec_test renders). */
     /* Cropped to the picture, the fixed margin applies only where the title
      * set one; otherwise only an uncovered upload span is blanked. */
-    const uint32_t margin =
-        (g_video_fmv_crop && !g_video_depth24_trailing_margin_set)
-            ? 0u : (uint32_t)g_video_depth24_trailing_margin;
-    const uint32_t rows = gpu_depth24_stage_scanout(di, buf, w, margin);
+    const uint32_t rows = gpu_depth24_stage_scanout(di, buf, w,
+                                                    depth24_present_margin());
     if (rows == 0u || w < 8u || s_d24_cutover_blank <= 0)
         return;
     s_d24_cutover_blank--;
     const size_t count = (size_t)w * di->screen_height;
     for (size_t i = 0; i < count; i++)
         buf[i] = 0xFF000000u;
+}
+
+/* The depth24 frame as the CPU present stages it (PS1B-121/123): the same
+ * canvas, row mask and trailing blank the window shows, at the present size
+ * (display width x screen height). The debug captures read this instead of
+ * decoding the GP1(07h) band themselves, so a capture of a 24-bit frame is
+ * the player's picture. Read-only: it does not consume the cutover blank,
+ * and reports whether the next present is one (`cutover`). */
+extern "C" int psx_depth24_present_capture(uint32_t *buf, size_t cap,
+                                           uint32_t *out_w, uint32_t *out_h,
+                                           int *cutover)
+{
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (!buf || !out_w || !out_h || !di.depth24 || di.disabled ||
+        di.width == 0u || di.height == 0u)
+        return 0;
+    const uint32_t w = di.width;
+    const uint32_t h = psx_display_present_height(1, di.height, di.screen_height);
+    if (h == 0u || (size_t)w * h > cap)
+        return 0;
+    if (gpu_depth24_stage_scanout(&di, buf, w, depth24_present_margin()) == 0u)
+        return 0;
+    *out_w = w;
+    *out_h = h;
+    if (cutover)
+        *cutover = s_d24_cutover_blank > 0;
+    return (int)(w * h);
 }
 
 enum {
@@ -10227,7 +10258,19 @@ static void headless_present_image_ring_capture(void) {
     if (!present_image_ring_accepting()) return;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
-    if (di.disabled || di.width == 0 || di.height == 0 || di.depth24) return;
+    if (di.disabled || di.width == 0 || di.height == 0) return;
+    /* A 24-bit frame is presented from the CPU staging (packed RGB888 never
+     * reaches a renderer surface), on every backend: ring that staging, so a
+     * headless run can see an FMV or a depth24 menu (PS1B-123). */
+    if (di.depth24) {
+        static std::vector<uint32_t> d24;
+        d24.resize((size_t)di.width * std::max(di.height, di.screen_height));
+        uint32_t dw = 0, dh = 0;
+        if (psx_depth24_present_capture(d24.data(), d24.size(), &dw, &dh, nullptr) > 0)
+            present_image_ring_push_argb((uint32_t)s_frame_count, d24.data(),
+                                         (int)dw, (int)dh, (int)dw);
+        return;
+    }
     const bool fmv_frame = !g_ws_engaged || gpu_ws_present_native_43() != 0;
 #ifndef PSX_SDL_NO_RENDER
     /* Render thread: the same capture, queued at this point of the frame
