@@ -15,7 +15,7 @@ def main():
     root = Path(__file__).resolve().parents[2]
     source = args.output.resolve() / 'src'
     source.mkdir(parents=True, exist_ok=True)
-    body = '''/* BIOS SHA256: fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57 */
+    body = '''/* BIOS SHA256: 32dbc89c2e620c9a671fabe05772c3ae0ab38e4d15b4fdeeb6f7ca07093ef8c3 */
 void OpenBIOS_func_1FC03A78(CPUState* cpu);
 void OpenBIOS_func_1FC03A78(CPUState* cpu) { original_request(cpu); }
 void continuation(CPUState* cpu) { OpenBIOS_func_1FC03A78(cpu); }
@@ -80,7 +80,7 @@ file(WRITE "${{CMAKE_CURRENT_BINARY_DIR}}/selected.txt" "${{_sources}}")
     (source / 'RetailBIOS_full.c').write_text('void retail_bios(void) {}\n', encoding='utf-8')
     configure('retail-bios-default', 'ENHANCED', other_bios=True)
     configure('retail-bios-on', 'ENHANCED', 'ON', other_bios=True)
-    bios.write_text(body.replace('fabe498f', '00000000'), encoding='utf-8')
+    bios.write_text(body.replace('32dbc89c', '00000000'), encoding='utf-8')
     configure('wrong-image', 'ENHANCED', 'ON', error='audited BIOS image')
     bios.write_text(body.replace('void OpenBIOS_func_1FC03A78(CPUState* cpu) {',
                                  'void missing_read_body(CPUState* cpu) {'), encoding='utf-8')
