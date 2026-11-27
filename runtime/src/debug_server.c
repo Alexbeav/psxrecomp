@@ -136,6 +136,16 @@ extern void     psx_write_byte(uint32_t addr, uint8_t val);
 static sock_t s_listen  = SOCK_INVALID;
 static sock_t s_client  = SOCK_INVALID;
 static int    s_port    = DEFAULT_DEBUG_PORT;
+
+/* The serving process, reported in the LISTENING line and in ping (PS1B-194). */
+static unsigned long debug_server_pid(void)
+{
+#ifdef _WIN32
+    return (unsigned long)GetCurrentProcessId();
+#else
+    return (unsigned long)getpid();
+#endif
+}
 static int    s_listen_err = 0;   /* platform socket error captured by init */
 #ifdef _WIN32
 static int    s_wsa_started;
@@ -5206,11 +5216,13 @@ static void handle_ping(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,"
              "\"dispatch_miss_total\":%llu,"
              "\"dispatch_miss_unique\":%d,"
-             "\"segment_miss_total\":%llu}",
+             "\"segment_miss_total\":%llu,"
+             "\"port\":%d,\"pid\":%lu}",
              id, (unsigned long long)s_frame_count,
              (unsigned long long)s_unknown_seq,
              s_unknown_unique_count,
-             (unsigned long long)psx_segment_miss_total());
+             (unsigned long long)psx_segment_miss_total(),
+             s_port, debug_server_pid());
 }
 
 static void handle_frame(int id, const char *json)
@@ -17255,7 +17267,9 @@ malformed:
 void debug_server_init(int port)
 {
     if (s_listen != SOCK_INVALID) return;
-    if (port > 0) s_port = port;
+    /* 0 = an OS-assigned port, learned after bind (PS1B-194); a negative
+     * port keeps the compile-time default. */
+    if (port >= 0) s_port = port;
 
     /* Deterministic cold-boot controller probe. Unlike a TCP set_input command,
      * which can only arrive after the guest has already started polling, this
@@ -17410,6 +17424,25 @@ void debug_server_init(int port)
      * fills the queue and every subsequent probe gets RST/ConnectionRefused.
      * 16 leaves room for a few probes to queue while we investigate. This
      * is observability infrastructure, not a freeze fix. */
+    if (s_port == 0) {
+        /* Port 0: the OS chose the port; learn it before advertising it. */
+        struct sockaddr_in bound;
+#ifdef _WIN32
+        int bound_len = (int)sizeof(bound);
+#else
+        socklen_t bound_len = (socklen_t)sizeof(bound);
+#endif
+        memset(&bound, 0, sizeof(bound));
+        if (getsockname(s_listen, (struct sockaddr *)&bound, &bound_len) != 0) {
+            s_listen_err = sock_error();
+            fprintf(stdout, "psxrecomp: debug server getsockname FAILED (%d)\n", s_listen_err);
+            sock_close(s_listen);
+            s_listen = SOCK_INVALID;
+            debug_server_shutdown();
+            return;
+        }
+        s_port = ntohs(bound.sin_port);
+    }
     listen(s_listen, 16);
     if (!psx_debug_socket_nonblocking(s_listen, 1)) {
         s_listen_err = sock_error();
@@ -17417,8 +17450,10 @@ void debug_server_init(int port)
         s_listen = SOCK_INVALID;
         return;
     }
-    fprintf(stdout, "psxrecomp: debug server LISTENING on 127.0.0.1:%d\n",
-            s_port);
+    /* pid names the process that owns the port, so a client can refuse a
+     * foreign responder (PS1B-194). */
+    fprintf(stdout, "psxrecomp: debug server LISTENING on 127.0.0.1:%d pid=%lu\n",
+            s_port, debug_server_pid());
 
     /* Always-on wall-time phase sampler (phase_profile). Own thread: the
      * server pumps on the main thread, so sampling must not live there. */
@@ -17797,10 +17832,17 @@ static int io_thread_main(void *arg)
         if (rl < 0) { sock_close(c); continue; }
         if (rl > 0 && req[rl - 1] == '\r') req[rl - 1] = '\0';
 
-        /* Lock-free liveness fast-path (survives an emu-thread freeze). */
+        /* Lock-free liveness fast-path (survives an emu-thread freeze). It
+         * names the port and process it came from (PS1B-194): s_port and the
+         * pid are fixed once listening, so a client can tell which runtime
+         * answered. The request's id is echoed like every other reply. */
         if (strstr(req, "\"ping\"")) {
-            const char *pong = "{\"id\":0,\"ok\":true,\"pong\":true,\"io_thread\":true}\n";
-            send_all_blocking(c, pong, strlen(pong));
+            char pong[160];
+            int pl = snprintf(pong, sizeof(pong),
+                              "{\"id\":%d,\"ok\":true,\"pong\":true,\"io_thread\":true,"
+                              "\"port\":%d,\"pid\":%lu}\n",
+                              json_get_int(req, "id", 0), s_port, debug_server_pid());
+            if (pl > 0 && pl < (int)sizeof(pong)) send_all_blocking(c, pong, (size_t)pl);
             sock_close(c);
             continue;
         }

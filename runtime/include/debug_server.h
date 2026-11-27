@@ -81,7 +81,8 @@ typedef struct {
 /* ---- Public API (same names as NES version) ---- */
 
 /* Initialize the server. Call once at startup.
- * port=0 uses the default (4370). */
+ * port=0 binds an OS-assigned port (printed in the LISTENING line with the
+ * pid, and reported by ping); a negative port keeps the compile-time default. */
 void debug_server_init(int port);
 
 /* Opt-in PSXRTI1 digital or PSXRTI2 DualShock route, validated before guest execution. First record is
@@ -102,6 +103,11 @@ int debug_server_requested(void);
 /* Reconcile listener policy after every session's mod activation. Keeps an
  * enabled listener, starts a newly enabled one, and closes a disabled one. */
 void debug_server_apply_request(int port);
+/* Debug port precedence (PS1B-194): --debug-port (cli >= 0), then
+ * PSX_DEBUG_PORT (decimal 0..65535; anything else is ignored), then the
+ * configured port (game.toml [runtime] debug_port or the compile-time
+ * default). 0 = OS-assigned. */
+int debug_server_resolve_port(int configured, const char *env, int cli);
 
 /* Current listener status for heartbeat diagnostics. error is the platform
  * socket error captured by init, or 0 when the listener is active. */

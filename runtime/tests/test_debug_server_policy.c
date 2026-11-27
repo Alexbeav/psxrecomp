@@ -36,6 +36,17 @@ int main(void) {
     CHECK(listening && starts==2 && last_port==4488);
     env_choice(NULL);debug_server_apply_request(4488);
     CHECK(!listening && stops==2);
-    if(!failures)puts("PASS debug server session policy: late enable, reuse, disable, overrides");
+    /* PS1B-194: --debug-port beats PSX_DEBUG_PORT beats the configured port;
+     * 0 (OS-assigned) is a real choice at every level; junk env is ignored. */
+    CHECK(debug_server_resolve_port(4370, NULL, -1) == 4370);
+    CHECK(debug_server_resolve_port(4370, "", -1) == 4370);
+    CHECK(debug_server_resolve_port(4370, "4555", -1) == 4555);
+    CHECK(debug_server_resolve_port(4370, "0", -1) == 0);
+    CHECK(debug_server_resolve_port(4370, "4555", 4600) == 4600);
+    CHECK(debug_server_resolve_port(4370, "4555", 0) == 0);
+    CHECK(debug_server_resolve_port(4370, "45x", -1) == 4370);
+    CHECK(debug_server_resolve_port(4370, "70000", -1) == 4370);
+    CHECK(debug_server_resolve_port(4370, "-1", -1) == 4370);
+    if(!failures)puts("PASS debug server session policy: late enable, reuse, disable, overrides, port precedence");
     return failures?1:0;
 }

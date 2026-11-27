@@ -23,6 +23,11 @@
 #include <sstream>
 #include <system_error>
 #include <tuple>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -3157,7 +3162,14 @@ bool ModPackageManager::save_state(std::string* error) const {
         set_error(error, "cannot create mods directory: " + ec.message());
         return false;
     }
-    const fs::path temp = state_dir() / "state.toml.tmp";
+    /* One temporary per process: two instances of a product start together (PS1B-194)
+     * and a shared "state.toml.tmp" made the second refuse to start. */
+#ifdef _WIN32
+    const long pid = (long)_getpid();
+#else
+    const long pid = (long)getpid();
+#endif
+    const fs::path temp = state_dir() / ("state.toml." + std::to_string(pid) + ".tmp");
     const fs::path final = state_dir() / "state.toml";
     std::ofstream out(temp, std::ios::trunc);
     if (!out) {
