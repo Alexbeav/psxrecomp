@@ -684,6 +684,8 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_immediate_guards.py")
         add_test(NAME mirror_pc_preserved_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mirror_pc_preserved_guards.py")
+        add_test(NAME ws_headless_engage_order_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ws_headless_engage_order.py")
         add_test(NAME segment_miss_wiring_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_miss_wiring.py")
         add_test(NAME overlay_unit_defer_wiring_test COMMAND "${Python3_EXECUTABLE}"
