@@ -4370,3 +4370,9 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(memory_spu_word_access_test PRIVATE -O2 -fwhole-program)
     add_test(NAME memory_spu_word_access_test COMMAND memory_spu_word_access_test)
 endif()
+
+# PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
+add_test(NAME runtime_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=runtime_test_temp_isolation
+         -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_temp.cmake")
+psx_isolate_test_temp()

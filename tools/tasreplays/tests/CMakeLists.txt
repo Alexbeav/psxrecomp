@@ -199,3 +199,7 @@ foreach(_t IN LISTS _tas_targets)
         target_sources(${_t} PRIVATE "${_tas_runtime}/tests/merge_link_stubs.c")
     endif()
 endforeach()
+
+# PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/psx_test_temp.cmake")
+psx_isolate_test_temp()
