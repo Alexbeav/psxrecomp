@@ -1626,9 +1626,12 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
     if (addr == 0x1F801814u) return gpu_read_gpustat();
     /* MDEC: 0x1F801820, 0x1F801824 */
     if (addr == 0x1F801820u || addr == 0x1F801824u) return mdec_read(addr);
-    /* SPU: 0x1F801C00..0x1F801FFF */
+    /* SPU: 0x1F801C00..0x1F801FFF. A word load is two halfword register
+     * reads, addr then addr+2: a 32-bit ENDX load returns voices 16-23 in
+     * bits 16-23 (PS1B-604). */
     if (addr >= 0x1F801C00u && addr <= 0x1F801FFFu) {
-        return spu_read(addr);
+        uint32_t lo = spu_read(addr) & 0xFFFFu;
+        return lo | ((spu_read(addr | 2u) & 0xFFFFu) << 16);
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
@@ -1704,9 +1707,12 @@ static void mmio_write32(uint32_t addr, uint32_t val) {
     if (addr == 0x1F801814u) { gpu_write_gp1(val); return; }
     /* MDEC: 0x1F801820, 0x1F801824 */
     if (addr == 0x1F801820u || addr == 0x1F801824u) { mdec_write(addr, val); return; }
-    /* SPU: 0x1F801C00..0x1F801FFF */
+    /* SPU: 0x1F801C00..0x1F801FFF. The SPU sits on a 16-bit bus: a word
+     * store is two halfword register writes, addr then addr+2, so a 32-bit
+     * KON/KOFF store reaches voices 16-23 (PS1B-604). */
     if (addr >= 0x1F801C00u && addr <= 0x1F801FFFu) {
-        spu_write(addr, val);
+        spu_write(addr, val & 0xFFFFu);
+        spu_write(addr | 2u, val >> 16);
         return;
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
