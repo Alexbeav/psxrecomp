@@ -1495,12 +1495,31 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-342: a build step that fails is built once more on its own, so a
+        # compiler that exits non-zero with no output (clang under concurrent
+        # builds) is told apart from a real error, and the log records the
+        # free memory and compiler count at the failure. A real Ninja build.
+        if(CMAKE_GENERATOR MATCHES "Ninja")
+            add_test(
+                NAME cli_build_failed_step
+                COMMAND ${Python3_EXECUTABLE} -B
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_build_failed_step.py
+                        --cmake ${CMAKE_COMMAND} --ninja ${CMAKE_MAKE_PROGRAM} --cc ${CMAKE_C_COMPILER}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(cli_build_failed_step PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP:")
+        endif()
         # update_disc_set.py writes in-project discs relative with '/' so one
         # game.toml resolves on every host.
         add_test(
             NAME update_disc_set_paths
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_update_disc_set_paths.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-583: the audit tools resolve a game.toml in its own folder.
+        add_test(
+            NAME audit_config_game_root
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_audit_config_root.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
         # reported at configure, a profile/CMake disagreement is an error, and
@@ -1769,9 +1788,9 @@ if(BUILD_TESTING)
         set(_psx_tools_tests "")
         foreach(_t IN ITEMS
                 menu_scan cursor_writers gpu_frame pad_trace pad_delivery
-                aligned_lzss_banks static_fragment_variant_keys
+                aligned_lzss_banks static_fragment_variant_keys host_bash_callers
                 mips_tagged_relocations overlay_widescreen_callbacks
-                duckstation_oracle)
+                duckstation_oracle gate_launcher)
             add_test(NAME tools_${_t}
                 COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
                     -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
@@ -1779,6 +1798,8 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
             list(APPEND _psx_tools_tests tools_${_t})
         endforeach()
+        set_tests_properties(tools_host_bash_callers PROPERTIES
+            ENVIRONMENT "PSX_TEST_CMAKE=${CMAKE_COMMAND}")
         if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
             add_test(NAME tools_psx_chd
                 COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
@@ -1986,6 +2007,10 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+
+        # PS1B-485: without recomp-ui the BIOS stems test prints "SKIP:" and returns 0; read that as Skipped.
+        set_tests_properties(codegen_host_bios_stems PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:")
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
@@ -2551,3 +2576,15 @@ add_test(
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 endif()
+
+# PS1B-590: assert() stays live in every test executable, whatever the build type.
+add_executable(recompiler_test_asserts_live "${CMAKE_CURRENT_LIST_DIR}/../cmake/test_asserts_live.c")
+add_test(NAME recompiler_test_asserts_live COMMAND recompiler_test_asserts_live)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_asserts.cmake")
+psx_keep_test_asserts()
+
+# PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
+add_test(NAME recompiler_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=recompiler_test_temp_isolation
+         -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_temp.cmake")
+psx_isolate_test_temp()

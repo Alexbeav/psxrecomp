@@ -22,6 +22,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import host_bash
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -31,20 +33,11 @@ from test_program_set import SET_TOML, make_set  # noqa: E402
 # The three shell helpers are the ones of test_package_setup_bios_hint.py. They
 # are repeated here because that module does not import on Python 3.9 (the
 # setup tools' floor), and this test must run there.
-def find_bash():
-    candidates = []
-    found = shutil.which("bash")
-    if found:
-        candidates.append(found)
-    if os.name == "nt":
-        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), r"C:\Program Files"):
-            candidates += [os.path.join(base, "Git", "usr", "bin", "bash.exe"),
-                           os.path.join(base, "Git", "bin", "bash.exe")]
-    for c in candidates:
-        # System32\bash.exe is the WSL launcher, not a shell for this repo's scripts.
-        if os.path.isfile(c) and "system32" not in c.lower():
-            return c
-    return None
+def find_bash() -> str | None:
+    try:
+        return host_bash.find_bash("the program-set package test", verify_msys=True)
+    except AssertionError:
+        return None
 
 
 def shell_env(bash):
@@ -398,6 +391,10 @@ def exe_name_pick(tmp: Path, zipped: bool) -> str:
             emitters = make_package_source(root)
             build = root / "build-setup"
             (build / "Resident_Evil_2").rename(build / "Resident_Evil_2.exe")
+            # A Windows host ships the MinGW emitters; since PS1B-381 the
+            # packager finds the .exe host and asks for them.
+            for tool in ("psxrecomp-game", "psxrecomp-bios"):
+                (emitters / tool).rename(emitters / (tool + ".exe"))
             assert sorted(p.name for p in build.iterdir() if p.name.startswith("Resident_Evil_2")) == [
                 "Resident_Evil_2.exe"]
             code, out = package(shell, root, emitters)

@@ -75,6 +75,9 @@ int input_route_session_event_receipt(uint8_t event,uint8_t disc_index,int resul
  * markers and the declared P1 device. Returns 0 and prints the reason when
  * the route is refused. */
 int input_route_session_admit(const char *path);
+/* The reason PSX_INPUT_ROUTE_PAD_ACK_MODEL cannot qualify a DualShock route,
+ * or NULL. Admission and the diagnostic preload share it. */
+const char *input_route_dualshock_ack_refusal(void);
 /* Diagnostic product: begin recording to `path`. Returns 0 when refused. */
 int input_route_session_record_begin(const char *path);
 /* After the BIOS HLE plan is fixed: compare the admitted identity (replay) or

@@ -36,6 +36,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from host_bash import find_bash  # noqa: E402
+
 from .gitops import CmdResult, _git, _is_git_repo, ensure_actions_registers_release_yml, push
 from .models import MigrateOptions
 
@@ -57,6 +60,13 @@ class BundledMigrateOptions:
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict | None = None) -> tuple[int, str]:
+    if cmd and cmd[0] == "bash":
+        # A bare "bash" on Windows is the WSL launcher, found in System32
+        # before PATH; it cannot run these scripts (PS1B-450).
+        try:
+            cmd = [find_bash("the bundled-release migration", verify_msys=True), *cmd[1:]]
+        except AssertionError as exc:
+            return 127, str(exc)
     r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
                        encoding="utf-8", errors="replace", env=env, check=False)
     return r.returncode, (r.stdout + r.stderr)

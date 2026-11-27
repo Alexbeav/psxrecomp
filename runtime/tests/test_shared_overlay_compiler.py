@@ -65,7 +65,10 @@ def main():
 #include <cstdio>
 #include <windows.h>
 #include "host_path.h"
+#include "psx_path_utf8.h"
 #include "psx_sha256.h"
+#include "psx_sha256_file.h"
+#include "psx_host_long_path.h"
 ''' + hash_function+'\n'+resolver+'''
 int main(int argc,char** argv) {
     std::filesystem::path tk_dir(argv[1]);
@@ -79,7 +82,7 @@ int main(int argc,char** argv) {
 }
 ''',encoding='utf-8')
         subprocess.run([compiler,'-std=c++17','-Werror=return-type','-static','-I'+str(root/'include'),
-                        '-I'+str(root.parent/'recompiler/include'),str(src),str(root/'src/psx_sha256.c'),'-o',str(probe)],env=env,check=True)
+                        '-I'+str(root.parent/'recompiler/include'),str(src),str(root/'src/psx_sha256.c'),str(root/'src/psx_sha256_file.cpp'),'-o',str(probe),'-lbcrypt'],env=env,check=True)
         if args.verify_toolkit:
             checked=subprocess.run([str(probe),str(args.verify_toolkit.resolve())],cwd=cwd,env=env,text=True,capture_output=True,check=True)
             assert Path(checked.stdout)==Path((args.verify_toolkit/'compiler.txt').read_text().strip())
@@ -133,12 +136,22 @@ int main(int argc,char** argv) {
         store.rename(parked)
         try: run(False,str(store))
         finally: parked.rename(store)
+        # PS1B-620: a store below a folder outside the ANSI code page (a profile
+        # name such as this one) is valid; the narrow fopen the check used refused it.
+        wide=base/'\u6771\u4eac profile'/store.name
+        shutil.copytree(store,wide)
+        (toolkit/'compiler.txt').write_bytes((str(wide/'bin/clang.exe')+'\n').encode('utf-8'))
+        r=subprocess.run([str(probe),str(toolkit)],cwd=cwd,env=env,capture_output=True)
+        assert r.returncode==0,(r.returncode,r.stderr.decode('utf-8','replace'))
+        assert Path(r.stdout.decode('utf-8'))==wide/'bin/clang.exe',r.stdout
+        (toolkit/'compiler.txt').write_text(str(bundled)+'\n')
+        run(True)
         marker.write_text('invalid\n')
         run(False,'compiler-store.sha256')
         marker.write_bytes((content+'\n').encode())
         (toolkit/'compiler.txt').unlink()
         run(False,'compiler.txt')
-        print('PASS: enclosing void startup, valid shared invocation, corrupt support, missing member/compiler/manifest/store, bad marker/config, host decoy rejected')
+        print('PASS: enclosing void startup, valid shared invocation, corrupt support, missing member/compiler/manifest/store, bad marker/config, host decoy rejected, non-ANSI store folder accepted')
 
 
 if __name__=='__main__':

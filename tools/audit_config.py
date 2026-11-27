@@ -110,8 +110,6 @@ def load(config_path) -> AuditConfig:
     if not config_path.exists():
         raise FileNotFoundError(f"audit config not found: {config_path}")
 
-    root = _find_project_root(config_path)
-
     with open(config_path, "rb") as f:
         cfg = tomllib.load(f)
 
@@ -119,6 +117,13 @@ def load(config_path) -> AuditConfig:
     prog = cfg.get("program") or cfg.get("game")
     if prog is None:
         raise KeyError(f"{config_path}: missing [program] or [game] block")
+
+    # PS1B-583: a game.toml's own folder is its root, as in the recompiler's
+    # load_game_config; only a BIOS profile walks up to a root marker.
+    if "game" in cfg or config_path.name == "game.toml":
+        root = config_path.parent
+    else:
+        root = _find_project_root(config_path)
 
     name = prog["name"]
     rom_field = prog.get("rom") or prog.get("exe")

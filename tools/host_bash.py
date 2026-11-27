@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find the bash that runs this repository's shell scripts in a test.
+"""Find the host bash for this repository's tools and tests.
 
 A Windows host can hold three programs named bash.exe. Git for Windows' bash
 is an MSYS shell: it takes the Windows paths a test gives it. The other two
@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import re
+import subprocess
 
 
 GIT_BASH_ENV = "PSX_GIT_BASH"
@@ -33,21 +35,22 @@ DEFAULT_SYSTEM_ROOT = "C:\\Windows"
 
 
 def _fold(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
+    return os.path.normcase(os.path.realpath(path)).casefold()
 
 
 def is_wsl_launcher(path: str, environ=None) -> bool:
     """True for a bash.exe that starts WSL: any below %SystemRoot%, and the
     app alias, which Windows keeps in a folder named Microsoft\\WindowsApps."""
     environ = os.environ if environ is None else environ
-    folded = _fold(path)
     root = _fold(environ.get("SystemRoot") or environ.get("windir") or DEFAULT_SYSTEM_ROOT)
-    if folded == root or folded.startswith(root.rstrip(os.sep) + os.sep):
-        return True
-    parts = folded.split(os.sep)
-    return (len(parts) >= 3
-            and parts[-2] == os.path.normcase("WindowsApps")
-            and parts[-3] == os.path.normcase("Microsoft"))
+    # Keep the alias's original folder as well as its resolved target.
+    for folded in (os.path.normcase(os.path.abspath(path)).casefold(), _fold(path)):
+        if folded == root or folded.startswith(root.rstrip(os.sep) + os.sep):
+            return True
+        parts = folded.split(os.sep)
+        if len(parts) >= 3 and parts[-2] == "windowsapps" and parts[-3] == "microsoft":
+            return True
+    return False
 
 
 def windows_candidates(environ) -> list[str]:
@@ -82,30 +85,47 @@ def windows_candidates(environ) -> list[str]:
     return ordered
 
 
-def find_bash(purpose: str, environ=None, windows: bool | None = None) -> str:
-    """The bash to run a repository script with, for the test named `purpose`.
+def is_msys_bash(path: str, environ=None) -> bool:
+    """Validate a non-launcher with the same MSYS checks as the replay tools."""
+    if is_wsl_launcher(path, environ) or not os.path.isfile(path):
+        return False
+    for argv, marker in (([path, "-c", "echo $MSYSTEM"], r"MINGW|MSYS|UCRT|CLANG"),
+                         ([path, "--version"], r"msys|mingw")):
+        try:
+            output = subprocess.run(argv, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=60,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                    env=environ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if re.search(marker, output or "", re.I):
+            return True
+    return False
 
-    `environ` and `windows` exist for the test of this function; a caller
-    leaves them out.
+
+def find_bash(purpose: str, environ=None, windows: bool | None = None,
+              *, verify_msys: bool = False) -> str:
+    """Choose one host shell. Windows launchers are never probed or returned.
+
+    Production callers use verify_msys to retain the replay tools' MSYS check.
+    The path-policy test uses authored empty files without starting a shell.
     """
     environ = os.environ if environ is None else environ
     windows = (os.name == "nt") if windows is None else windows
-
+    explicit = environ.get(GIT_BASH_ENV)
+    if explicit:
+        if windows and is_wsl_launcher(explicit, environ):
+            raise AssertionError(f"{GIT_BASH_ENV} names a WSL launcher: {explicit}")
+        if not os.path.isfile(explicit):
+            raise AssertionError(f"{GIT_BASH_ENV} names a file that does not exist: {explicit}")
+        if windows and verify_msys and not is_msys_bash(explicit, environ):
+            raise AssertionError(f"{GIT_BASH_ENV} is not a Git for Windows bash.exe: {explicit}")
+        return explicit
     if not windows:
         found = shutil.which("bash", path=environ.get("PATH"))
         if found:
             return found
         raise AssertionError(f"bash is required for {purpose}; there is none on PATH")
-
-    explicit = environ.get(GIT_BASH_ENV)
-    if explicit:
-        if is_wsl_launcher(explicit, environ):
-            raise AssertionError(
-                f"{GIT_BASH_ENV} names a WSL launcher, which cannot run the scripts "
-                f"of {purpose}: {explicit}")
-        if not os.path.isfile(explicit):
-            raise AssertionError(f"{GIT_BASH_ENV} names a file that does not exist: {explicit}")
-        return explicit
 
     launchers = []
     for candidate in windows_candidates(environ):
@@ -113,14 +133,11 @@ def find_bash(purpose: str, environ=None, windows: bool | None = None) -> str:
             if os.path.lexists(candidate):
                 launchers.append(candidate)
             continue
-        if os.path.isfile(candidate):
+        if os.path.isfile(candidate) and (not verify_msys or is_msys_bash(candidate, environ)):
             return candidate
-
     if launchers:
-        found = ("The only bash.exe found starts WSL (" + ", ".join(launchers) + "); "
-                 "it runs a script in Linux with Windows paths and fails with exit 127. ")
+        found = "The only bash.exe found starts WSL (" + ", ".join(launchers) + "). "
     else:
-        found = "No bash.exe was found. "
-    raise AssertionError(
-        f"Git for Windows bash is required for {purpose}. " + found
-        + f"Install Git for Windows, or set {GIT_BASH_ENV} to its bash.exe.")
+        found = "No suitable bash.exe was found. "
+    raise AssertionError(f"Git for Windows bash is required for {purpose}. " + found
+                         + f"Install Git for Windows, or set {GIT_BASH_ENV} to its bash.exe.")

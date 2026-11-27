@@ -37,7 +37,9 @@ def main():
         print(r.stdout,r.stderr[-4000:],flush=True)
         if r.returncode: raise subprocess.CalledProcessError(r.returncode,command)
     flags=['-std=gnu11','-O'+args.optimization,'-DPSX_SDL3=1',*([] if args.debug_tools else ['-DPSX_NO_DEBUG_TOOLS=1']),
-           '-ffunction-sections','-fdata-sections','-I',fw/'runtime/include','-I',fw/'runtime/src']
+           '-ffunction-sections','-fdata-sections','-I',fw/'runtime/include','-I',fw/'runtime/src',
+           # psx_host_dir.h -> psx_host_long_path.h -> host_path.h (PS1B-703)
+           '-I',fw/'recompiler/include']
     for include in args.sdl_include.split(';'):
         if include: flags+=['-I',include]
     sources=[('probe',args.fixture.resolve() if args.fixture else fw/'runtime/tests/test_gl_texture_filter.c'),

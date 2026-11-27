@@ -28,6 +28,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 HOST_C = ROOT / "host" / "psxrecomp_codegen_host.c"
 BEGIN, END = "rem sidecar-handover-begin", "rem sidecar-handover-end"
+ROOT_SETTINGS = "[video]\ninternal_resolution = 3\n"
+PRODUCT_SETTINGS = "[video]\ninternal_resolution = 1\n"
 
 PROBE = """
 #include "psxrecomp_codegen_host.c"
@@ -123,8 +125,10 @@ def main() -> int:
                 if root_bios is not None:
                     (proj / "bios.cfg").write_text(root_bios + "\n", encoding="utf-8")
                     (proj / "disc.cfg").write_text(disc + "\n", encoding="utf-8")
+                    (proj / "settings.toml").write_text(ROOT_SETTINGS, encoding="utf-8")
                 if product is not None:
                     (build_dir / "bios.cfg").write_text(product, encoding="utf-8")
+                    (build_dir / "settings.toml").write_text(PRODUCT_SETTINGS, encoding="utf-8")
                 part = lines[lines.index(BEGIN):lines.index(END) + 1]
                 script = proj / "_scratch" / "handover-only.cmd"
                 script.parent.mkdir(exist_ok=True)
@@ -136,9 +140,17 @@ def main() -> int:
                 target = build_dir / "bios.cfg"
                 got_bios = target.read_text(encoding="utf-8").strip() if target.is_file() else None
                 disc_ok = root_bios is None or (build_dir / "disc.cfg").is_file()
-                if res.returncode != 0 or got_bios != expected or not disc_ok:
-                    print("FAIL: %s\n  expected=%r got=%r disc.cfg=%s rc=%d %s"
-                          % (why, expected, got_bios, disc_ok, res.returncode, res.stdout + res.stderr))
+                # Settings edited in the setup launcher reach the product too;
+                # settings the product already has stay.
+                want_settings = (PRODUCT_SETTINGS if product is not None
+                                 else ROOT_SETTINGS if root_bios is not None else None)
+                settings = build_dir / "settings.toml"
+                got_settings = settings.read_text(encoding="utf-8") if settings.is_file() else None
+                settings_ok = got_settings == want_settings
+                if res.returncode != 0 or got_bios != expected or not disc_ok or not settings_ok:
+                    print("FAIL: %s\n  expected=%r got=%r disc.cfg=%s settings.toml=%r (want %r) rc=%d %s"
+                          % (why, expected, got_bios, disc_ok, got_settings, want_settings,
+                             res.returncode, res.stdout + res.stderr))
                     failures += 1
                 else:
                     print(f"ok: {stem}: {why}")

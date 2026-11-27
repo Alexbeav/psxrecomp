@@ -1,6 +1,7 @@
 // Launcher input validation only. The guest/runtime SBI reader is unchanged.
 #pragma once
 #include "psx_sha256.h"
+#include "psx_host_dir.h"
 #include <array>
 #include <cctype>
 #include <filesystem>
@@ -149,7 +150,7 @@ inline std::filesystem::path import_sbi_setup(
         output << cue;
         output.close();
         if (!output) throw std::runtime_error("Cannot save the imported CUE file.");
-    } catch (...) { fs::remove_all(folder, ec); throw; }
+    } catch (...) { host_remove_tree(folder, ec); throw; }
     return fs::absolute(folder / "disc.cue");
 }
 } // namespace PSXRecompV4

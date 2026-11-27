@@ -1,4 +1,5 @@
 #include "psx_path_utf8.h"
+#include "psx_host_dir.h"
 #include "mod_runtime.h"
 #include "mod_command_registry.h"
 #include "host_launch_timing.h"
@@ -246,12 +247,15 @@ bool dependency_files(RuntimeMods& s, const std::filesystem::path& disc,
     if (!add(disc) || !add(resolve_disc_path(disc).data)) return false;
     std::error_code ec;
     size_t entries = 0;
-    for (std::filesystem::recursive_directory_iterator it(s.manager.root(), ec), end;
-         !ec && it != end; it.increment(ec)) {
-        if (++entries > 4096) return false;
-        if (it->is_regular_file(ec) && !add(it->path())) return false;
-    }
-    if (ec) return false;
+    bool refused = false;
+    host_visit_tree(s.manager.root(), ec, [&](const HostDirEntry& e) {
+        if (++entries > 4096 || (e.is_regular_file && !add(e.path))) {
+            refused = true;
+            return HostVisit::Stop;
+        }
+        return HostVisit::Continue;
+    });
+    if (refused || ec) return false;
     for (const auto& [id, versions] : s.manager.packages()) {
         (void)versions;
         const auto* package = s.manager.selected_package(id);
@@ -286,18 +290,19 @@ bool catalog_files(RuntimeMods& s, std::map<std::filesystem::path, std::string>&
     std::error_code ec;
     if (!std::filesystem::exists(s.manager.root(), ec)) return !ec;
     size_t entries = 0;
-    for (std::filesystem::recursive_directory_iterator it(s.manager.root(), ec), end;
-         !ec && it != end; it.increment(ec)) {
-        if (++entries > 4096) return false;
-        if (it->path().filename() != "manifest.toml") continue;
+    bool refused = false;
+    host_visit_tree(s.manager.root(), ec, [&](const HostDirEntry& e) {
+        if (++entries > 4096) { refused = true; return HostVisit::Stop; }
+        if (e.path.filename() != "manifest.toml") return HostVisit::Continue;
         std::string stamp;
-        if (!host_file_identity(it->path(), stamp)) {
-            if (!sha256_file(it->path(), stamp, nullptr)) return false;
+        if (!host_file_identity(e.path, stamp)) {
+            if (!sha256_file(e.path, stamp, nullptr)) { refused = true; return HostVisit::Stop; }
             stamp = "sha256:" + stamp;
         }
-        files[it->path()] = std::move(stamp);
-    }
-    return !ec && record_selection_file(s, files);
+        files[e.path] = std::move(stamp);
+        return HostVisit::Continue;
+    });
+    return !refused && !ec && record_selection_file(s, files);
 }
 
 bool prepared_ticket_matches(const std::filesystem::path& disc) {

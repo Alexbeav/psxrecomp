@@ -165,6 +165,32 @@ if(BUILD_TESTING)
     add_test(NAME debug_socket_shutdown_test COMMAND debug_socket_shutdown_test)
     set_tests_properties(debug_socket_shutdown_test PROPERTIES TIMEOUT 15)
 
+    # PS1B-620: store members past MAX_PATH or outside the ANSI code page.
+    add_executable(host_long_path_test tests/test_host_long_path.cpp src/psx_sha256.c)
+    target_include_directories(host_long_path_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
+    target_compile_features(host_long_path_test PRIVATE cxx_std_17)
+    psxrecomp_sha256_file(host_long_path_test)
+    add_test(NAME host_long_path_test COMMAND host_long_path_test)
+
+    # PS1B-703: directory walks, copies and removals past MAX_PATH.
+    add_executable(host_dir_test tests/test_host_dir.cpp)
+    target_include_directories(host_dir_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
+    target_compile_features(host_dir_test PRIVATE cxx_std_17)
+    find_package(Threads REQUIRED)
+    target_link_libraries(host_dir_test PRIVATE Threads::Threads)
+    add_test(NAME host_dir_test COMMAND host_dir_test)
+    set_tests_properties(host_dir_test PROPERTIES TIMEOUT 60)
+
+    # PS1B-574: GCC PGO profiles from a deep build folder stay under MAX_PATH.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME gcc_pgo_deep_folder_test COMMAND "${CMAKE_COMMAND}"
+            "-DPSXRECOMP_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "-DCC=${CMAKE_C_COMPILER}" "-DGEN=${CMAKE_GENERATOR}"
+            "-DMAKE=${CMAKE_MAKE_PROGRAM}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/pgo-deep"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/gcc_pgo_deep_folder_test.cmake")
+        set_tests_properties(gcc_pgo_deep_folder_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+    endif()
+
     add_executable(atomic_file_write_test tests/test_atomic_file_write.cpp)
     target_include_directories(atomic_file_write_test PRIVATE include)
     target_compile_features(atomic_file_write_test PRIVATE cxx_std_17)
@@ -297,7 +323,7 @@ if(BUILD_TESTING)
     add_executable(missing_sbi_report_test
         ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_report.cpp
         src/start_refusal.c)
-    target_include_directories(missing_sbi_report_test PRIVATE include)
+    target_include_directories(missing_sbi_report_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     add_test(NAME missing_sbi_report_test COMMAND missing_sbi_report_test)
     # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
     add_executable(netplay_lan_version_test
@@ -1753,14 +1779,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(hd_texture_pack_test
         tests/test_hd_texture_pack.cpp
         src/hd_texture_pack.cpp)
-    target_include_directories(hd_texture_pack_test PRIVATE include)
+    target_include_directories(hd_texture_pack_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     find_package(Threads REQUIRED)
     target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
     add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
     add_executable(duckstation_texture_pack_test
         tests/test_duckstation_texture_pack.cpp
         src/duckstation_texture_pack.cpp)
-    target_include_directories(duckstation_texture_pack_test PRIVATE include)
+    target_include_directories(duckstation_texture_pack_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     target_link_libraries(duckstation_texture_pack_test PRIVATE Threads::Threads)
     target_link_libraries(duckstation_texture_pack_test PRIVATE psx_texture_image_decode)
     add_test(NAME duckstation_texture_pack_test COMMAND duckstation_texture_pack_test)
@@ -1769,7 +1795,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(duckstation_texture_pack_cpp20_test
         tests/test_duckstation_texture_pack.cpp
         src/duckstation_texture_pack.cpp)
-    target_include_directories(duckstation_texture_pack_cpp20_test PRIVATE include)
+    target_include_directories(duckstation_texture_pack_cpp20_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     set_target_properties(duckstation_texture_pack_cpp20_test PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_link_libraries(duckstation_texture_pack_cpp20_test PRIVATE
@@ -2565,7 +2591,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # A cue, conventional raw image, or Steam .car image is a valid pick; each
     # must mount the same disc and identify off the same data track.
     add_executable(sbi_setup_test tests/test_sbi_setup.cpp src/psx_sha256.c)
-    target_include_directories(sbi_setup_test PRIVATE include)
+    target_include_directories(sbi_setup_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     add_test(NAME sbi_setup_test COMMAND sbi_setup_test ${CMAKE_CURRENT_BINARY_DIR}/sbi-setup-fixture)
 
     add_executable(disc_path_resolve_test
@@ -2733,7 +2759,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         src/psx_ram_geometry.c)
     target_include_directories(text_xlate_fix_only_test PRIVATE
         include
-        ../recompiler/lib/toml11)
+        ../recompiler/lib/toml11 ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
     add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
     add_executable(native_text_test tests/test_native_text.cpp
         src/native_text.cpp third_party/json11/json11.cpp)
@@ -2889,7 +2915,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     foreach(_resident_mode 0 1)
         add_executable(resident_preparation_${_resident_mode}_test
             tests/test_resident_preparation.cpp src/psx_sha256.c)
-        target_include_directories(resident_preparation_${_resident_mode}_test PRIVATE include)
+        target_include_directories(resident_preparation_${_resident_mode}_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
         target_compile_features(resident_preparation_${_resident_mode}_test PRIVATE cxx_std_17)
         target_compile_definitions(resident_preparation_${_resident_mode}_test PRIVATE
             PSX_NATIVE_RESIDENT_PREPARATION=${_resident_mode} PSX_DISABLE_NATIVE_SHA256=1)
@@ -3862,6 +3888,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME codegen_host_disc_cfg_handoff_test
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_disc_cfg_handoff.py)
+        # PS1B-485: without recomp-ui (RECOMP_UI_ROOT) it prints "SKIP:" and returns 0; read that as Skipped.
+        set_tests_properties(codegen_host_disc_cfg_handoff_test PROPERTIES
+                 SKIP_REGULAR_EXPRESSION "^SKIP:")
         # The hand-over to the product forces the launcher for a player and
         # honours a headless start (a gate that starts a kit's own exe needs
         # frames from the game it hands over to).
@@ -3893,6 +3922,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_portable_install.py
                          --compiler ${CMAKE_C_COMPILER})
         set_tests_properties(toolchain_portable_install_test PROPERTIES SKIP_RETURN_CODE 77)
+        # PS1B-416: on Linux and macOS a pack in use (held by the CLI or the
+        # setup host that put it on PATH) is neither renamed nor replaced by an
+        # install or a prune. On Windows it prints "SKIP:"; read that as Skipped.
+        add_test(NAME toolchain_pack_in_use_test
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_pack_in_use.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_pack_in_use_test PROPERTIES
+                 SKIP_REGULAR_EXPRESSION "^SKIP:")
         # PS1B-410: the toolchain check does not depend on the length of PATH
         # (it failed past about 7,600 characters), and activating a pack does
         # not grow PATH.
@@ -4073,8 +4111,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME release_stage_notices_test
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_notices.py)
-        find_program(PSX_PACKAGE_TEST_BASH NAMES bash
-            HINTS "C:/Program Files/Git/bin")
+        # The shared finder never hands these tests the WSL launcher (PS1B-450).
+        include("${CMAKE_CURRENT_SOURCE_DIR}/host_bash.cmake")
+        psxrecomp_find_bash(PSX_PACKAGE_TEST_BASH _psx_package_test_launcher)
         add_test(NAME package_execution_stage_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_package_execution_stage.py
@@ -4140,7 +4179,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # stages the cache tree, builds the fixture and the test, and runs it — so
     # register THAT rather than reimplementing its fixture staging here.
     if(UNIX)
-        find_program(BASH_EXECUTABLE bash)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/host_bash.cmake")
+        psxrecomp_find_bash(BASH_EXECUTABLE _bash_launcher)
         if(BASH_EXECUTABLE)
             add_test(NAME overlay_posix_test
                      COMMAND ${BASH_EXECUTABLE}
@@ -4380,3 +4420,15 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(memory_spu_word_access_test PRIVATE -O2 -fwhole-program)
     add_test(NAME memory_spu_word_access_test COMMAND memory_spu_word_access_test)
 endif()
+
+# PS1B-590: assert() stays live in every test executable, whatever the build type.
+add_executable(runtime_test_asserts_live "${CMAKE_CURRENT_LIST_DIR}/../cmake/test_asserts_live.c")
+add_test(NAME runtime_test_asserts_live COMMAND runtime_test_asserts_live)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_asserts.cmake")
+psx_keep_test_asserts()
+
+# PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
+add_test(NAME runtime_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=runtime_test_temp_isolation
+         -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_temp.cmake")
+psx_isolate_test_temp()

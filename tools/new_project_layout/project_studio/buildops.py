@@ -16,9 +16,13 @@ import re
 import shutil
 import subprocess
 import threading
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from host_bash import find_bash
 
 from .gitops import CmdResult
 
@@ -133,7 +137,9 @@ def _run_stream(
     *,
     log: LogFn | None = None,
     env: dict[str, str] | None = None,
+    lines_out: list[str] | None = None,
 ) -> CmdResult:
+    """lines_out, when given, receives every output line (detail keeps the last 40)."""
     if log:
         log("$ " + " ".join(cmd))
     try:
@@ -143,6 +149,10 @@ def _run_stream(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            # Compiler output is UTF-8; the console code page (cp1253 on a Greek
+            # Windows) cannot decode every byte and would stop the build log.
+            encoding="utf-8",
+            errors="replace",
             env=env,
             bufsize=1,
         )
@@ -150,12 +160,13 @@ def _run_stream(
         return CmdResult(False, f"Failed to start: {cmd[0]}", str(exc))
 
     assert proc.stdout is not None
-    lines: list[str] = []
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        lines.append(line)
-        if log:
-            log(line)
+    lines: list[str] = lines_out if lines_out is not None else []
+    with proc.stdout:
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            lines.append(line)
+            if log:
+                log(line)
     code = proc.wait()
     detail = "\n".join(lines[-40:])
     if code != 0:
@@ -443,7 +454,12 @@ def _regen_bios_profile(
         return CmdResult(False, f"BIOS profile missing: {profile}")
 
     script = fw / "tools" / "regen_bios.sh"
-    bash = shutil.which("bash") or shutil.which("bash.exe")
+    try:
+        bash = find_bash("BIOS regeneration", verify_msys=True)
+    except AssertionError as exc:
+        bash = None
+        if log:
+            log(f"Bash unavailable; using the direct emitter: {exc}")
 
     if script.is_file() and bash:
         cmd = [bash, str(script), "--config", profile_rel]
@@ -528,7 +544,12 @@ def ensure_bios_backends(
     # Prefer regen_bios.sh (builds emitter + fingerprints). It does not configure
     # the recompiler — ensure a usable tree (or a found binary) first.
     script = fw / "tools" / "regen_bios.sh"
-    bash = shutil.which("bash") or shutil.which("bash.exe")
+    try:
+        bash = find_bash("BIOS regeneration", verify_msys=True)
+    except AssertionError as exc:
+        bash = None
+        if log:
+            log(f"Bash unavailable; using the direct emitter: {exc}")
     need_emitter_setup = not (
         _any_usable_recompiler_build(fw) or _find_psxrecomp_bios(fw, root) is not None
     )
@@ -625,6 +646,54 @@ def configure(
     return r
 
 
+def _failed_step_module():
+    """tools/build_failed_step.py of the framework this studio ships in, or None
+    when the studio runs from a copy without it (then a failed build stays as is)."""
+    path = Path(__file__).resolve().parents[2] / "build_failed_step.py"
+    if not path.is_file():
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("build_failed_step", path)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _build_failed_steps_alone(cmd: list[str], root: Path, failed: CmdResult,
+                              lines: list[str], log: LogFn | None) -> CmdResult:
+    """PS1B-342: build each step Ninja reported FAILED once more on its own. When
+    every one passes alone, run the build again; otherwise name each step that
+    fails alone with its own diagnostic, or "no diagnostic"."""
+    mod = _failed_step_module()
+    if mod is None:
+        return failed
+    say = log or (lambda _line: None)
+
+    def run_alone(one_cmd: list[str]) -> tuple[int, str]:
+        out: list[str] = []
+        one = _run_stream(one_cmd, root, log=log, lines_out=out)
+        m = re.search(r"exit (-?\d+)", one.message) if not one.ok else None
+        return (0 if one.ok else int(m.group(1)) if m else 1), "\n".join(out)
+
+    code = re.search(r"exit (-?\d+)", failed.message)
+    alone = mod.failed_steps_alone(cmd[:3], int(code.group(1)) if code else 1,
+                                   "\n".join(lines), run_alone, say)
+    if not alone:
+        return failed
+    if all(a["exit"] == 0 for a in alone):
+        say("WARNING: %d build step(s) failed in the parallel build and passed on their own (%s); "
+            "the build goes on." % (len(alone), mod.host_build_load()))
+        return _run_stream(cmd, root, log=log)
+    summary = failed.message
+    for a in [a for a in alone if a["exit"] != 0][:3]:
+        summary += "; %s fails on its own (exit %d): %s" % (
+            a["target"], a["exit"], a["diagnostic"] or "no diagnostic")
+    return CmdResult(False, summary, failed.detail)
+
+
 def build(
     root: Path,
     *,
@@ -652,7 +721,10 @@ def build(
             log(msg)
         return CmdResult(True, msg)
 
-    r = _run_stream(cmd, root, log=log)
+    lines: list[str] = []
+    r = _run_stream(cmd, root, log=log, lines_out=lines)
+    if not r.ok:
+        r = _build_failed_steps_alone(cmd, root, r, lines, log)
     if r.ok:
         exe = find_runtime_exe(bdir)
         hint = f" → {exe.name}" if exe else ""
@@ -920,8 +992,12 @@ def export_release(
     # Explicit either way: the packager defaults this from $CI, and a studio
     # export must not inherit that by accident on a CI-flavoured machine.
     env["EXCLUDE_DEV_MODS"] = "1" if exclude_dev_mods else "0"
+    try:
+        bash = find_bash("the release packager", verify_msys=True)
+    except AssertionError as exc:
+        return CmdResult(False, str(exc))
     res = _run_stream(
-        ["bash", str(wrapper), build_dir, tag, recompiler_build],
+        [bash, str(wrapper), build_dir, tag, recompiler_build],
         root, log=log, env=env,
     )
     if not res.ok:

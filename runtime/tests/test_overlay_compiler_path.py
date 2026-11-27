@@ -29,7 +29,7 @@ def main():
         unrelated = base / 'unrelated cwd'
         unrelated.mkdir()
         source = base / 'resolver.cpp'
-        source.write_text('#include <filesystem>\n#include <string>\n#include <iostream>\n#include <fstream>\n#include <stdexcept>\n#include <type_traits>\n#include <cstdio>\n#ifdef _WIN32\n#include <windows.h>\n#endif\n#include "host_path.h"\n#include "psx_sha256.h"\n' + hash_function + '\n' + text[start:end] + '''
+        source.write_text('#include <filesystem>\n#include <string>\n#include <iostream>\n#include <fstream>\n#include <stdexcept>\n#include <type_traits>\n#include <cstdio>\n#ifdef _WIN32\n#include <windows.h>\n#endif\n#include "host_path.h"\n#include "psx_path_utf8.h"\n#include "psx_sha256.h"\n#include "psx_sha256_file.h"\n#include "psx_host_long_path.h"\n' + hash_function + '\n' + text[start:end] + '''
 int main(int argc, char** argv) {
     const std::filesystem::path tk_dir(argv[1]);
     { std::ofstream config(tk_dir / "compiler.txt"); config << argv[2] << "\\n"; }
@@ -52,7 +52,8 @@ int main(int argc, char** argv) {
         for src, dst in ((source, probe), (stub, bundled)):
             subprocess.run([compiler, '-std=c++17', '-Werror=return-type', *(['-static'] if os.name == 'nt' else []),
                             '-I'+str(root/'include'), '-I'+str(root.parent/'recompiler/include'),
-                            str(src), str(root/'src/psx_sha256.c'), '-o', str(dst)], check=True, env=env)
+                            str(src), str(root/'src/psx_sha256.c'), str(root/'src/psx_sha256_file.cpp'), '-o', str(dst),
+                            *(['-lbcrypt'] if os.name == 'nt' else [])], check=True, env=env)
         relative = bundled.relative_to(toolkit).as_posix()
         for configured in (relative, str(bundled)):
             resolved = subprocess.check_output([str(probe), str(toolkit), configured], cwd=unrelated, text=True)
