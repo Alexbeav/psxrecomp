@@ -113,6 +113,10 @@ respective files.
 
 ### Fields
 
+"Project root" below means, for a game config, the folder that holds the
+`game.toml` (PS1B-583). A BIOS profile's root is found by walking up from the
+profile to the first folder with a `.gitignore`, `.git` or `CMakeLists.txt`.
+
 | Field | Required for | Description |
 |---|---|---|
 | `name` | both | display name, e.g. `"SCPH1001 BIOS"` |

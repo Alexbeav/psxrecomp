@@ -118,6 +118,41 @@ int main() {
               "a packaged game folder is its own root");
     }
 
+    // PS1B-583 (Alex, 2026-11-27, "583 a"): a game.toml's own folder is its
+    // root. A game folder with no marker of its own, below an unrelated
+    // repository or a lane folder (.git, .gitignore, CMakeLists.txt), read
+    // its exe and discs from that ancestor.
+    {
+        const fs::path lane = game.parent_path() / "lane";
+        const fs::path proj = lane / "tmp" / "fixture";
+        fs::create_directories(lane / ".git");
+        fs::create_directories(proj);
+        std::ofstream(lane / ".gitignore") << "*\n";
+        std::ofstream(lane / "CMakeLists.txt") << "\n";
+        std::ofstream(proj / "game.toml")
+            << "[game]\nname = \"Fixture\"\nexe = \"GAME.EXE\"\n"
+               "disc = \"disc/fixture.cue\"\n"
+               "load_address = \"0x80010000\"\nentry_pc = \"0x80010000\"\n"
+               "text_size = \"0x800\"\nstack_base = \"0x801FFF00\"\n"
+               "[recompiler]\nseeds = \"seeds.txt\"\n";
+        std::ofstream(proj / "seeds.txt") << "0x80010000\n";
+        try {
+            const auto cfg = PSXRecompV4::load_game_config(proj / "game.toml");
+            const fs::path want_root = PSXRecompV4::host_absolute(proj);
+            check(cfg.exe_path == want_root / "GAME.EXE",
+                  "a game.toml below a marked ancestor resolves its exe in its own folder");
+            check(!cfg.discs.empty() &&
+                      cfg.discs.front() == want_root / "disc" / "fixture.cue",
+                  "a game.toml below a marked ancestor resolves its disc in its own folder");
+            check(PSXRecompV4::find_project_root(lane / "bios" / "X.toml") ==
+                      PSXRecompV4::host_absolute(lane),
+                  "a BIOS profile still walks up to its root marker");
+        } catch (const std::exception& ex) {
+            std::fprintf(stderr, "FAIL: load_game_config threw: %s\n", ex.what());
+            ++failures;
+        }
+    }
+
     fs::remove_all(game.parent_path(), ec);
     if (failures) return 1;
     std::printf("portable_settings_paths_test: all checks passed\n");

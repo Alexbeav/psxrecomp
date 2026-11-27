@@ -1843,10 +1843,14 @@ void set_user_settings_install_root(const std::filesystem::path& root);
 bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
                                       const char* key, bool value);
 
-// Locate the project root by walking upward from `config_path` until a
-// directory containing `.gitignore`, `.git`, or `CMakeLists.txt` is found.
-// Throws std::runtime_error if not found within 8 levels.
+// Locate a BIOS profile's root by walking upward from `config_path` until a
+// directory containing `.gitignore`, `.git`, or `CMakeLists.txt` is found
+// (a packaged game folder is its own root). Falls back to the config's own
+// folder when no marker is found within 8 levels.
 std::filesystem::path find_project_root(const std::filesystem::path& config_path);
+
+// A game.toml's project root: the folder that holds it (PS1B-583).
+std::filesystem::path game_config_root(const std::filesystem::path& config_path);
 
 // Load a BIOS config TOML. Throws std::runtime_error on schema violations.
 BiosConfig load_bios_config(const std::filesystem::path& config_path);

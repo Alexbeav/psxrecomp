@@ -1,6 +1,6 @@
 # Cycle-isolation micro-benchmark test ROM — ruler #2 (in-tree).
-# Paths are relative to the psxrecomp worktree root (find_project_root walks up
-# to it). Generated EXE: gen_testrom.py. Recompiled by psxrecomp-game for the
+# Paths are relative to this folder (a game.toml's own folder is its root,
+# PS1B-583). Generated EXE: gen_testrom.py. Recompiled by psxrecomp-game for the
 # native cost-model side; sideloaded raw into Beetle for the HW-oracle side.
 [game]
 name = "CycleTestROM"
