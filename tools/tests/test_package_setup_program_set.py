@@ -391,6 +391,10 @@ def exe_name_pick(tmp: Path, zipped: bool) -> str:
             emitters = make_package_source(root)
             build = root / "build-setup"
             (build / "Resident_Evil_2").rename(build / "Resident_Evil_2.exe")
+            # A Windows host ships the MinGW emitters; since PS1B-381 the
+            # packager finds the .exe host and asks for them.
+            for tool in ("psxrecomp-game", "psxrecomp-bios"):
+                (emitters / tool).rename(emitters / (tool + ".exe"))
             assert sorted(p.name for p in build.iterdir() if p.name.startswith("Resident_Evil_2")) == [
                 "Resident_Evil_2.exe"]
             code, out = package(shell, root, emitters)
