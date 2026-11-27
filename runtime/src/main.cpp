@@ -22816,7 +22816,8 @@ int main(int argc, char** argv) {
     /* CLI overrides win over config — applied last, before backend/port init.
      * Enables a soak fleet: several instances on distinct ports + renderers,
      * including BIOS instances that have no [game]-block config. */
-    if (cli_debug_port >= 0) debug_port      = (uint16_t)cli_debug_port;
+    debug_port = (uint16_t)debug_server_resolve_port(debug_port, std::getenv("PSX_DEBUG_PORT"),
+                                                     cli_debug_port);
     if (cli_renderer   >= 0) g_video_renderer = cli_renderer;
     if (cli_window_title)    window_title     = cli_window_title;
     if (cli_memcard_dir) {
