@@ -589,6 +589,18 @@ static const char *validate_event_roster(const InputRouteV3 *meta)
     return NULL;
 }
 
+const char *input_route_dualshock_ack_refusal(void)
+{
+    /* sio.c reads the same setting in both products. These two ACK models
+     * time a digital pad's bytes, so they cannot qualify a DualShock route. */
+    const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
+    if (ack_model && !strcmp(ack_model, "octoshock-2.2.2-digital"))
+        return "digital Octoshock ACK profile cannot qualify a Nymashock DualShock";
+    if (ack_model && !strcmp(ack_model, "nymashock-2.8-gamepad"))
+        return "2.8 plain-gamepad ACK profile cannot qualify a DualShock route";
+    return NULL;
+}
+
 int input_route_session_admit(const char *path)
 {
     unsigned char magic[8];
@@ -640,6 +652,8 @@ int input_route_session_admit(const char *path)
         dualshock = 0;
     }
     if (fclose(f) && !error) error = "close error";
+    if (!error && dualshock && meta.port_count != 2)
+        error = input_route_dualshock_ack_refusal();
     for (uint32_t i = 0; !error && dualshock && i < count; ++i)
         if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
 #ifdef PSX_NO_DEBUG_TOOLS
