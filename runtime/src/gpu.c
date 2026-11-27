@@ -7664,7 +7664,7 @@ static void gp0_ring_record(const uint32_t *words, int n) {
     int copy_n = e->n_words > GPU_GP0_RING_MAX_WORDS ? GPU_GP0_RING_MAX_WORDS : e->n_words;
     for (int i = 0; i < copy_n; i++) e->cmd[i] = words[i];
     for (int i = copy_n; i < GPU_GP0_RING_MAX_WORDS; i++) e->cmd[i] = 0;
-    if (e->opcode == 0x80) { gp0_capture_builder_chain(e->bld); e->csp = g_gp0_last_copy_sp; }
+    if ((e->opcode & 0xE0) == 0x80) { gp0_capture_builder_chain(e->bld); e->csp = g_gp0_last_copy_sp; }
     else { for (int i = 0; i < 6; i++) e->bld[i] = 0; e->csp = 0; }
     gp0_ring_head = (gp0_ring_head + 1) % GP0_RING_CAP;
     gp0_ring_seq++;

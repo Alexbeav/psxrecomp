@@ -153,7 +153,7 @@ static inline int source_gpu_t_copy(unsigned width, unsigned height, int mask_ch
  * reads); the flag only ever follows the queue depth.
  *
  * [ORACLE FIXTURE: 5 read cases] The threshold is a property of the command's
- * phase, not of its packet length. Copy (A0h), upload (80h) and read-back (C0h)
+ * phase, not of its packet length. Copy (80h), upload (A0h) and read-back (C0h)
  * report ready again only once two words are left: their data phase starts with
  * the second header word, so the flag clears again at two even though the
  * packet runs to three or four words. A VRAM read's result is therefore not
@@ -179,7 +179,7 @@ static inline int source_gpu_t_is_one_word_setup(unsigned op)
 static inline unsigned source_gpu_t_ready_below(uint32_t head)
 {
     const unsigned op = (unsigned)(head >> 24);
-    if (op == 0x80u || op == 0xA0u || op == 0xC0u) return SOURCE_GPU_T_READY_TRANSFER;
+    if ((op & 0xE0u) >= 0x80u && (op & 0xE0u) <= 0xC0u) return SOURCE_GPU_T_READY_TRANSFER; /* and mirrors */
     if (op == 0x00u) return SOURCE_GPU_T_READY_NOP;
     if (source_gpu_t_is_one_word_setup(op)) return SOURCE_GPU_T_READY_SETUP;
     if (source_gpu_sprite_opcode(op)) return SOURCE_GPU_T_RECT_FEEDBACK(op);
