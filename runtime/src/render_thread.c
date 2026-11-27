@@ -201,9 +201,12 @@ static void wake_emu(void) {
 }
 
 /* Called with mtx held when the ring is empty: hand the context over while
- * the emulation thread asks for it. Returns with mtx held. */
-static void serve_release_locked(void) {
-    if (!R.release_req) return;
+ * the emulation thread asks for it. Returns with mtx held, and returns
+ * whether this thread holds the context again. The context is taken back
+ * with mtx unlocked, so a stop can arrive after it is taken; R.stop alone
+ * does not say which side holds it (PS1B-590). */
+static int serve_release_locked(void) {
+    if (!R.release_req) return 1;
     mtx_unlock(&R.mtx);
     R.ctx(R.user, 0);
     mtx_lock(&R.mtx);
@@ -211,10 +214,11 @@ static void serve_release_locked(void) {
     cnd_bcast(&R.cv_emu);
     while (R.release_req && !R.stop) cnd_wait(&R.cv_work, &R.mtx);
     atomic_store(&R.released, 0);
-    if (R.stop) return;              /* the stopper owns the context now */
+    if (R.stop) return 0;            /* the stopper owns the context now */
     mtx_unlock(&R.mtx);
     R.ctx(R.user, 1);
     mtx_lock(&R.mtx);
+    return 1;
 }
 
 #ifdef _WIN32
@@ -258,8 +262,7 @@ static void *render_main(void *arg)
             }
             atomic_store(&R.render_sleeping, 0);
             if (R.release_req && atomic_load(&R.wpos) == r) {
-                serve_release_locked();
-                if (R.stop) have_ctx = 0;
+                have_ctx = serve_release_locked();
             }
             int done = R.stop && atomic_load(&R.wpos) == r;
             mtx_unlock(&R.mtx);

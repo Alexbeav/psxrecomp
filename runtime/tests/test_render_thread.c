@@ -20,6 +20,8 @@ static int checks, failures;
 static _Atomic int ctx_owner;          /* 0 none, 1 emu, 2 render */
 static _Atomic int ctx_violations;
 static __thread int t_is_render;       /* set by exec on first call */
+static _Atomic int retake_delay_us;    /* render thread pauses after taking the context */
+static void sleep_us(int us);
 static void fake_ctx(void *user, int current) {
     (void)user;
     int me = rt_on_render_thread() ? 2 : 1;
@@ -27,6 +29,8 @@ static void fake_ctx(void *user, int current) {
         int expect = 0;
         if (!atomic_compare_exchange_strong(&ctx_owner, &expect, me))
             atomic_fetch_add(&ctx_violations, 1);
+        else if (me == 2 && atomic_load(&retake_delay_us))
+            sleep_us(atomic_load(&retake_delay_us));
     } else {
         int expect = me;
         if (!atomic_compare_exchange_strong(&ctx_owner, &expect, 0))
@@ -97,6 +101,7 @@ static void reset_state(void) {
     atomic_store(&ctx_violations, 0);
     atomic_store(&ctx_owner, 1);      /* the "context" starts current here */
     exec_delay_us = 0;
+    atomic_store(&retake_delay_us, 0);
 }
 
 static int start(size_t ring, int frames) {
@@ -280,6 +285,25 @@ static void test_tick(void) {
     rt_stop();
 }
 
+/* 7. Stop right after a release (PS1B-590). The render thread takes the
+ * context back with its lock dropped; a stop that lands in that window must
+ * still see the thread give it up on exit. The pause after the take puts the
+ * stop there every time; before the fix the thread exited holding it. */
+static void test_stop_after_release(void) {
+    reset_state();
+    CHECK(start(1u << 20, 3), "start");
+    for (int i = 0; i < 10; i++) emit(100);
+    rt_acquire("retake");
+    atomic_store(&retake_delay_us, 50000);
+    rt_release();
+    sleep_us(5000);            /* the render thread is inside its retake */
+    rt_stop();
+    atomic_store(&retake_delay_us, 0);
+    CHECK(atomic_load(&ctx_owner) == 1, "context back on caller after a stop during retake");
+    CHECK(atomic_load(&ctx_violations) == 0, "context exclusive across the stop (%d)",
+          atomic_load(&ctx_violations));
+}
+
 int main(void) {
     test_order_and_wrap();
     test_oversize();
@@ -287,6 +311,7 @@ int main(void) {
     test_acquire_release();
     test_stop_while_held();
     test_tick();
+    test_stop_after_release();
     printf("checks=%d failures=%d\n", checks, failures);
     return failures ? 1 : 0;
 }
