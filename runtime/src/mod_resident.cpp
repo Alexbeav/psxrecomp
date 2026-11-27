@@ -9,6 +9,7 @@
  *   u8 table_sha256[32]  (everything above), payload.
  * Every blob is hashed again on load. Identical bytes share one blob. */
 #include "mod_resident.h"
+#include "psx_host_dir.h"
 #include "mod_plugins.h"
 #include "mod_runtime.h"
 #include "mod_disc_read_session.h"
@@ -418,19 +419,19 @@ bool extents_match(const PSXResidentPack& pack, const PSXResidentSpec* s) {
 
 void prune(const std::filesystem::path& keep, const std::string& format, uint32_t count) {
     std::error_code ec;
-    std::vector<std::filesystem::directory_entry> packs;
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> packs;
     const std::string prefix = format + "-";
-    for (const auto& e : std::filesystem::directory_iterator(keep.parent_path(), ec)) {
-        const auto name = e.path().filename().string();
-        if (e.path() != keep && name.rfind(prefix, 0) == 0 && e.path().extension() == ".pack")
-            packs.push_back(e);
+    for (const PSXRecompV4::HostDirEntry& e : PSXRecompV4::host_list_dir(keep.parent_path(), ec)) {
+        const auto name = e.path.filename().string();
+        if (e.path != keep && name.rfind(prefix, 0) == 0 && e.path.extension() == ".pack") {
+            std::error_code te;
+            packs.emplace_back(std::filesystem::last_write_time(PSXRecompV4::host_long_path(e.path), te), e.path);
+        }
     }
     if (packs.size() <= count) return;
-    std::sort(packs.begin(), packs.end(), [](const auto& a, const auto& b) {
-        std::error_code e1, e2;
-        return a.last_write_time(e1) > b.last_write_time(e2);
-    });
-    for (size_t i = count; i < packs.size(); i++) std::filesystem::remove(packs[i].path(), ec);
+    std::sort(packs.begin(), packs.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (size_t i = count; i < packs.size(); i++)
+        std::filesystem::remove(PSXRecompV4::host_long_path(packs[i].second), ec);
 }
 
 Record& record_for(const PSXResidentSpec* s) {

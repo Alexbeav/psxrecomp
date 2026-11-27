@@ -2,6 +2,7 @@
  * See text_xlate.h + docs/STRING_TRANSLATION.md. */
 
 #include "text_xlate.h"
+#include "psx_host_dir.h"
 #include "psx_memory.h"
 #include "cpu_state.h"
 
@@ -492,11 +493,11 @@ void load_tables_locked() {
     const bool lang_off = g_lang.empty() || g_lang == "jp" || g_lang == "off";
     size_t files = 0, entries = 0, glyphs = 0, vpatches = 0;
     std::error_code ec;
-    for (auto& de : fs::directory_iterator(g_dir, ec)) {
-        if (!de.is_regular_file()) continue;
-        if (de.path().extension() != ".toml") continue;
+    for (const PSXRecompV4::HostDirEntry& de : PSXRecompV4::host_list_dir(g_dir, ec)) {
+        if (!de.is_regular_file) continue;
+        if (de.path.extension() != ".toml") continue;
         toml::value data;
-        try { data = toml::parse(de.path().string()); }
+        try { data = toml::parse(de.path.string()); }
         catch (...) { continue; }
         ++files;
         /* A fixes-only file (vram_patch / glyph-label / msg blocks, no string

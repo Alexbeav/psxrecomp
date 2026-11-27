@@ -1,4 +1,5 @@
 #include "hd_texture_pack.h"
+#include "psx_host_dir.h"
 #include "texture_pack_preload.hpp"
 
 #ifndef HD_TEXTURE_PACK_DISABLE_PNG_DECODE
@@ -620,11 +621,11 @@ void decode_worker(DecodeCache* cache) {
 
 bool directory_has_pack_png(const fs::path& directory) {
     std::error_code ec;
-    for (fs::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
-        if (!it->is_regular_file(ec)) continue;
+    for (const PSXRecompV4::HostDirEntry& e : PSXRecompV4::host_list_dir(directory, ec)) {
+        if (!e.is_regular_file) continue;
         uint32_t texture_hash = 0;
         uint32_t palette_hash = 0;
-        if (parse_png_filename(it->path(), &texture_hash, &palette_hash)) return true;
+        if (parse_png_filename(e.path, &texture_hash, &palette_hash)) return true;
     }
     return false;
 }
@@ -913,10 +914,10 @@ int hd_texture_pack_create(const char* explicit_root,
                 ? input / "Hashes.ini" : input.parent_path() / "Hashes.ini";
         } else if (fs::is_regular_file(input / "Hashes.ini", ec)) {
             std::vector<fs::path> children;
-            for (fs::directory_iterator it(input, ec), end; !ec && it != end; it.increment(ec)) {
-                if (it->is_directory(ec) &&
-                    ends_with_ci(it->path().filename().string(), "-texture-replacements"))
-                    children.push_back(it->path());
+            for (const PSXRecompV4::HostDirEntry& e : PSXRecompV4::host_list_dir(input, ec)) {
+                if (e.is_directory &&
+                    ends_with_ci(e.path.filename().string(), "-texture-replacements"))
+                    children.push_back(e.path);
             }
             std::sort(children.begin(), children.end());
             if (children.size() != 1) {
@@ -941,13 +942,12 @@ int hd_texture_pack_create(const char* explicit_root,
         pack->logical_mapping_count = mappings.size();
 
         std::vector<fs::path> files;
-        for (fs::directory_iterator it(replacement, ec), end; !ec && it != end;
-             it.increment(ec)) {
-            if (!it->is_regular_file(ec)) continue;
+        for (const PSXRecompV4::HostDirEntry& e : PSXRecompV4::host_list_dir(replacement, ec)) {
+            if (!e.is_regular_file) continue;
             uint32_t texture_hash = 0;
             uint32_t palette_hash = 0;
-            if (parse_png_filename(it->path(), &texture_hash, &palette_hash))
-                files.push_back(it->path());
+            if (parse_png_filename(e.path, &texture_hash, &palette_hash))
+                files.push_back(e.path);
         }
         if (ec) {
             write_error(error, error_capacity, "failed to scan replacement directory");

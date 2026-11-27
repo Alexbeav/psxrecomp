@@ -2,6 +2,7 @@
 
 #include "cue_sheet.h"
 #include "host_path.h"
+#include "psx_host_dir.h"
 
 #include <cctype>
 #include <cstdio>
@@ -107,8 +108,8 @@ fs::path resolve_cue_relative_file(const fs::path& dir, const std::string& name)
     ec.clear();
     if (fs::is_directory(parent, ec)) {
         ec.clear();
-        for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec)) {
-            if (equal_ci(it->path().filename().string(), want)) return it->path();
+        for (const HostDirEntry& e : host_list_dir(parent, ec)) {
+            if (equal_ci(e.path.filename().string(), want)) return e.path;
         }
     }
     return literal;

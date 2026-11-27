@@ -1,4 +1,5 @@
 #include "psx_path_utf8.h"
+#include "psx_host_dir.h"
 #include "duckstation_texture_pack.h"
 #include "texture_image_decode.h"
 #include "texture_pack_preload.hpp"
@@ -771,18 +772,21 @@ int duck_texture_pack_create(const char* root, DuckTexturePack** out, char* erro
         std::vector<fs::path> paths;
         if (fs::is_directory(p->replacements, ec)) {
             size_t scanned = 0;
-            for (fs::recursive_directory_iterator it(p->replacements, fs::directory_options::skip_permission_denied, ec), end;
-                 !ec && it != end; it.increment(ec)) {
+            // PS1B-703: not recursive_directory_iterator, which lists the
+            // wrong folder once the path reaches 260 characters.
+            PSXRecompV4::host_visit_tree(p->replacements, ec, [&](const PSXRecompV4::HostDirEntry& e) {
                 if (++scanned > kMaxEntries * 4) throw std::runtime_error("texture replacement directory scan limit exceeded");
-                if (it.depth() >= 16) { if (it->is_directory(ec)) it.disable_recursion_pending(); note(*p, "replacement nesting exceeds 16 levels"); }
-                if (it->is_regular_file(ec)) {
-                    const std::string name = psx_path::utf8(it->path().filename());
-                    if (name.rfind("texupload-", 0) != 0 && name.rfind("texpage-", 0) != 0 && name.rfind("vram-write-", 0) != 0) continue;
-                    if (!image_extension(it->path())) { note(*p, "unsupported replacement image format"); continue; }
+                PSXRecompV4::HostVisit next = PSXRecompV4::HostVisit::Continue;
+                if (e.depth >= 16) { if (e.is_directory) next = PSXRecompV4::HostVisit::Skip; note(*p, "replacement nesting exceeds 16 levels"); }
+                if (e.is_regular_file) {
+                    const std::string name = psx_path::utf8(e.path.filename());
+                    if (name.rfind("texupload-", 0) != 0 && name.rfind("texpage-", 0) != 0 && name.rfind("vram-write-", 0) != 0) return next;
+                    if (!image_extension(e.path)) { note(*p, "unsupported replacement image format"); return next; }
                     if (paths.size() >= kMaxEntries) throw std::runtime_error("texture replacement file limit (262144) exceeded");
-                    paths.push_back(it->path());
+                    paths.push_back(e.path);
                 }
-            }
+                return next;
+            }, /*skip_unreadable=*/true);
             if (ec) { error_text(error, capacity, "cannot scan replacement directory: " + ec.message()); return 0; }
         } else if (ec && ec != std::errc::no_such_file_or_directory) {
             error_text(error, capacity, "cannot inspect replacement directory: " + ec.message()); return 0;
