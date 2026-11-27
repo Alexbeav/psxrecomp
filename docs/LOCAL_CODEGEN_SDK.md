@@ -199,3 +199,22 @@ GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now*
 `latest/` pointer, etc.), the host removes the broken `latest/` cache entry,
 clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a repair note
 so the player can redownload — without deleting the cache by hand.
+
+### A pack in use is left alone
+
+An install over the installed tag, and the prune of older tags, rename the
+installed folder aside before they replace or remove it. Every program that
+puts a pack on `PATH` (the CLI's `activate_toolchain_bin`, the setup host's
+`activate_toolchain_path`) holds that pack's folder until it ends, so a build
+keeps its pack even between two compiler runs, when it has no file of the pack
+open:
+
+- Linux and macOS: a shared `flock` on the folder. An installer takes the
+  exclusive lock without waiting; when it cannot, the pack stays and the
+  player reads the sentence for a pack in use (PS1B-416).
+- Windows: a handle to the folder that does not share delete access. The
+  rename aside then fails with error 32 and the pack stays (PS1B-578).
+
+An installer lets go of its own hold before it renames its own pack.
+`runtime/tests/test_toolchain_pack_in_use.py` checks both installers against
+both holders.
