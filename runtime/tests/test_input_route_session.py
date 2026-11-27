@@ -200,6 +200,36 @@ with tempfile.TemporaryDirectory() as temp:
             code, out, err = run(exe, 'armed', path, markers_exit=False)
             check(code == 0 and 'before=0 admitted=1 armed=1' in out,
                   f'{name} route is armed on {exe.name}', out + err)
+    # PS1B-602: a DualShock route refuses the two ACK models that cannot
+    # qualify it, at admission, so the release product refuses them too.
+    # sio.c reads the same setting in both products.
+    dual_v3 = root / 'dualshock.psxrti3'
+    dual_v3.write_bytes(struct.pack('<8sIIIII', b'PSXRTI3\0', 3, 12, 2, 0, 0) +
+                        b''.join(struct.pack('<IH6B', i + 1, b, *axes, 0, 0)
+                                 for i, (b, *axes) in enumerate(rows)))
+    refused_ack = (('octoshock-2.2.2-digital', 'digital Octoshock ACK profile cannot qualify'),
+                   ('nymashock-2.8-gamepad', '2.8 plain-gamepad ACK profile cannot qualify'))
+    for exe, routes in ((release, (('PSXRTI2', dual), ('PSXRTI3', dual_v3))),
+                        (diagnostic, (('PSXRTI3', dual_v3),))):
+        for name, path in routes:
+            code, out, err = run(exe, 'armed', path, markers_exit=False)
+            check(code == 0 and 'admitted=1 armed=1' in out,
+                  f'{name} DualShock route without an ACK model is admitted on {exe.name}', out + err)
+            for model, reason in refused_ack:
+                code, out, err = run(exe, 'armed', path, markers_exit=False,
+                                     extra_env={'PSX_INPUT_ROUTE_PAD_ACK_MODEL': model})
+                check(code == 0 and 'admitted=0 armed=0' in out and reason in err,
+                      f'{name} DualShock route refuses ACK model {model} on {exe.name}', out + err)
+            code, out, err = run(exe, 'armed', path, markers_exit=False,
+                                 extra_env={'PSX_INPUT_ROUTE_PAD_ACK_MODEL': 'nymashock-1.32.1-dualshock'})
+            check(code == 0 and 'admitted=1 armed=1' in out,
+                  f'{name} DualShock route admits its own ACK model on {exe.name}', out + err)
+    for exe in (diagnostic, release):
+        code, out, err = run(exe, 'armed', route, markers_exit=False,
+                             extra_env={'PSX_INPUT_ROUTE_PAD_ACK_MODEL': 'octoshock-2.2.2-digital'})
+        check(code == 0 and 'admitted=1 armed=1' in out,
+              f'a digital route keeps the digital Octoshock ACK model on {exe.name}', out + err)
+
     # Event routes bind every configured disc before arming, then apply exact
     # boundary order once. Missing/wrong bindings and host failure stay closed.
     def entry(tag, payload):

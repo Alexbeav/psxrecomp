@@ -435,11 +435,7 @@ int debug_server_preload_input_route(const char *path)
                    : input_dualshock_route_read(f, dual, &count, &frames);
         if (fclose(f) && !error) error = "close error";
         if (getenv("PSX_INPUT_UPDATE_CLOCK")) error = "DualShock does not admit input retiming";
-        const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
-        if (ack_model && !strcmp(ack_model, "octoshock-2.2.2-digital"))
-            error = "digital Octoshock ACK profile cannot qualify a Nymashock DualShock";
-        if (ack_model && !strcmp(ack_model, "nymashock-2.8-gamepad"))
-            error = "2.8 plain-gamepad ACK profile cannot qualify a DualShock route";
+        if (!error) error = input_route_dualshock_ack_refusal();
         for (uint32_t i = 0; !error && i < count; ++i)
             if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
         if (error) {
