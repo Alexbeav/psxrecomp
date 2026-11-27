@@ -354,6 +354,73 @@ with zipfile.ZipFile(sys.argv[-2], "w") as archive:
         self.assertIn("requires runtime.openbios=false", result.stderr)
 
 
+def _windows_bash():
+    if os.name != "nt":
+        return None
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        import host_bash
+        return host_bash.find_bash("the setup packager test")
+    except Exception:
+        return None
+    finally:
+        sys.path.pop(0)
+
+
+@unittest.skipIf(_windows_bash() is None, "Windows Git Bash packaging fixture")
+class WindowsSetupHostLookupTests(unittest.TestCase):
+    """PS1B-381: under Git Bash, [[ -f build/Fixture ]] is true when only
+    Fixture.exe exists. The packager must still pick the .exe name, so the
+    Windows-only staging (sibling DLLs, signing) runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        for path in ("build/assets/fonts/font.txt", "build/assets/img/image.txt",
+                     "build/mods/bundled/fixture/1.0.0/manifest.toml",
+                     "mods/preloaded/packages/fixture/1.0.0/manifest.toml",
+                     "psxrecomp/psxrecomp_cli.py", "recomp-ui/CMakeLists.txt",
+                     "psxrecomp/recompiler/lib/rabbitizer/include/generated/InstrId_enum.h",
+                     "psxrecomp/recompiler/lib/rabbitizer/include/generated/InstrDescriptor_Descriptors_array.h",
+                     "psxrecomp/recompiler/lib/rabbitizer/cplusplus/include/generated/UniqueId_enum_class.hpp",
+                     "emitters/psxrecomp-game.exe", "emitters/psxrecomp-bios.exe",
+                     "emitters/runtime/include/overlay_codegen_hash.h"):
+            self.write(path, "synthetic fixture\n")
+        for name in ("OpenBIOS.toml", "openbios.bin", "OpenBIOS.LICENSE", "SCPH1001.toml"):
+            self.write("psxrecomp/bios/" + name, "synthetic BIOS fixture")
+        self.write("CMakeLists.txt", "# synthetic title\n")
+        self.write("VERSION", "0.0.1\n")
+        self.write("build/psx_game_version.txt", "0.0.1\n")
+        self.write("build/Fixture.exe", "synthetic executable, never run\n")
+        self.write("build/zlib1.dll", "synthetic sibling DLL\n")
+        self.write("game.toml", "[runtime]\noverlay_cache=true\nopenbios=true\n")
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_exe_name_wins_over_bare_name_and_siblings_ship(self):
+        args = [_windows_bash(), str(ROOT / "tools/package_setup_host.sh"),
+                "--root", str(self.root), "--build-dir", "build", "--artifact", "windows-x64",
+                "--zip-prefix", "test", "--exe-name", "Fixture", "--recompiler-build", "emitters",
+                "--project-file", "CMakeLists.txt", "--project-file", "game.toml"]
+        env = dict(os.environ, RELEASE_VERSION="0.0.1", EXCLUDE_DEV_MODS="0")
+        for key in ("WINDOWS_SIGN_PFX", "WINDOWS_SIGN_PFX_BASE64"):
+            env.pop(key, None)
+        result = subprocess.run(args, cwd=self.root, env=env, capture_output=True,
+                                text=True, encoding="utf-8", errors="replace")
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("staged sibling DLL zlib1.dll", output)
+        self.assertIn("Windows code signing skipped", output)
+        with zipfile.ZipFile(self.root / "dist/test-0.0.1-windows-x64.zip") as archive:
+            names = archive.namelist()
+        self.assertIn("Fixture.exe", names)
+        self.assertIn("zlib1.dll", names)
+
+
 class RuntimeBiosStagingTests(unittest.TestCase):
     def test_actual_runtime_staging_requires_only_linked_openbios_assets(self):
         cmake = os.environ.get("PSX_TEST_CMAKE") or shutil.which("cmake")
