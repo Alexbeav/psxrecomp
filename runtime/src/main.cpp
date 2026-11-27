@@ -74,6 +74,8 @@ extern "C" int iso_source_bin_path(void*,char*,uint32_t);
 #include "disc_digest_cache.h"
 #include "launcher_record_replay.h"
 #include "psx_sha256.h"
+#include "psx_sha256_file.h"
+#include "psx_host_long_path.h"
 #include "netplay_state_digest.h"
 #include "local_mouse_sdl.h"
 #include "pad_external_input.h"
@@ -3674,8 +3676,24 @@ static std::filesystem::path resolve_overlay_compiler_path(
     const auto marker = toolchain / "compiler-store.sha256";
     if (std::filesystem::exists(marker)) {
         const auto reject = [](const std::filesystem::path& bad) {
-            throw std::runtime_error("shared overlay compiler unavailable or corrupt: " + bad.string() +
+            /* A path Windows cannot open at its length is not a corrupt store
+             * (PS1B-620); name the length so the message says which it is. */
+            const size_t length = bad.native().size();
+            throw std::runtime_error("shared overlay compiler unavailable or corrupt: " + psx_path::utf8(bad) +
+                (length >= 260 ? " (path of " + std::to_string(length) + " characters)" : std::string()) +
                 "; re-run the Workbench with --repair-shared-toolchain, or rebuild as portable");
+        };
+        /* Every store member is opened by its extended-length wide path: the
+         * deepest Clang header is about 170 characters below LOCALAPPDATA, and
+         * a narrow fopen also fails outside the ANSI code page (PS1B-620). */
+        const auto long_path = [](const std::filesystem::path& path) {
+            return PSXRecompV4::host_long_path(path);
+        };
+        const auto file_sha256 = [&](const std::filesystem::path& path, char out[65]) {
+            uint8_t digest[32];
+            if (psx_sha256_file(long_path(path), digest) != PsxFileHashResult::Ok) return false;
+            for (int i = 0; i < 32; ++i) std::snprintf(out + i * 2, 3, "%02x", digest[i]);
+            return true;
         };
         const auto valid_hash = [](const std::string& value) {
             return value.size() == 64 && value.find_first_not_of("0123456789abcdef") == std::string::npos;
@@ -3699,7 +3717,7 @@ static std::filesystem::path resolve_overlay_compiler_path(
         static StoreGuard guard;
         if (guard.handle == INVALID_HANDLE_VALUE) {
             const auto lock = std::filesystem::path(store.wstring() + L".lock");
-            guard.handle = CreateFileW(lock.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+            guard.handle = CreateFileW(long_path(lock).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                                       OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (guard.handle == INVALID_HANDLE_VALUE) reject(lock);
         }
@@ -3708,9 +3726,9 @@ static std::filesystem::path resolve_overlay_compiler_path(
 #endif
         const auto manifest = store / "SHA256SUMS.txt";
         char actual[65];
-        if (!source_stateio_file_sha256(manifest.string().c_str(), actual) || expected != actual)
+        if (!file_sha256(manifest, actual) || expected != actual)
             reject(manifest);
-        std::ifstream entries(manifest, std::ios::binary);
+        std::ifstream entries(long_path(manifest), std::ios::binary);
         std::string line, previous;
         bool compiler_listed = false;
         while (std::getline(entries, line)) {
@@ -3724,8 +3742,9 @@ static std::filesystem::path resolve_overlay_compiler_path(
             for (const auto& component : member) if (component == "..") reject(manifest);
             previous = relative;
             const auto file = store / member;
-            if (!std::filesystem::is_regular_file(file) ||
-                !source_stateio_file_sha256(file.string().c_str(), actual) || line.substr(0, 64) != actual)
+            std::error_code file_error;
+            if (!std::filesystem::is_regular_file(long_path(file), file_error) ||
+                !file_sha256(file, actual) || line.substr(0, 64) != actual)
                 reject(file);
             if (relative == "bin/clang.exe") compiler_listed = true;
         }
