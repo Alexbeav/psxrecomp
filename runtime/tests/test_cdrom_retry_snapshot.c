@@ -127,8 +127,8 @@ static void validate_rows(void) {
     uint32_t n; uint8_t *p = section(&n);
     CHECK(cdrom_snapshot_validate(p, n), "R4: a live run validates");
     CHECK(source_snapshot_bytes() == 0, "R4: the default path has no source appendix");
-    CHECK(cd_tape_le32(p + n - 12) == 0x37464443u, "R4: the section ends with the CDF7 tier");
-    uint8_t *retry = p + n - 8;                    /* CDF7: marker, target, count */
+    CHECK(cd_tape_le32(p + n - 21) == 0x37464443u, "R4: the CDF7 tier sits under the 9-byte CDF8 seek arrival (PS1B-584)");
+    uint8_t *retry = p + n - 17;                   /* CDF7: marker, target, count; then CDF8 */
     const uint32_t keep_t = cd_tape_le32(retry), keep_r = cd_tape_le32(retry + 4);
     CHECK((int32_t)keep_t == TARGET_LBA && (int32_t)keep_r == 1, "R4: the run is the CDF7 payload");
     const int32_t targets[] = { -1, -2, -150, -151, 450000, 450001 };
@@ -144,8 +144,8 @@ static void validate_rows(void) {
     retry[4] = (uint8_t)keep_r; retry[5] = retry[6] = retry[7] = 0;
     /* R7: a state from before CDF7 (pin J v0.1.10 saves) still validates and
      * loads, and starts with no run. */
-    CHECK(cdrom_snapshot_validate(p, n - 12), "R7: a CDF6 state validates");
-    CHECK(cdrom_snapshot_read(p, n - 12), "R7: a CDF6 state loads");
+    CHECK(cdrom_snapshot_validate(p, n - 21), "R7: a CDF6 state validates");
+    CHECK(cdrom_snapshot_read(p, n - 21), "R7: a CDF6 state loads");
     CHECK(s_retry_target == -1 && s_retry_run == 0, "R7: a CDF6 state carries no run");
     CHECK(cdrom_snapshot_read(p, n) && s_retry_target == TARGET_LBA && s_retry_run == 1,
           "R7: the CDF7 state restores its run");

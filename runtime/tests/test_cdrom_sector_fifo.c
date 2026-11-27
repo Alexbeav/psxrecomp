@@ -342,14 +342,15 @@ static void snapshot_setloc_and_paused_head(void) {
     CHECK(cdrom_snapshot_read(wire,size) && !setloc_pending);
     exec_command(0x1B);ack();
     CHECK(msf_to_lba(read_min,read_sec,read_sect)==150);
-    /* The CDF6 phase byte sits under the 12-byte CDF7 retry run (PS1G-140). */
-    {uint8_t ph=wire[size-13];wire[size-13]=2;CHECK(!cdrom_snapshot_validate(wire,size));wire[size-13]=ph;}
+    /* The CDF6 phase byte sits under the 12-byte CDF7 retry run (PS1G-140)
+     * and the 9-byte CDF8 seek arrival (PS1B-584). */
+    {uint8_t ph=wire[size-22];wire[size-22]=2;CHECK(!cdrom_snapshot_validate(wire,size));wire[size-22]=ph;}
     /* CDF2 states remain readable and retain the paused drive position. */
     exec_command(0x09);ack();
     PstW writer;pst_w_init(&writer,wire,size);
-    CHECK(cdrom_snap_emit(&writer,1) && writer.written==size-43);
+    CHECK(cdrom_snap_emit(&writer,1) && writer.written==size-52);
     read_sec=9;
-    CHECK(cdrom_snapshot_read(wire,size-43));
+    CHECK(cdrom_snapshot_read(wire,size-52));
     exec_command(0x06);
     CHECK(msf_to_lba(read_min,read_sec,read_sect)==150);
     free(wire);
