@@ -20,7 +20,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     source = args.generated.read_text(encoding='utf-8')
-    if 'BIOS SHA256: fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57' not in source:
+    if 'BIOS SHA256: 32dbc89c2e620c9a671fabe05772c3ae0ab38e4d15b4fdeeb6f7ca07093ef8c3' not in source:
         raise ValueError('Unaudited BIOS image')
     matches = list(re.finditer(r'void OpenBIOS_func_1FC03A78\(CPUState\* cpu\)\s*\{', source))
     if len(matches) != 1:

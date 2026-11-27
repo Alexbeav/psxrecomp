@@ -28,7 +28,7 @@ def check_openbios_paths(args, root, temp):
     body = source / 'OpenBIOS_full.c'
     # Synthetic selector fixture; the actual generated-body contract is tested
     # separately by test_openbios_read_job.py.
-    original = ('/* BIOS SHA256: fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57 */\n'
+    original = ('/* BIOS SHA256: 32dbc89c2e620c9a671fabe05772c3ae0ab38e4d15b4fdeeb6f7ca07093ef8c3 */\n'
                 'typedef int CPUState; extern int result;\n'
                 'void OpenBIOS_func_1FC03A78(CPUState* cpu) { result=1; }\n')
     body.write_text(original)
