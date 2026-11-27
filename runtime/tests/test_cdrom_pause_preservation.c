@@ -103,19 +103,19 @@ int main(void) {
     cdrom_snapshot_write(wire);
     for (unsigned missing = 1; missing < 5; missing++)
         CHECK(!cdrom_snapshot_validate(wire, bytes - missing));
-    wire[bytes - 22] = 2; /* actual CDF4 received-sector Boolean */
+    wire[bytes - 34] = 2; /* actual CDF4 received-sector Boolean, under CDF5-CDF7 */
     CHECK(!cdrom_snapshot_read(wire, bytes));
-    wire[bytes - 22] = 1;
+    wire[bytes - 34] = 1;
     cdrom_snapshot_write(after);
     CHECK(memcmp(wire, after, bytes) == 0);
-    for (unsigned offset = bytes - 31; offset <= bytes - 26; offset += 5) {
+    for (unsigned offset = bytes - 43; offset <= bytes - 38; offset += 5) {
         wire[offset] ^= 1;
         CHECK(!cdrom_snapshot_read(wire, bytes));
         wire[offset] ^= 1;
         cdrom_snapshot_write(after);
         CHECK(memcmp(wire, after, bytes) == 0);
     }
-    CHECK(cdrom_snapshot_read(wire, bytes - 26)); /* actual CDF3 length */
+    CHECK(cdrom_snapshot_read(wire, bytes - 38)); /* actual CDF3 length */
     exec_command(9); response_clear(); ack();
     CHECK(msf_to_lba(read_min, read_sec, read_sect) == 101);
     setup(); sector(); ack();
