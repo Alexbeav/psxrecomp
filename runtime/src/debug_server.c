@@ -17792,10 +17792,17 @@ static int io_thread_main(void *arg)
         if (rl < 0) { sock_close(c); continue; }
         if (rl > 0 && req[rl - 1] == '\r') req[rl - 1] = '\0';
 
-        /* Lock-free liveness fast-path (survives an emu-thread freeze). */
+        /* Lock-free liveness fast-path (survives an emu-thread freeze). It
+         * names the port and process it came from (PS1B-194): s_port and the
+         * pid are fixed once listening, so a client can tell which runtime
+         * answered. The request's id is echoed like every other reply. */
         if (strstr(req, "\"ping\"")) {
-            const char *pong = "{\"id\":0,\"ok\":true,\"pong\":true,\"io_thread\":true}\n";
-            send_all_blocking(c, pong, strlen(pong));
+            char pong[160];
+            int pl = snprintf(pong, sizeof(pong),
+                              "{\"id\":%d,\"ok\":true,\"pong\":true,\"io_thread\":true,"
+                              "\"port\":%d,\"pid\":%lu}\n",
+                              json_get_int(req, "id", 0), s_port, debug_server_pid());
+            if (pl > 0 && pl < (int)sizeof(pong)) send_all_blocking(c, pong, (size_t)pl);
             sock_close(c);
             continue;
         }
