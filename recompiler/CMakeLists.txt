@@ -2547,3 +2547,9 @@ add_test(
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 endif()
+
+# PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
+add_test(NAME recompiler_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=recompiler_test_temp_isolation
+         -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_temp.cmake")
+psx_isolate_test_temp()
