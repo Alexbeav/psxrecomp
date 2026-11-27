@@ -41,6 +41,10 @@ void pgxp_projective_scope_end(PGXPProjectiveScope *scope) {
 }
 uint32_t g_debug_current_func_addr;
 uint32_t g_debug_last_store_pc;
+/* dma.c is not linked here: GP0 words come from CPU stores, no DMA runs (PS1B-101). */
+int g_dma_exec_depth;
+int g_dma_cur_ch = -1;
+uint32_t g_dma_initiator_pc;
 CPUState *debug_cpu_ptr;
 int g_psx_vram_dirty_tracking;
 uint32_t g_psx_ram_size = 0x00200000u;
