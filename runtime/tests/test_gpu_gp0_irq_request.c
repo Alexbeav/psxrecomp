@@ -49,14 +49,31 @@ int main(void) {
     gpu_write_gp1(0x02000000u);
     CHECK(irq_flag() == 0u);
 
-    /* The next command is parsed normally: GP0(E1h) then a flat quad. */
+    /* The next command is parsed normally. */
     gpu_write_gp0(0xE1000000u);
     CHECK(((gpu_read_gpustat() >> 26) & 1u) == 1u);
+
+    /* Same class: F0h-FEh are one-word null commands in Beetle's table (only
+     * FFh was a NOP here). Each is consumed alone; the quad after it is
+     * parsed from its own header. */
+    {
+        for (unsigned op = 0xF0u; op <= 0xFEu; ++op) {
+            gpu_write_gp0(op << 24);
+            CHECK(((gpu_read_gpustat() >> 26) & 1u) == 1u);
+        }
+        gpu_write_gp0(0x28000000u);
+        CHECK(((gpu_read_gpustat() >> 26) & 1u) == 0u);
+        gpu_write_gp0(0x00000000u);
+        gpu_write_gp0(0x00000010u);
+        gpu_write_gp0(0x00100000u);
+        gpu_write_gp0(0x00100010u);
+        CHECK(((gpu_read_gpustat() >> 26) & 1u) == 1u);
+    }
 
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);
         return 1;
     }
-    puts("PASS: GP0(1Fh) sets GPUSTAT bit 24 and raises I_STAT bit 1 on the edge; GP1(02h) clears it");
+    puts("PASS: GP0(1Fh) sets GPUSTAT bit 24 and raises I_STAT bit 1 on the edge; GP1(02h) clears it; F0h-FEh are NOPs");
     return 0;
 }
