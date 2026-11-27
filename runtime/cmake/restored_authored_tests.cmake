@@ -289,3 +289,13 @@ endif()
 if(BUILD_TESTING)
 add_test(NAME text_xlate_kernel_bless_test COMMAND text_xlate_kernel_bless_test)
 endif()
+if(BUILD_TESTING)
+add_executable(gpu_render_native_scale_lock_test
+        tests/test_gpu_render_native_scale_lock.c src/gpu_render.c
+        src/gpu_sw_renderer.c src/gpu_vram_dirty.c)
+target_include_directories(gpu_render_native_scale_lock_test PRIVATE include)
+if(NOT MSVC)
+target_link_libraries(gpu_render_native_scale_lock_test PRIVATE m)
+endif()
+add_test(NAME gpu_render_native_scale_lock_test COMMAND gpu_render_native_scale_lock_test)
+endif()

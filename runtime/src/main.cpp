@@ -23270,12 +23270,14 @@ session_reboot:
              * (PS1B-448, first landed as 41309837 on stage/pin-i). */
             if (gr_backend() == GR_BACKEND_OPENGL) {
                 gr_set_backend(GR_BACKEND_SOFTWARE);
-                gr_set_scale(1);
-                g_video_scale = 1;
                 g_gl_fbo_present = 0;
                 std::fprintf(stdout, "psxrecomp: source GPU model: software raster at 1x; "
                                      "OpenGL presents the CPU picture\n");
             }
+            /* A software start with a supersample setting halts the same
+             * way, at the first source block; hold 1x on every backend. */
+            gr_lock_native_scale();
+            g_video_scale = 1;
         }
     }
 

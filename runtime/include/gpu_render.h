@@ -37,6 +37,10 @@ void      gr_refresh_backend(void);           /* re-fetch the GL table (render t
 void gr_init(uint16_t *vram);
 void gr_display_mode_changed(void);
 void gr_set_scale(int scale);
+/* Hold the internal scale at 1x for the rest of the process: the source GPU
+ * model draws only at native resolution (PS1B-448). Later gr_set_scale calls
+ * (settings, internal-resolution and live-scale paths) then set 1x. */
+void gr_lock_native_scale(void);
 int  gr_scale(void);
 
 /* Compile-time ceiling for the OpenGL backend's internal-resolution scale. The
