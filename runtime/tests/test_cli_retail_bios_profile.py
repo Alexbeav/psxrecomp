@@ -91,5 +91,49 @@ class RetailBiosProfileTests(unittest.TestCase):
                              "abc123\n")
 
 
+    @unittest.skipUnless(cli.shutil.which("cmake"), "cmake not on PATH: fingerprint test skipped")
+    def test_image_change_makes_the_backend_stale(self):
+        # PS1B-573: PS1G-142 replaced bios/openbios.bin and its pinned sha256; a
+        # tree generated before that kept linking the old OpenBIOS code because
+        # generate checked only that the pair existed.
+        with tempfile.TemporaryDirectory() as temporary:
+            fw = Path(temporary)
+            (fw / "tools").mkdir()
+            (fw / "bios").mkdir()
+            (fw / "generated").mkdir()
+            script = (ROOT / "tools/bios_emitter_fingerprint.cmake").read_text(encoding="utf-8")
+            (fw / "tools/bios_emitter_fingerprint.cmake").write_text(script, encoding="utf-8")
+            profile = fw / "bios/OpenBIOS.toml"
+            old = "fabe498f" + "0" * 56
+            new = "32dbc89c" + "0" * 56
+            recipe = ('[program]\nrom = "bios/openbios.bin"\nsha256 = "{}"\n'
+                      '[recompiler]\nout_dir = "generated"\nout_stem = "OpenBIOS"\n')
+            profile.write_text(recipe.format(old), encoding="utf-8")
+            (fw / "generated/OpenBIOS_dispatch.c").write_text(
+                "const PsxBiosBackend OpenBIOS_psx_bios_backend;", encoding="utf-8")
+            (fw / "generated/OpenBIOS_full.c").write_text("", encoding="utf-8")
+            stamp = fw / "generated/OpenBIOS.emitter.sha"
+            self.assertFalse(cli.bios_backend_present(fw, "OpenBIOS"), "a pair with no stamp is not proven current")
+            fingerprint = cli.bios_emitter_fingerprint(fw, "bios/OpenBIOS.toml")
+            self.assertTrue(fingerprint and fingerprint.strip())
+            stamp.write_text(fingerprint, encoding="utf-8")
+            self.assertTrue(cli.bios_backend_present(fw, "OpenBIOS"), "the pair the current recipe made")
+            profile.write_text(recipe.format(new), encoding="utf-8")
+            self.assertFalse(cli.bios_backend_present(fw, "OpenBIOS"), "a new pinned image makes the pair stale")
+            # stage_retail_bios takes the same answer: a stale pair regenerates
+            # without --force-bios.
+            (fw / "bios/SCPH5552.toml").write_text(
+                recipe.replace("openbios.bin", "SCPH5552.BIN").replace("OpenBIOS", "SCPH5552").format(new),
+                encoding="utf-8")
+            for name in ("SCPH5552_dispatch.c", "SCPH5552_full.c"):
+                (fw / "generated" / name).write_text(
+                    "const PsxBiosBackend SCPH5552_psx_bios_backend;", encoding="utf-8")
+            (fw / "generated/SCPH5552.emitter.sha").write_text("stale\n", encoding="utf-8")
+            dump = fw / "dump.bin"
+            dump.write_bytes(b"\0" * 16)
+            with patch.object(cli, "regen_bios_profile") as regen:
+                cli.stage_retail_bios(fw, fw, dump, "SCPH5552", force=False, progress=Mock())
+            regen.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()

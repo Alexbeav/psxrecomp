@@ -889,6 +889,13 @@ def ensure_framework(
 
 
 def bios_backend_present(fw: Path, stem: str) -> bool:
+    """A linkable backend pair that the current recipe produced.
+
+    The pair must name the stem's descriptor, and when bios/<stem>.toml exists
+    its generated/<stem>.emitter.sha must equal the fingerprint of the current
+    emitter, seeds and profile. The profile pins the image's sha256, so a new
+    BIOS image, like a new emitter, makes the pair stale and generate
+    regenerates it instead of linking the old code (PS1B-573)."""
     dispatch = fw / "generated" / f"{stem}_dispatch.c"
     full = fw / "generated" / f"{stem}_full.c"
     if not dispatch.is_file() or not full.is_file():
@@ -897,7 +904,35 @@ def bios_backend_present(fw: Path, stem: str) -> bool:
         text = dispatch.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    return f"{stem}_psx_bios_backend" in text
+    if f"{stem}_psx_bios_backend" not in text:
+        return False
+    profile_rel = f"bios/{stem}.toml"
+    if not (fw / profile_rel).is_file():
+        return True
+    stamp = fw / "generated" / f"{stem}.emitter.sha"
+    try:
+        saved = stamp.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    current = bios_emitter_fingerprint(fw, profile_rel)
+    return bool(saved) and current is not None and saved == current.strip()
+
+
+def bios_emitter_fingerprint(fw: Path, profile_rel: str) -> Optional[str]:
+    """tools/bios_emitter_fingerprint.cmake for *profile_rel*, or None when
+    cmake or the script is missing or the script fails."""
+    cmake = shutil.which("cmake")
+    script = fw / "tools" / "bios_emitter_fingerprint.cmake"
+    if not cmake or not script.is_file():
+        return None
+    proc = subprocess.run(
+        [cmake, f"-DROOT={fw}", f"-DPROFILE={profile_rel}", "-P", str(script)],
+        cwd=str(fw), capture_output=True,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
 
 
 def regen_bios_profile(
