@@ -87,9 +87,20 @@ int main(void) {
     assert((channels[0].chcr >> 24) & 1u); assert(!((channels[0].chcr >> 28) & 1u));
     fresh(); kick(0x1F801090, 0x20000, (4u << 16) | 32, 0x11000200);   /* MDEC out, async */
     assert((channels[1].chcr >> 24) & 1u); assert(!((channels[1].chcr >> 28) & 1u));
-    fresh(); ram[0x1000 / 4] = 0x00FFFFFF;
-    kick(0x1F8010A0, 0x1000, 0, 0x11000401);                            /* GPU linked list */
+    /* GPU linked list. Kicked from a device service, which the CPU hold skips,
+     * the walk is still running after the kick. Kicked from guest code, the
+     * store holds the CPU until the walk ends (c1a8337f; PSX-SPX "CPU Operation
+     * during DMA"), so this one-node list has finished: busy and bit 28 clear,
+     * MADR at the end marker (PS1B-590: the old check expected busy here and
+     * passed only because Release builds compiled assert() out). */
+    fresh(); ram[0x1000 / 4] = 0x00FFFFFF; psx_in_device_service = 1;
+    kick(0x1F8010A0, 0x1000, 0, 0x11000401);
     assert((channels[2].chcr >> 24) & 1u); assert(!((channels[2].chcr >> 28) & 1u));
+    psx_in_device_service = 0;
+    fresh(); ram[0x1000 / 4] = 0x00FFFFFF;
+    kick(0x1F8010A0, 0x1000, 0, 0x11000401);
+    assert(!((channels[2].chcr >> 24) & 1u)); assert(!((channels[2].chcr >> 28) & 1u));
+    assert(channels[2].madr == 0x00FFFFFFu);
     fresh(); kick(0x1F8010B0, 0x20000, 0x00010200, 0x11000000);         /* CD async */
     assert((channels[3].chcr >> 24) & 1u); assert(!((channels[3].chcr >> 28) & 1u));
     fresh(); kick(0x1F8010C0, 0x10000, (4u << 16) | 16, 0x11000201);    /* SPU, deferred done */

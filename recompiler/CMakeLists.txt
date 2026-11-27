@@ -2548,6 +2548,12 @@ add_test(
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 endif()
 
+# PS1B-590: assert() stays live in every test executable, whatever the build type.
+add_executable(recompiler_test_asserts_live "${CMAKE_CURRENT_LIST_DIR}/../cmake/test_asserts_live.c")
+add_test(NAME recompiler_test_asserts_live COMMAND recompiler_test_asserts_live)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_asserts.cmake")
+psx_keep_test_asserts()
+
 # PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
 add_test(NAME recompiler_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=recompiler_test_temp_isolation
          -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")

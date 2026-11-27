@@ -4384,6 +4384,12 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_test(NAME memory_spu_word_access_test COMMAND memory_spu_word_access_test)
 endif()
 
+# PS1B-590: assert() stays live in every test executable, whatever the build type.
+add_executable(runtime_test_asserts_live "${CMAKE_CURRENT_LIST_DIR}/../cmake/test_asserts_live.c")
+add_test(NAME runtime_test_asserts_live COMMAND runtime_test_asserts_live)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_asserts.cmake")
+psx_keep_test_asserts()
+
 # PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
 add_test(NAME runtime_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=runtime_test_temp_isolation
          -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")

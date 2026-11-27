@@ -200,6 +200,10 @@ foreach(_t IN LISTS _tas_targets)
     endif()
 endforeach()
 
+# PS1B-590: assert() stays live in every test executable, whatever the build type.
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/psx_test_asserts.cmake")
+psx_keep_test_asserts()
+
 # PS1B-434: one TEMP per test, so concurrent test runs never share fixed names.
 include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/psx_test_temp.cmake")
 psx_isolate_test_temp()
