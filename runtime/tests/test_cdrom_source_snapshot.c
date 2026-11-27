@@ -61,9 +61,9 @@ int main(int argc,char **argv) {
     }
     EXPECT(!cdrom_snapshot_read(saved,n-1),"truncated optional state refused");
     EXPECT(!cdrom_snapshot_read(saved,base),"profile-less state refused in enabled profile");
-    /* CDF6 adds9 bytes after CDF5's12-byte gain section. The CDF4
+    /* CDF7 (12 bytes) follows CDF6 (9), which follows CDF5's 12-byte gain section. The CDF4
      * received-sector Boolean remains immediately before those sections. */
-    memcpy(bad,saved,n);bad[base-22u]=2;
+    memcpy(bad,saved,n);bad[base-34u]=2;
     EXPECT(!cdrom_snapshot_read(bad,n),"modern CDF4 receipt validation still applies");
     cdrom_snapshot_write(again);EXPECT(!memcmp(saved,again,n),"CDF4 refusal remains atomic with source appendix");
     free(saved);free(again);free(bad);

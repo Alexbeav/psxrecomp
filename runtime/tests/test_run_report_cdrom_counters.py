@@ -20,10 +20,12 @@ assert "void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent, uint32_
 call = REPORT.index("cdrom_silent_read_stats(&starts, &silent, &longest_run);")
 fmt = re.search(
     r'"  \\"cdrom\\": \{\\"read_starts\\": %u, \\"silent_reads\\": %u, "\s*'
-    r'"\\"silent_run_max\\": %u\},\\n",\s*starts, silent, longest_run\);',
+    r'"\\"silent_run_max\\": %u, \\"retry_dither\\": %llu, "\s*'
+    r'"\\"retry_dither_fires\\": \[",\s*starts, silent, longest_run,',
     REPORT[call:],
 )
-assert fmt, 'the report must write "cdrom": {"read_starts", "silent_reads", "silent_run_max"} from the counters'
+# PS1G-140 extends the object with the retry dither count and its fires.
+assert fmt, 'the report must write "cdrom": {"read_starts", "silent_reads", "silent_run_max", ...} from the counters'
 
 # The counters are fed where a stream starts and where one ends, and nowhere
 # decide anything: outside the accounting they are only read by the getter.

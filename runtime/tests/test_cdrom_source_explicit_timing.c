@@ -175,7 +175,10 @@ int main(int argc,char **argv) {
     command(0x15);finish();CHECK(!s_source_seek_paused,"seek changes timing state before restore");
     CHECK(cdrom_snapshot_read(wire,size)&&s_source_seek_paused==1,"matching-profile snapshot restores paused timing");
     CHECK(source_explicit_seek_cycles(0x15)==2947488,"restored first logical seek retains exact delay");
-    wire[size-1]=2;uint8_t old_stat=stat_reg;uint8_t old_phase=s_source_seek_paused;
+    /* The CDF7 retry run (magic, target, count: 12 bytes) follows the CDF6 phase byte. */
+    wire[size-1]=0x80;uint8_t old_stat=stat_reg;uint8_t old_phase=s_source_seek_paused;
+    CHECK(!cdrom_snapshot_read(wire,size)&&stat_reg==old_stat&&s_source_seek_paused==old_phase,"negative retry run fails before state mutation");
+    wire[size-1]=0;wire[size-13]=2;
     CHECK(!cdrom_snapshot_read(wire,size)&&stat_reg==old_stat&&s_source_seek_paused==old_phase,"invalid phase fails before state mutation");
     command(0x15);finish();command(9);finish();target(5);command(0x15);
     CHECK(pending.due_cyc-psx_cycle_count==2947488,"Pause restores paused restart cost after standby");
