@@ -33,16 +33,21 @@ sys.path.insert(0, str(TOOLKIT))
 TEMPLATE = FW / "docs" / "ci" / "templates" / "game-release.yml"
 CHECK_GENERATED = FW / "tools" / "ci" / "check_generated.sh"
 BOOT = "SLUS_012.34"
+sys.path.insert(0, str(FW / "tools"))
+import host_bash  # noqa: E402
+
 GIT = shutil.which("git")
-BASH = shutil.which("bash")
+# PATH can resolve bash to the WSL launcher, which does not accept the native
+# Windows fixture and script paths; the shared finder never returns it.
+try:
+    BASH = host_bash.find_bash("the bundled-release layout test")
+except AssertionError:
+    BASH = None
 if os.name == "nt":
-    # PATH can resolve bash to the WSL launcher and git to an MSYS shim.
-    # Neither reliably accepts the native Windows fixture/script paths.
+    # PATH can resolve git to an MSYS shim.
     git_root = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git"
     if (git_root / "cmd/git.exe").is_file():
         GIT = str(git_root / "cmd/git.exe")
-    if (git_root / "bin/bash.exe").is_file():
-        BASH = str(git_root / "bin/bash.exe")
 
 
 def _git(root, *args):

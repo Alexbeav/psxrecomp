@@ -1136,9 +1136,11 @@ def sign_windows(ctx):
         log('Windows binaries ship unsigned (no WINDOWS_SIGN_PFX certificate configured)')
         ctx.signed = False
         return
-    bash = shutil.which('bash')
-    if not bash:
-        fail('a signing certificate is configured but bash is not available to run sign_windows.sh')
+    from host_bash import find_bash
+    try:
+        bash = find_bash('Authenticode signing (sign_windows.sh)', verify_msys=True)
+    except AssertionError as exc:
+        fail('a signing certificate is configured but no usable bash runs sign_windows.sh: %s' % exc)
     run([bash, TOOLS / 'ci/sign_windows.sh', ctx.stage], 'Authenticode signing')
     ctx.signed = True
 

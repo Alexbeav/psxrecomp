@@ -39,9 +39,12 @@ class BashCallerTests(unittest.TestCase):
         self.windows = self.root / 'Windows'
         self.wsl = self.windows / 'System32' / 'bash.exe'
         self.git = self.root / 'Git with spaces' / 'bin' / 'bash.exe'
-        for path in (self.wsl, self.git):
+        # Distinct bytes: the CMake finder knows a launcher reached through a
+        # junction by its content.
+        for path, body in ((self.wsl, b'authored WSL launcher stand-in'),
+                           (self.git, b'authored Git Bash stand-in')):
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'')
+            path.write_bytes(body)
         self.env = {'SystemRoot': str(self.windows),
                     'PATH': os.pathsep.join((str(self.wsl.parent), str(self.git.parent)))}
         self.real_find = host_bash.find_bash
@@ -57,40 +60,33 @@ class BashCallerTests(unittest.TestCase):
                 patch.object(host_bash, 'is_msys_bash', return_value=True):
             yield
 
-    def test_cli_fingerprint_never_executes_the_first_path_launcher(self):
+    def test_cli_fingerprint_starts_no_bash(self):
+        # The stamp writer computes the fingerprint with CMake's own script
+        # (tools/bios_emitter_fingerprint.cmake), so no bash, and no launcher,
+        # can be started from it whatever PATH holds.
         cli = load('_host_bash_cli', BASELINE_CLI or ROOT / 'psxrecomp_cli.py')
         fw = self.root / 'framework'
         (fw / 'tools').mkdir(parents=True)
         (fw / 'tools' / 'bios_emitter_fingerprint.sh').write_text('authored stand-in\n', encoding='utf-8')
+        (fw / 'tools' / 'bios_emitter_fingerprint.cmake').write_text('# authored stand-in\n', encoding='utf-8')
+        (fw / 'generated').mkdir()
         (fw / 'profile.toml').write_text('[recompiler]\nout_stem="Authored"\n', encoding='utf-8')
         calls = []
         def fingerprint(argv, **kwargs):
             calls.append(argv)
-            self.assertEqual(Path(argv[0]), self.git, 'WSL launcher reached subprocess.run')
+            self.assertNotIn('bash', Path(argv[0]).name.casefold(), 'a bash reached subprocess.run')
             return subprocess.CompletedProcess(argv, 0, 'authored-fingerprint\n', '')
-        with self.policy(), patch.object(cli.subprocess, 'run', side_effect=fingerprint):
-            if hasattr(cli, 'find_bash'):
-                with patch.object(cli, 'find_bash', side_effect=self.windows_find):
-                    cli.write_bios_emitter_stamp(fw, 'profile.toml', progress=SimpleNamespace(log=lambda line: None))
-            else:
-                cli.write_bios_emitter_stamp(fw, 'profile.toml', progress=SimpleNamespace(log=lambda line: None))
+        cmake = os.environ.get('PSX_TEST_CMAKE') or shutil.which('cmake')
+        if not cmake:
+            self.skipTest('the stamp writer needs CMake; CTest passes its actual CMAKE_COMMAND')
+        def which(name, *args, **kwargs):
+            # The host's cmake; for bash, only the launcher first on PATH.
+            return {'cmake': cmake, 'bash': str(self.wsl)}.get(name)
+        with self.policy(), patch.object(cli.shutil, 'which', side_effect=which), \
+                patch.object(cli.subprocess, 'run', side_effect=fingerprint):
+            cli.write_bios_emitter_stamp(fw, 'profile.toml', progress=SimpleNamespace(log=lambda line: None))
         self.assertEqual(len(calls), 1)
         self.assertEqual((fw / 'generated' / 'Authored.emitter.sha').read_text(), 'authored-fingerprint\n')
-
-    def test_optional_stamp_refuses_an_invalid_explicit_override(self):
-        if BASELINE_CLI:
-            self.skipTest('baseline measurement selects the unsafe CLI seam only')
-        cli = load('_host_bash_cli_optional', ROOT / 'psxrecomp_cli.py')
-        fw = self.root / 'optional'
-        (fw / 'tools').mkdir(parents=True)
-        (fw / 'tools' / 'bios_emitter_fingerprint.sh').write_text('stand-in', encoding='utf-8')
-        messages = []
-        with self.policy(), patch.dict(os.environ, {'PSX_GIT_BASH': str(self.wsl)}), \
-                patch.object(cli, 'find_bash', side_effect=self.windows_find), \
-                patch.object(cli.subprocess, 'run') as run:
-            cli.write_bios_emitter_stamp(fw, 'missing-profile.toml', progress=SimpleNamespace(log=messages.append))
-            run.assert_not_called()
-        self.assertTrue(any('WSL launcher' in message for message in messages))
 
     def test_every_python_adapter_uses_the_same_policy(self):
         modules = [('package BIOS hint', 'tools/tests/test_package_setup_bios_hint.py'),
@@ -157,6 +153,63 @@ class BashCallerTests(unittest.TestCase):
             self.assertEqual(cli.cmd_build_mingw(args), 0)
             self.assertEqual(Path(run.call_args.args[0][0]), self.git)
 
+    def test_studio_release_steps_never_start_a_bare_bash(self):
+        # A bare "bash" given to CreateProcess on Windows is System32's WSL
+        # launcher whatever PATH says; every Studio release step must name
+        # the shared finder's choice instead.
+        sys.path.insert(0, str(ROOT / 'tools' / 'new_project_layout'))
+        from project_studio import buildops, migrate_bundled, ops
+        from project_studio.models import MigrateOptions
+        def started(argv):
+            self.assertEqual(Path(argv[0]), self.git, 'a launcher or a bare bash reached the process start')
+
+        game = self.root / 'game'
+        (game / 'psxrecomp' / 'tools' / 'ci').mkdir(parents=True)
+        (game / 'psxrecomp' / 'tools' / 'ci' / 'record_pins.sh').write_text('stand-in', encoding='utf-8')
+        with self.subTest(step='record framework pins'), self.policy(), \
+                patch.object(ops, 'find_bash', side_effect=self.windows_find), \
+                patch.object(ops.subprocess, 'run',
+                             side_effect=lambda argv, **kw: started(argv) or
+                             subprocess.CompletedProcess(argv, 0, 'psxrecomp=authored\n', '')) as run:
+            result = ops.op_record_framework_pins(game, MigrateOptions())
+            self.assertTrue(result.ok, result)
+            self.assertEqual(run.call_count, 1)
+
+        for argv in (['bash', 'psxrecomp/tools/ci/build_emitters.sh'],
+                     ['bash', '-c', 'psxrecomp/tools/ci/check_boot_exe.sh']):
+            with self.subTest(step='bundled migration', argv=argv), self.policy(), \
+                    patch.object(migrate_bundled, 'find_bash', side_effect=self.windows_find), \
+                    patch.object(migrate_bundled.subprocess, 'run',
+                                 side_effect=lambda cmd, **kw: started(cmd) or
+                                 SimpleNamespace(returncode=0, stdout='', stderr='')):
+                self.assertEqual(migrate_bundled._run(argv, game)[0], 0)
+        with self.subTest(step='bundled migration without a usable bash'), \
+                patch.object(migrate_bundled, 'find_bash', side_effect=AssertionError('only a launcher')), \
+                patch.object(migrate_bundled.subprocess, 'run') as run:
+            self.assertEqual(migrate_bundled._run(['bash', 'x.sh'], game), (127, 'only a launcher'))
+            run.assert_not_called()
+
+        (game / 'scripts').mkdir()
+        (game / 'scripts' / 'package_release.sh').write_text('stand-in', encoding='utf-8')
+        (game / 'build-release' / 'mods').mkdir(parents=True)
+        with self.subTest(step='release export'), self.policy(), \
+                patch.object(buildops, 'find_bash', side_effect=self.windows_find), \
+                patch.object(buildops, '_run_stream',
+                             side_effect=lambda argv, *a, **kw: started(argv) or
+                             SimpleNamespace(ok=False, message='stop after the start')) as run:
+            buildops.export_release(game)
+            self.assertEqual(run.call_count, 1)
+
+    def test_authenticode_signing_uses_the_shared_shell(self):
+        release = load('_host_bash_release', ROOT / 'tools' / 'package_title_release.py')
+        ctx = SimpleNamespace(stage=self.root / 'stage', signed=None)
+        commands = []
+        with self.policy(), patch.dict(os.environ, {'WINDOWS_SIGN_PFX': 'authored-placeholder'}), \
+                patch.object(release, 'run', side_effect=lambda command, what, **kw: commands.append(command)):
+            release.sign_windows(ctx)
+        self.assertEqual([Path(c[0]) for c in commands], [self.git])
+        self.assertTrue(ctx.signed)
+
     def test_native_lookup_and_explicit_overrides(self):
         with patch.object(host_bash.shutil, 'which', return_value='/usr/bin/bash'):
             self.assertEqual(self.real_find('native control', environ={'PATH': '/usr/bin'}, windows=False), '/usr/bin/bash')
@@ -177,10 +230,13 @@ class BashCallerTests(unittest.TestCase):
                           f'include("{(BASELINE_CMAKE or ROOT / "runtime/host_bash.cmake").as_posix()}")\n'
                           'psxrecomp_find_bash(picked launcher)\n'
                           'message("PICK=${picked}\\nLAUNCHER=${launcher}")\n', encoding='utf-8')
-        env = {**os.environ, **self.env}
-        for name in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
-            env.pop(name, None)
-        env.pop('PSX_GIT_BASH', None)
+        # Windows keeps environment names in upper case in os.environ and
+        # matches them without case, so drop by folded name: a second
+        # "SystemRoot" beside "SYSTEMROOT" is not an override.
+        dropped = {name.casefold() for name in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)',
+                                                'LOCALAPPDATA', 'PSX_GIT_BASH', *self.env)}
+        env = {name: value for name, value in os.environ.items() if name.casefold() not in dropped}
+        env.update(self.env)
         if override is not None:
             env['PSX_GIT_BASH'] = str(override)
         if path is not None:
@@ -275,7 +331,7 @@ if __name__ == '__main__':
     args, remaining = parser.parse_known_args()
     BASELINE_CLI = args.baseline_cli
     BASELINE_CMAKE = args.baseline_cmake
-    suite = (unittest.TestSuite([BashCallerTests('test_cli_fingerprint_never_executes_the_first_path_launcher')])
+    suite = (unittest.TestSuite([BashCallerTests('test_cli_fingerprint_starts_no_bash')])
              if BASELINE_CLI else
              unittest.TestSuite([BashCallerTests('test_cmake_finder_refuses_aliases_in_override_cache_and_path')])
              if BASELINE_CMAKE else unittest.defaultTestLoader.loadTestsFromTestCase(BashCallerTests))

@@ -934,8 +934,12 @@ def export_release(
     # Explicit either way: the packager defaults this from $CI, and a studio
     # export must not inherit that by accident on a CI-flavoured machine.
     env["EXCLUDE_DEV_MODS"] = "1" if exclude_dev_mods else "0"
+    try:
+        bash = find_bash("the release packager", verify_msys=True)
+    except AssertionError as exc:
+        return CmdResult(False, str(exc))
     res = _run_stream(
-        ["bash", str(wrapper), build_dir, tag, recompiler_build],
+        [bash, str(wrapper), build_dir, tag, recompiler_build],
         root, log=log, env=env,
     )
     if not res.ok:
