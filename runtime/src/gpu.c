@@ -7039,12 +7039,10 @@ static int gp0_command_word_count(uint8_t opcode) {
             /* 0x03-0x1E, 0xE7-0xEF, 0xFF: NOP (1 word). PSX-SPX graphicsprocessingunitgpu,
              * "GP0(04h..1Eh,E0h,E7h..EFh) - Mirrors of GP0(00h) - NOP (?)",
              * lists 04h-1Eh and E7h-EFh; it calls 03h unknown and does not
-             * list FFh. This code also treats 03h and FFh as NOPs.
-             * F0h-FEh: in-tree Beetle's command table (gpu.cpp, 0xF0 row)
-             * makes all of F0h-FFh one-word null commands; they are NOPs
-             * here too (PS1B-603, same fault class as GP0(1Fh)). */
+             * list FFh. This code also treats 03h and FFh as NOPs. */
             if ((opcode >= 0x03 && opcode <= 0x1E) ||
-                opcode >= 0xE7) {
+                (opcode >= 0xE7 && opcode <= 0xEF) ||
+                opcode == 0xFF) {
                 return 1;
             }
             return 0;  /* unknown */
@@ -8119,11 +8117,11 @@ static void gp0_dispatch_command(uint8_t opcode) {
             break;
 
         default:
-            /* NOP range: 0x03-0x1E, 0xE0, 0xE7-0xFF (Beetle: F0h-FFh are
-             * null commands; PS1B-603) */
+            /* NOP range: 0x03-0x1E, 0xE0, 0xE7-0xEF, 0xFF */
             if ((opcode >= 0x03 && opcode <= 0x1E) ||
                 opcode == 0xE0 ||
-                opcode >= 0xE7) {
+                (opcode >= 0xE7 && opcode <= 0xEF) ||
+                opcode == 0xFF) {
                 break;  /* NOP — silently consume */
             }
 
