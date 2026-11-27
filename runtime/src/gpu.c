@@ -94,11 +94,18 @@ static uint32_t gp0_cmd_buf[16];   /* max fixed-length command is 12 words */
 static int      gp0_words_collected;
 static int      gp0_words_needed;
 static uint32_t gp0_next_source_addr = 0xFFFFFFFFu;
+/* PS1B-101: the instruction that sent the next GP0 word, and the DMA channel
+ * that carried it (-1 for a CPU store to GP0). A DMA feed runs long after the
+ * guest's last store, so g_debug_last_store_pc is stale there; the channel's
+ * kick PC is the sender. Diagnostic only: not in the snapshot. */
+static uint32_t gp0_next_origin_pc, gp0_cmd_origin_pc;
+static int8_t   gp0_next_origin_ch = -1, gp0_cmd_origin_ch = -1;
 static int source_gpu_queue_enabled;
 static uint32_t source_gpu_config;
 static int gpu_source_dispatch(const SourceGPUCommandDispatch *);
 static struct {
     uint32_t words[16], sources[16], ranks[16], count;
+    uint32_t origin_pcs[16]; int8_t origin_chs[16];  /* PS1B-101; not in the snapshot */
     int32_t credit;
     uint64_t cycle;
 } gpu_queue;
@@ -4272,6 +4279,8 @@ static void gpu_reset_state(int clear_vram) {
     memset(gp0_cmd_buf, 0, sizeof(gp0_cmd_buf));
     gp0_next_source_addr = 0xFFFFFFFFu;
     gp0_cmd_source_addr = 0xFFFFFFFFu;
+    gp0_next_origin_pc = gp0_cmd_origin_pc = 0;
+    gp0_next_origin_ch = gp0_cmd_origin_ch = -1;
     ws_hud_anchor_clear(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_hud_anchor_clear(ws_background_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_background_tags_used = 0;
@@ -7658,7 +7667,8 @@ static void gp0_ring_record(const uint32_t *words, int n) {
     e->frame   = (uint32_t)s_frame_count;
     e->seq     = (uint32_t)gp0_ring_seq;
     e->src_addr = gp0_cmd_source_addr;
-    e->pc      = g_debug_last_store_pc;
+    e->pc      = gp0_cmd_origin_pc;
+    e->dma_ch  = gp0_cmd_origin_ch;
     e->func    = g_debug_current_func_addr;
     e->ra      = debug_guest_ra();
     e->opcode  = (uint8_t)((words[0] >> 24) & 0xFF);
@@ -7732,6 +7742,19 @@ void gpu_gp0_ring_frame_span(uint32_t *out_oldest, uint32_t *out_newest) {
 
 void gpu_set_gp0_source(uint32_t addr) {
     gp0_next_source_addr = addr;
+#ifndef PSX_NO_DEBUG_TOOLS
+    {
+        extern int g_dma_exec_depth, g_dma_cur_ch;
+        extern uint32_t g_dma_initiator_pc;
+        if (g_dma_exec_depth > 0 && g_dma_cur_ch >= 0) {
+            gp0_next_origin_pc = g_dma_initiator_pc;
+            gp0_next_origin_ch = (int8_t)g_dma_cur_ch;
+        } else {
+            gp0_next_origin_pc = g_debug_last_store_pc;
+            gp0_next_origin_ch = -1;
+        }
+    }
+#endif
 }
 
 /* ---- Draw census ring (ALWAYS-ON) -----------------------------------------
@@ -8348,6 +8371,8 @@ static void gpu_write_gp0_body(uint32_t val) {
 
     gp0_cmd_buf[0] = val;
     gp0_cmd_source_addr = gp0_next_source_addr;
+    gp0_cmd_origin_pc = gp0_next_origin_pc;
+    gp0_cmd_origin_ch = gp0_next_origin_ch;
 
     if (word_count == 1) {
         gp0_words_collected = 1;
@@ -8373,7 +8398,7 @@ void gpu_write_gp0(uint32_t val) {
     if(source_gpu_runtime_active())source_gpu_runtime_gp0(val);
     else if(source_gpu_queue_enabled){
         gpu_queue_service();if(!gpu_queue_has_space())psx_fatal_halt("source GPU FIFO overflow");
-        unsigned at=gpu_queue.count++;gpu_queue.words[at]=val;gpu_queue.sources[at]=gp0_next_source_addr;gpu_queue.ranks[at]=gp0_ot_rank;gpu_queue_consume();psx_next_service_cycle=0;
+        unsigned at=gpu_queue.count++;gpu_queue.words[at]=val;gpu_queue.sources[at]=gp0_next_source_addr;gpu_queue.origin_pcs[at]=gp0_next_origin_pc;gpu_queue.origin_chs[at]=gp0_next_origin_ch;gpu_queue.ranks[at]=gp0_ot_rank;gpu_queue_consume();psx_next_service_cycle=0;
     }else if(gpu_draw_timing_on) gpu_draw_timed_gp0(val);
     else gpu_write_gp0_body(val);
     g_exec_phase = prev_phase;

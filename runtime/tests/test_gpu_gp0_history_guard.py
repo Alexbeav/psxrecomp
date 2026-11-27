@@ -28,6 +28,8 @@ DRIVER_C = r"""
 #include <stdio.h>
 
 extern uint64_t s_frame_count;
+extern uint32_t g_debug_last_store_pc, g_dma_initiator_pc;
+extern int g_dma_exec_depth, g_dma_cur_ch;
 extern int test_upload_begins, test_upload_commits, test_upload_rect[4];
 uint32_t gpu_get_opcode_count(uint8_t op);
 uint64_t gpu_get_gp0_count(void);
@@ -185,6 +187,35 @@ int main(int argc, char **argv) {
            copy_dumped > 0 ? copy_entries[0].csp : 0u,
            poly_dumped, poly_dumped > 0 ? poly_entries[0].opcode : 0u,
            poly_dumped > 0 ? poly_entries[0].cmd[0] : 0u);
+    /* PS1B-101: `pc` names the sender of the command's first word. A CPU
+     * fill is sent by three stores; the header's store is the sender, not
+     * the last one. A DMA feed runs after unrelated guest stores; the
+     * channel-2 kick PC is the sender, and dma_ch says it was DMA. */
+    {
+        GpuGp0RingEntry cpu_e[4], dma_e[4];
+        s_frame_count = 40;
+        g_debug_last_store_pc = 0x80011110u; gpu_set_gp0_source(0x1F801810u);
+        gpu_write_gp0(0x02000000u);
+        g_debug_last_store_pc = 0x80011120u; gpu_set_gp0_source(0x1F801810u);
+        gpu_write_gp0((5u << 16) | 16u);
+        g_debug_last_store_pc = 0x80011130u; gpu_set_gp0_source(0x1F801810u);
+        gpu_write_gp0((1u << 16) | 16u);
+        s_frame_count = 41;
+        g_debug_last_store_pc = 0x80033330u;   /* an unrelated RAM store */
+        g_dma_exec_depth = 1; g_dma_cur_ch = 2; g_dma_initiator_pc = 0x80044440u;
+        for (uint32_t i = 0; i < 3u; i++) {
+            static const uint32_t fill[3] = {0x02000000u, (5u << 16) | 16u, (1u << 16) | 16u};
+            gpu_set_gp0_source(0x00100000u + 4u * i);
+            gpu_write_gp0(fill[i]);
+        }
+        g_dma_exec_depth = 0; g_dma_cur_ch = -1;
+        int cn = gpu_gp0_ring_dump_frame(40, cpu_e, 4);
+        int dn = gpu_gp0_ring_dump_frame(41, dma_e, 4);
+        printf("cpun=%d cpupc=%08x cpuch=%d dman=%d dmapc=%08x dmach=%d dmasrc=%08x\n",
+               cn, cn > 0 ? cpu_e[0].pc : 0u, cn > 0 ? cpu_e[0].dma_ch : 9,
+               dn, dn > 0 ? dma_e[0].pc : 0u, dn > 0 ? dma_e[0].dma_ch : 9,
+               dn > 0 ? dma_e[0].src_addr : 0u);
+    }
     /* Native upload identity is invalidated at the header, even when GP1
      * aborts a partially written payload. Mask rules stay in gpu.c and bulk
      * commits carry only the final native words. */
@@ -229,6 +260,9 @@ STUBS_C = r"""
 uint64_t s_frame_count = 0;
 uint64_t psx_cycle_count = 0;
 uint32_t g_debug_last_store_pc = 0x80012340u;
+int g_dma_exec_depth = 0;
+int g_dma_cur_ch = -1;
+uint32_t g_dma_initiator_pc = 0;
 uint32_t g_psx_ram_size = 0x00200000u;
 uint32_t g_psx_ram_mask = 0x001FFFFFu;
 /* No frame boundary is serviced in this scripted register/VRAM fixture. */
@@ -620,6 +654,12 @@ def main() -> int:
         fail("debug GP0 history lost polyline header capture")
     if debug_out["polycmd0"] != "4800007f":
         fail("debug GP0 history lost polyline command word")
+    if (debug_out["cpun"], debug_out["cpupc"], debug_out["cpuch"]) != ("1", "80011110", "-1"):
+        fail(f"GP0 pc must name the CPU store of the header word (PS1B-101): {debug_out}")
+    if (debug_out["dman"], debug_out["dmapc"], debug_out["dmach"], debug_out["dmasrc"]) !=             ("1", "80044440", "2", "00100000"):
+        fail(f"GP0 pc of a DMA feed must be the channel kick PC (PS1B-101): {debug_out}")
+    if prod_out["cpun"] != "0" or prod_out["dman"] != "0":
+        fail("production GP0 history frame dumps should be empty")
     print("PASS: actual gpu.c production GP0 history gate preserves GPU state")
     return 0
 

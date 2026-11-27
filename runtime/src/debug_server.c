@@ -7028,10 +7028,10 @@ static void handle_gpu_frame_dump(int id, const char *json)
         const GpuGp0RingEntry *e = &entries[i];
         pos += (size_t)snprintf(buf + pos, buf_sz - pos,
             "%s{\"seq\":%u,\"op\":\"0x%02X\",\"n\":%u,"
-            "\"src\":\"0x%08X\",\"ot\":%u,\"pc\":\"0x%08X\","
+            "\"src\":\"0x%08X\",\"ot\":%u,\"pc\":\"0x%08X\",\"dma_ch\":%d,"
             "\"func\":\"0x%08X\",\"ra\":\"0x%08X\",\"w\":[",
             i ? "," : "", e->seq, e->opcode, e->n_words,
-            e->src_addr, (unsigned)e->ot_rank, e->pc, e->func, e->ra);
+            e->src_addr, (unsigned)e->ot_rank, e->pc, (int)e->dma_ch, e->func, e->ra);
         int show = e->n_words < GPU_GP0_RING_MAX_WORDS
                  ? e->n_words : GPU_GP0_RING_MAX_WORDS;
         for (int k = 0; k < show && pos < buf_sz - 32; k++) {
