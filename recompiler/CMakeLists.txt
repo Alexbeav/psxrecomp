@@ -1495,6 +1495,19 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-342: a build step that fails is built once more on its own, so a
+        # compiler that exits non-zero with no output (clang under concurrent
+        # builds) is told apart from a real error, and the log records the
+        # free memory and compiler count at the failure. A real Ninja build.
+        if(CMAKE_GENERATOR MATCHES "Ninja")
+            add_test(
+                NAME cli_build_failed_step
+                COMMAND ${Python3_EXECUTABLE} -B
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_build_failed_step.py
+                        --cmake ${CMAKE_COMMAND} --ninja ${CMAKE_MAKE_PROGRAM} --cc ${CMAKE_C_COMPILER}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(cli_build_failed_step PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP:")
+        endif()
         # update_disc_set.py writes in-project discs relative with '/' so one
         # game.toml resolves on every host.
         add_test(
