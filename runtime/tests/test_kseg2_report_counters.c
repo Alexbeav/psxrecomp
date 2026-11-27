@@ -61,6 +61,8 @@ uint32_t psx_bios_kernel_body_count;
 const PsxKernelPatchRange *psx_bios_kernel_patch_ranges;
 uint32_t psx_bios_kernel_patch_range_count;
 
+/* Pin J memory.c reads this flag on every store; outside a render pass it is 0. */
+int g_psx_render_pass_active = 0;
 int source_gpu_runtime_active(void) { return 0; }
 int fntrace_is_game_started(void) { return 1; }
 int psx_get_in_exception(void) { return 0; }
