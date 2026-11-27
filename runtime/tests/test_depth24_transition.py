@@ -55,6 +55,7 @@ static unsigned reset_observing, reset_notifies, reset_rows;
 static uint16_t vram[1];
 static int gp0_state, gp0_words_collected, gp0_words_needed;
 static uint32_t gp0_cmd_buf[16], gp0_next_source_addr, gp0_cmd_source_addr;
+static uint32_t gp0_next_origin_pc, gp0_cmd_origin_pc; static int8_t gp0_next_origin_ch = -1, gp0_cmd_origin_ch = -1;
 #define GP0_IDLE 0
 #define WS_HUD_ANCHOR_TABLE_SIZE 1
 static int ws_hud_anchor_tags[1], ws_reveal_clear_tags[1], ws_reveal_edge_tags[1], ws_repeat_rect_tags[1];
