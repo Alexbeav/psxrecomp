@@ -13,8 +13,7 @@ static void check(int ok, const char *name) {
 }
 
 static void fresh(void) {
-    free(mdec.input);
-    free(mdec.output);
+    /* mdec_init() releases the decoder buffers itself (PS1B-432). */
     mdec_init();
 }
 
