@@ -2176,6 +2176,10 @@ if(BUILD_TESTING AND EXISTS
         add_test(NAME tas_pepsiman_admission
             COMMAND ${Python3_EXECUTABLE} -B
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_pepsiman.py")
+        # PR #923's checkpoint run driver and state comparison (PS1B-702).
+        add_test(NAME checkpoint_tools_test
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_checkpoint_tools.py")
         # The Python driver compiles test_source_ram_page_probe.c at O0/O2.
         add_test(NAME tas_ram_long_route
             COMMAND ${Python3_EXECUTABLE} -B

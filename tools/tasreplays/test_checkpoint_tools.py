@@ -4,6 +4,11 @@ A stand-in game (this file run with --fake-game) follows the runtime's
 checkpoint contract: it captures at the requested frames, defers the capture
 requested at 500 by two frames as a boundary would, resumes from a state,
 applies the timer2 perturbation, and quits on the debug server's quit command.
+
+Pin J ships PR #923's run_checkpoint.py and compare_boot_states.py but keeps
+pin I's compare_checkpoint_runs.py and verify_checkpoint_cohort.py (PS1B-685),
+so this test covers the two PR #923 tools only (PS1B-702). It also checks
+which load path run_native.py gives its checkpoint options.
 """
 import json
 import os
@@ -20,9 +25,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from compare_boot_states import compare, sections  # noqa: E402
-from compare_checkpoint_runs import compare_runs  # noqa: E402
 from run_checkpoint import main as run_main, run  # noqa: E402
-from verify_checkpoint_cohort import cohort, main as cohort_main  # noqa: E402
+from run_native import checkpoint_load_path  # noqa: E402
 
 DEFERRED = {500: 2}
 
@@ -128,58 +132,49 @@ def test_compare_boot_states(tmp):
         raise AssertionError(f'{name} is refused')
 
 
-def test_cohort(tmp, mode, expect_passed, failing=None):
-    port = free_port()
-    if mode == 'honest':
-        # The documented command line: options after the output folder, the game after --.
-        out = tmp / f'cohort-{mode}'
-        code = cohort_main([str(out), '--terminal', '2600', '--port', str(port), '--timeout', '60',
-                            '--', *game_command(port, mode)])
-        report = json.loads((out / 'results.json').read_text(encoding='utf-8'))
-        check(code == 0, f'the cohort command line exits 0 on a pass, got {code}')
-    else:
-        report = cohort(tmp / f'cohort-{mode}', game_command(port, mode), 2600, port, 60)
-    check(report['passed'] == expect_passed, f'{mode}: cohort passed={report["passed"]}: {report.get("error")}')
-    if failing:
-        check(failing in report.get('error', ''), f'{mode}: fails at {failing}: {report.get("error")}')
-    return report
-
-
 def main(argv):
     if argv[1:2] == ['--fake-game']:
         return fake_game(int(argv[2]), argv[3])
+    # run_native.py: only the source GPU model takes stateio; every other model
+    # would take PR #923's frame path, which cannot seek a route, and is refused.
+    quad = 'octoshock-2.2.2-bounded-quad'
+    check(checkpoint_load_path('default', None, None) == 'none', 'no checkpoint option, no load path')
+    check(checkpoint_load_path(quad, [300], None) == 'stateio', 'bounded-quad captures through stateio')
+    check(checkpoint_load_path(quad, None, Path('s.pst')) == 'stateio', 'bounded-quad resumes through stateio')
+    for model in ('default', 'octoshock-2.2.2-vram-upload', 'octoshock-2.2.2-bounded-linked-list'):
+        for save_at, resume in (([300], None), (None, Path('s.pst'))):
+            try:
+                checkpoint_load_path(model, save_at, resume)
+            except ValueError as error:
+                check(quad in str(error), f'{model}: the refusal names the model it needs')
+                continue
+            raise AssertionError(f'{model}: a checkpoint option is refused')
     with tempfile.TemporaryDirectory(prefix='checkpoint-tools-') as name:
         tmp = Path(name)
         test_compare_boot_states(tmp)
 
-        report = test_cohort(tmp, 'honest', True)
-        check(report['runs']['A1']['reached_last_capture'], 'A1 stops after the last capture')
-        check(report['comparisons']['resume500']['start'] == 502,
-              'a resume starts from the frame the deferred capture was taken at')
-        check(set(report['comparisons']['negative']['captures']) == {'2501', '2560', '2600'} and
-              not report['comparisons']['negative']['passed'], 'the timer2 negative run is caught')
-        test_cohort(tmp, 'lossy', False, 'resume500')
-        test_cohort(tmp, 'blind', False, 'negative')
+        # A capture requested at 500 is deferred to 502 and names both frames.
+        port = free_port()
+        code, rows = run(tmp / 'cold', game_command(port), [500, 600], None, None, port, 30)
+        check(code == 0, f'the cold run reaches its last capture, got {code}')
+        check([(r['requested_frame'], r['frame']) for r in rows] == [(500, 502), (600, 600)],
+              f'captures are taken where the game took them: {rows}')
+        cold = tmp / 'cold'
 
-        # A missing capture on one side fails the comparison.
-        a1 = tmp / 'cohort-honest' / 'A1'
-        rows = json.loads((a1 / 'captures.json').read_text())
-        short = tmp / 'short'
-        short.mkdir()
-        for row in rows:
-            for suffix in ('', '.json'):
-                (short / (row['state'] + suffix)).write_bytes((a1 / (row['state'] + suffix)).read_bytes())
-        (short / 'captures.json').write_text(json.dumps(rows[:-1]))
-        result = compare_runs(a1, short, 0)
-        check(not result['passed'] and result['captures']['2600']['missing'] == 'candidate',
-              'a capture missing from the candidate fails')
-
-        # Identical images with a different recorded cycle still fail.
-        rows[0]['cycle'] += 1
-        (short / 'captures.json').write_text(json.dumps(rows))
-        result = compare_runs(a1, short, 0)
-        check(not result['passed'] and list(result['captures']['500']['fields']) == ['cycle'],
-              'a capture whose manifest cycle differs fails')
+        # A resume from the deferred capture reproduces the cold run at 600;
+        # the timer2 perturbation is caught there, and a lossy resume too.
+        for name, mode, perturb, same in (('resume', 'honest', None, True),
+                                          ('negative', 'honest', 'timer2', False),
+                                          ('lossy', 'lossy', None, False)):
+            port = free_port()
+            code, rows = run(tmp / name, game_command(port, mode), [600],
+                             cold / 'tas-state-000502.pst', perturb, port, 30)
+            check(code == 0 and [r['frame'] for r in rows] == [600], f'{name}: exit {code}, {rows}')
+            result = compare(cold / 'tas-state-000600.pst', tmp / name / 'tas-state-000600.pst')
+            check(result['identical'] == same, f'{name}: identical={result["identical"]}')
+            if not same:
+                check([d['section'] for d in result['differences']] == ['TIMER'],
+                      f'{name}: the timer section is named: {result["differences"]}')
 
         # A refused resume ends the run with the game's status.
         port = free_port()
@@ -192,7 +187,7 @@ def main(argv):
                          '--', *game_command(port)])
         check(code == 0 and json.loads((tmp / 'cli' / 'captures.json').read_text())[0]['requested_frame'] == 600,
               f'the run command line captures at the requested frame, got exit {code}')
-    print('checkpoint tools: state comparison, run driver, cohort and its controls pass')
+    print('checkpoint tools: state comparison, run driver, resume controls and run_native load path pass')
     return 0
 
 
