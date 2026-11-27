@@ -5495,6 +5495,11 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
             "copy /y \"%%ROOT%%\\bios.cfg\" \"%%EXE_DIR%%bios.cfg\" >NUL\r\n"
             "if exist \"%%ROOT%%\\disc.cfg\" if not exist \"%%EXE_DIR%%disc.cfg\" "
             "copy /y \"%%ROOT%%\\disc.cfg\" \"%%EXE_DIR%%disc.cfg\" >NUL\r\n"
+            /* Settings edited in the setup launcher reach the product the
+             * same way (sync_project_settings_to_product could not write
+             * them before the exe folder existed). */
+            "if exist \"%%ROOT%%\\settings.toml\" if not exist \"%%EXE_DIR%%settings.toml\" "
+            "copy /y \"%%ROOT%%\\settings.toml\" \"%%EXE_DIR%%settings.toml\" >NUL\r\n"
             "rem sidecar-handover-end\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
             /* The diagnostic product relaunches itself; a plain build starts
