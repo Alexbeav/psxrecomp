@@ -4,7 +4,7 @@ This fixture links the actual device readers from a Windows GCC 16.1 consumer.
 It runs no retail guest code. Its linked executable still contains generated
 material, so keep the output directory on private scratch storage.
 
-Raw and compressed version-10 controls must roundtrip successfully in the
+Raw and compressed version-18 controls must roundtrip successfully in the
 normal and source-comparison profiles. The fixture omits and duplicates every
 required section, truncates the stream, corrupts late semantic fields, and fails
 allocation sites. It also exercises different MDEC FIFO sizes and reversed
@@ -21,7 +21,9 @@ suite: a green CTest run does not establish state-load atomicity.
 The loader retains inflated sections, checks presence and content, and reserves
 MDEC/bitmap storage before applying any guest state. Scheduler admission reads
 the incoming RAM. Application follows dependency order regardless of wire order.
-The repair retains the version-10 wire and rejects older versions.
+The repair keeps the version-18 wire (`BOOT_STATE_VERSION` in
+`runtime/include/boot_state.h`) and rejects versions below 17
+(`BOOT_STATE_VERSION_MIN_READ`).
 
 This fixture checks represented machine state and allocation failure handling.
 It does not establish retail gameplay, portability, or completeness of fields

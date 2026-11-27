@@ -3817,8 +3817,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME replay_observation_compare_test
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${PSXRECOMP_ROOT}/tools/tasreplays/test_stream_compare.py)
-        # checkpoint_tools_test (PR #923 tools) is not registered: pin J keeps
-        # pin I's checkpoint compare and cohort tools (PS1B-685).
+        # PR #923's run driver and state comparison. Pin J keeps pin I's
+        # checkpoint compare and cohort tools (PS1B-685), which this test
+        # does not cover (PS1B-702).
+        add_test(NAME checkpoint_tools_test
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${PSXRECOMP_ROOT}/tools/tasreplays/test_checkpoint_tools.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC
            AND NOT CMAKE_CROSSCOMPILING)
             add_test(NAME audio_trace_pcm_guard_test
