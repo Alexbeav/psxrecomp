@@ -341,6 +341,10 @@ static uint64_t cdda_sectors_played;
  * cdrom_source_profile.inc; no profile changes the modern default path. */
 static CdRandomTape s_source_clock_tape;
 static int s_source_clock, s_source_firmware_model, s_source_cold_status_model;
+static uint64_t s_cd_retry_dither_count; /* PS1G-140 */
+#define CD_RETRY_DITHER_LOG 32
+typedef struct { uint32_t frame; int target, run, cycles; } CdRetryDitherFire;
+static CdRetryDitherFire s_cd_retry_dither_log[CD_RETRY_DITHER_LOG];
 static int s_source_toc_seek_model, s_source_explicit_seek_model, s_source_read_pipeline;
 static int s_nymashock_drive, s_cd_reset_seek_draw_first;
 static uint64_t s_source_reset_due, s_source_command_due, s_source_ready_due;
@@ -1868,9 +1872,84 @@ static int read_continues_current_stream(void) {
     return 1;
 }
 
+/* PS1G-140: a stall loop gets a deterministic first-sector delay of 0..1
+ * sector period, hashed from the cycle count. A stall loop is a read re-issued
+ * at the same target after the previous attempt delivered that sector but
+ * stopped within RETRY_STALL_SECTORS sectors past it (RE3 Europe, RPD
+ * stairwell: 33485-33487, then Pause, Setloc, ReadN). The delay starts at the
+ * RETRY_DITHER_AFTER-th such re-issue in a row. The default profile's
+ * latencies are otherwise constant, so each retry lands at the same phase
+ * against vblank; a game that loses a race at that phase (there: INT1
+ * acknowledged in its VSync handler before the DataReady callback runs)
+ * retries for minutes. Real drives do not repeat a read start to the cycle.
+ * Untouched: the first two re-issues of a run, a re-issue while no sector at
+ * or past the target has been delivered yet, and a re-read after an attempt
+ * that ran past RETRY_STALL_SECTORS (that restarts the run). last_sector_lba
+ * is not cleared per attempt, so once the run has reached the target, an
+ * attempt that delivers nothing still counts. A recorded replay that meets
+ * no such loop keeps its timing; one that meets a loop diverges at its third
+ * re-issue. Off in the source read model (it has its own timing), for XA
+ * streams, and with PSX_CD_RETRY_DITHER=0.
+ * The run (target and count) is in the CD section of the save state (tier
+ * CDF7); power-on and a disc change clear it. */
+#define RETRY_DITHER_AFTER 3
+#define RETRY_STALL_SECTORS 8
+static int s_retry_target = -1;
+static int s_retry_run;
+
+static int retry_dither_cycles(int target)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_CD_RETRY_DITHER");
+        enabled = !(e && e[0] == '0');
+    }
+    if (!enabled || s_source_clock || (mode_reg & 0x40u)) return 0;
+    if (target != s_retry_target) {
+        s_retry_target = target;
+        s_retry_run = 0;
+        return 0;
+    }
+    if (last_sector_lba < target) return 0;      /* nothing delivered yet */
+    if (last_sector_lba - target > RETRY_STALL_SECTORS) {   /* it was progressing */
+        s_retry_run = 0;
+        return 0;
+    }
+    if (++s_retry_run < RETRY_DITHER_AFTER) return 0;
+    uint32_t h = (uint32_t)psx_cycle_count * 0x9E3779B1u ^ (uint32_t)(psx_cycle_count >> 32);
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    s_cd_retry_dither_count++;
+    int dither = (int)(h % (uint32_t)source_drive_sector_period());
+    if (s_cd_retry_dither_count <= CD_RETRY_DITHER_LOG) {
+        CdRetryDitherFire *f = &s_cd_retry_dither_log[s_cd_retry_dither_count - 1];
+        f->frame = (uint32_t)s_frame_count;
+        f->target = target;
+        f->run = s_retry_run;
+        f->cycles = dither;
+    }
+    return dither;
+}
+
+/* How often the dither fired, and the first fires, for the run report
+ * (psx_crash_trace_dump, its "cdrom" object). */
+uint64_t cdrom_retry_dither_count(void) { return s_cd_retry_dither_count; }
+int cdrom_retry_dither_fire(int i, uint32_t *frame, int *target, int *run, int *cycles)
+{
+    if (i < 0 || (uint64_t)i >= s_cd_retry_dither_count || i >= CD_RETRY_DITHER_LOG) return 0;
+    *frame = s_cd_retry_dither_log[i].frame;
+    *target = s_cd_retry_dither_log[i].target;
+    *run = s_cd_retry_dither_log[i].run;
+    *cycles = s_cd_retry_dither_log[i].cycles;
+    return 1;
+}
+
 static void start_read_stream(uint8_t cmd) {
     if (source_read_model()) { source_start_read_stream(cmd); return; }
     int seek_cycles = implicit_read_seek_cycles();
+    int retry_dither = retry_dither_cycles(setloc_pending ? s_setloc_lba :
+        msf_to_lba(read_min, read_sec, read_sect));
     last_sector_have_raw=GETLOCL_NO_HEADER;
     cd_stream_account_end();
     s_cd_stream_open_seq = s_cd_timing_total;
@@ -1900,7 +1979,7 @@ static void start_read_stream(uint8_t cmd) {
     }
     setloc_pending = 0;
     read_cmd = cmd;
-    read_delay = seek_cycles + initial_read_delay_cycles();
+    read_delay = seek_cycles + initial_read_delay_cycles() + retry_dither;
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
@@ -3307,6 +3386,7 @@ void cdrom_init(const char* cue_path) {
     response_read = 0;
     response_count = 0;
     last_sector_lba = -1;
+    s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
     last_sector_size = 0;
     last_sector_frame = 0;
     last_sector_mode = 0;
@@ -4281,6 +4361,10 @@ static int cdrom_snap_emit(PstW *w, int extended) {
             WU(0x36464443u); /* CDF6: common model identity and paused/standby */
             WU(source_snapshot_flags()); W8(s_source_seek_paused);
         }
+        if (extended >= 6) {
+            WU(0x37464443u); /* CDF7: PS1G-140 retry-dither run (target, count) */
+            WI(s_retry_target); WI(s_retry_run);
+        }
     }
 
 #undef W8
@@ -4370,10 +4454,15 @@ static int cdrom_snap_parse(PstR *r, int extended) {
         if (extended >= 5) {
             RU(u); RU(u); R8(s_source_seek_paused);
         }
+        if (extended >= 6) {
+            RU(u); RI(s_retry_target); RI(s_retry_run);
+        }
     }
     /* Legacy default states cannot distinguish paused from standby. */
     if (extended < 5)
         s_source_seek_paused = !reading && (stat_reg & CDSTAT_MOTOR) != 0;
+    /* States before CDF7 carry no retry run: a load starts a new one. */
+    if (extended < 6) { s_retry_target = -1; s_retry_run = 0; }
 
 #undef R8
 #undef RI
@@ -4407,11 +4496,11 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
         len=current;
     }
     /* Even a selector with no optional appendix needs its CDF6 identity. */
-    if (source_snapshot_flags() && len != current) return 0;
+    if (source_snapshot_flags() && len != current && len != current-12u) return 0;
     if (len == legacy) return 1;
-    if (len != current && len != current-9u && len != current-21u &&
-        len != current-26u && len != current-31u)
-        return 0; /* CDF5, CDF4, CDF3 or CDF2 */
+    if (len != current && len != current-12u && len != current-21u && len != current-33u &&
+        len != current-38u && len != current-43u)
+        return 0; /* CDF7, CDF6, CDF5, CDF4, CDF3 or CDF2 */
     PstR r;
     uint32_t magic;
     int32_t index, pos, size, delay;
@@ -4429,22 +4518,22 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
             size < 0 || size > SECTOR_BUFFER_SIZE || pos < 0 || pos > size)
             return 0;
     }
-    if (len >= current - 26u) {
+    if (len >= current - 38u) {
         uint8_t pending_loc;
         if (!pst_r_u32(&r, &magic) || magic != 0x33464443u ||
             !pst_r_u8(&r, &pending_loc) || pending_loc > 1) return 0;
     }
-    if (len >= current-21u) {
+    if (len >= current-33u) {
         uint8_t received;
         if (!pst_r_u32(&r, &magic) || magic != 0x34464443u ||
             !pst_r_u8(&r, &received) || received > 1) return 0;
     }
-    if (len >= current-9u) {
+    if (len >= current-21u) {
         uint8_t matrices[8];
         if (!pst_r_u32(&r,&magic) || magic!=0x35464443u ||
             !pst_r_bytes(&r,matrices,sizeof matrices)) return 0;
     }
-    if (len == current) {
+    if (len >= current-12u) {
         uint32_t flags;
         uint8_t paused;
         if (!pst_r_u32(&r,&magic) || magic!=0x36464443u ||
@@ -4454,13 +4543,20 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
          * before either the default state or the source state is mutated. */
         if (extra && p[current+8u] != paused) return 0;
     }
+    if (len == current) {   /* PS1G-140 retry run: a read target from the lead-in
+                             * (-150) to the end of a disc (-1: no run), a count >= 0 */
+        int32_t t, n;
+        if (!pst_r_u32(&r,&magic) || magic!=0x37464443u ||
+            !pst_r_i32(&r,&t) || !pst_r_i32(&r,&n) ||
+            t < -150 || t > 450000 || n < 0) return 0;
+    }
     return r.p == r.end;
 }
 
 static uint32_t cdrom_snapshot_base_bytes(void) {
     PstW w;
     pst_w_init(&w, NULL, 0);
-    (void)cdrom_snap_emit(&w, 5);
+    (void)cdrom_snap_emit(&w, 6);
     return (uint32_t)w.written;
 }
 uint32_t cdrom_snapshot_bytes(void) {
@@ -4470,7 +4566,7 @@ void cdrom_snapshot_write(uint8_t *p) {
     PstW w;
     uint32_t n = cdrom_snapshot_bytes();
     pst_w_init(&w, p, n);
-    (void)cdrom_snap_emit(&w, 5);
+    (void)cdrom_snap_emit(&w, 6);
     (void)source_snapshot_emit(&w);
 }
 int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
@@ -4480,10 +4576,11 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     const uint32_t base_len=len-extra;
     pst_r_init(&r, p, base_len);
     const int extended = base_len == cdrom_snapshot_legacy_bytes() ? 0 :
-                         base_len == cdrom_snapshot_base_bytes() ? 5 :
-                         base_len == cdrom_snapshot_base_bytes()-9u ? 4 :
-                         base_len == cdrom_snapshot_base_bytes()-21u ? 3 :
-                         base_len == cdrom_snapshot_base_bytes()-26u ? 2 : 1;
+                         base_len == cdrom_snapshot_base_bytes() ? 6 :
+                         base_len == cdrom_snapshot_base_bytes()-12u ? 5 :
+                         base_len == cdrom_snapshot_base_bytes()-21u ? 4 :
+                         base_len == cdrom_snapshot_base_bytes()-33u ? 3 :
+                         base_len == cdrom_snapshot_base_bytes()-38u ? 2 : 1;
     if (!cdrom_snap_parse(&r, extended))
         return 0;
     /* Absolute host deadlines are not on the wire — rebuild from restored
@@ -4605,6 +4702,7 @@ int cdrom_disc_select(int index_1based) {
     /* Buffered sectors and the seek position describe the old disc. */
     clear_sector_buffer();
     last_sector_lba = -1;
+    s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
     last_sector_size = 0;
     s_setloc_lba = -1;
     ++s_stream_generation;
