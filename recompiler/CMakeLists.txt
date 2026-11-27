@@ -1784,7 +1784,7 @@ if(BUILD_TESTING)
                 menu_scan cursor_writers gpu_frame pad_trace pad_delivery
                 aligned_lzss_banks static_fragment_variant_keys host_bash_callers
                 mips_tagged_relocations overlay_widescreen_callbacks
-                duckstation_oracle)
+                duckstation_oracle gate_launcher)
             add_test(NAME tools_${_t}
                 COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
                     -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
@@ -2001,6 +2001,10 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+
+        # PS1B-485: without recomp-ui the BIOS stems test prints "SKIP:" and returns 0; read that as Skipped.
+        set_tests_properties(codegen_host_bios_stems PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:")
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
