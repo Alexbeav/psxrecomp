@@ -20,8 +20,9 @@ from pathlib import Path
 
 MODULES = ["source_gpu_runtime.c", "dma.c", "interrupts.c", "timers.c", "dirty_ram_interp.c"]
 SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-MULTIPLE = re.compile(r"multiple definition of [`']([^`']+)[`']")
-UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
+# GNU ld: multiple definition of `sym'; ld.lld: duplicate symbol: sym (PS1B-589).
+MULTIPLE = re.compile(r"(?:multiple definition of [`']|duplicate symbol: )([^`'\s]+)")
+UNDEFINED = re.compile(r"(?:undefined reference to [`']|undefined symbol: )([^`'\s]+)")
 
 # A definition in our stub object would silently override a symbol that the C
 # library would otherwise satisfy from an archive/shared object, so anything

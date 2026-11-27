@@ -13,8 +13,9 @@ import subprocess
 from pathlib import Path
 
 SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-MULTIPLE = re.compile(r"multiple definition of [`']([^`']+)[`']")
-UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
+# GNU ld: multiple definition of `sym'; ld.lld: duplicate symbol: sym (PS1B-589).
+MULTIPLE = re.compile(r"(?:multiple definition of [`']|duplicate symbol: )([^`'\s]+)")
+UNDEFINED = re.compile(r"(?:undefined reference to [`']|undefined symbol: )([^`'\s]+)")
 DATA_SEAMS = {
     'g_psx_gcs_recip_q16', 'g_psx_gcs_frac', 'g_psx_mod_immediate_live',
     'g_psx_func_override_hook', 'g_psx_mod_instruction_hooks',
