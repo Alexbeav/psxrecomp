@@ -600,6 +600,14 @@ static inline const char *input_route_v3_read_impl_capacity(
             return "replay END marker missing";
         if (!s.checkpoint_count || checkpoints[s.checkpoint_count - 1].frame != s.frames)
             return "replay END checkpoint missing";
+        /* The replay player feeds pad records only: it runs no console event
+         * (reset, tray, disc select) and mounts no disc roster. A replay that
+         * declares either would play to its end without them, so refuse it
+         * rather than ignore a mandatory tag (PS1B-599). One declared
+         * DualShock port is what the player plays; every other port layout
+         * is already refused above for want of its record array. */
+        if (s.event_count) return "replay console events not supported";
+        if (s.disc_count) return "replay disc set not supported";
         *replay = rp;
     }
     *meta = s;
