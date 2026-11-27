@@ -1897,6 +1897,18 @@ static int read_continues_current_stream(void) {
 static int s_retry_target = -1;
 static int s_retry_run;
 
+/* PS1B-584: the drive arrival of a plain seek whose second response a later
+ * command cancelled. A command written while SeekL or SeekP is pending ends
+ * only the command; the drive still reaches the target, and the status loses
+ * its seek bit there with no INT2 (Beetle cdc.cpp: a new command resets the
+ * command state but not DriveStatus, which completes the seek on its own).
+ * s_seek_arrive_cmd is 0 when nothing is owed, else the seek command (15h or
+ * 16h), with SEEK_ARRIVE_KEEP_SETLOC set once a Setloc arrives after it.
+ * Default path only: the source clock profiles keep their own drive model. */
+#define SEEK_ARRIVE_KEEP_SETLOC 0x80u
+static uint8_t s_seek_arrive_cmd;
+static uint64_t s_seek_arrive_due;
+
 static int retry_dither_cycles(int target)
 {
     static int enabled = -1;
@@ -2566,7 +2578,29 @@ static void exec_command(uint8_t cmd) {
      * shows the same stale-Pause overlap during ReadS streaming. */
     if (pending.pending) {
         trace_cdrom('X', 0, pending.cmd, 0);
+        if (!s_source_clock && pending.phase == 1 &&
+            (pending.cmd == 0x15 || pending.cmd == 0x16)) {
+            s_seek_arrive_cmd = pending.cmd;
+            s_seek_arrive_due = pending.due_cyc;
+        }
         pending.pending = 0;
+    }
+    /* PS1B-584: a command that moves or stops the drive replaces the owed
+     * arrival; status and position queries, Setloc, Setmode, Setfilter,
+     * Mute, Demute, Test and GetID leave the drive alone. */
+    if (s_seek_arrive_cmd) {
+        switch (cmd) {
+        case 0x01: case 0x0B: case 0x0C: case 0x0D: case 0x0E:
+        case 0x10: case 0x11: case 0x13: case 0x14: case 0x19: case 0x1A:
+            break;
+        case 0x02:
+            s_seek_arrive_cmd |= SEEK_ARRIVE_KEEP_SETLOC;
+            break;
+        default:
+            s_seek_arrive_cmd = 0;
+            s_seek_arrive_due = 0;
+            break;
+        }
     }
     /* Snapshot the param FIFO before handlers consume it, so the
      * command-history record at the end sees the original params. */
@@ -3023,6 +3057,48 @@ command_complete:
     cd_bisect_cmd_log("ISSUE", cmd, cmd_params, cmd_param_count);
 }
 
+/* The state a plain seek leaves when the drive reaches its target: the
+ * seek bit clears, GetlocP names the target and GetlocL has no header.
+ * consume_setloc is 0 when a Setloc came after the seek (PS1B-584): that
+ * Setloc names the next target and stays pending. */
+static void seek_arrive_state(uint8_t done_cmd, int consume_setloc) {
+    stat_reg &= ~(CDSTAT_SEEK|CDSTAT_READ|CDSTAT_PLAY);
+    last_sector_have_raw=s_source_clock?GETLOCL_NO_HEADER:GETLOCL_SEEK_DONE;
+    setloc_seek_far = 0;
+    if (source_read_model() || source_cdda.enabled) {
+        /* A seek that names its target consumes the dirty flag on the source
+         * profiles; an explicit source seek therefore leaves it standing. */
+        if (!s_nymashock_drive && consume_setloc) setloc_pending = 0;
+        /* Without a source clock the completed seek also becomes the position
+         * GetlocP reports. The source profiles keep their own answer. */
+        last_sector_have_raw = s_source_clock ? GETLOCL_NO_HEADER
+                                              : GETLOCL_SEEK_DONE;
+        /* PS1B-109 (Tomb Raider 4212, return 2546): on the source CD-DA
+         * model a completed SeekP leaves the sub-Q one sector before the
+         * target, as a CD-DA Play does when its seek ends (the back-peek in
+         * process_source_cdda). GetlocP then answers from that sub-Q, not
+         * from the last data sector. The Octoshock reference answers the
+         * first GetlocP after SeekP 32:30:00 with track 02, index 00,
+         * absolute 32:29:74; the bridge answered track 01, index 01,
+         * 28:02:57 (the last data read). A read start clears it. */
+        if (done_cmd == 0x16 && source_cdda.enabled) {
+            int target = msf_to_lba(read_min, read_sec, read_sect);
+            for (int back = 1; back <= 16; ++back)
+                if (source_cdda_peek((int32_t)target - back)) break;
+        }
+    } else if (consume_setloc) {
+        setloc_pending = 0;
+    }
+}
+
+static void process_seek_arrival(void) {
+    if (!s_seek_arrive_cmd || psx_cycle_count < s_seek_arrive_due) return;
+    const uint8_t c = s_seek_arrive_cmd;
+    s_seek_arrive_cmd = 0;
+    s_seek_arrive_due = 0;
+    seek_arrive_state((uint8_t)(c & 0x7Fu), !(c & SEEK_ARRIVE_KEEP_SETLOC));
+}
+
 static void process_pending(uint32_t cycles) {
     uint8_t done_cmd;
     (void)cycles;
@@ -3101,33 +3177,7 @@ static void process_pending(uint32_t cycles) {
 
     case 0x15: /* SeekL complete */
     case 0x16: /* SeekP complete */
-        stat_reg &= ~(CDSTAT_SEEK|CDSTAT_READ|CDSTAT_PLAY);
-        last_sector_have_raw=s_source_clock?GETLOCL_NO_HEADER:GETLOCL_SEEK_DONE;
-        setloc_seek_far = 0;
-    if (source_read_model() || source_cdda.enabled) {
-        /* A seek that names its target consumes the dirty flag on the source
-         * profiles; an explicit source seek therefore leaves it standing. */
-        if (!s_nymashock_drive) setloc_pending = 0;
-        /* Without a source clock the completed seek also becomes the position
-         * GetlocP reports. The source profiles keep their own answer. */
-        last_sector_have_raw = s_source_clock ? GETLOCL_NO_HEADER
-                                              : GETLOCL_SEEK_DONE;
-        /* PS1B-109 (Tomb Raider 4212, return 2546): on the source CD-DA
-         * model a completed SeekP leaves the sub-Q one sector before the
-         * target, as a CD-DA Play does when its seek ends (the back-peek in
-         * process_source_cdda). GetlocP then answers from that sub-Q, not
-         * from the last data sector. The Octoshock reference answers the
-         * first GetlocP after SeekP 32:30:00 with track 02, index 00,
-         * absolute 32:29:74; the bridge answered track 01, index 01,
-         * 28:02:57 (the last data read). A read start clears it. */
-        if (done_cmd == 0x16 && source_cdda.enabled) {
-            int target = msf_to_lba(read_min, read_sec, read_sect);
-            for (int back = 1; back <= 16; ++back)
-                if (source_cdda_peek((int32_t)target - back)) break;
-        }
-    } else {
-    setloc_pending = 0;
-    }
+        seek_arrive_state(done_cmd, 1);
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
@@ -3387,6 +3437,7 @@ void cdrom_init(const char* cue_path) {
     response_count = 0;
     last_sector_lba = -1;
     s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
+    s_seek_arrive_cmd = 0; s_seek_arrive_due = 0;   /* PS1B-584 */
     last_sector_size = 0;
     last_sector_frame = 0;
     last_sector_mode = 0;
@@ -3854,6 +3905,11 @@ uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
             best = 0u;
         }
     }
+    /* PS1B-584: an owed seek arrival changes the status at its deadline. */
+    if (s_seek_arrive_cmd) {
+        uint32_t d = (uint32_t)cycles_until_due(s_seek_arrive_due);
+        if (d < best) best = d;
+    }
     /* Scheduled release of a pended data-ready. */
     if (pending_present_due != 0) {
         uint32_t d = (uint32_t)cycles_until_due(pending_present_due);
@@ -3876,6 +3932,7 @@ void cdrom_advance(uint32_t cycles) {
     refresh_cdrom_irq_line();
     process_source_reset();
     source_cdda_present();
+    process_seek_arrival();
     process_pending(cycles);
     if(!s_source_clock)try_execute_queued_command();
     /* Release a scheduled data-ready once its delay has elapsed and the guest
@@ -4257,6 +4314,9 @@ static void cdrom_apply_savestate_delay_caps(int log_clamps) {
     }
     if (irq_present_rem_cycles() > CDROM_SAVESTATE_DELAY_CAP)
         irq_present_set_remaining(CDROM_SAVESTATE_DELAY_CAP);
+    if (s_seek_arrive_cmd &&
+        cycles_until_due(s_seek_arrive_due) > CDROM_SAVESTATE_DELAY_CAP)
+        s_seek_arrive_due = psx_cycle_count + CDROM_SAVESTATE_DELAY_CAP;
 }
 
 void cdrom_accelerate_after_savestate(void) {
@@ -4296,6 +4356,11 @@ int cdrom_savestate_boost_vblanks_remaining(void) {
  * PendingCmd / QueuedCmd are plain pointer-free structs, so raw copy is sound. */
 /* LE field wire — PendingCmd/QueuedCmd have host padding. */
 #include "pst_wire.h"
+
+static int seek_arrive_wire_rem(void) {
+    int rem = cycles_until_due(s_seek_arrive_due);
+    return rem == 0x7FFFFFFF ? rem - 1 : rem;
+}
 
 static int cdrom_snap_emit(PstW *w, int extended) {
 #define W8(f)  do { if (!pst_w_u8(w, (uint8_t)(f))) return 0; } while (0)
@@ -4364,6 +4429,11 @@ static int cdrom_snap_emit(PstW *w, int extended) {
         if (extended >= 6) {
             WU(0x37464443u); /* CDF7: PS1G-140 retry-dither run (target, count) */
             WI(s_retry_target); WI(s_retry_run);
+        }
+        if (extended >= 7) {
+            WU(0x38464443u); /* CDF8: PS1B-584 owed seek arrival (remaining+1, command) */
+            WI(s_seek_arrive_cmd ? seek_arrive_wire_rem() + 1 : 0);
+            W8(s_seek_arrive_cmd);
         }
     }
 
@@ -4457,12 +4527,20 @@ static int cdrom_snap_parse(PstR *r, int extended) {
         if (extended >= 6) {
             RU(u); RI(s_retry_target); RI(s_retry_run);
         }
+        if (extended >= 7) {
+            int arrive_rem = 0;
+            RU(u); RI(arrive_rem); R8(s_seek_arrive_cmd);
+            s_seek_arrive_due = arrive_rem > 0
+                ? psx_cycle_count + (uint64_t)(arrive_rem - 1) : 0;
+        }
     }
     /* Legacy default states cannot distinguish paused from standby. */
     if (extended < 5)
         s_source_seek_paused = !reading && (stat_reg & CDSTAT_MOTOR) != 0;
     /* States before CDF7 carry no retry run: a load starts a new one. */
     if (extended < 6) { s_retry_target = -1; s_retry_run = 0; }
+    /* States before CDF8 owe no seek arrival. */
+    if (extended < 7) { s_seek_arrive_cmd = 0; s_seek_arrive_due = 0; }
 
 #undef R8
 #undef RI
@@ -4496,11 +4574,12 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
         len=current;
     }
     /* Even a selector with no optional appendix needs its CDF6 identity. */
-    if (source_snapshot_flags() && len != current && len != current-12u) return 0;
+    if (source_snapshot_flags() && len != current && len != current-9u &&
+        len != current-21u) return 0;
     if (len == legacy) return 1;
-    if (len != current && len != current-12u && len != current-21u && len != current-33u &&
-        len != current-38u && len != current-43u)
-        return 0; /* CDF7, CDF6, CDF5, CDF4, CDF3 or CDF2 */
+    if (len != current && len != current-9u && len != current-21u && len != current-30u &&
+        len != current-42u && len != current-47u && len != current-52u)
+        return 0; /* CDF8, CDF7, CDF6, CDF5, CDF4, CDF3 or CDF2 */
     PstR r;
     uint32_t magic;
     int32_t index, pos, size, delay;
@@ -4518,22 +4597,22 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
             size < 0 || size > SECTOR_BUFFER_SIZE || pos < 0 || pos > size)
             return 0;
     }
-    if (len >= current - 38u) {
+    if (len >= current - 47u) {
         uint8_t pending_loc;
         if (!pst_r_u32(&r, &magic) || magic != 0x33464443u ||
             !pst_r_u8(&r, &pending_loc) || pending_loc > 1) return 0;
     }
-    if (len >= current-33u) {
+    if (len >= current-42u) {
         uint8_t received;
         if (!pst_r_u32(&r, &magic) || magic != 0x34464443u ||
             !pst_r_u8(&r, &received) || received > 1) return 0;
     }
-    if (len >= current-21u) {
+    if (len >= current-30u) {
         uint8_t matrices[8];
         if (!pst_r_u32(&r,&magic) || magic!=0x35464443u ||
             !pst_r_bytes(&r,matrices,sizeof matrices)) return 0;
     }
-    if (len >= current-12u) {
+    if (len >= current-21u) {
         uint32_t flags;
         uint8_t paused;
         if (!pst_r_u32(&r,&magic) || magic!=0x36464443u ||
@@ -4543,12 +4622,21 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
          * before either the default state or the source state is mutated. */
         if (extra && p[current+8u] != paused) return 0;
     }
-    if (len == current) {   /* PS1G-140 retry run: a read target from the lead-in
+    if (len >= current-9u) {   /* PS1G-140 retry run: a read target from the lead-in
                              * (-150) to the end of a disc (-1: no run), a count >= 0 */
         int32_t t, n;
         if (!pst_r_u32(&r,&magic) || magic!=0x37464443u ||
             !pst_r_i32(&r,&t) || !pst_r_i32(&r,&n) ||
             t < -150 || t > 450000 || n < 0) return 0;
+    }
+    if (len == current) {   /* PS1B-584 owed arrival: none, or a plain seek's */
+        int32_t rem;
+        uint8_t c;
+        if (!pst_r_u32(&r,&magic) || magic!=0x38464443u ||
+            !pst_r_i32(&r,&rem) || !pst_r_u8(&r,&c) || rem < 0) return 0;
+        const uint8_t seek = (uint8_t)(c & 0x7Fu);
+        if ((rem == 0) != (c == 0)) return 0;
+        if (c && seek != 0x15 && seek != 0x16) return 0;
     }
     return r.p == r.end;
 }
@@ -4556,7 +4644,7 @@ int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
 static uint32_t cdrom_snapshot_base_bytes(void) {
     PstW w;
     pst_w_init(&w, NULL, 0);
-    (void)cdrom_snap_emit(&w, 6);
+    (void)cdrom_snap_emit(&w, 7);
     return (uint32_t)w.written;
 }
 uint32_t cdrom_snapshot_bytes(void) {
@@ -4566,7 +4654,7 @@ void cdrom_snapshot_write(uint8_t *p) {
     PstW w;
     uint32_t n = cdrom_snapshot_bytes();
     pst_w_init(&w, p, n);
-    (void)cdrom_snap_emit(&w, 6);
+    (void)cdrom_snap_emit(&w, 7);
     (void)source_snapshot_emit(&w);
 }
 int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
@@ -4576,11 +4664,12 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     const uint32_t base_len=len-extra;
     pst_r_init(&r, p, base_len);
     const int extended = base_len == cdrom_snapshot_legacy_bytes() ? 0 :
-                         base_len == cdrom_snapshot_base_bytes() ? 6 :
-                         base_len == cdrom_snapshot_base_bytes()-12u ? 5 :
-                         base_len == cdrom_snapshot_base_bytes()-21u ? 4 :
-                         base_len == cdrom_snapshot_base_bytes()-33u ? 3 :
-                         base_len == cdrom_snapshot_base_bytes()-38u ? 2 : 1;
+                         base_len == cdrom_snapshot_base_bytes() ? 7 :
+                         base_len == cdrom_snapshot_base_bytes()-9u ? 6 :
+                         base_len == cdrom_snapshot_base_bytes()-21u ? 5 :
+                         base_len == cdrom_snapshot_base_bytes()-30u ? 4 :
+                         base_len == cdrom_snapshot_base_bytes()-42u ? 3 :
+                         base_len == cdrom_snapshot_base_bytes()-47u ? 2 : 1;
     if (!cdrom_snap_parse(&r, extended))
         return 0;
     /* Absolute host deadlines are not on the wire — rebuild from restored
@@ -4703,6 +4792,7 @@ int cdrom_disc_select(int index_1based) {
     clear_sector_buffer();
     last_sector_lba = -1;
     s_retry_target = -1; s_retry_run = 0;   /* PS1G-140 */
+    s_seek_arrive_cmd = 0; s_seek_arrive_due = 0;   /* PS1B-584 */
     last_sector_size = 0;
     s_setloc_lba = -1;
     ++s_stream_generation;

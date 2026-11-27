@@ -1202,6 +1202,11 @@ add_test(NAME sio_dualshock_config_replies_test COMMAND sio_dualshock_config_rep
     add_executable(cdrom_retry_snapshot_test tests/test_cdrom_retry_snapshot.c src/psx_sha256.c)
     target_include_directories(cdrom_retry_snapshot_test PRIVATE include)
     add_test(NAME cdrom_retry_snapshot_test COMMAND cdrom_retry_snapshot_test)
+    # PS1B-584: a command during SeekL or SeekP cancels only the seek's second
+    # response; the drive still arrives, and the arrival survives a save.
+    add_executable(cdrom_seek_cancel_arrival_test tests/test_cdrom_seek_cancel_arrival.c src/psx_sha256.c)
+    target_include_directories(cdrom_seek_cancel_arrival_test PRIVATE include)
+    add_test(NAME cdrom_seek_cancel_arrival_test COMMAND cdrom_seek_cancel_arrival_test)
     # PS1B-317 fleet check: read streams that ended before their first sector,
     # counted for the run report (docs/RUN_REPORT_CDROM.md).
     add_executable(cdrom_silent_read_counter_test tests/test_cdrom_silent_read_counter.c src/psx_sha256.c)
