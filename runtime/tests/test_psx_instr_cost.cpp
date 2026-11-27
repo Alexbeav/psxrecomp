@@ -42,7 +42,54 @@ static uint32_t reference_dep_res_mask(uint32_t insn) {
     }
 }
 
+/* Native-span charges against the reference main-RAM load interlock
+ * (psx_cyc.h: issue 1, ReadFudge 2, wait 3, completion 2; the LDAbsorb
+ * give-back is spent by later independent instructions). A flat +2 per load
+ * made a kernel TestEvent poll about a third cheaper than the reference, so a
+ * game's pass-count timeout on a memory-card read expired before the read
+ * finished (PS1B-695 Tiny Toon; the RE3 Europe LOAD "Access error"). */
+static int check_native_span_costs() {
+    int failures = 0;
+    const uint32_t lw = 0x8C580004u;  /* lw t8,4(v0) */
+    if (psx_native_instr_cycles(lw, 0x80001000u) != 8u) {
+        std::fprintf(stderr, "cached main-RAM lw: expected 8, got %u\n",
+                     psx_native_instr_cycles(lw, 0x80001000u));
+        ++failures;
+    }
+    if (psx_native_instr_cycles(lw, 0xBFC01000u) != 12u) {
+        std::fprintf(stderr, "uncached main-RAM lw: expected 12, got %u\n",
+                     psx_native_instr_cycles(lw, 0xBFC01000u));
+        ++failures;
+    }
+    /* The B0 TestEvent body a card-wait loop polls: two dependent loads. */
+    static const uint32_t poll[] = {
+        0x3C0E8000u, /* lui t6,0x8000 */
+        0x8DCE0040u, /* lw t6,64(t6) */
+        0x01E47823u, /* subu t7,t7,a0 */
+        0x000F7880u, /* sll t7,t7,2 */
+        0x01CF1021u, /* addu v0,t6,t7 */
+        0x8C580004u, /* lw t8,4(v0) */
+        0x24014000u, /* addiu at,zero,0x4000 */
+        0x03011026u, /* xor v0,t8,at */
+        0x03E00008u, /* jr ra */
+        0x00000000u, /* nop */
+    };
+    PsxNativeSpanModel m;
+    psx_native_span_model_init(&m);
+    uint32_t total = 0u;
+    for (unsigned i = 0; i < sizeof(poll) / sizeof(poll[0]); ++i) {
+        total += psx_native_span_model_step(&m, poll[i], 0x80000500u + 4u * i);
+    }
+    if (total != 21u) {
+        std::fprintf(stderr, "TestEvent poll span: expected 21 (reference), got %u "
+                     "(flat +2 per load gives 14)\n", total);
+        ++failures;
+    }
+    return failures;
+}
+
 int main() {
+    if (check_native_span_costs() != 0) return 1;
     for (uint32_t op = 0; op < 64u; ++op) {
         const uint32_t function_count = (op == 0u) ? 64u : 1u;
         for (uint32_t fn = 0; fn < function_count; ++fn) {
@@ -64,6 +111,7 @@ int main() {
             }
         }
     }
-    std::puts("PASS: table-driven dependency masks match the frozen decoder");
+    std::puts("PASS: native-span load interlock matches the reference; "
+              "table-driven dependency masks match the frozen decoder");
     return 0;
 }
