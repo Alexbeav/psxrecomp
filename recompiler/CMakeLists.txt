@@ -1515,6 +1515,12 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_update_disc_set_paths.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-583: the audit tools resolve a game.toml in its own folder.
+        add_test(
+            NAME audit_config_game_root
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_audit_config_root.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
         # reported at configure, a profile/CMake disagreement is an error, and
         # hash_codegen.cmake's source-list mode matches psxrecomp-game's hash.

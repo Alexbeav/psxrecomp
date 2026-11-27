@@ -1355,6 +1355,14 @@ fs::path find_project_root(const fs::path& config_path) {
     return fallback;
 }
 
+fs::path game_config_root(const fs::path& config_path) {
+    // PS1B-583 (Alex, 2026-11-27, "583 a"): a game.toml's own folder is its
+    // project root. The marker walk above stopped at any ancestor with a
+    // .gitignore, .git or CMakeLists.txt -- an unrelated repository, a lane
+    // folder -- and resolved the game's exe, discs and out_dir there.
+    return PSXRecompV4::host_absolute(config_path).parent_path();
+}
+
 bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg) {
     if (reg == 0u || reg > 31u) return false;
     const uint32_t op = instr >> 26;
@@ -1786,7 +1794,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         throw std::runtime_error(
             fmt::format("game config not found: {}", config_path.string()));
     }
-    const fs::path root = find_project_root(config_path);
+    const fs::path root = game_config_root(config_path);
 
     toml::value cfg;
     try {
