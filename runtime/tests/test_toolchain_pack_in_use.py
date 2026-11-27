@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""A toolchain pack in use is left alone on Linux and macOS (PS1B-416).
+"""A toolchain pack in use is left alone (PS1B-416 on Linux and macOS, PS1B-578 on Windows).
 
 After PS1B-410 both installers (the setup host, host/psxrecomp_codegen_host.c,
 and the CLI, tools/toolchain_pack.py) rename an installed pack aside before
 they replace or prune it. On Windows a folder with an open file cannot be
 renamed, and that was the only thing that kept a pack away from a build using
-it. Linux and macOS rename it anyway. Now every program that puts a pack on
-PATH holds a shared lock on the pack's folder while it runs, and an installer
-that cannot take the exclusive lock at once leaves the pack alone.
+it; a build between two compiler runs has no file open. Linux and macOS rename
+it anyway. Now every program that puts a pack on PATH holds the pack's folder
+while it runs: on Linux and macOS a shared lock, which an installer that cannot
+take the exclusive lock at once leaves alone; on Windows a handle to the folder
+that does not share delete access, so the rename aside fails with error 32.
 
 Each case starts a program that uses a pack (a holder: the CLI's module after
 activate_toolchain_bin, or the setup host after activate_toolchain_path) and
 then runs an installer (the CLI's or the host's) on the same cache:
 
   same tag     an install over the tag the holder uses is refused with the
-               sentence for EBUSY, and the pack is byte-for-byte what it was.
+               sentence for a pack in use (EBUSY; Windows error 32), and the
+               pack is byte-for-byte what it was.
   older tag    the prune of an older tag the holder uses keeps it whole.
   holds nothing  the holder has no file of the pack open, only the lock on
                its folder: a build between two compiler runs is covered.
@@ -22,11 +25,11 @@ then runs an installer (the CLI's or the host's) on the same cache:
                prune go through.
 
 Every holder and installer pairs with every other, so the CLI and the host
-honour each other's hold. Windows is the other half of PS1B-416 and is not
-tested here (the line SKIP says so). Everything runs in the closed environment
+honour each other's hold. Everything runs in the closed environment
 of toolchain_test_support.py. --dry-run prints it and starts nothing.
 --cli-only leaves the host out; the host also needs recomp-ui (RECOMP_UI_ROOT)
-and a C compiler (--compiler, CC or the PATH).
+and a C compiler (--compiler, CC or the PATH); on Windows the stand-in
+compiler of the pack needs that compiler too.
 """
 
 from __future__ import annotations
@@ -44,6 +47,25 @@ from toolchain_test_support import WINDOWS, make_pack, make_zip, snapshot  # noq
 
 THIS = Path(__file__).resolve()
 EBUSY = 16
+IN_USE = 32 if WINDOWS else EBUSY       # the error of a rename aside of a pack in use
+
+
+def _windows_open(path: Path, access: int, share: int) -> bool:
+    """Windows: whether path opens with this access while sharing only `share`.
+    False is a sharing violation: another program has it open in a way that
+    conflicts."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = k32.CreateFileW(str(path), access, share, None, 3, 0x02000000, None)   # OPEN_EXISTING, BACKUP_SEMANTICS
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        return False
+    k32.CloseHandle(handle)
+    return True
 OPS = ("same_tag", "older_tag")
 HELD_TAG = {"same_tag": "1.0.14", "older_tag": "1.0.13"}
 
@@ -104,6 +126,10 @@ class Holder:
 
     def pack_files_open(self, pack: Path) -> list[str] | None:
         """What the holder has open inside the pack, other than the pack's folder. None where it cannot be read."""
+        if WINDOWS:
+            # A file another program has open does not open here unshared.
+            return [str(f) for f in sorted(pack.rglob("*")) if f.is_file()
+                    and not _windows_open(f, 0x80000000, 0)]        # GENERIC_READ, no sharing
         fd_dir = Path("/proc/%d/fd" % self.proc.pid)
         if not fd_dir.is_dir():
             return None
@@ -119,6 +145,10 @@ class Holder:
         return found
 
     def holds_folder(self, pack: Path) -> bool | None:
+        if WINDOWS:
+            # Delete access to the folder, sharing everything, conflicts only
+            # with a handle that does not share delete: the hold.
+            return not _windows_open(pack, 0x00010000, 0x7)        # DELETE; share read, write, delete
         fd_dir = Path("/proc/%d/fd" % self.proc.pid)
         if not fd_dir.is_dir():
             return None
@@ -201,7 +231,7 @@ def run_case(holder_kind: str, installer: str, op: str, probe: Path | None, tmp:
         check(not [n for n in names if n.startswith(".old-") or n.startswith(".staging")],
               "%s: nothing is left beside the pack" % name, names)
         if op == "same_tag":
-            check(not seen["done"] and seen["said"].endswith(support.s3(EBUSY)),
+            check(not seen["done"] and seen["said"].endswith(support.s3(IN_USE)),
                   "%s: the install is refused with the sentence for a pack in use" % name, seen["said"])
         elif installer == "host":
             check("older toolchain is in use by another program; kept" in seen["stderr"],
@@ -241,16 +271,14 @@ def main() -> int:
         return cli_child(argv[1])
     if len(argv) == 2 and argv[0] == "--cli-holder":
         return cli_holder(argv[1])
-    if WINDOWS:
-        print("SKIP: on Windows a folder with an open file cannot be renamed; this test is the Linux and macOS "
-              "half of PS1B-416")
-        return 0
     check = support.Checks()
     cc = support.find_compiler(argv)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         stub = support.make_stub(tmp, cc)
-        assert stub is not None     # a shell script off Windows
+        if stub is None:            # Windows without a C compiler
+            print("SKIP: no C compiler for the stand-in programs of the pack (--compiler, CC or the PATH)")
+            return 0
         kinds = ["CLI"]
         probe = None
         if "--cli-only" in argv:

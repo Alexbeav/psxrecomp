@@ -1061,6 +1061,95 @@ static void path_put_in_front(const char* first, const char* second) {
     free(neu);
 }
 
+#if defined(_WIN32)
+/* A pack in use on Windows (PS1B-578). Windows refuses to rename a folder with
+ * an open file, but a build between two compiler runs has no file of the pack
+ * open, so an installer could still take it away. This program holds a handle
+ * to the folder of each pack it puts on PATH, for as long as it runs. The
+ * handle does not share delete access, so a rename aside by any other program
+ * fails with error 32 (a sharing violation) and the pack stays: the sentence
+ * for a pack in use. set_dir_aside lets go of this program's own hold first.
+ * tools/toolchain_pack.py does the same. */
+#define PACK_HOLDS 8
+static HANDLE g_pack_hold[PACK_HOLDS];
+static DWORD g_pack_hold_vol[PACK_HOLDS];
+static ULONGLONG g_pack_hold_idx[PACK_HOLDS];
+
+/* The folder's volume and file index through a handle. 0 when they cannot be read. */
+static int pack_handle_identity(HANDLE h, DWORD* vol, ULONGLONG* idx) {
+    BY_HANDLE_FILE_INFORMATION fi;
+    if (!GetFileInformationByHandle(h, &fi))
+        return 0;
+    *vol = fi.dwVolumeSerialNumber;
+    *idx = ((ULONGLONG)fi.nFileIndexHigh << 32) | (ULONGLONG)fi.nFileIndexLow;
+    return 1;
+}
+
+/* The slot that holds this folder, or -1. */
+static int pack_hold_slot(DWORD vol, ULONGLONG idx) {
+    int i;
+    for (i = 0; i < PACK_HOLDS; ++i)
+        if (g_pack_hold[i] && g_pack_hold_vol[i] == vol && g_pack_hold_idx[i] == idx)
+            return i;
+    return -1;
+}
+
+/* Hold the pack folder until this program ends. Again for the same folder:
+ * nothing. A folder an installer is renaming this instant is waited for
+ * briefly; a new folder under the same name is then held. */
+static void hold_pack(const char* pack_root) {
+    int tries, i;
+    for (tries = 0; tries < 20; ++tries) {
+        DWORD vol;
+        ULONGLONG idx;
+        HANDLE h = CreateFileA(pack_root, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            DWORD e = GetLastError();
+            if (e == ERROR_SHARING_VIOLATION || e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) {
+                Sleep(50);      /* an installer is renaming it this instant */
+                continue;
+            }
+            return;
+        }
+        if (!pack_handle_identity(h, &vol, &idx) || pack_hold_slot(vol, idx) >= 0) {
+            CloseHandle(h);
+            return;
+        }
+        for (i = 0; i < PACK_HOLDS && g_pack_hold[i]; ++i)
+            ;
+        if (i == PACK_HOLDS) {
+            CloseHandle(h);     /* eight packs held already */
+            return;
+        }
+        g_pack_hold[i] = h;
+        g_pack_hold_vol[i] = vol;
+        g_pack_hold_idx[i] = idx;
+        return;
+    }
+}
+
+/* Let go of this program's own hold on the folder at path, if it has one. */
+static void let_go_of_pack(const char* path) {
+    DWORD vol;
+    ULONGLONG idx;
+    int slot;
+    HANDLE h = CreateFileA(path, FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    if (pack_handle_identity(h, &vol, &idx)) {
+        slot = pack_hold_slot(vol, idx);
+        if (slot >= 0) {
+            CloseHandle(g_pack_hold[slot]);
+            g_pack_hold[slot] = NULL;
+        }
+    }
+    CloseHandle(h);
+}
+#endif
+
 #if !defined(_WIN32)
 /* A pack in use (PS1B-416). On Windows a folder with an open file cannot be
  * renamed, and that is what keeps an installer from taking a pack away from a
@@ -1184,8 +1273,10 @@ static void activate_toolchain_path(void) {
         g_toolchain_bin[0] = '\0';
         return;
     }
-    hold_pack(pack_root);   /* an installer leaves a pack in use alone (PS1B-416) */
 #endif
+    /* An installer leaves a pack in use alone (PS1B-416, PS1B-578). */
+    if (pack_root[0])
+        hold_pack(pack_root);
 
     /* Prepend pack python/ (Windows) or python/bin (Unix), then bin/. */
     char py_path_dir[1400];
@@ -2845,7 +2936,9 @@ static int set_dir_aside(const char* path, char* aside, size_t cap) {
     aside[0] = '\0';
     if (!base || !base[0] || !dirname_copy(parent, sizeof(parent), path))
         return 0;
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    let_go_of_pack(path);   /* another program's hold fails the rename, error 32 */
+#else
     lock_fd = claim_for_rename(path);
     if (lock_fd == -2) {
         g_tc_aside_error = (long)EBUSY;

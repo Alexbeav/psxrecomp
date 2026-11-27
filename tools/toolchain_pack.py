@@ -42,6 +42,22 @@ try:
 except ImportError:     # Windows
     fcntl = None  # type: ignore[assignment]
 
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _CreateFileW = _kernel32.CreateFileW
+    _CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                             wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    _CreateFileW.restype = wintypes.HANDLE
+    _CloseHandle = _kernel32.CloseHandle
+    _CloseHandle.argtypes = [wintypes.HANDLE]
+    _CloseHandle.restype = wintypes.BOOL
+else:
+    _CreateFileW = None
+
 DEFAULT_REPO = "RetroPortingToolKit/RetroPorting-Toolchains"
 PACK_ID = "cmake-clang-v1"
 
@@ -177,26 +193,82 @@ def _remove_pointer(path: Path) -> bool:
 # (EBUSY: another program holds the pack, see below).
 _aside_error = 0
 
-# A pack in use (PS1B-416). On Windows a folder with an open file cannot be
-# renamed, and that is what keeps an installer from taking a pack away from a
-# build. Linux and macOS rename it anyway, so there every program that puts a
-# pack on PATH (activate_toolchain_bin) holds a shared lock on the pack's
-# folder for as long as it runs, and an installer takes the exclusive lock
-# without waiting before it renames the folder aside. When it cannot, the pack
-# is in use and stays. The setup host does the same (host/psxrecomp_codegen_host.c).
-# On a filesystem without locks nothing is held and the rename goes on as before.
+# A pack in use (PS1B-416, PS1B-578). Every program that puts a pack on PATH
+# (activate_toolchain_bin) holds the pack's folder for as long as it runs, and
+# an installer leaves a held pack alone. The setup host does the same
+# (host/psxrecomp_codegen_host.c).
+#
+# Linux and macOS rename a folder in use, so there the hold is a shared lock on
+# the folder, and an installer takes the exclusive lock without waiting before
+# it renames the folder aside. When it cannot, the pack is in use and stays. On
+# a filesystem without locks nothing is held and the rename goes on as before.
+#
+# Windows refuses to rename a folder with an open file, but a build between two
+# compiler runs has no file of the pack open. So there the hold is a handle to
+# the folder itself that does not share delete access: the rename aside then
+# fails with error 32 (a sharing violation), the sentence for a pack in use.
 _held_packs: dict[str, tuple[int, int, int]] = {}     # real path -> (fd, st_dev, st_ino)
 _O_DIR = getattr(os, "O_DIRECTORY", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_FILE_LIST_DIRECTORY = 0x0001
+_FILE_SHARE_READ_WRITE = 0x0001 | 0x0002            # not FILE_SHARE_DELETE (0x0004)
+_OPEN_EXISTING = 3
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000            # needed to open a folder
+_INVALID_HANDLE = ctypes.c_void_p(-1).value if os.name == "nt" else None
+
+
+def _open_folder_hold(real: str) -> Optional[int]:
+    """Windows: a descriptor of a handle to the folder that does not share
+    delete access, so nothing can rename or remove the folder while it is open."""
+    handle = _CreateFileW(real, _FILE_LIST_DIRECTORY, _FILE_SHARE_READ_WRITE, None,
+                          _OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS, None)
+    if handle is None or handle == _INVALID_HANDLE:
+        return None
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except OSError:
+        _CloseHandle(handle)
+        return None
+
+
+def _hold_pack_windows(real: str) -> None:
+    for _ in range(20):
+        try:
+            st = os.stat(real)
+        except OSError:
+            time.sleep(0.05)        # set aside by an installer; the new pack takes the name next
+            continue
+        held = _held_packs.get(real)
+        if held is not None and held[1:] == (st.st_dev, st.st_ino):
+            return
+        if held is not None:
+            os.close(held[0])
+            del _held_packs[real]
+        fd = _open_folder_hold(real)
+        if fd is None:
+            time.sleep(0.05)        # an installer is renaming it this instant
+            continue
+        locked = os.fstat(fd)
+        try:
+            now = os.stat(real)
+        except OSError:
+            now = None
+        if now is not None and (now.st_dev, now.st_ino) == (locked.st_dev, locked.st_ino):
+            _held_packs[real] = (fd, locked.st_dev, locked.st_ino)
+            return
+        os.close(fd)                # renamed between the stat and the open: again
 
 
 def _hold_pack(pack_root: Path) -> None:
-    """Hold a shared lock on the pack folder until this process ends. Again
-    for the same folder: nothing; for a new folder under the same name: the
-    old hold is let go and the new folder is held."""
+    """Hold the pack folder until this process ends. Again for the same
+    folder: nothing; for a new folder under the same name: the old hold is let
+    go and the new folder is held."""
+    real = os.path.realpath(str(pack_root))
+    if _CreateFileW is not None:
+        _hold_pack_windows(real)
+        return
     if fcntl is None:
         return
-    real = os.path.realpath(str(pack_root))
     for _ in range(20):
         try:
             st = os.stat(real)
@@ -244,9 +316,9 @@ def _let_go_of_pack(st: os.stat_result) -> None:
 def _claim_for_rename(path: Path) -> tuple[bool, Optional[int]]:
     """(False, None): another program holds the pack. (True, fd): the
     exclusive lock is held until fd is closed. (True, None): nothing to lock
-    (not a folder, Windows, or no locks on this filesystem)."""
-    if fcntl is None:
-        return True, None
+    (not a folder, Windows, or no locks on this filesystem). This process's own
+    hold on the folder is let go first; on Windows another program's hold
+    makes the rename itself fail (error 32)."""
     try:
         st = os.lstat(str(path))
     except OSError:
@@ -254,6 +326,8 @@ def _claim_for_rename(path: Path) -> tuple[bool, Optional[int]]:
     if not stat.S_ISDIR(st.st_mode):
         return True, None
     _let_go_of_pack(st)
+    if fcntl is None:
+        return True, None
     try:
         fd = os.open(str(path), os.O_RDONLY | _O_DIR | _O_NOFOLLOW)
     except OSError:
