@@ -33,6 +33,7 @@ from typing import Any, Iterable, Optional, Union
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "tools"))
 from sdk_progress import ProgressReporter  # noqa: E402
+from build_failed_step import failed_steps_alone, host_build_load  # noqa: E402
 from disc_companion import CompanionError, inspect_companion  # noqa: E402
 import psx_chd  # noqa: E402
 from toolchain_pack import (  # noqa: E402
@@ -1983,6 +1984,16 @@ def _resolve_runtime_exe(build_dir: Path, target: str, exe_basename: str):
     )
 
 
+def _run_logged(cmd: list[str], progress: ProgressReporter) -> subprocess.CompletedProcess:
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    for stream in (proc.stdout, proc.stderr):
+        if stream:
+            for line in stream.splitlines():
+                if line.strip():
+                    progress.log(line)
+    return proc
+
+
 def _cmake_build(
     build_dir: Path,
     target: str,
@@ -2001,14 +2012,29 @@ def _cmake_build(
         target,
     ]
     progress.log(" ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    for stream in (proc.stdout, proc.stderr):
-        if stream:
-            for line in stream.splitlines():
-                if line.strip():
-                    progress.log(line)
+    proc = _run_logged(cmd, progress)
+    alone: list[dict] = []
+    if proc.returncode != 0:
+        output = "\n".join(s for s in (proc.stdout or "", proc.stderr or "") if s)
+
+        def run_alone(one_cmd: list[str]) -> tuple[int, str]:
+            one = _run_logged(one_cmd, progress)
+            return one.returncode, "\n".join(s for s in (one.stdout or "", one.stderr or "") if s)
+
+        alone = failed_steps_alone(cmd[:3], proc.returncode, output, run_alone, progress.log)
+        if alone and all(a["exit"] == 0 for a in alone):
+            # PS1B-342: under several concurrent builds clang once exited 1
+            # with no diagnostic, and the same compile passed when re-run.
+            # Each step that failed has now passed on its own; the build goes on.
+            progress.log(
+                "WARNING: %d build step(s) failed in the parallel build and passed on their own "
+                "(%s); the build goes on." % (len(alone), host_build_load()))
+            proc = _run_logged(cmd, progress)
     if proc.returncode != 0:
         err = f"cmake --build failed (exit {proc.returncode})"
+        for a in [a for a in alone if a["exit"] != 0][:3]:
+            err += "; %s fails on its own (exit %d): %s" % (
+                a["target"], a["exit"], a["diagnostic"] or "no diagnostic")
         combined = "\n".join(
             s for s in (proc.stdout or "", proc.stderr or "") if s
         )
