@@ -85,6 +85,12 @@ static inline int source_gpu_sprite_origin(uint32_t word, unsigned shift, int of
 
 static inline int source_gpu_polygon_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x20u; }
 static inline int source_gpu_line_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x40u; }
+/* Transfer commands decode on the top three bits (psx-spx "GPU Command
+ * Summary"): 80h..9Fh VRAM-to-VRAM copy, A0h..BFh CPU-to-VRAM, C0h..DFh
+ * VRAM-to-CPU. Mirrors behave as the base opcode (PS1B-601). */
+static inline int source_gpu_copy_opcode(unsigned opcode) { return (opcode & 0xE0u) == 0x80u; }
+static inline int source_gpu_upload_opcode(unsigned opcode) { return (opcode & 0xE0u) == 0xA0u; }
+static inline int source_gpu_download_opcode(unsigned opcode) { return (opcode & 0xE0u) == 0xC0u; }
 static inline int source_gpu_line_polyline(unsigned opcode) { return (opcode & 0x08u) != 0; }
 
 /* Words per vertex: optional colour (gouraud, bit 28), the vertex, and an
@@ -110,7 +116,7 @@ static inline int source_gpu_line_terminator(uint32_t word)
 
 static inline int source_gpu_block_supported(unsigned opcode)
 {
-    return opcode == 0x02u || opcode == 0x80u || source_gpu_sprite_opcode(opcode);
+    return opcode == 0x02u || source_gpu_copy_opcode(opcode) || source_gpu_sprite_opcode(opcode);
 }
 
 /* Rectangle packet: command+colour, vertex, optional UV (bit 26), and a size
@@ -131,10 +137,11 @@ static inline unsigned source_gpu_command_length(uint32_t word)
     if (source_gpu_line_supported(opcode))
         return 1u + 2u * source_gpu_line_segment_length(opcode) - ((opcode >> 4) & 1u);
     if (source_gpu_sprite_opcode(opcode)) return source_gpu_sprite_length(opcode);
+    if (source_gpu_copy_opcode(opcode)) return 4u;   /* VRAM copy: source, destination, size */
+    if (source_gpu_upload_opcode(opcode) || source_gpu_download_opcode(opcode))
+        return 3u;                                    /* transfer: destination/source, size */
     switch (opcode) {
     case 0x02: return 3u;          /* fill: colour, corner, size */
-    case 0x80: return 4u;          /* VRAM copy: source, destination, size */
-    case 0xA0: case 0xC0: return 3u; /* transfer: destination/source, size */
     default: return 1u;
     }
 }
@@ -169,9 +176,10 @@ static inline int source_gpu_command_nop(unsigned opcode)
 static inline int source_gpu_command_known(unsigned opcode)
 {
     if (source_gpu_command_nop(opcode) || source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode) ||
-        source_gpu_block_supported(opcode)) return 1;
+        source_gpu_block_supported(opcode) || source_gpu_upload_opcode(opcode) ||
+        source_gpu_download_opcode(opcode)) return 1;
     switch (opcode) {
-    case 0x01: case 0xA0: case 0xC0:
+    case 0x01:
     case 0xE1: case 0xE2: case 0xE3: case 0xE4: case 0xE5: case 0xE6: return 1;
     default: return 0;
     }
@@ -199,7 +207,7 @@ static inline unsigned source_gpu_command_prefetch(uint32_t word)
         return (source_gpu_sprite_class(opcode) && !(opcode & 4u)) ?
                SOURCE_GPU_T_PREFETCH_RECT_SMALL : SOURCE_GPU_T_PREFETCH_RECT_LARGE;
     if (opcode == 0x02u) return SOURCE_GPU_T_PREFETCH_FILL;
-    if (opcode == 0x80u || opcode == 0xA0u || opcode == 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;
+    if ((opcode & 0xE0u) >= 0x80u && (opcode & 0xE0u) <= 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;
     return SOURCE_GPU_T_PREFETCH_ATTRIBUTE;
 }
 
@@ -310,7 +318,7 @@ static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection
 {
     unsigned opcode = source_gpu_opcode(words[0]);
     if (opcode == 0x02u) return source_gpu_command_fill_cost(s, words);
-    if (opcode == 0x80u) return source_gpu_command_copy_cost(s, words);
+    if (source_gpu_copy_opcode(opcode)) return source_gpu_command_copy_cost(s, words);
     return source_gpu_command_sprite_cost(s, words);
 }
 
@@ -387,7 +395,7 @@ static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection 
         if (source_gpu_polygon_supported(opcode) && (opcode & 0x08u))
             length += source_gpu_polygon_stride(opcode);
         /* A queued CPU-to-VRAM transfer owes its data words. */
-        if (opcode == 0xA0u && at + 3 <= s->count)
+        if (source_gpu_upload_opcode(opcode) && at + 3 <= s->count)
             length += source_gpu_command_transfer_words(s->queue[at + 2]);
         /* A queued poly-line owes segments until its terminator word. */
         if (source_gpu_line_supported(opcode) && source_gpu_line_polyline(opcode)) {
@@ -518,9 +526,9 @@ static inline int source_gpu_command_start_other(SourceGPUCommandProjection *s)
     s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD;
     s->command = opcode;
     source_gpu_command_environment(s, words[0]);
-    if (opcode == 0xA0u || opcode == 0xC0u) {
+    if (source_gpu_upload_opcode(opcode) || source_gpu_download_opcode(opcode)) {
         s->transfer_words = source_gpu_command_transfer_words(words[2]);
-        s->phase = opcode == 0xA0u ? SOURCE_GPU_PHASE_UPLOAD : SOURCE_GPU_PHASE_DOWNLOAD;
+        s->phase = source_gpu_upload_opcode(opcode) ? SOURCE_GPU_PHASE_UPLOAD : SOURCE_GPU_PHASE_DOWNLOAD;
         if (!s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;
     }
     source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_COMMAND, words, length);

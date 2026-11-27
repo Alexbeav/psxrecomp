@@ -2989,7 +2989,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # Accepted optional bus: exact source expectations, modern defaults separate.
     foreach(opt IN ITEMS 0 2)
         foreach(source IN ITEMS test_source_gpu_service_clock.c test_source_gpu_command_projection.c
-                test_source_gpu_ready_transfer.c test_source_gpu_service_start.c
+                test_source_gpu_ready_transfer.c test_source_gpu_transfer_mirrors.c test_source_gpu_service_start.c
                 test_source_gpu_pending_frame.c test_input_route_raster_clock.c
                 test_dma_source_spec2.c test_dma_source_state.c test_dma_source_register_edges.c test_dma_cd_source.c
                 test_dma_otc_timing.c test_dma_gpu_linked_list_source.c test_dma_gpu_upload_source.c)
