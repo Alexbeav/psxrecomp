@@ -2,7 +2,26 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dma_gpu_ll.c"
 #include "dma.c"
+/* PS1B-432: count the decoder's live buffers so repeated mdec_init() calls
+ * can be checked for leaks without a sanitizer. */
+#include <stdlib.h>
+static long mdec_test_live;
+static void *mdec_test_realloc(void *p, size_t n)
+{
+    void *q = realloc(p, n);
+    if (q && !p) mdec_test_live++;
+    return q;
+}
+static void mdec_test_free(void *p)
+{
+    if (p) mdec_test_live--;
+    free(p);
+}
+#define realloc mdec_test_realloc
+#define free mdec_test_free
 #include "mdec.c"
+#undef realloc
+#undef free
 /* Exclusive create without C11 fopen "x", which msvcrt rejects. */
 #include <fcntl.h>
 #ifdef _WIN32
@@ -106,8 +125,22 @@ static int verify_optional_wire(void){
  assert(!memcmp(a,b,n));++checks;
  free(a);free(b);free(bad);printf("source MDEC DMA wire/grid: %u checks PASS\n",checks);return 0;
 }
+/* PS1B-432: mdec_init() owns the decoder's input and output buffers. A second
+ * init (state load, test reset) must release them, not drop the pointers. */
+static int verify_init_releases_buffers(void){
+ mdec_init();
+ long base=mdec_test_live;
+ for(int round=0;round<3;++round){
+  if(!ensure_input_capacity(300u) || !ensure_output_capacity(5000u))return 1;
+  if(mdec_test_live!=base+2){fprintf(stderr,"FAIL round %d: %ld live buffers after growth, want %ld\n",round,mdec_test_live,base+2);return 1;}
+  mdec_init();
+  if(mdec_test_live!=base){fprintf(stderr,"FAIL round %d: %ld live buffers after mdec_init, want %ld\n",round,mdec_test_live,base);return 1;}
+  if(mdec.input || mdec.input_cap || mdec.output || mdec.output_cap){fprintf(stderr,"FAIL round %d: init kept a buffer\n",round);return 1;}
+ }
+ printf("MDEC init releases its buffers: 3 rounds PASS\n");return 0;
+}
 int main(int argc,char **argv){
- if(argc==1)return verify_optional_wire();
+ if(argc==1)return verify_init_releases_buffers() || verify_optional_wire();
  if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fixture_create_new(argv[2]);if(!in || !out)return 2;
  set_option("PSX_MDEC_SOURCE_MODEL","octoshock-2.3");
  set_option("PSX_INPUT_ROUTE_FILE","authored-fixture");

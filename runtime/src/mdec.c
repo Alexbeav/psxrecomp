@@ -806,6 +806,11 @@ uint64_t mdec_color_age_cycles(void) {
 #include "mdec_source_profile.inc"
 
 void mdec_init(void) {
+    /* Init owns the decoder buffers: release them before the state is
+     * cleared, so a second init (state load, test reset) does not leak
+     * them. The next command or restore grows them again (PS1B-432). */
+    free(mdec.input);
+    free(mdec.output);
     memset(&mdec, 0, sizeof(mdec));
     memset(mdec_trace, 0, sizeof(mdec_trace));
     mdec_trace_seq = 0;
