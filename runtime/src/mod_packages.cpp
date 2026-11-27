@@ -1,4 +1,5 @@
 #include "psx_path_utf8.h"
+#include "psx_host_dir.h"
 #include "mod_packages.h"
 #include "host_launch_timing.h"
 
@@ -1739,14 +1740,13 @@ ModPluginAudit mod_audit_registered_plugins(
             audit.errors.push_back(root.string() + ": not a directory");
             continue;
         }
-        for (fs::recursive_directory_iterator it(root, ec), end;
-             !ec && it != end; it.increment(ec)) {
-            if (!it->is_regular_file(ec) || it->path().filename() != "manifest.toml")
+        for (const HostDirEntry& e : host_walk_tree(root, ec)) {
+            if (!e.is_regular_file || e.path.filename() != "manifest.toml")
                 continue;
             ModPackage package;
             std::string error;
-            if (!ModPackageManager::read_manifest(it->path(), package, &error)) {
-                audit.errors.push_back(it->path().string() + ": " + error);
+            if (!ModPackageManager::read_manifest(e.path, package, &error)) {
+                audit.errors.push_back(e.path.string() + ": " + error);
                 continue;
             }
             ++audit.manifests;
@@ -2918,42 +2918,40 @@ void ModPackageManager::migrate_legacy_root() {
     const fs::path installed = installed_root();
     const fs::path bundled = bundled_root();
     size_t stranded = 0;
-    for (const fs::directory_entry& id_dir : fs::directory_iterator(legacy, ec)) {
+    for (const HostDirEntry& id_dir : host_list_dir(legacy, ec)) {
         if (ec) break;
-        if (!id_dir.is_directory()) continue;
-        const std::string id = id_dir.path().filename().string();
-        for (const fs::directory_entry& version_dir :
-             fs::directory_iterator(id_dir.path(), ec)) {
-            if (ec) break;
-            if (!version_dir.is_directory()) continue;
-            const std::string version = version_dir.path().filename().string();
+        if (!id_dir.is_directory) continue;
+        const std::string id = id_dir.path.filename().string();
+        for (const HostDirEntry& version_dir : host_list_dir(id_dir.path, ec)) {
+            if (!version_dir.is_directory) continue;
+            const std::string version = version_dir.path.filename().string();
             std::error_code move_ec;
             /* Already staged by the build: this copy is redundant output, not
              * anything the player owns. */
             if (fs::exists(bundled / id / version, move_ec)) {
-                fs::remove_all(version_dir.path(), move_ec);
+                host_remove_tree(version_dir.path, move_ec);
                 continue;
             }
             const fs::path destination = installed / id / version;
             if (fs::exists(destination, move_ec)) {
-                fs::remove_all(version_dir.path(), move_ec);
+                host_remove_tree(version_dir.path, move_ec);
                 continue;
             }
             fs::create_directories(destination.parent_path(), move_ec);
             if (move_ec) { ++stranded; continue; }
-            fs::rename(version_dir.path(), destination, move_ec);
+            fs::rename(version_dir.path, destination, move_ec);
             if (move_ec) {
                 /* Cross-device or a locked file: copy rather than lose it. */
                 move_ec.clear();
-                fs::copy(version_dir.path(), destination,
-                         fs::copy_options::recursive, move_ec);
+                host_copy_tree(version_dir.path, destination, move_ec);
                 if (move_ec) {
                     ++stranded;
                     continue;
                 }
-                fs::remove_all(version_dir.path(), move_ec);
+                host_remove_tree(version_dir.path, move_ec);
             }
         }
+        if (ec) break;
     }
     /* Drop the legacy tree only when every version directory was dealt with.
      * A blanket remove_all here would be the very data loss this migration
@@ -2967,20 +2965,19 @@ void ModPackageManager::migrate_legacy_root() {
         return;
     }
     ec.clear();
-    fs::remove_all(legacy, ec);
+    host_remove_tree(legacy, ec);
 }
 
 bool ModPackageManager::scan_root(const fs::path& packages_root,
                                   ModPackageOrigin origin, std::string* error) {
     std::error_code ec;
     if (!fs::exists(packages_root, ec)) return true;
-    for (const fs::directory_entry& id_dir : fs::directory_iterator(packages_root, ec)) {
+    for (const HostDirEntry& id_dir : host_list_dir(packages_root, ec)) {
         if (ec) break;
-        if (!id_dir.is_directory()) continue;
-        for (const fs::directory_entry& version_dir : fs::directory_iterator(id_dir.path(), ec)) {
-            if (ec) break;
-            if (!version_dir.is_directory()) continue;
-            const fs::path manifest = version_dir.path() / "manifest.toml";
+        if (!id_dir.is_directory) continue;
+        for (const HostDirEntry& version_dir : host_list_dir(id_dir.path, ec)) {
+            if (!version_dir.is_directory) continue;
+            const fs::path manifest = version_dir.path / "manifest.toml";
             if (!fs::exists(manifest)) continue;
             ModPackage package;
             std::string parse_error;
@@ -2991,8 +2988,8 @@ bool ModPackageManager::scan_root(const fs::path& packages_root,
                 scan_errors_.push_back(manifest.string() + ": " + parse_error);
                 continue;
             }
-            if (package.id != id_dir.path().filename().string() ||
-                package.version != version_dir.path().filename().string()) {
+            if (package.id != id_dir.path.filename().string() ||
+                package.version != version_dir.path.filename().string()) {
                 scan_errors_.push_back(
                     manifest.string() +
                     ": package path does not match manifest id/version");
@@ -3278,16 +3275,16 @@ bool ModPackageManager::install_archive(const fs::path& archive,
         return false;
     }
     if (!extract_zip(bytes, entries, staging, error)) {
-        fs::remove_all(staging, ec);
+        host_remove_tree(staging, ec);
         return false;
     }
     ModPackage package;
     if (!read_manifest(staging / "manifest.toml", package, error)) {
-        fs::remove_all(staging, ec);
+        host_remove_tree(staging, ec);
         return false;
     }
     if (!developer_channel_ && !strip_developer_features(package)) {
-        fs::remove_all(staging, ec);
+        host_remove_tree(staging, ec);
         set_error(error,
                   "this package contains only developer-channel features, "
                   "which are not available in this build");
@@ -3297,19 +3294,19 @@ bool ModPackageManager::install_archive(const fs::path& archive,
      * a tree with the build-staged catalog, which every build wipes. */
     const fs::path destination = installed_root() / package.id / package.version;
     if (fs::exists(destination)) {
-        fs::remove_all(staging, ec);
+        host_remove_tree(staging, ec);
         set_error(error, "package version is already installed");
         return false;
     }
     fs::create_directories(destination.parent_path(), ec);
     if (ec) {
-        fs::remove_all(staging, ec);
+        host_remove_tree(staging, ec);
         set_error(error, "cannot create package directory: " + ec.message());
         return false;
     }
     fs::rename(staging, destination, ec);
     if (ec) {
-        fs::remove_all(staging, ec);
+        host_remove_tree(staging, ec);
         set_error(error, "cannot publish installed package: " + ec.message());
         return false;
     }
@@ -3376,7 +3373,7 @@ bool ModPackageManager::remove_version(const std::string& id, const std::string&
     }
     const fs::path path = pit->second.at(version).root;
     std::error_code ec;
-    fs::remove_all(path, ec);
+    host_remove_tree(path, ec);
     if (ec) {
         set_error(error, "cannot remove package version: " + ec.message());
         return false;

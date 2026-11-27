@@ -1,4 +1,5 @@
 #include "psx_path_utf8.h"
+#include "psx_host_dir.h"
 /* Small read-only installer validation. Target metadata is a declaration,
  * never proof that every translated asset has a replacement. */
 #include "gpu_hd_textures.h"
@@ -43,14 +44,15 @@ extern "C" int gpu_hd_textures_validate_install(const char* input,const char* ga
         candidate(root);
         if(candidates.empty()) {
             size_t visited=0;
-            for(fs::recursive_directory_iterator it(root),end;it!=end;++it) {
+            std::error_code ec;
+            PSXRecompV4::host_visit_tree(root,ec,[&](const PSXRecompV4::HostDirEntry& e) {
                 if(++visited>4096)throw std::runtime_error("Folder scan limit reached; select the pack folder itself.");
-                if(it->is_symlink()){if(it->is_directory())it.disable_recursion_pending();continue;}
-                if(it->is_directory()) {
-                    if(it.depth()>=4||it->path().filename()=="replacements"||it->path().filename()=="dumps")it.disable_recursion_pending();
-                    else candidate(it->path());
-                }
-            }
+                if(e.is_link||!e.is_directory)return PSXRecompV4::HostVisit::Skip;
+                if(e.depth>=4||e.path.filename()=="replacements"||e.path.filename()=="dumps")return PSXRecompV4::HostVisit::Skip;
+                candidate(e.path);
+                return PSXRecompV4::HostVisit::Continue;
+            });
+            if(ec)throw fs::filesystem_error("cannot scan the texture pack folder",root,ec);
         }
         if(candidates.empty())throw std::runtime_error("Incompatible or unidentified pack: no target for "+std::string(game?game:"")+". Select a matching game-ID folder or a pack declaring game_ids in texture-pack.toml.");
         if(candidates.size()!=1)throw std::runtime_error("Several compatible packs found; select the desired pack folder.");
@@ -63,19 +65,22 @@ extern "C" int gpu_hd_textures_validate_install(const char* input,const char* ga
         // This installer deliberately accepts the shared DuckStation wire format.
         // Beetle packs remain usable by legacy manifests without texture_game_id.
         size_t count=0;uint64_t total=0;
-        for(const auto& entry:fs::recursive_directory_iterator(root/"replacements")) {
-            if(entry.is_symlink())throw std::runtime_error("Linked replacement files are not supported.");
-            if(!entry.is_regular_file())continue;
-            std::string ext=psx_path::utf8(entry.path().extension());std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
+        std::error_code walk_ec;
+        const std::vector<PSXRecompV4::HostDirEntry> replacements=PSXRecompV4::host_walk_tree(root/"replacements",walk_ec);
+        if(walk_ec)throw fs::filesystem_error("cannot scan the replacement folder",root/"replacements",walk_ec);
+        for(const auto& entry:replacements) {
+            if(entry.is_link)throw std::runtime_error("Linked replacement files are not supported.");
+            if(!entry.is_regular_file)continue;
+            std::string ext=psx_path::utf8(entry.path.extension());std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
             if(ext!=".png"&&ext!=".jpg"&&ext!=".jpeg"&&ext!=".webp")continue;
             DuckTextureKey key{};
-            if(!duck_texture_parse_name(psx_path::utf8(entry.path().filename()).c_str(),&key))throw std::runtime_error("Invalid replacement filename: "+psx_path::utf8(entry.path().filename()));
-            auto bytes=entry.file_size();total+=bytes;
+            if(!duck_texture_parse_name(psx_path::utf8(entry.path.filename()).c_str(),&key))throw std::runtime_error("Invalid replacement filename: "+psx_path::utf8(entry.path.filename()));
+            auto bytes=entry.size;total+=bytes;
             if(!bytes||bytes>TEXTURE_IMAGE_MAX_ENCODED_BYTES||total>4ull*1024*1024*1024||++count>65536)throw std::runtime_error("Replacement image exceeds installer limits.");
-            std::vector<uint8_t> encoded(static_cast<size_t>(bytes));std::ifstream in(entry.path(),std::ios::binary);
+            std::vector<uint8_t> encoded(static_cast<size_t>(bytes));std::ifstream in(PSXRecompV4::host_long_path(entry.path),std::ios::binary);
             DecodedTextureImage image;std::string diagnostic;
-            if(!in.read(reinterpret_cast<char*>(encoded.data()),encoded.size())||!texture_image_decode(encoded.data(),encoded.size(),TEXTURE_IMAGE_DEFAULT_DECODED_BUDGET,image,diagnostic))throw std::runtime_error("Invalid image "+psx_path::utf8(entry.path().filename())+": "+diagnostic);
-            if(image.width%key.width||image.height%key.height||image.width/key.width!=image.height/key.height)throw std::runtime_error("Replacement image has an incompatible scale: "+psx_path::utf8(entry.path().filename()));
+            if(!in.read(reinterpret_cast<char*>(encoded.data()),encoded.size())||!texture_image_decode(encoded.data(),encoded.size(),TEXTURE_IMAGE_DEFAULT_DECODED_BUDGET,image,diagnostic))throw std::runtime_error("Invalid image "+psx_path::utf8(entry.path.filename())+": "+diagnostic);
+            if(image.width%key.width||image.height%key.height||image.width/key.width!=image.height/key.height)throw std::runtime_error("Replacement image has an incompatible scale: "+psx_path::utf8(entry.path.filename()));
         }
         if(!count){say("No texture pack installed");return 0;}
         if(count!=info.replacement_count)throw std::runtime_error("Incomplete or aliased pack: replacement/image counts differ.");

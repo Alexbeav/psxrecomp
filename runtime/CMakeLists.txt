@@ -172,6 +172,15 @@ if(BUILD_TESTING)
     psxrecomp_sha256_file(host_long_path_test)
     add_test(NAME host_long_path_test COMMAND host_long_path_test)
 
+    # PS1B-703: directory walks, copies and removals past MAX_PATH.
+    add_executable(host_dir_test tests/test_host_dir.cpp)
+    target_include_directories(host_dir_test PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/include)
+    target_compile_features(host_dir_test PRIVATE cxx_std_17)
+    find_package(Threads REQUIRED)
+    target_link_libraries(host_dir_test PRIVATE Threads::Threads)
+    add_test(NAME host_dir_test COMMAND host_dir_test)
+    set_tests_properties(host_dir_test PROPERTIES TIMEOUT 60)
+
     add_executable(atomic_file_write_test tests/test_atomic_file_write.cpp)
     target_include_directories(atomic_file_write_test PRIVATE include)
     target_compile_features(atomic_file_write_test PRIVATE cxx_std_17)

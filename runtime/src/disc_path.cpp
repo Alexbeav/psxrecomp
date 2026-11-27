@@ -2,6 +2,7 @@
 
 #include "disc_path.h"
 #include "host_path.h"
+#include "psx_host_dir.h"
 
 #include "cue_sheet.h"
 
@@ -72,9 +73,9 @@ fs::path find_sibling_image(const fs::path& cue) {
     if (fs::is_directory(dir, ec)) {
         const fs::path stem = cue.stem();
         ec.clear();
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-            if (it->path().stem() != stem) continue;
-            if (is_raw_image(it->path())) return it->path();
+        for (const HostDirEntry& e : host_list_dir(dir, ec)) {
+            if (e.path.stem() != stem) continue;
+            if (is_raw_image(e.path)) return e.path;
         }
     }
     return {};
@@ -105,10 +106,10 @@ fs::path find_owning_cue(const fs::path& image) {
     if (!fs::is_directory(dir, ec)) return {};
 
     ec.clear();
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        if (!is_cue(it->path())) continue;
-        if (same_file_path(it->path(), same_stem)) continue;  // already tried
-        if (cue_owns_image(it->path())) return it->path();
+    for (const HostDirEntry& e : host_list_dir(dir, ec)) {
+        if (!is_cue(e.path)) continue;
+        if (same_file_path(e.path, same_stem)) continue;  // already tried
+        if (cue_owns_image(e.path)) return e.path;
     }
     return {};
 }

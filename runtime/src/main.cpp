@@ -76,6 +76,7 @@ extern "C" int iso_source_bin_path(void*,char*,uint32_t);
 #include "psx_sha256.h"
 #include "psx_sha256_file.h"
 #include "psx_host_long_path.h"
+#include "psx_host_dir.h"
 #include "netplay_state_digest.h"
 #include "local_mouse_sdl.h"
 #include "pad_external_input.h"
@@ -3929,11 +3930,10 @@ static std::filesystem::path find_shared_retail_bios() {
     const fs::path dir = shared_bios_folder();
     std::error_code ec;
     if (dir.empty() || !fs::is_directory(dir, ec)) return {};
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        const fs::path p = it->path();
-        std::error_code fec;
-        if (!it->is_regular_file(fec) || fec || p.extension() == ".part") continue;
-        if (it->file_size(fec) != 512u * 1024u || fec) continue;
+    for (const PSXRecompV4::HostDirEntry& e : PSXRecompV4::host_list_dir(dir, ec)) {
+        const fs::path p = e.path;
+        if (!e.is_regular_file || p.extension() == ".part") continue;
+        if (e.size != 512u * 1024u) continue;
         const PsxBiosBackend* b = bios_backend_for_file(p, nullptr, nullptr);
         if (b && b->image && !b->image->image_bundled) return p;
     }
@@ -3950,10 +3950,8 @@ static void store_shared_retail_bios(const std::filesystem::path& picked) {
     const fs::path dir = shared_bios_folder();
     if (dir.empty()) return;
     std::error_code ec;
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        std::error_code fec;
-        if (it->is_regular_file(fec) && !fec &&
-            bios_backend_for_file(it->path(), nullptr, nullptr) == b)
+    for (const PSXRecompV4::HostDirEntry& e : PSXRecompV4::host_list_dir(dir, ec)) {
+        if (e.is_regular_file && bios_backend_for_file(e.path, nullptr, nullptr) == b)
             return;
     }
     ec.clear();
