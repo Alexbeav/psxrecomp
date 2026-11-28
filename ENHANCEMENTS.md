@@ -867,3 +867,12 @@ tooling defect found on the way: `screenshot_hires` produces a tiled/black
 PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
 the census + the player's own captures carried the session; fix it before
 the formal Crash/Tomba2 A/B.
+
+## F1 — Frame Rate Unlock: presentation decoupled from guest rate (2026-11-28)
+
+Plan, layers and status: `docs/FRAME_RATE_UNLOCK.md`. Built-in mod
+`psx.presentation.frame-rate` (limit 30/60/90/120/144/240/360/unlimited or
+match display; in-between frames motion-adaptive / crossfade / off). Game
+logic stays stock. New measurement surface: TCP `frame_cadence` and the
+`Game N fps` telemetry readout. Next: motion-correct in-between frames
+(per-primitive draw-list replay, shared with the depth-rebuilding layer).

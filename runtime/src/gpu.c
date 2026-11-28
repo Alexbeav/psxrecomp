@@ -28,6 +28,7 @@
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
+#include "frame_cadence.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2933,6 +2934,10 @@ void gpu_vblank_flush_present(void) {
 
 void gpu_vblank_tick(void) {
     lcf ^= 1;
+    /* Game-frame cadence (observation only): must run before the vblank
+     * present callback so the presenter sees whether this VBlank completed a
+     * new game frame. */
+    (void)frame_cadence_note_vblank(&g_frame_cadence);
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
      * field while GP1(08h) vertical interlace is on, in antiphase with the
      * even/odd-lines bit 31 during active display. Modeled here at vblank
@@ -5075,7 +5080,10 @@ static void gp0_execute_command(void) {
     /* Categorize for diagnostics */
     if (opcode <= 0x01) gp0_nop_count++;
     else if (opcode == 0x02) gp0_fill_count++;
-    else if (opcode >= 0x20 && opcode <= 0x7F) gp0_draw_count++;
+    else if (opcode >= 0x20 && opcode <= 0x7F) {
+        gp0_draw_count++;
+        frame_cadence_note_draw(&g_frame_cadence);
+    }
     else if (opcode >= 0x80 && opcode <= 0xDF) gp0_copy_count++;
     else if (opcode >= 0xE1 && opcode <= 0xE6) gp0_env_count++;
 
@@ -5531,6 +5539,8 @@ static void gp1_display_area_start(uint32_t val) {
     display_area_x = val & 0x3FF;
     display_area_y = (val >> 10) & 0x1FF;
     ws_note_display_base(display_area_x);  /* learn the display buffer set (native-wide) */
+    frame_cadence_note_display_start(&g_frame_cadence, display_area_x,
+                                     display_area_y);
 }
 
 static void gp1_h_display_range(uint32_t val) {

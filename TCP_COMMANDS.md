@@ -376,6 +376,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `fntrace_reset` |  | ✓ |  |
 | `fntrace_unfiltered` |  | ✓ |  |
 | `frame` | ✓ |  | ✓ |
+| `frame_cadence` | ✓ |  |  |
 | `frame_fingerprint` | ✓ |  |  |
 | `frame_perf` | ✓ |  |  |
 | `frame_range` | ✓ | ✓ | ✓ |

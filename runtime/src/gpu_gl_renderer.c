@@ -68,6 +68,7 @@
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
 #include "frame_interpolation.h"
+#include "frame_cadence.h"
 #include "host_osd.h"
 #include "psx_savestate_menu.h"
 #include "host_time.h"
@@ -335,6 +336,10 @@ static double        s_interp_host_hz = 0.0;
 static double        s_interp_target_hz = 0.0;
 static double        s_interp_source_hz = 0.0;
 static FrameInterpolationSchedule s_interp_schedule;
+/* Game-frame awareness (frame_cadence.h): VBlanks since the newest captured
+ * game frame, and that frame's measured duration in VBlanks. */
+static uint32_t      s_interp_since = 0, s_interp_span = 1;
+static uint64_t      s_interp_held = 0;
 static void interp_reset_history(void);
 static int interp_present(float alpha);
 static void interp_present_source_interval(void);
@@ -3693,10 +3698,17 @@ int gl_renderer_perf_aggregate(int wide_filter, double out[18]) {
 void gl_renderer_set_ws_ablate(int mode) { s_ws_ablate = (mode >= 0 && mode <= 3) ? mode : 0; }
 int  gl_renderer_get_ws_ablate(void)     { return s_ws_ablate; }
 
+static const char *interp_blend_mode_name(int mode) {
+    return mode == 2 ? "no blend: newest frame, rate-limited only"
+         : mode == 1 ? "change-adaptive blend" : "linear blend";
+}
+
 static void interp_reset_history_unlocked(void) {
     s_interp_valid = 0;
     s_interp_w = s_interp_h = 0;
     s_interp_source_path = -1;
+    s_interp_since = 0;
+    s_interp_span = 1;
     frame_interpolation_schedule_reset(&s_interp_schedule);
 }
 
@@ -3706,10 +3718,16 @@ static void interp_reset_history(void) {
 
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
                                    double source_hz, int blend_mode) {
-    double effective_hz = target_hz > 0.0 ? target_hz : host_hz;
-    if (effective_hz < source_hz) effective_hz = source_hz;
+    /* target_hz is the presentation-rate limit, independent of the guest
+     * rate: > 0 caps presents/s (below the guest rate too: 30 on a 50 Hz
+     * guest), 0 follows the measured display refresh, < 0 is unlimited. */
+    const int unlimited = target_hz < 0.0;
+    double effective_hz = unlimited ? -1.0
+                        : target_hz > 0.0 ? target_hz
+                        : host_hz > 0.0 ? host_hz : source_hz;
     int active = (enabled && source_hz >= 1.0 && source_hz <= 1000.0 &&
-                  effective_hz >= source_hz && effective_hz <= 1000.0) ? 1 : 0;
+                  (unlimited ||
+                   (effective_hz >= 1.0 && effective_hz <= 1000.0))) ? 1 : 0;
     const char *diag = getenv("PSX_GL_INTERP_DIAG");
     s_interp_diag = diag && diag[0] && diag[0] != '0';
     if (active != s_interp_enabled || source_hz != s_interp_source_hz ||
@@ -3719,13 +3737,18 @@ void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz
     s_interp_host_hz = host_hz;
     s_interp_target_hz = active ? effective_hz : 0.0;
     s_interp_source_hz = active ? source_hz : 0.0;
-    s_interp_blend_mode = blend_mode == 1 ? 1 : 0;
-    if (active)
+    s_interp_blend_mode = (blend_mode == 1 || blend_mode == 2) ? blend_mode : 0;
+    if (active && unlimited)
+        fprintf(stdout, "psxrecomp: GL presentation decoupled: unlimited "
+                "presents/s from %.3f guest VBlanks/s on the render thread "
+                "(%s; no motion vectors)\n", source_hz,
+                interp_blend_mode_name(s_interp_blend_mode));
+    else if (active)
         fprintf(stdout, "psxrecomp: GL temporal frame blending enabled: %.1f "
                 "presents/s from %.3f guest frames/s on the render thread "
-                "(%s blend; no motion vectors)\n",
+                "(%s; no motion vectors)\n",
                 effective_hz, source_hz,
-                s_interp_blend_mode ? "change-adaptive" : "linear");
+                interp_blend_mode_name(s_interp_blend_mode));
     else
         fprintf(stdout, "psxrecomp: GL temporal frame blending disabled "
                 "(host %.1f Hz)\n", host_hz);
@@ -3753,6 +3776,16 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
     if (swaps) *swaps = s_interp_swaps;
 }
 
+void gl_renderer_interpolation_cadence_diag(uint32_t *since, uint32_t *span,
+                                            uint64_t *held, uint64_t *captures,
+                                            int *blend_mode) {
+    if (since) *since = s_interp_since;
+    if (span) *span = s_interp_span;
+    if (held) *held = s_interp_held;
+    if (captures) *captures = s_interp_captures;
+    if (blend_mode) *blend_mode = s_interp_blend_mode;
+}
+
 /* Copy a stable display image out of the mutable VRAM/wide render target.
  * Returns true when temporal blending owns this source-frame interval. */
 static int interp_capture(GLuint fbo, int x, int y, int w, int h,
@@ -3771,6 +3804,15 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
         }
     }
 
+    /* Advance history only on a real game frame. A VBlank that re-shows the
+     * same image (a 25 fps title's second VBlank) keeps the pair and moves
+     * the blend further along it instead of blending identical images. */
+    if (s_interp_valid >= 1 && !g_frame_cadence.last_vblank_new_frame) {
+        if (s_interp_since != UINT32_MAX) s_interp_since++;
+        s_interp_held++;
+        return 1;
+    }
+
     int dst = 0;
     if (s_interp_valid == 1) dst = s_interp_cur == 0 ? 1 : 0;
     else if (s_interp_valid >= 2) dst = s_interp_prev;
@@ -3787,6 +3829,10 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
         s_interp_cur = dst;
         s_interp_valid = 2;
     }
+    s_interp_since = 0;
+    s_interp_span = g_frame_cadence.last_duration;
+    if (s_interp_span < 1) s_interp_span = 1;
+    if (s_interp_span > 8) s_interp_span = 8;  /* longer = a stall, not motion */
     s_interp_linear = linear;
     s_interp_force_4_3 = force_4_3;
     s_interp_source_path = source_path;
@@ -3871,8 +3917,16 @@ static void interp_present_source_interval(void) {
                &s_interp_schedule, SDL_GetPerformanceCounter(),
                &deadline, &alpha)) {
         interp_wait_until(deadline, frequency);
+        alpha = s_interp_blend_mode == 2 ? 1.0f
+              : frame_interpolation_span_alpha(alpha, s_interp_since,
+                                               s_interp_span);
         latency_ring_mark(LAT_SWAP_BEGIN);
-        (void)interp_present(alpha);
+        {
+            const uint64_t t0 = SDL_GetPerformanceCounter();
+            (void)interp_present(alpha);
+            frame_interpolation_schedule_note_cost(
+                &s_interp_schedule, SDL_GetPerformanceCounter() - t0);
+        }
         latency_ring_mark(LAT_SWAP_END);
     }
     interp_wait_until(frame_interpolation_schedule_end(&s_interp_schedule),

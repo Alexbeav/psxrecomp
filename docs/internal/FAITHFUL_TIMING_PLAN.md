@@ -213,6 +213,14 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-11-28 (presentation-rate decoupling — enhancement tier, no core change):**
+  Frame Rate Unlock (docs/FRAME_RATE_UNLOCK.md): game-frame cadence tracker,
+  decoupled GL presenter with a 30..unlimited limit, blends following real game
+  frames. Guest VBlank cadence, timers, devices and the cycle-cost model are
+  untouched. Fixed a pacing bug on the way: with interpolation on, a PAL title
+  was paced at 59.94/60 Hz (1.2x fast); the presenter now follows the live
+  video standard like the wall-clock pacer. All registered runtime tests pass.
+
 - **2026-07-28 (per-game host audio cushion — implemented, parser validated):**
   Added `[audio] buffer_ms` as a runtime-only developer setting with a guarded
   30–500 ms range. The compatibility default remains 180 ms, preserving the

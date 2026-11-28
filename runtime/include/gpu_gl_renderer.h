@@ -30,6 +30,12 @@ void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz
                                    double source_hz, int blend_mode);
 void gl_renderer_set_interpolation_suspended(int suspended);
 int gl_renderer_interpolation_owns_cadence(void);
+/* Game-frame awareness of the decoupled presenter: VBlanks since the newest
+ * captured game frame, that frame's duration in VBlanks, VBlanks that re-showed
+ * an image (history held, not re-captured), total captures, blend mode. */
+void gl_renderer_interpolation_cadence_diag(uint32_t *since, uint32_t *span,
+                                            uint64_t *held, uint64_t *captures,
+                                            int *blend_mode);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,
                                     double *host_hz, double *target_hz,

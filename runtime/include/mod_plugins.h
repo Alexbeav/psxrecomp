@@ -139,8 +139,19 @@ int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
  * temporally blends completed guest frames at the requested output rate on its
  * owning render thread/context. It does not derive motion vectors or generate
  * true intermediate object positions.
- * A value of zero follows the measured host-display refresh rate.
+ *
+ * The value is a presentation-rate LIMIT, independent of the guest rate:
+ * PSX_MOD_FRAME_RATE_MIN..MAX caps presents per second (a cap below the guest
+ * rate, e.g. 30 on a 50 Hz PAL title, presents fewer frames without slowing
+ * the game), PSX_MOD_FRAME_RATE_UNLIMITED presents back-to-back, and
+ * zero follows the measured host-display refresh rate.
+ *
+ * Blending follows real game frames (frame_cadence.h), not VBlanks: a title
+ * that produces a new image every second VBlank is blended across both.
  */
+#define PSX_MOD_FRAME_RATE_MIN       24u
+#define PSX_MOD_FRAME_RATE_MAX       1000u
+#define PSX_MOD_FRAME_RATE_UNLIMITED 0xFFFFFFFFu
 int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
 /*
  * Choose how the OpenGL presenter combines completed frames. Linear is a
@@ -148,9 +159,15 @@ int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
  * small temporal changes but switches large changes cleanly to reduce the
  * double-image trails produced by moving objects.
  */
+/*
+ * None presents the newest completed game frame with no blending: the rate
+ * limit applies, nothing is synthesized, and there is no added frame of
+ * latency. It is the pure FPS-limiter setting.
+ */
 enum {
     PSX_MOD_FRAME_INTERPOLATION_LINEAR = 0,
-    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1
+    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1,
+    PSX_MOD_FRAME_INTERPOLATION_NONE = 2
 };
 int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 int psx_mod_set_auto_skip_fmv(int enabled);
