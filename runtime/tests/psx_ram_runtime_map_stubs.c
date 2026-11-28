@@ -80,6 +80,7 @@ void psx_devices_service_to_now(void) {}
 /* Source devices are disabled in the ordinary geometry/cache fixtures. */
 int source_gpu_runtime_active(void){return 0;}
 int gpu_dma_source_ll_ready(void){fputs("unexpected source GPU\n",stderr);exit(2);}
+uint32_t gpu_dma_vram_upload_words(void){fputs("unexpected source GPU\n",stderr);exit(2);}
 uint32_t cdrom_dma_read_padded(void){fputs("unexpected source CD\n",stderr);exit(2);}
 int cdrom_get_setloc_lba(void){return 0;}
 void overlay_capture_on_dma(uint32_t a,uint32_t n,const uint8_t *p){(void)a;(void)n;(void)p;}
