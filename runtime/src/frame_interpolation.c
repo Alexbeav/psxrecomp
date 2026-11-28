@@ -7,6 +7,16 @@ void frame_interpolation_schedule_reset(FrameInterpolationSchedule *schedule) {
     if (schedule) memset(schedule, 0, sizeof(*schedule));
 }
 
+void frame_interpolation_schedule_note_cost(FrameInterpolationSchedule *schedule,
+                                            uint64_t ticks) {
+    if (!schedule) return;
+    if (schedule->present_cost <= 0.0)
+        schedule->present_cost = (double)ticks;
+    else
+        schedule->present_cost = schedule->present_cost * 0.875 +
+                                 (double)ticks * 0.125;
+}
+
 int frame_interpolation_schedule_begin(FrameInterpolationSchedule *schedule,
                                        uint64_t now, uint64_t frequency,
                                        double source_hz, double target_hz) {
@@ -14,16 +24,18 @@ int frame_interpolation_schedule_begin(FrameInterpolationSchedule *schedule,
     double target_period;
     double now_d = (double)now;
 
+    int unlimited = target_hz <= 0.0;
+
     if (!schedule || frequency == 0 || !isfinite(source_hz) ||
-        !isfinite(target_hz) || source_hz < 1.0 || target_hz < source_hz ||
-        source_hz > 1000.0 || target_hz > 1000.0) {
+        !isfinite(target_hz) || source_hz < 1.0 || source_hz > 1000.0 ||
+        (!unlimited && (target_hz < 1.0 || target_hz > 1000.0))) {
         if (schedule) frame_interpolation_schedule_reset(schedule);
         return 0;
     }
 
     source_period = (double)frequency / source_hz;
-    target_period = (double)frequency / target_hz;
-    if (source_period < 1.0 || target_period < 1.0) {
+    target_period = unlimited ? 0.0 : (double)frequency / target_hz;
+    if (source_period < 1.0 || (!unlimited && target_period < 1.0)) {
         frame_interpolation_schedule_reset(schedule);
         return 0;
     }
@@ -44,6 +56,17 @@ int frame_interpolation_schedule_begin(FrameInterpolationSchedule *schedule,
 
     schedule->frame_end = schedule->source_deadline;
     schedule->target_period = target_period;
+    if (schedule->presents == 0) {
+        if (schedule->starved < 1000000) schedule->starved++;
+    } else {
+        schedule->starved = 0;
+    }
+    schedule->presents = 0;
+
+    if (unlimited) {
+        schedule->next_present_deadline = schedule->frame_start;
+        return 1;
+    }
 
     /* Coalesce stale output deadlines. Keep the newest missed deadline so an
      * over-budget guest frame can update the window once, then resume cadence. */
@@ -59,12 +82,26 @@ int frame_interpolation_schedule_next(FrameInterpolationSchedule *schedule,
     double span;
     double a;
 
-    if (!schedule || schedule->target_period <= 0.0 ||
-        schedule->next_present_deadline > schedule->frame_end + 0.5)
+    if (!schedule || schedule->frame_end <= 0.0)
         return 0;
-
-    d = schedule->next_present_deadline;
-    schedule->next_present_deadline += schedule->target_period;
+    if (schedule->target_period <= 0.0) {
+        /* Unlimited: one present per call while a present (at its measured
+         * cost) still fits before the interval ends. When none fits (a slow
+         * GPU, or a guest frame that overran), present anyway only if the
+         * previous interval was also skipped: the window keeps updating at
+         * half rate at worst, and a present that costs more than a guest
+         * interval can never slow the guest down. */
+        if ((double)now + schedule->present_cost >= schedule->frame_end &&
+            (schedule->presents > 0 || schedule->starved < 1))
+            return 0;
+        d = (double)now;
+    } else {
+        if (schedule->next_present_deadline > schedule->frame_end + 0.5)
+            return 0;
+        d = schedule->next_present_deadline;
+        schedule->next_present_deadline += schedule->target_period;
+    }
+    schedule->presents++;
     if (d < (double)now) d = (double)now;
     if (d > schedule->frame_end) d = schedule->frame_end;
 
@@ -81,4 +118,17 @@ uint64_t frame_interpolation_schedule_end(
     const FrameInterpolationSchedule *schedule) {
     if (!schedule || schedule->frame_end <= 0.0) return 0;
     return (uint64_t)(schedule->frame_end + 0.5);
+}
+
+float frame_interpolation_span_alpha(float interval_alpha,
+                                     uint32_t vblanks_since_capture,
+                                     uint32_t frame_vblanks) {
+    double a;
+    if (!(interval_alpha >= 0.0f)) interval_alpha = 0.0f;
+    if (interval_alpha > 1.0f) interval_alpha = 1.0f;
+    if (frame_vblanks <= 1u) return vblanks_since_capture ? 1.0f : interval_alpha;
+    a = ((double)vblanks_since_capture + (double)interval_alpha) /
+        (double)frame_vblanks;
+    if (a > 1.0) a = 1.0;
+    return (float)a;
 }

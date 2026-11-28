@@ -7834,12 +7834,71 @@ static void handle_gl_interp(int id, const char *json)
     int enabled = 0, suspended = 0, history = 0;
     double host_hz = 0.0, target_hz = 0.0;
     uint64_t swaps = 0;
+    uint32_t since = 0, span = 0;
+    uint64_t held = 0, captures = 0;
+    int blend = 0;
     gl_renderer_interpolation_diag(&enabled, &suspended, &history,
                                    &host_hz, &target_hz, &swaps);
+    gl_renderer_interpolation_cadence_diag(&since, &span, &held, &captures,
+                                           &blend);
+    /* target_hz < 0 = unlimited. blend: 0 linear, 1 adaptive, 2 none. */
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"suspended\":%d,\"history\":%d,"
-             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu}",
+             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu,"
+             "\"blend\":%d,\"captures\":%llu,\"held_vblanks\":%llu,"
+             "\"since\":%u,\"span\":%u}",
              id, enabled, suspended, history, host_hz, target_hz,
-             (unsigned long long)swaps);
+             (unsigned long long)swaps, blend, (unsigned long long)captures,
+             (unsigned long long)held, (unsigned)since, (unsigned)span);
+}
+
+/* frame_cadence [count=N] [reset=1]: game-frame cadence (frame_cadence.h).
+ * game_fps is new game images per second of GUEST time (VBlanks at the
+ * nominal 50/59.94 Hz), so it is independent of host speed: a PAL title that
+ * flips every second VBlank reports 25.0 whatever the host is doing. hist[i]
+ * counts frames shown for i+1 VBlanks (last bucket = 8+). recent lists the
+ * newest `count` durations, oldest first. reset=1 clears the statistics after
+ * reporting them (live flip state is kept). */
+#include "frame_cadence.h"
+static void handle_frame_cadence(int id, const char *json)
+{
+    extern int gpu_video_standard_is_pal(void);
+    const FrameCadence *c = &g_frame_cadence;
+    int count = json_get_int(json, "count", 64);
+    int reset = json_get_int(json, "reset", 0);
+    const int pal = gpu_video_standard_is_pal();
+    const double nominal = pal ? 50.0 : 59.94;
+    const double game_fps = c->vblanks
+        ? (double)c->frames * nominal / (double)c->vblanks : 0.0;
+    char recent[FRAME_CADENCE_RING * 4 + 8];
+    size_t pos = 0;
+    uint32_t avail = c->ring_head < FRAME_CADENCE_RING
+        ? c->ring_head : FRAME_CADENCE_RING;
+    if (count < 0) count = 0;
+    if ((uint32_t)count > avail) count = (int)avail;
+    for (int i = 0; i < count; i++) {
+        uint32_t idx = (c->ring_head - (uint32_t)count + (uint32_t)i) %
+                       FRAME_CADENCE_RING;
+        pos += (size_t)snprintf(recent + pos, sizeof recent - pos, "%s%u",
+                                i ? "," : "", (unsigned)c->ring[idx]);
+    }
+    recent[pos] = '\0';
+    send_fmt("{\"id\":%d,\"ok\":true,\"pal\":%d,\"nominal_hz\":%.2f,"
+             "\"vblanks\":%llu,\"frames\":%llu,\"flip_frames\":%llu,"
+             "\"game_fps\":%.3f,\"last_duration\":%u,"
+             "\"vblanks_since_frame\":%u,\"static_vblanks\":%u,"
+             "\"hist\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu],"
+             "\"recent\":[%s]}",
+             id, pal, nominal,
+             (unsigned long long)c->vblanks, (unsigned long long)c->frames,
+             (unsigned long long)c->flip_frames, game_fps,
+             (unsigned)c->last_duration, (unsigned)c->vblanks_since_frame,
+             (unsigned)c->static_vblanks,
+             (unsigned long long)c->hist[0], (unsigned long long)c->hist[1],
+             (unsigned long long)c->hist[2], (unsigned long long)c->hist[3],
+             (unsigned long long)c->hist[4], (unsigned long long)c->hist[5],
+             (unsigned long long)c->hist[6], (unsigned long long)c->hist[7],
+             recent);
+    if (reset) frame_cadence_clear_stats(&g_frame_cadence);
 }
 
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
@@ -13863,6 +13922,7 @@ static const CmdEntry s_commands[] = {
     { "frame_perf",        handle_frame_perf },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
+    { "frame_cadence",     handle_frame_cadence },
     { "gl_wide_fast",      handle_gl_wide_fast },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },

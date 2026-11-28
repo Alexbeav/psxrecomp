@@ -29,6 +29,7 @@
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
+#include "frame_cadence.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2616,6 +2617,7 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 /* ---- Initialization ---- */
 
 static void gpu_reset_state(int clear_vram) {
+    frame_cadence_rearm(&g_frame_cadence);
     if (clear_vram) {
         memset(vram, 0, sizeof(vram));
         gpu_vram_dirty_mark_all();
@@ -2939,6 +2941,10 @@ void gpu_vblank_flush_present(void) {
 
 void gpu_vblank_tick(void) {
     lcf ^= 1;
+    /* Game-frame cadence (observation only): must run before the vblank
+     * present callback so the presenter sees whether this VBlank completed a
+     * new game frame. */
+    (void)frame_cadence_note_vblank(&g_frame_cadence);
     /* Surface materials: rotate probe samples + advance shader time (no-op
      * bookkeeping when the feature is off). */
     surface_frame_end();
@@ -3059,6 +3065,8 @@ int gpu_depth24_present_hold_tick(void) {
 }
 
 void gpu_depth24_on_savestate_loaded(void) {
+    /* Restored display start belongs to another timeline. */
+    frame_cadence_rearm(&g_frame_cadence);
     /* Hold skips Swap — after restore we want the restored VRAM visible now.
      * Upload span / prev_h were restored from the GPU snap. */
     s_d24_present_hold = 0;
@@ -5083,8 +5091,14 @@ static void gp0_execute_command(void) {
 
     /* Categorize for diagnostics */
     if (opcode <= 0x01) gp0_nop_count++;
-    else if (opcode == 0x02) gp0_fill_count++;
-    else if (opcode >= 0x20 && opcode <= 0x7F) gp0_draw_count++;
+    else if (opcode == 0x02) {
+        gp0_fill_count++;
+        frame_cadence_note_draw(&g_frame_cadence);  /* clears count as drawing */
+    }
+    else if (opcode >= 0x20 && opcode <= 0x7F) {
+        gp0_draw_count++;
+        frame_cadence_note_draw(&g_frame_cadence);
+    }
     else if (opcode >= 0x80 && opcode <= 0xDF) gp0_copy_count++;
     else if (opcode >= 0xE1 && opcode <= 0xE6) gp0_env_count++;
 
@@ -5549,6 +5563,8 @@ static void gp1_display_area_start(uint32_t val) {
     display_area_x = val & 0x3FF;
     display_area_y = (val >> 10) & 0x1FF;
     ws_note_display_base(display_area_x);  /* learn the display buffer set (native-wide) */
+    frame_cadence_note_display_start(&g_frame_cadence, display_area_x,
+                                     display_area_y);
 }
 
 static void gp1_h_display_range(uint32_t val) {

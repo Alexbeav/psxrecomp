@@ -418,6 +418,12 @@ if(BUILD_TESTING)
     add_test(NAME frame_interpolation_schedule_test
              COMMAND frame_interpolation_schedule_test)
 
+    add_executable(frame_cadence_test
+        tests/test_frame_cadence.c
+        src/frame_cadence.c)
+    target_include_directories(frame_cadence_test PRIVATE include)
+    add_test(NAME frame_cadence_test COMMAND frame_cadence_test)
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
