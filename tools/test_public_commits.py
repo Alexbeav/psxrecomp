@@ -151,7 +151,7 @@ class GuardTests(unittest.TestCase):
                 guard.pre_push('https://github.com/fixture/fixture', [line], self.base)
 
     def test_missing_baseline_refused(self):
-        with self.assertRaises(subprocess.CalledProcessError):
+        with self.assertRaisesRegex(ValueError, 'public base'):
             guard.check_refs([self.base], 'f' * 40)
 
     def test_older_source_branch_preserves_historical_exemption(self):
@@ -259,7 +259,7 @@ class GuardTests(unittest.TestCase):
         copied = hooks / 'public-commit-guard' / 'check_public_commits.py'
         # The isolated transport fixture uses its own historical pin. Production
         # pin identity is tested separately by invoking the guard on the stage head.
-        copied.write_text(copied.read_text(encoding='utf-8').replace(guard.PIN_H, self.base), encoding='utf-8')
+        copied.write_text(copied.read_text(encoding='utf-8').replace(guard.PIN_J_BASE, self.base), encoding='utf-8')
         remote = Path('private-remote.git').resolve()
         run('init', '--bare', '--quiet', str(remote))
         ssh = Path('local-transport.py').resolve()
