@@ -198,8 +198,8 @@ inline void host_copy_tree(const std::filesystem::path& from,
 inline std::uintmax_t host_remove_tree(const std::filesystem::path& path,
                                        std::error_code& ec) {
     ec.clear();
-    constexpr std::uintmax_t failed = static_cast<std::uintmax_t>(-1);
 #ifdef _WIN32
+    constexpr std::uintmax_t failed = static_cast<std::uintmax_t>(-1);
     const std::wstring top = host_long_path(path).native();
     const DWORD attr = GetFileAttributesW(top.c_str());
     if (attr == INVALID_FILE_ATTRIBUTES) {
