@@ -4,6 +4,7 @@
 #include "overlay_api.h"   /* PSX_OVERLAY_CODEGEN_HASH / _ABI_TAG / _CODEGEN_VER */
 #include "dirty_ram_interp.h"
 #include "gpu.h"           /* gpu_get_vram — CPU-auth mirror under dual-raster   */
+#include "surface_materials.h"
 #include "gpu_render.h"    /* gr_vram_transfer_in / gr_vram_transfer_out          */
 #include "gpu_vram_dirty.h"
 #include "cpu_state.h"     /* gte_canonicalize_cpu_state after CPU wire restore   */
@@ -728,6 +729,9 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return gpu_snapshot_read(p, len);
     case BS_SEC_VRAM: {
         if (len != VRAM_SIZE) return 0;
+        /* Restored VRAM is not a GP0 upload: drop surface-material residency
+         * (textures regain identity on the game's next upload). */
+        surface_materials_reset_tracking();
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
         /* Wire == host layout: upload straight from the section buffer. */
         gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, (const uint16_t*)p);

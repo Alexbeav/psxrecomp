@@ -16,6 +16,7 @@
 #  define _POSIX_C_SOURCE 200809L
 #endif
 #include <time.h>
+#include "surface_materials.h"
 #include "debug_server.h"
 #include "dispatch_publish.h"
 #include "psx_bss.h"
@@ -8257,12 +8258,71 @@ static void handle_gl_interp(int id, const char *json)
     int enabled = 0, suspended = 0, history = 0;
     double host_hz = 0.0, target_hz = 0.0;
     uint64_t swaps = 0;
+    uint32_t since = 0, span = 0;
+    uint64_t held = 0, captures = 0;
+    int blend = 0;
     gl_renderer_interpolation_diag(&enabled, &suspended, &history,
                                    &host_hz, &target_hz, &swaps);
+    gl_renderer_interpolation_cadence_diag(&since, &span, &held, &captures,
+                                           &blend);
+    /* target_hz < 0 = unlimited. blend: 0 linear, 1 adaptive, 2 none. */
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"suspended\":%d,\"history\":%d,"
-             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu}",
+             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu,"
+             "\"blend\":%d,\"captures\":%llu,\"held_vblanks\":%llu,"
+             "\"since\":%u,\"span\":%u}",
              id, enabled, suspended, history, host_hz, target_hz,
-             (unsigned long long)swaps);
+             (unsigned long long)swaps, blend, (unsigned long long)captures,
+             (unsigned long long)held, (unsigned)since, (unsigned)span);
+}
+
+/* frame_cadence [count=N] [reset=1]: game-frame cadence (frame_cadence.h).
+ * game_fps is new game images per second of GUEST time (VBlanks at the
+ * nominal 50/59.94 Hz), so it is independent of host speed: a PAL title that
+ * flips every second VBlank reports 25.0 whatever the host is doing. hist[i]
+ * counts frames shown for i+1 VBlanks (last bucket = 8+). recent lists the
+ * newest `count` durations, oldest first. reset=1 clears the statistics after
+ * reporting them (live flip state is kept). */
+#include "frame_cadence.h"
+static void handle_frame_cadence(int id, const char *json)
+{
+    extern int gpu_video_standard_is_pal(void);
+    const FrameCadence *c = &g_frame_cadence;
+    int count = json_get_int(json, "count", 64);
+    int reset = json_get_int(json, "reset", 0);
+    const int pal = gpu_video_standard_is_pal();
+    const double nominal = pal ? 50.0 : 59.94;
+    const double game_fps = c->vblanks
+        ? (double)c->frames * nominal / (double)c->vblanks : 0.0;
+    char recent[FRAME_CADENCE_RING * 4 + 8];
+    size_t pos = 0;
+    uint32_t avail = c->ring_head < FRAME_CADENCE_RING
+        ? c->ring_head : FRAME_CADENCE_RING;
+    if (count < 0) count = 0;
+    if ((uint32_t)count > avail) count = (int)avail;
+    for (int i = 0; i < count; i++) {
+        uint32_t idx = (c->ring_head - (uint32_t)count + (uint32_t)i) %
+                       FRAME_CADENCE_RING;
+        pos += (size_t)snprintf(recent + pos, sizeof recent - pos, "%s%u",
+                                i ? "," : "", (unsigned)c->ring[idx]);
+    }
+    recent[pos] = '\0';
+    send_fmt("{\"id\":%d,\"ok\":true,\"pal\":%d,\"nominal_hz\":%.2f,"
+             "\"vblanks\":%llu,\"frames\":%llu,\"flip_frames\":%llu,"
+             "\"game_fps\":%.3f,\"last_duration\":%u,"
+             "\"vblanks_since_frame\":%u,\"static_vblanks\":%u,"
+             "\"hist\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu],"
+             "\"recent\":[%s]}",
+             id, pal, nominal,
+             (unsigned long long)c->vblanks, (unsigned long long)c->frames,
+             (unsigned long long)c->flip_frames, game_fps,
+             (unsigned)c->last_duration, (unsigned)c->vblanks_since_frame,
+             (unsigned)c->static_vblanks,
+             (unsigned long long)c->hist[0], (unsigned long long)c->hist[1],
+             (unsigned long long)c->hist[2], (unsigned long long)c->hist[3],
+             (unsigned long long)c->hist[4], (unsigned long long)c->hist[5],
+             (unsigned long long)c->hist[6], (unsigned long long)c->hist[7],
+             recent);
+    if (reset) frame_cadence_clear_stats(&g_frame_cadence);
 }
 
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
@@ -14086,6 +14146,160 @@ static void handle_starv_ring(int id, const char *json)
     free(buf);
 }
 
+/* surface_* — surface-material authoring (docs/SURFACE_MATERIALS.md).
+ *   {"cmd":"surface_status"}                          -> table + counters
+ *   {"cmd":"surface_probe_on","on":0|1}               -> record per-prim samples
+ *   {"cmd":"surface_probe","x":X,"y":Y}               -> prims (topmost first)
+ *        covering VRAM pixel (X,Y) last frame, with their texture keys
+ *   {"cmd":"surface_census","limit":N}                -> last frame's keys by area
+ *   {"cmd":"surface_highlight","key":"tex-pal|tex-*"} -> pulse those prims magenta
+ *   {"cmd":"surface_highlight"}                       -> clear highlight
+ *   {"cmd":"surface_load","path":"..."}               -> (re)load a table; "" clears
+ * x/y are VRAM coordinates (display_x/display_y from gpu_state + screen px). */
+static int surface_json_str(const char *json, const char *key, char *out, int cap)
+{
+    char pat[64];
+    snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *p = strstr(json, pat);
+    if (!p) return 0;
+    p += strlen(pat);
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return 0;
+    p++;
+    int n = 0;
+    while (*p && *p != '"' && n < cap - 1) {
+        if (*p == '\\' && p[1]) p++;
+        out[n++] = *p++;
+    }
+    out[n] = 0;
+    return 1;
+}
+
+/* gp0_inject — feed raw words to the GP0 port (the hardware model, exactly as a
+ * CPU store to 0x1F801810 would): {"cmd":"gp0_inject","words":["0xE1000005",...]}
+ * Renderer bring-up tool: lets a synthetic primitive stream (upload + textured
+ * quad) exercise a renderer feature without a disc. Requests are capped at
+ * RECV_BUF_SIZE, so a long stream (a VRAM upload) is staged with "stage":1 on
+ * every chunk but the last; the last chunk writes everything at ONE safe point,
+ * so the running program's own GP0 traffic can never interleave mid-transfer.
+ * The write is refused (staged words kept) while the program is mid-command,
+ * so injected words can never become another command's parameters. */
+static uint32_t s_gp0_stage[65536];
+static int      s_gp0_stage_n = 0;
+
+static void handle_gp0_inject(int id, const char *json)
+{
+    const char *p = strstr(json, "\"words\"");
+    if (!p || !(p = strchr(p, '['))) { send_err(id, "words array required"); return; }
+    p++;
+    int start = s_gp0_stage_n;
+    /* A request longer than RECV_BUF_SIZE arrives truncated, possibly
+     * mid-word: require the closing ']' so a cut request is rejected whole. */
+    {
+        const char *close = strchr(p, ']');
+        if (!close) { send_err(id, "words array not closed (request truncated? stage smaller chunks)"); return; }
+    }
+    while (*p && *p != ']') {
+        while (*p == ' ' || *p == ',' || *p == '"') p++;
+        if (*p == ']' || !*p) break;
+        char *end = NULL;
+        unsigned long v = strtoul(p, &end, 0);
+        if (end == p) { s_gp0_stage_n = start; send_err(id, "bad word"); return; }
+        if (s_gp0_stage_n >= (int)(sizeof s_gp0_stage / sizeof s_gp0_stage[0])) {
+            s_gp0_stage_n = 0; send_err(id, "stage overflow (65536 words)"); return;
+        }
+        s_gp0_stage[s_gp0_stage_n++] = (uint32_t)v;
+        p = end;
+    }
+    if (json_get_int(json, "stage", 0)) {
+        send_fmt("{\"id\":%d,\"ok\":true,\"staged\":%d}", id, s_gp0_stage_n);
+        return;
+    }
+    extern void gpu_write_gp0(uint32_t val);
+    extern int gpu_gp0_at_command_boundary(void);
+    if (!gpu_gp0_at_command_boundary()) {
+        /* The program is between two words of its own GP0 command; writing
+         * now would splice ours into it. Keep the staged words; retry. */
+        send_err(id, "GPU mid-command; staged words kept, retry with an empty words array");
+        return;
+    }
+    int n = s_gp0_stage_n;
+    for (int k = 0; k < n; k++) gpu_write_gp0(s_gp0_stage[k]);
+    s_gp0_stage_n = 0;
+    send_fmt("{\"id\":%d,\"ok\":true,\"written\":%d}", id, n);
+}
+
+static void handle_surface_status(int id, const char *json)
+{
+    (void)json;
+    static char body[8192];
+    surface_status_json(body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+static void handle_surface_probe_on(int id, const char *json)
+{
+    surface_materials_set_probe(json_get_int(json, "on", 1) != 0);
+    handle_surface_status(id, json);
+}
+
+static void handle_surface_probe(int id, const char *json)
+{
+    static char body[16384];
+    surface_probe_json(json_get_int(json, "x", 0), json_get_int(json, "y", 0),
+                       body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+static void handle_surface_census(int id, const char *json)
+{
+    static char body[32768];
+    /* ~130 bytes per key: 200 keys always fit the 32 KB body. */
+    int limit = json_get_int(json, "limit", 40);
+    if (limit > 200) limit = 200;
+    surface_census_json(limit, body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+static void handle_surface_highlight(int id, const char *json)
+{
+    char key[64];
+    if (!surface_json_str(json, "key", key, sizeof key) || !key[0]) {
+        surface_materials_set_highlight(0, 0, 0, 0);
+    } else {
+        uint32_t t = 0, p = 0;
+        int any = 0;
+        if (!surface_parse_key(key, &t, &p, &any)) {
+            send_err(id, "key must be tex-pal or tex-* (hex)");
+            return;
+        }
+        surface_materials_set_highlight(t, p, any, 1);
+    }
+    handle_surface_status(id, json);
+}
+
+static void handle_surface_load(int id, const char *json)
+{
+    char path[1024];
+    if (!surface_json_str(json, "path", path, sizeof path)) {
+        send_err(id, "path required (\"\" clears)");
+        return;
+    }
+    if (!path[0]) {
+        surface_materials_clear();
+    } else {
+        char e[512];
+        if (!surface_materials_load_file(path, e, sizeof e)) {
+            /* toml diagnostics carry quotes/newlines; send_err does not escape. */
+            for (char *c = e; *c; c++)
+                if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) *c = ' ';
+            send_err(id, e);
+            return;
+        }
+    }
+    handle_surface_status(id, json);
+}
+
 /* data_shards: memoized pure-function replay counters (data_shards.c).
  *   {"cmd":"data_shards"}              -> counters
  *   {"cmd":"data_shards","enable":0|1} -> toggle, then counters */
@@ -14168,6 +14382,13 @@ static const CmdEntry s_commands[] = {
     { "scene_capture",     handle_scene_capture },
     { "scene_dump",        handle_scene_dump },
     { "pgxp",              handle_pgxp },
+    { "surface_status",    handle_surface_status },
+    { "gp0_inject",        handle_gp0_inject },
+    { "surface_probe_on",  handle_surface_probe_on },
+    { "surface_probe",     handle_surface_probe },
+    { "surface_census",    handle_surface_census },
+    { "surface_highlight", handle_surface_highlight },
+    { "surface_load",      handle_surface_load },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_branch_sites",   handle_ws_branch_sites },
@@ -14195,6 +14416,7 @@ static const CmdEntry s_commands[] = {
     { "frame_perf",        handle_frame_perf },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
+    { "frame_cadence",     handle_frame_cadence },
     { "gl_wide_fast",      handle_gl_wide_fast },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },

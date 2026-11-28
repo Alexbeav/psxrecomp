@@ -82,6 +82,8 @@ static void ws_hud_anchor_clear(void *tags, unsigned n) { (void)tags; (void)n; }
 static void ws_repeat_rect_tag_clear(void *tags) { (void)tags; }
 static void split_trace_reset(void *trace) { (void)trace; }
 static void ws_scene_hold_reset(void *hold) { (void)hold; }
+static int g_frame_cadence;
+static void frame_cadence_rearm(int *cadence) { (void)cadence; }
 
 static int gpu_display_is_depth24(void) { return (int)display_depth; }
 static void ensure_cpu(void) { cpu = fbo; ++syncs; event('S'); }

@@ -18,6 +18,7 @@
 #include "display_scanout.h"
 #include "source_gpu_runtime.h"
 #include "interrupts.h"
+#include "surface_materials.h"
 #include "pgxp.h"
 #include "scene_capture.h"
 #include "mod_memory.h"
@@ -42,6 +43,7 @@
 #include "ws_hud_anchor.h"
 #include "ws_repeat_rect.h"
 #include "drawn_frames.h"
+#include "frame_cadence.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2514,6 +2516,11 @@ static void gp0_commit_cpu_to_vram(void) {
             vram_write_pixels[row * vram_write_w + col] =
                 vram[((vram_write_y + row) & 511u) * 1024u +
                      ((vram_write_x + col) & 1023u)];
+    /* Surface materials key textures by this exact GP0(A0h) upload
+     * (docs/SURFACE_MATERIALS.md); savestate VRAM restores are not uploads. */
+    if (surface_materials_active())
+        surface_note_upload(vram_write_x, vram_write_y,
+                            vram_write_w, vram_write_h, vram_write_pixels);
     gr_vram_transfer_in(vram_write_x, vram_write_y,
                         vram_write_w, vram_write_h, vram_write_pixels);
     /* Observe the edge before marking the first completed movie upload. */
@@ -2869,6 +2876,7 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 /* ---- Initialization ---- */
 
 static void gpu_reset_state(int clear_vram) {
+    frame_cadence_rearm(&g_frame_cadence);
     if (clear_vram) {
         memset(vram, 0, sizeof(vram));
         gpu_vram_dirty_mark_all();
@@ -3237,6 +3245,13 @@ void gpu_vblank_tick(void) {
     if (psx_drawn_frames_enabled())
         drawn_frames_vblank_sample();
     lcf ^= 1;
+    /* Surface materials: rotate probe samples + advance shader time (no-op
+     * bookkeeping when the feature is off). */
+    surface_frame_end();
+    /* Game-frame cadence (observation only): must run before the vblank
+     * present callback so the presenter sees whether this VBlank completed a
+     * new game frame. */
+    (void)frame_cadence_note_vblank(&g_frame_cadence);
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
      * field while GP1(08h) vertical interlace is on, in antiphase with the
      * even/odd-lines bit 31 during active display. Modeled here at vblank
@@ -3349,6 +3364,8 @@ int gpu_depth24_present_hold_tick(void) {
 }
 
 void gpu_depth24_on_savestate_loaded(void) {
+    /* Restored display start belongs to another timeline. */
+    frame_cadence_rearm(&g_frame_cadence);
     /* Hold skips Swap — after restore we want the restored VRAM visible now.
      * Upload span / prev_h were restored from the GPU snap. */
     s_d24_present_hold = 0;
@@ -5496,8 +5513,14 @@ static void gp0_execute_command(void) {
 
     /* Categorize for diagnostics */
     if (opcode <= 0x01) gp0_nop_count++;
-    else if (opcode == 0x02) gp0_fill_count++;
-    else if (opcode >= 0x20 && opcode <= 0x7F) gp0_draw_count++;
+    else if (opcode == 0x02) {
+        gp0_fill_count++;
+        frame_cadence_note_draw(&g_frame_cadence);  /* clears count as drawing */
+    }
+    else if (opcode >= 0x20 && opcode <= 0x7F) {
+        gp0_draw_count++;
+        frame_cadence_note_draw(&g_frame_cadence);
+    }
     else if (opcode >= 0x80 && opcode <= 0xDF) gp0_copy_count++;
     else if (opcode >= 0xE1 && opcode <= 0xE6) gp0_env_count++;
 
@@ -5900,6 +5923,15 @@ static void gpu_write_gp0_body(uint32_t val) {
  * rasterization / batching / VRAM transfer work on the emu thread — as its
  * own phase so it is separable from the guest code that issued the write.
  * Covers both the MMIO store chokepoint and DMA channel-2 feeds. */
+/* Debug-tool gate (gp0_inject): 1 when no GP0 command or transfer is in
+ * flight, so injected words cannot be consumed as another command's
+ * parameters or pixel data. */
+int gpu_gp0_at_command_boundary(void) {
+    /* Collection, VRAM transfers and polylines each hold a non-idle state;
+     * gp0_words_collected keeps its last value after a command executes. */
+    return gp0_state == GP0_IDLE;
+}
+
 static int gpu_source_draw_triangle(const uint32_t *words,int second) {
     unsigned opcode=words[0]>>24,stride=source_gpu_polygon_stride(opcode);
     int x[3],y[3],extra_work=0;uint32_t colors[3];SourceGPUTexture texture={0};
@@ -6156,6 +6188,8 @@ static void gp1_display_area_start(uint32_t val) {
     if (psx_drawn_frames_enabled())
         psx_drawn_frames_note_display_start(display_area_x, display_area_y);
     ws_note_display_base(display_area_x);  /* learn the display buffer set (native-wide) */
+    frame_cadence_note_display_start(&g_frame_cadence, display_area_x,
+                                     display_area_y);
 }
 
 static void gp1_h_display_range(uint32_t val) {

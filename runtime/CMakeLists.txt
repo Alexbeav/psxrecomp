@@ -24,7 +24,7 @@ psxrecomp_add_runtime_target(psx-runtime
 
 if(BUILD_TESTING)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c src/drawn_frames.c)
+        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c src/drawn_frames.c src/frame_cadence.c tests/surface_materials_off.c)
         target_include_directories(depth24_row_policy_test PRIVATE include)
         target_compile_options(depth24_row_policy_test PRIVATE
             -O2 -UNDEBUG -flto -fwhole-program -ffunction-sections -fdata-sections)
@@ -899,6 +899,19 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME controller_port_route_test COMMAND controller_port_route_test)
 
+    # Surface materials (docs/SURFACE_MATERIALS.md): key parsing, table load,
+    # residency identity through the shared HD-pack tracker, render-to-texture
+    # invalidation, probe/census, and the default-off gate.
+    add_executable(surface_materials_test
+        tests/test_surface_materials.cpp
+        src/surface_materials.cpp
+        src/hd_texture_pack.cpp)
+    target_compile_definitions(surface_materials_test PRIVATE HD_TEXTURE_PACK_DISABLE_PNG_DECODE=1)
+    target_include_directories(surface_materials_test PRIVATE include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/lib/toml11)
+    target_link_libraries(surface_materials_test PRIVATE Threads::Threads)
+    add_test(NAME surface_materials_test COMMAND surface_materials_test)
+
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
     # g_debug_last_store_pc references that this test's stub block never gained,
@@ -995,7 +1008,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
 
     add_executable(gpu_textured_dot_nw_shift_exec_test
         tests/test_gpu_textured_dot_nw_shift_exec.c
-        src/drawn_frames.c)
+        src/drawn_frames.c
+        src/frame_cadence.c
+        tests/surface_materials_off.c)
     target_include_directories(gpu_textured_dot_nw_shift_exec_test PRIVATE
         include
         src)
@@ -1473,6 +1488,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME frame_interpolation_schedule_test
              COMMAND frame_interpolation_schedule_test)
 
+    add_executable(frame_cadence_test
+        tests/test_frame_cadence.c
+        src/frame_cadence.c)
+    target_include_directories(frame_cadence_test PRIVATE include)
+    add_test(NAME frame_cadence_test COMMAND frame_cadence_test)
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
@@ -1483,7 +1504,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
 
     add_executable(gpu_interlace_render_test
         tests/test_gpu_interlace_render.c src/gpu_render.c
-        src/gpu_sw_renderer.c src/gpu_vram_dirty.c)
+        src/gpu_sw_renderer.c src/gpu_vram_dirty.c tests/surface_materials_off.c)
     target_include_directories(gpu_interlace_render_test PRIVATE include)
     if(NOT MSVC)
         target_link_libraries(gpu_interlace_render_test PRIVATE m)
@@ -1624,9 +1645,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_executable(vblank_in_exception_test tests/test_vblank_in_exception.c)
         add_executable(gpu_interlace_status_test tests/test_gpu_interlace_status.c src/drawn_frames.c)
         add_executable(gpu_gpuread_latch_test tests/test_gpu_gpuread_latch.c src/drawn_frames.c)
-        add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c src/drawn_frames.c)
-        add_executable(dma_gpu_command_queue_test tests/test_dma_gpu_command_queue.c src/dma_gpu_ll.c src/drawn_frames.c)
-        add_executable(gpu_queue_boot_admission_test tests/test_gpu_queue_boot_admission.c src/dma_gpu_ll.c src/drawn_frames.c)
+        add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c src/drawn_frames.c src/frame_cadence.c tests/surface_materials_off.c)
+        add_executable(dma_gpu_command_queue_test tests/test_dma_gpu_command_queue.c src/dma_gpu_ll.c src/drawn_frames.c src/frame_cadence.c tests/surface_materials_off.c)
+        add_executable(gpu_queue_boot_admission_test tests/test_gpu_queue_boot_admission.c src/dma_gpu_ll.c src/drawn_frames.c src/frame_cadence.c tests/surface_materials_off.c)
         target_link_libraries(gpu_queue_boot_admission_test PRIVATE ZLIB::ZLIB)
         add_test(NAME gpu_queue_boot_admission COMMAND gpu_queue_boot_admission_test)
         foreach(_queue_test gpu_command_queue dma_gpu_command_queue gpu_queue_boot_admission)
