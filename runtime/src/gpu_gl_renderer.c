@@ -86,6 +86,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "surface_materials.h"
 #include "png_write.h"   /* png_write_rgb — present_shot readback */
 
 #ifndef GL_BGRA
@@ -149,6 +150,7 @@ typedef void   (APIENTRY *PFN_glUniform2i)(GLint, GLint, GLint);
 typedef void   (APIENTRY *PFN_glUniform4i)(GLint, GLint, GLint, GLint, GLint);
 typedef void   (APIENTRY *PFN_glUniform2f)(GLint, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
+typedef void   (APIENTRY *PFN_glUniform4fv)(GLint, GLsizei, const GLfloat *);
 typedef void   (APIENTRY *PFN_glBlendColor)(GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glBlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum);
 typedef void   (APIENTRY *PFN_glBlendEquationSeparate)(GLenum, GLenum);
@@ -212,6 +214,7 @@ static PFN_glUniform2i         p_glUniform2i;
 static PFN_glUniform4i         p_glUniform4i;
 static PFN_glUniform2f         p_glUniform2f;
 static PFN_glUniform4f         p_glUniform4f;
+static PFN_glUniform4fv        p_glUniform4fv;
 static PFN_glBlendColor        p_glBlendColor;
 static PFN_glBlendFuncSeparate p_glBlendFuncSeparate;
 static PFN_glBlendEquationSeparate p_glBlendEquationSeparate;
@@ -267,6 +270,7 @@ static int load_modern_gl(void) {
     LOAD(p_glUniform2i, "glUniform2i"); LOAD(p_glUniform4i, "glUniform4i");
     LOAD(p_glUniform2f, "glUniform2f");
     LOAD(p_glUniform4f, "glUniform4f");
+    LOAD(p_glUniform4fv, "glUniform4fv");
     LOAD(p_glBlendColor, "glBlendColor");
     LOAD(p_glBlendFuncSeparate, "glBlendFuncSeparate");
     LOAD(p_glBlendEquationSeparate, "glBlendEquationSeparate");
@@ -367,7 +371,7 @@ static GLuint s_tex_prog = 0, s_tex_vao = 0, s_tex_vbo = 0;
  * PS1-faithful default, which makes the vertex shader's w exactly 1.0 and the
  * fragment shader read the noperspective varying — i.e. bit-identical to the
  * pre-feature pipeline. */
-#define TEXV 20
+#define TEXV 21   /* + material slot (surface_materials.h); 0 = none = faithful */
 static GLuint s_blit_prog = 0, s_blit_vao = 0, s_blit_vbo = 0;
 static GLuint s_pack_prog = 0, s_stencil_prog = 0, s_empty_vao = 0;
 
@@ -385,6 +389,10 @@ static GLint s_uVram = -1, s_uTpage = -1, s_uClut = -1, s_uDepth = -1;
 static GLint s_uRaw = -1, s_uSemipass = -1, s_uSemimode = -1;
 static GLint s_uTwin = -1, s_uMaskset = -1, s_uFilter = -1;
 static GLint s_uLimits = -1;
+/* Surface-material uniforms (surface_materials.h). Uploaded per textured batch
+ * only while the feature is active; inactive => every a_mat is 0 and the
+ * shader never reads them. */
+static GLint s_uMatA = -1, s_uMatB = -1, s_uMatC = -1, s_uMatTime = -1;
 /* Native-wide x-projection uniforms (per program). u_xoff = x translation in
  * native px (0 canonical), u_xhalf = x clip half-extent in native px (512
  * canonical). When wide is off these stay 0 / 512 so the canonical pass is
@@ -998,6 +1006,7 @@ static const char *TEX_VS =
     "layout(location=7) in vec4 a_limits;\n"
     "layout(location=8) in float a_semi;\n"
     "layout(location=9) in float a_q;   /* persp weight; 0 = affine (default) */\n"
+    "layout(location=10) in float a_mat; /* surface material slot; 0 = none */\n"
     "uniform float u_shift;\n"
     "uniform float u_xoff;   /* native-wide x translation (px); 0 canonical */\n"
     "uniform float u_xhalf;  /* x clip half-extent (px); 512 canonical */\n"
@@ -1005,11 +1014,11 @@ static const char *TEX_VS =
     "uniform float u_xcenter;/* stretch centre in VRAM px; 0 canonical */\n"
     "noperspective out vec2 v_uv; noperspective out vec4 v_col;\n"
     "smooth out vec2 v_uv_p;  /* perspective-correct UV (used when v_persp!=0) */\n"
-    "flat out int v_persp;\n"
+    "flat out int v_persp; flat out int v_mat;\n"
     "flat out ivec2 v_tpage; flat out ivec2 v_clut; flat out int v_depth;\n"
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
     "void main(){ v_uv = a_uv; v_uv_p = a_uv; v_col = a_col;\n"
-    "  v_persp = (a_q > 0.0) ? 1 : 0;\n"
+    "  v_persp = (a_q > 0.0) ? 1 : 0; v_mat = int(a_mat + 0.5);\n"
     "  v_tpage = ivec2(a_tpage + 0.5); v_clut = ivec2(a_clut + 0.5);\n"
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
     "  v_semi = int(a_semi + 0.5);\n"
@@ -1040,6 +1049,11 @@ static const char *TEX_FS =
     "flat in int v_raw;       /* 1 = no color modulation */\n"
     "flat in ivec4 v_limits;  /* prim uv sampling bounds (inclusive, post-wrap) */\n"
     "flat in int v_semi;      /* GP0 command has semi-transparency enabled */\n"
+    "flat in int v_mat;       /* surface material slot (surface_materials.h); 0 = none */\n"
+    "uniform vec4 u_matA[16]; /* kind, ripple_amplitude, ripple_scale, ripple_speed */\n"
+    "uniform vec4 u_matB[16]; /* flow_u, flow_v, glint, glint_power */\n"
+    "uniform vec4 u_matC[16]; /* tint rgb, tint_mix */\n"
+    "uniform float u_time;    /* guest-frame seconds (surface_time_seconds) */\n"
     "uniform usampler2D u_vram;\n"
     "uniform int u_semipass;  /* 0=all texels, 1=STP=0 only, 2=STP=1 only */\n"
     "uniform int u_semimode;  /* PS1 blend mode; drives dual-source factors */\n"
@@ -1077,6 +1091,32 @@ static const char *TEX_FS =
     "   * AND this prim's packet carried full GTE projection provenance, so the\n"
     "   * default is the PS1's affine (noperspective) mapping. */\n"
     "  vec2 uv = (v_persp != 0) ? v_uv_p : v_uv;\n"
+    "  /* Surface materials (docs/SURFACE_MATERIALS.md). v_mat is 0 for every\n"
+    "   * prim unless a surface_materials table tagged its texture key, so the\n"
+    "   * default path below is untouched. */\n"
+    "  int mkind = 0; float glint = 0.0;\n"
+    "  if (v_mat != 0) mkind = int(u_matA[v_mat].x + 0.5);\n"
+    "  if (mkind == 1) {\n"
+    "    /* WATER: three crossing wave trains in texel space (anchored to the\n"
+    "     * surface, so ripples move with the geometry, not the screen). The\n"
+    "     * analytic height gradient displaces the sampled uv (refraction-like\n"
+    "     * wobble) and tilts a normal for a sun glint. */\n"
+    "    vec4 mA = u_matA[v_mat], mB = u_matB[v_mat];\n"
+    "    float t = u_time * mA.w;\n"
+    "    vec2 p = uv * mA.z;\n"
+    "    vec2 d1 = vec2(0.80, 0.60), d2 = vec2(-0.50, 0.87), d3 = vec2(0.98, -0.20);\n"
+    "    vec2 g = d1 * cos(dot(d1, p) + t)\n"
+    "           + d2 * (0.6 * cos(dot(d2, p) * 1.37 + t * 1.31))\n"
+    "           + d3 * (0.3 * cos(dot(d3, p) * 2.11 - t * 0.73));\n"
+    "    uv += mB.xy * u_time + g * mA.y;\n"
+    "    /* Tile inside the prim's own sampled rect so flow scrolls the texture\n"
+    "     * instead of smearing its clamped edge. */\n"
+    "    vec2 lo = vec2(v_limits.xy), sz = vec2(v_limits.zw - v_limits.xy) + 1.0;\n"
+    "    uv = lo + mod(uv - lo, sz);\n"
+    "    vec3 n = normalize(vec3(-g * 0.6, 1.0));\n"
+    "    vec3 h = normalize(vec3(0.30, -0.45, 0.84));\n"
+    "    glint = mB.z * pow(max(dot(n, h), 0.0), mB.w);\n"
+    "  }\n"
     "  if (u_filter == 0) {\n"
     "    int raw = fetch_texel(int(floor(uv.x)), int(floor(uv.y)));\n"
     "    if (raw == 0) discard;\n"
@@ -1113,6 +1153,16 @@ static const char *TEX_FS =
     "  if (u_semipass == 1 && stp == 1) discard;\n"
     "  if (u_semipass == 2 && stp == 0) discard;\n"
     "  if (v_raw == 0) rgb = clamp(rgb * v_col.rgb * 2.0, 0.0, 1.0);\n"
+    "  if (mkind == 1) {\n"
+    "    vec4 mC = u_matC[v_mat];\n"
+    "    rgb = mix(rgb, rgb * mC.rgb, mC.a);\n"
+    "    /* Glint follows the prim's own light (vertex colour) so it dims in\n"
+    "     * shadow and darkness the game already shades. */\n"
+    "    float lum = (v_raw == 0) ? clamp(dot(v_col.rgb, vec3(0.6667)), 0.0, 1.0) : 1.0;\n"
+    "    rgb = clamp(rgb + vec3(glint * lum), 0.0, 1.0);\n"
+    "  } else if (mkind == 2) {\n"
+    "    rgb = mix(rgb, vec3(1.0, 0.0, 1.0), 0.55 + 0.35 * sin(u_time * 8.0));\n"
+    "  }\n"
     "  float dst_factor = 0.0;\n"
     "  if (u_semimode == 4 && v_semi != 0 && stp != 0) {\n"
     "    dst_factor = v_semi == 1 ? 0.5 : 1.0;\n"
@@ -1521,6 +1571,9 @@ static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
     if (x1 > s_area_x2) x1 = s_area_x2;
     if (y1 > s_area_y2) y1 = s_area_y2;
     rect_add(&s_pack_dirty, x0, y0, x1, y1);
+    /* Render-to-VRAM drops texture identity under the drawn rect. */
+    if (surface_materials_active() && x1 >= x0 && y1 >= y0)
+        surface_note_vram_write(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
     /* Dual-raster keeps CPU current via SW writes — do not mark GPU-ahead. */
     if (!s_cpu_auth_dual)
         s_gpu_dirty = 1;
@@ -1774,6 +1827,26 @@ static int mirror_batch_center_only(int nverts) {
     return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
+/* Push the surface-material table + time into the TEX program (bound). */
+static void surface_uniforms_upload(void) {
+    float a[SURFACE_MAT_SLOTS * 4], b[SURFACE_MAT_SLOTS * 4], c[SURFACE_MAT_SLOTS * 4];
+    memset(a, 0, sizeof a); memset(b, 0, sizeof b); memset(c, 0, sizeof c);
+    for (int i = 1; i < SURFACE_MAT_SLOTS; i++) {
+        const SurfaceMaterial *m = surface_material_get(i);
+        if (!m) continue;
+        a[i*4+0] = (float)m->kind;     a[i*4+1] = m->ripple_amplitude;
+        a[i*4+2] = m->ripple_scale;    a[i*4+3] = m->ripple_speed;
+        b[i*4+0] = m->flow_u;          b[i*4+1] = m->flow_v;
+        b[i*4+2] = m->glint;           b[i*4+3] = m->glint_power;
+        c[i*4+0] = m->tint[0];         c[i*4+1] = m->tint[1];
+        c[i*4+2] = m->tint[2];         c[i*4+3] = m->tint_mix;
+    }
+    p_glUniform4fv(s_uMatA, SURFACE_MAT_SLOTS, a);
+    p_glUniform4fv(s_uMatB, SURFACE_MAT_SLOTS, b);
+    p_glUniform4fv(s_uMatC, SURFACE_MAT_SLOTS, c);
+    p_glUniform1f(s_uMatTime, surface_time_seconds());
+}
+
 static void flush_tex_batch(void) {
     if (s_tb_n == 0) return;
     int nverts = s_tb_n, semi = s_tb_semi;
@@ -1789,6 +1862,7 @@ static void flush_tex_batch(void) {
     p_glUniform4i(s_uTwin, s_tb_twin[0], s_tb_twin[1], s_tb_twin[2], s_tb_twin[3]);
     p_glUniform1i(s_uMaskset, s_tb_mask);
     p_glUniform1i(s_uFilter, s_tb_filter);
+    if (surface_materials_active()) surface_uniforms_upload();
     p_glBindVertexArray(s_tex_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_tex_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * TEXV * sizeof(float)), s_tb, PSXGL_STREAM_DRAW);
@@ -1979,6 +2053,19 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     int base_y = ((texpage >> 4) & 1) * 256;
     int depth  = (texpage >> 7) & 3; if (depth > 2) depth = 2;
 
+    /* Surface material slot from the texture key (0 when the feature is off).
+     * Classified before this prim's own draw invalidates any residency. */
+    int surf_mat = 0;
+    if (surface_materials_active()) {
+        int bx0 = xs[0], bx1 = xs[0], by0 = ys[0], by1 = ys[0];
+        for (int i = 1; i < 3; i++) {
+            if (xs[i] < bx0) bx0 = xs[i]; if (xs[i] > bx1) bx1 = xs[i];
+            if (ys[i] < by0) by0 = ys[i]; if (ys[i] > by1) by1 = ys[i];
+        }
+        surf_mat = surface_classify_prim(texpage, clut_x, clut_y, lim, s_vram,
+                                         bx0, by0, bx1, by1);
+    }
+
     flush_cpu_upload();   /* if a CPU->VRAM upload is pending it flushes the batch first */
     flush_pack_if_sampling(base_x, base_y, depth, clut_x, clut_y);  /* flushes batch iff it must pack */
     mark_prim_dirty(xs, ys, 3, 1 /* textured */);
@@ -2046,6 +2133,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
             vp[18] = semi >= 0 ? (float)(semi + 1) : 0.0f;          /* a_semi code */
             vp[19] = s_pq_valid ? s_pq[i] : 0.0f;                   /* a_q; 0 = affine */
+            vp[20] = (float)surf_mat;                               /* a_mat; 0 = none */
         }
         s_tb_n += 3;
         if (isolate) flush_tex_batch();   /* draw this semi prim alone, in submission order */
@@ -2698,6 +2786,10 @@ static int init_gpu_raster(void) {
     s_uMaskset  = p_glGetUniformLocation(s_tex_prog, "u_maskset");
     s_uFilter   = p_glGetUniformLocation(s_tex_prog, "u_filter");
     s_uLimits   = p_glGetUniformLocation(s_tex_prog, "u_limits");
+    s_uMatA     = p_glGetUniformLocation(s_tex_prog, "u_matA");
+    s_uMatB     = p_glGetUniformLocation(s_tex_prog, "u_matB");
+    s_uMatC     = p_glGetUniformLocation(s_tex_prog, "u_matC");
+    s_uMatTime  = p_glGetUniformLocation(s_tex_prog, "u_time");
     s_uBlitSrc     = p_glGetUniformLocation(s_blit_prog, "u_src");
     s_uBlitPass    = p_glGetUniformLocation(s_blit_prog, "u_stp_pass");
     s_uBlitMaskset = p_glGetUniformLocation(s_blit_prog, "u_maskset");
@@ -2772,6 +2864,7 @@ static int init_gpu_raster(void) {
         p_glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, st, (void*)(14*sizeof(float))); p_glEnableVertexAttribArray(7); /* limits */
         p_glVertexAttribPointer(8, 1, GL_FLOAT, GL_FALSE, st, (void*)(18*sizeof(float))); p_glEnableVertexAttribArray(8); /* semi   */
         p_glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, st, (void*)(19*sizeof(float))); p_glEnableVertexAttribArray(9); /* q      */
+        p_glVertexAttribPointer(10, 1, GL_FLOAT, GL_FALSE, st, (void*)(20*sizeof(float))); p_glEnableVertexAttribArray(10); /* material */
     }
 
     p_glGenVertexArrays(1, &s_blit_vao);
@@ -3116,6 +3209,10 @@ int gl_renderer_fbo_peek(int x, int y, int w, int h, uint16_t *out) {
     if (!s_raster_ok || !s_ctx) return 0;
     if (x < 0 || y < 0 || w < 1 || h < 1 ||
         x + w > VRAM_W || y + h > VRAM_H) return 0;
+    /* Draw the open prim batches first: a peek right after a submission
+     * otherwise reads the FBO from before those prims (stale capture). */
+    flush_flat_batch();
+    flush_tex_batch();
     flush_cpu_upload();
     rect_add(&s_pack_dirty, x, y, x + w - 1, y + h - 1);
     pack_flush();

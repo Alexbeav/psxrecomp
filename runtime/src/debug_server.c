@@ -15,6 +15,7 @@
 #  define _POSIX_C_SOURCE 200809L
 #endif
 #include <time.h>
+#include "surface_materials.h"
 #include "debug_server.h"
 #include "psx_bss.h"
 #include "nd_intro_ot.h"
@@ -13656,6 +13657,160 @@ static void handle_starv_ring(int id, const char *json)
     free(buf);
 }
 
+/* surface_* — surface-material authoring (docs/SURFACE_MATERIALS.md).
+ *   {"cmd":"surface_status"}                          -> table + counters
+ *   {"cmd":"surface_probe_on","on":0|1}               -> record per-prim samples
+ *   {"cmd":"surface_probe","x":X,"y":Y}               -> prims (topmost first)
+ *        covering VRAM pixel (X,Y) last frame, with their texture keys
+ *   {"cmd":"surface_census","limit":N}                -> last frame's keys by area
+ *   {"cmd":"surface_highlight","key":"tex-pal|tex-*"} -> pulse those prims magenta
+ *   {"cmd":"surface_highlight"}                       -> clear highlight
+ *   {"cmd":"surface_load","path":"..."}               -> (re)load a table; "" clears
+ * x/y are VRAM coordinates (display_x/display_y from gpu_state + screen px). */
+static int surface_json_str(const char *json, const char *key, char *out, int cap)
+{
+    char pat[64];
+    snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *p = strstr(json, pat);
+    if (!p) return 0;
+    p += strlen(pat);
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return 0;
+    p++;
+    int n = 0;
+    while (*p && *p != '"' && n < cap - 1) {
+        if (*p == '\\' && p[1]) p++;
+        out[n++] = *p++;
+    }
+    out[n] = 0;
+    return 1;
+}
+
+/* gp0_inject — feed raw words to the GP0 port (the hardware model, exactly as a
+ * CPU store to 0x1F801810 would): {"cmd":"gp0_inject","words":["0xE1000005",...]}
+ * Renderer bring-up tool: lets a synthetic primitive stream (upload + textured
+ * quad) exercise a renderer feature without a disc. Requests are capped at
+ * RECV_BUF_SIZE, so a long stream (a VRAM upload) is staged with "stage":1 on
+ * every chunk but the last; the last chunk writes everything at ONE safe point,
+ * so the running program's own GP0 traffic can never interleave mid-transfer.
+ * The write is refused (staged words kept) while the program is mid-command,
+ * so injected words can never become another command's parameters. */
+static uint32_t s_gp0_stage[65536];
+static int      s_gp0_stage_n = 0;
+
+static void handle_gp0_inject(int id, const char *json)
+{
+    const char *p = strstr(json, "\"words\"");
+    if (!p || !(p = strchr(p, '['))) { send_err(id, "words array required"); return; }
+    p++;
+    int start = s_gp0_stage_n;
+    /* A request longer than RECV_BUF_SIZE arrives truncated, possibly
+     * mid-word: require the closing ']' so a cut request is rejected whole. */
+    {
+        const char *close = strchr(p, ']');
+        if (!close) { send_err(id, "words array not closed (request truncated? stage smaller chunks)"); return; }
+    }
+    while (*p && *p != ']') {
+        while (*p == ' ' || *p == ',' || *p == '"') p++;
+        if (*p == ']' || !*p) break;
+        char *end = NULL;
+        unsigned long v = strtoul(p, &end, 0);
+        if (end == p) { s_gp0_stage_n = start; send_err(id, "bad word"); return; }
+        if (s_gp0_stage_n >= (int)(sizeof s_gp0_stage / sizeof s_gp0_stage[0])) {
+            s_gp0_stage_n = 0; send_err(id, "stage overflow (65536 words)"); return;
+        }
+        s_gp0_stage[s_gp0_stage_n++] = (uint32_t)v;
+        p = end;
+    }
+    if (json_get_int(json, "stage", 0)) {
+        send_fmt("{\"id\":%d,\"ok\":true,\"staged\":%d}", id, s_gp0_stage_n);
+        return;
+    }
+    extern void gpu_write_gp0(uint32_t val);
+    extern int gpu_gp0_at_command_boundary(void);
+    if (!gpu_gp0_at_command_boundary()) {
+        /* The program is between two words of its own GP0 command; writing
+         * now would splice ours into it. Keep the staged words; retry. */
+        send_err(id, "GPU mid-command; staged words kept, retry with an empty words array");
+        return;
+    }
+    int n = s_gp0_stage_n;
+    for (int k = 0; k < n; k++) gpu_write_gp0(s_gp0_stage[k]);
+    s_gp0_stage_n = 0;
+    send_fmt("{\"id\":%d,\"ok\":true,\"written\":%d}", id, n);
+}
+
+static void handle_surface_status(int id, const char *json)
+{
+    (void)json;
+    static char body[8192];
+    surface_status_json(body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+static void handle_surface_probe_on(int id, const char *json)
+{
+    surface_materials_set_probe(json_get_int(json, "on", 1) != 0);
+    handle_surface_status(id, json);
+}
+
+static void handle_surface_probe(int id, const char *json)
+{
+    static char body[16384];
+    surface_probe_json(json_get_int(json, "x", 0), json_get_int(json, "y", 0),
+                       body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+static void handle_surface_census(int id, const char *json)
+{
+    static char body[32768];
+    /* ~130 bytes per key: 200 keys always fit the 32 KB body. */
+    int limit = json_get_int(json, "limit", 40);
+    if (limit > 200) limit = 200;
+    surface_census_json(limit, body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
+}
+
+static void handle_surface_highlight(int id, const char *json)
+{
+    char key[64];
+    if (!surface_json_str(json, "key", key, sizeof key) || !key[0]) {
+        surface_materials_set_highlight(0, 0, 0, 0);
+    } else {
+        uint32_t t = 0, p = 0;
+        int any = 0;
+        if (!surface_parse_key(key, &t, &p, &any)) {
+            send_err(id, "key must be tex-pal or tex-* (hex)");
+            return;
+        }
+        surface_materials_set_highlight(t, p, any, 1);
+    }
+    handle_surface_status(id, json);
+}
+
+static void handle_surface_load(int id, const char *json)
+{
+    char path[1024];
+    if (!surface_json_str(json, "path", path, sizeof path)) {
+        send_err(id, "path required (\"\" clears)");
+        return;
+    }
+    if (!path[0]) {
+        surface_materials_clear();
+    } else {
+        char e[512];
+        if (!surface_materials_load_file(path, e, sizeof e)) {
+            /* toml diagnostics carry quotes/newlines; send_err does not escape. */
+            for (char *c = e; *c; c++)
+                if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) *c = ' ';
+            send_err(id, e);
+            return;
+        }
+    }
+    handle_surface_status(id, json);
+}
+
 /* data_shards: memoized pure-function replay counters (data_shards.c).
  *   {"cmd":"data_shards"}              -> counters
  *   {"cmd":"data_shards","enable":0|1} -> toggle, then counters */
@@ -13736,6 +13891,13 @@ static const CmdEntry s_commands[] = {
     { "gpu_state",         handle_gpu_state },
     { "geom_correction",   handle_geom_correction },
     { "pgxp",              handle_pgxp },
+    { "surface_status",    handle_surface_status },
+    { "gp0_inject",        handle_gp0_inject },
+    { "surface_probe_on",  handle_surface_probe_on },
+    { "surface_probe",     handle_surface_probe },
+    { "surface_census",    handle_surface_census },
+    { "surface_highlight", handle_surface_highlight },
+    { "surface_load",      handle_surface_load },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },

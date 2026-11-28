@@ -256,6 +256,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vram_dirty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
+    ${PSXRECOMP_ROOT}/runtime/src/surface_materials.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/hd_texture_pack.cpp
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/dma.c
