@@ -61,10 +61,12 @@ static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
             gp0_opcode_count[opcode]++;
             if(opcode==2)gp0_fill_count++;else if(opcode==0x80)gp0_copy_count++;else gp0_draw_count++;
             gp0_ring_record(gp0_cmd_buf,event->count);
+            if(g_scene_capture_on)scene_capture_gp0(gp0_cmd_buf,event->count,gp0_cmd_source_addr);
             extra_work=gpu_source_draw_block(event->words);
         } else if(source_gpu_polygon_supported(opcode)) {
             gp0_opcode_count[opcode]++;gp0_draw_count++;
             gp0_ring_record(gp0_cmd_buf,event->count);
+            if(g_scene_capture_on)scene_capture_gp0(gp0_cmd_buf,event->count,gp0_cmd_source_addr);
             extra_work=gpu_source_draw_triangle(event->words,0);
         } else {
             if(opcode==1)gr_source_texture_control(1,0);
@@ -80,6 +82,7 @@ static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
     } else if(event->kind==SOURCE_GPU_DISPATCH_QUAD_SECOND) {
         /* The completed packet supplies source vertex groups (1,2,3). */
         gp0_ring_record(gp0_cmd_buf,event->count);
+        if(g_scene_capture_on)scene_capture_gp0(gp0_cmd_buf,event->count,gp0_cmd_source_addr);
         extra_work=gpu_source_draw_triangle(event->words,1);
     }
     g_exec_phase=previous_phase;

@@ -101,6 +101,7 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "pgxp_session.h"
+#include "scene_capture.h"
 #include "interrupts.h"
 #include "psx_video_timing.h"
 #include "present_ring.h"
@@ -20330,6 +20331,19 @@ int main(int argc, char** argv) {
     std::string deferred_overlay_capture_persist_dir;
 
     if (game_config_path) {
+        /* Typed scene capture adapter (docs/scene_capture.md): optional, next
+         * to game.toml. Only names hook addresses and the link window; the
+         * capture itself stays off until a mod or the debug server enables it
+         * (PSX_SCENE_CAPTURE=1 enables it at boot for headless measurement). */
+        {
+            const std::filesystem::path adapter =
+                std::filesystem::path(game_config_path).parent_path() / "scene_adapter.toml";
+            std::error_code ec;
+            if (std::filesystem::exists(adapter, ec))   /* errors: scene_capture TCP reply */
+                (void)scene_capture_load_adapter(adapter.string().c_str(), nullptr, 0);
+            if (const char* e = std::getenv("PSX_SCENE_CAPTURE"))
+                if (*e && *e != '0') scene_capture_set_enabled(1);
+        }
         try {
             auto gc = PSXRecompV4::load_game_config(game_config_path);
             game_name = gc.name;
