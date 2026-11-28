@@ -2611,6 +2611,7 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 /* ---- Initialization ---- */
 
 static void gpu_reset_state(int clear_vram) {
+    frame_cadence_rearm(&g_frame_cadence);
     if (clear_vram) {
         memset(vram, 0, sizeof(vram));
         gpu_vram_dirty_mark_all();
@@ -3055,6 +3056,8 @@ int gpu_depth24_present_hold_tick(void) {
 }
 
 void gpu_depth24_on_savestate_loaded(void) {
+    /* Restored display start belongs to another timeline. */
+    frame_cadence_rearm(&g_frame_cadence);
     /* Hold skips Swap — after restore we want the restored VRAM visible now.
      * Upload span / prev_h were restored from the GPU snap. */
     s_d24_present_hold = 0;
@@ -5079,7 +5082,10 @@ static void gp0_execute_command(void) {
 
     /* Categorize for diagnostics */
     if (opcode <= 0x01) gp0_nop_count++;
-    else if (opcode == 0x02) gp0_fill_count++;
+    else if (opcode == 0x02) {
+        gp0_fill_count++;
+        frame_cadence_note_draw(&g_frame_cadence);  /* clears count as drawing */
+    }
     else if (opcode >= 0x20 && opcode <= 0x7F) {
         gp0_draw_count++;
         frame_cadence_note_draw(&g_frame_cadence);

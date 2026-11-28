@@ -18,6 +18,17 @@ void frame_cadence_clear_stats(FrameCadence *c) {
     c->ring_head = 0;
 }
 
+void frame_cadence_rearm(FrameCadence *c) {
+    if (!c) return;
+    c->have_disp = 0;
+    c->armed = 0;
+    c->seen_flip = 0;
+    c->draws_this_vblank = 0;
+    c->static_vblanks = 0;
+    c->vblanks_since_frame = 0;
+    c->last_vblank_new_frame = 0;
+}
+
 void frame_cadence_note_display_start(FrameCadence *c, uint32_t x, uint32_t y) {
     if (!c) return;
     c->cur_disp = (x & 0x3FFu) | ((y & 0x1FFu) << 16);
@@ -66,12 +77,14 @@ int frame_cadence_note_vblank(FrameCadence *c) {
     c->latched_disp = c->cur_disp;
     if (flipped) {
         c->static_vblanks = 0;
+        c->seen_flip = 1;
     } else if (c->static_vblanks != UINT32_MAX) {
         c->static_vblanks++;
     }
 
     new_frame = flipped ||
-        (c->static_vblanks >= FRAME_CADENCE_STATIC_VBLANKS &&
+        (!c->seen_flip &&
+         c->static_vblanks >= FRAME_CADENCE_STATIC_VBLANKS &&
          c->draws_this_vblank > 0);
     if (new_frame) record_frame(c, flipped);
     c->draws_this_vblank = 0;

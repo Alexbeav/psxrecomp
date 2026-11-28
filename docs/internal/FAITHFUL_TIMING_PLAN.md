@@ -219,7 +219,8 @@ on a fixed region -> next.
   frames. Guest VBlank cadence, timers, devices and the cycle-cost model are
   untouched. Fixed a pacing bug on the way: with interpolation on, a PAL title
   was paced at 59.94/60 Hz (1.2x fast); the presenter now follows the live
-  video standard like the wall-clock pacer. All registered runtime tests pass.
+  video standard like the wall-clock pacer (code + unit tests; runtime
+  validation on a PAL title still pending). All registered runtime tests pass.
 
 - **2026-07-28 (per-game host audio cushion — implemented, parser validated):**
   Added `[audio] buffer_ms` as a runtime-only developer setting with a guarded

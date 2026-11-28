@@ -79,6 +79,27 @@ int main(void) {
     for (int i = 0; i < 5; i++)
         CHECK(vblank(&c, -1, 0) == 0, "an idle static screen makes no frames");
 
+    /* A double-buffered title whose frame takes 10 VBlanks to render is one
+     * frame, not a fallback frame per VBlank after the eighth. */
+    frame_cadence_reset(&c);
+    (void)vblank(&c, 0, 1);
+    (void)vblank(&c, 240, 1);            /* proves the title flips */
+    frames = 0;
+    for (int i = 0; i < 9; i++) frames += vblank(&c, -1, 50);
+    frames += vblank(&c, 0, 50);
+    CHECK(frames == 1, "a slow double-buffered frame is counted once");
+    CHECK(c.last_duration == 10, "and lasts its full ten VBlanks");
+
+    /* Rearm forgets the old display start: no false flip after a reset. */
+    frame_cadence_reset(&c);
+    (void)vblank(&c, 0, 1);
+    frame_cadence_rearm(&c);
+    frame_cadence_note_display_start(&c, 0, 240);
+    CHECK(frame_cadence_note_vblank(&c) == 0,
+          "first VBlank after a rearm is not a flip");
+    CHECK(vblank(&c, 0, 1) == 1 && c.last_duration == 1,
+          "flips are measured again after a rearm");
+
     /* clear_stats keeps the live flip state. */
     frame_cadence_reset(&c);
     (void)vblank(&c, 0, 1);

@@ -35,13 +35,16 @@ per VBlank and reports, for any title:
 - `game_fps`: new images per second of **guest** time (independent of host
   speed);
 - a histogram of how many VBlanks each image was shown for (1 = full rate,
-  2 = half rate, 3+ = the game is falling behind);
+  2 = half rate, 3+ = three or more; whether that is a deliberate cap or a
+  slowdown is read from the pattern, not from one bucket);
 - the last 256 durations.
 
 Read it over TCP with `{"cmd":"frame_cadence","count":64}` (`reset=1` clears
 the statistics), or turn on `PSX_FPS_TELEMETRY=1` for a `Game N fps` readout
-in the title bar and OSD. Titles that never move the display start fall back
-to "drew something this VBlank" after 8 static VBlanks.
+in the title bar and OSD. Titles that have never moved the display start
+fall back to "drew something this VBlank" after 8 static VBlanks; once a
+title has flipped, only flips count. The tracker re-arms on GPU reset and
+savestate load.
 
 **AR measuring pass (needs the game, so on Alex's machine):** play the same
 three spots (a light corridor, a heavy room, a fight) and record
@@ -67,13 +70,17 @@ interval. It now:
 - accepts any limit from 24 to 1000 presents/s, **including below the guest
   rate** (30 on a 50 Hz game shows 3 of every 5 frames, the game is not
   slowed), plus "match display" and "unlimited";
-- in unlimited mode, measures its own present cost and never starts a present
-  that would run past the guest interval, so a slow GPU lowers the present
-  rate instead of slowing the game;
-- follows **game frames, not VBlanks**: history only advances when the game
-  actually flipped, and each blend is spread over the measured duration of
-  the newest frame. A 25 fps title is blended across both VBlanks instead of
-  showing blend, hold, blend, hold;
+- in unlimited mode, measures its own present cost and, after the first
+  measured present, does not start a present that would run past the guest
+  interval unless the previous interval had none. A GPU slower than the
+  guest interval therefore drops to about every other interval instead of
+  slowing the game;
+- follows **game frames, not VBlanks**: history advances when the cadence
+  tracker detects a new frame (a flip, or the static-draw fallback), and the
+  blend from the previous to the newest frame is spread over the measured gap
+  between them (that gap is the best available prediction of the newest
+  frame's own duration). A 25 fps title is blended across both VBlanks
+  instead of showing blend, hold, blend, hold;
 - takes its guest rate from the live video standard. Previously it took
   59.94/60 Hz even for PAL titles, so turning interpolation on ran a PAL game
   1.2x fast.
@@ -85,7 +92,8 @@ Player-facing: the built-in **Frame Rate Unlock** mod
 - *Frame rate limit*: Match display / 30 / 60 / 90 / 120 / 144 / 240 / 360 /
   Unlimited;
 - *In-between frames*: Motion-adaptive blend / Crossfade / Off (limiter only:
-  the newest frame, no blending, no added latency).
+  the newest frame, no blending). Off still presents on the limiter's
+  cadence, so a frame can wait up to one present period to be shown.
 
 Developer API: `psx_mod_set_frame_interpolation(fps)` with
 `PSX_MOD_FRAME_RATE_MIN..MAX` and `PSX_MOD_FRAME_RATE_UNLIMITED`;
@@ -95,8 +103,10 @@ the pure limiter. Env for testing: `PSX_FRAME_INTERPOLATION_FPS=-1|0|24..1000`.
 Verified so far: unit tests (`frame_cadence_test`,
 `frame_interpolation_schedule_test`) and an OpenBIOS smoke run under a
 software GL driver: the 30 cap gave 30.0 presents/s with the guest at full
-speed, and unlimited kept the guest at full speed after the cost guard.
-**Not yet verified on a PAL title or a real GPU.**
+speed, and unlimited kept the guest at full speed after the cost guard
+(software GL presents cost more than a 16.7 ms guest interval there, so this
+exercised the slow-GPU path). **The PAL rate fix and everything above are not
+yet verified on a PAL title or a real GPU.**
 
 ### L2: Motion-correct in-between frames (next)
 

@@ -161,8 +161,8 @@ int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
  */
 /*
  * None presents the newest completed game frame with no blending: the rate
- * limit applies, nothing is synthesized, and there is no added frame of
- * latency. It is the pure FPS-limiter setting.
+ * limit applies and nothing is synthesized. It is the pure FPS-limiter
+ * setting; presents still follow the limiter's cadence.
  */
 enum {
     PSX_MOD_FRAME_INTERPOLATION_LINEAR = 0,

@@ -24,7 +24,9 @@
  * from the value latched at the previous VBlank. Titles that never move the
  * display start (single-buffered, or drawing straight into the shown buffer)
  * fall back to "drew primitives this VBlank" once the display start has been
- * static for FRAME_CADENCE_STATIC_VBLANKS. Observation only: nothing here
+ * static for FRAME_CADENCE_STATIC_VBLANKS. The fallback is only for titles
+ * that have never flipped since the last rearm: a double-buffered frame that
+ * takes 8+ VBlanks to render is still one frame. Observation only: nothing here
  * feeds back into guest-visible state.
  */
 #include <stdint.h>
@@ -48,6 +50,7 @@ typedef struct FrameCadence {
     uint32_t last_duration;     /* VBlanks the latest game frame took       */
     int      last_vblank_new_frame;
     int      last_frame_by_flip;  /* 1 = display flip, 0 = static-draw rule */
+    int      seen_flip;         /* a real flip was seen: fallback disabled  */
     uint64_t vblanks;
     uint64_t frames;
     uint64_t flip_frames;
@@ -62,6 +65,10 @@ void frame_cadence_note_draw(FrameCadence *c);
 /* Call once per simulated VBlank. Returns 1 when this VBlank completed a new
  * game frame. */
 int  frame_cadence_note_vblank(FrameCadence *c);
+/* Forget the live flip state (GPU reset, savestate/rollback load) so the
+ * next VBlank cannot report a false flip against the old timeline. Keeps the
+ * statistics. */
+void frame_cadence_rearm(FrameCadence *c);
 /* Clear only the statistics (histogram, ring, counters); keep the live flip
  * state so the next frame is still measured correctly. */
 void frame_cadence_clear_stats(FrameCadence *c);

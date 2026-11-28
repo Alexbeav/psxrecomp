@@ -6811,10 +6811,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             /* Game fps: new images the title produced per second of GUEST
              * time (frame_cadence.h), so a 25 fps PAL title reads 25 at any
              * host speed. Display fps: measured decoupled presents/s. */
+            /* frame_cadence reset=1 (TCP) can move the counters backwards:
+             * count from zero then instead of wrapping. */
             const uint64_t d_game_frames =
-                g_frame_cadence.frames - s_fps_last_game_frames;
+                g_frame_cadence.frames >= s_fps_last_game_frames
+                    ? g_frame_cadence.frames - s_fps_last_game_frames
+                    : g_frame_cadence.frames;
             const uint64_t d_game_vblanks =
-                g_frame_cadence.vblanks - s_fps_last_game_vblanks;
+                g_frame_cadence.vblanks >= s_fps_last_game_vblanks
+                    ? g_frame_cadence.vblanks - s_fps_last_game_vblanks
+                    : g_frame_cadence.vblanks;
             const double game_fps = d_game_vblanks
                 ? (double)d_game_frames * ro.nominal_hz / (double)d_game_vblanks
                 : 0.0;
@@ -13296,7 +13302,13 @@ int main(int argc, char** argv) {
     if (!turbo_loads_offered)
         g_turbo_loads_enabled = 0;
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    /* Presentation decoupling is mod-owned (frame_interpolation_offered is
+     * false): a soft return must not keep the previous game's Frame Rate
+     * Unlock active when the next game has it disabled. */
+    g_frame_interpolation = 0;
+    g_frame_interpolation_fps = 0;
     mod_runtime_activate_plugins();
+    apply_interpolation_rates();   /* no-op before the GL context exists */
     apply_netplay_local_viewport_aspect(net_cfg.enabled);
     for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
         if (g_mod_controller_mode_override[i] >= 0)
