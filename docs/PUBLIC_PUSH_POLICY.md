@@ -1,9 +1,10 @@
 # Public push checks
 
 `tools/check_public_commits.py` owns the fork's public commit checks. It requires
-Python 3 and Git. It checks every commit outside the accepted pin H's history,
+Python 3 and Git. It checks every commit outside the history of pin J's public
+base, upstream master b263b855 (the parent of the pin J v0.1 combine 5082f0be),
 including merge-parent diffs and markers removed in later commits. Fixes branched
-from older source use the same history exemption. Historical pin H ancestors are
+from older source use the same history exemption. Ancestors of that base are
 left unchanged. It refuses unlisted authors or committers, attribution, tool names
 in commit messages, and the lifted reference marker in commit messages or diffs.
 

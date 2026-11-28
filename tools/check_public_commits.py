@@ -8,7 +8,11 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-PIN_H = 'a279b5e86a8d4f027ccdc4965d2aabc39bfbf04e'
+# Pin J was rebuilt on upstream master (5082f0be, 'pin j v0.1: combine upstream
+# master, open pull requests and pin i 0.1.24'), so pin H (a279b5e8) is not in its history.
+# Its public base is that commit's parent, upstream master b263b855 (PS1B-709).
+PIN_J_BASE = 'b263b8552e5b8838b317f8921dfde8b6aca97904'
+PUBLIC_BASE = PIN_J_BASE
 MARKER = ('LIFTED' + '-REWRITE').encode()
 ATTRIBUTION = re.compile(rb'^\s*(?:co-authored-by|generated-by|assisted-by)\s*:', re.I | re.M)
 TOOL_NAME = re.compile(rb'\b(?:codex|claude|chatgpt|openai|anthropic|copilot)\b', re.I)
@@ -46,9 +50,14 @@ def github_remote(location):
     return False
 
 
-def check_refs(refs, base=PIN_H):
+def check_refs(refs, base=PUBLIC_BASE):
     allowed = set(json.loads(POLICY.read_text(encoding='utf-8')))
-    base = git('rev-parse', '--verify', '--end-of-options', base + '^{commit}').strip().decode('ascii')
+    found = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', '--end-of-options', base + '^{commit}'],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if found.returncode:
+        # Its own message: the Git/SSH text below once hid this for a whole pin (PS1B-709).
+        raise ValueError(f'public base {base} is not in this repository; no commit can be judged')
+    base = found.stdout.strip().decode('ascii')
     tips = [git('rev-parse', '--verify', '--end-of-options', ref + '^{commit}').strip().decode('ascii') for ref in refs]
     commits = git('rev-list', *tips, '--not', base).decode('ascii').splitlines()
     errors = []
@@ -70,7 +79,7 @@ def check_refs(refs, base=PIN_H):
     print(f'Public commit check: {len(commits)} commits passed')
 
 
-def pre_push(location, lines, base=PIN_H):
+def pre_push(location, lines, base=PUBLIC_BASE):
     if not github_remote(location):
         return
     tips = []
