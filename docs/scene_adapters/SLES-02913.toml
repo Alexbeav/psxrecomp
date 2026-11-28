@@ -4,6 +4,7 @@
 # psyq_sigs address 0x00012C84 is written as 0x80012C84. psyq_sigs finds DrawOTag in
 # SLES_029.13 but no SetRotMatrix or SetTransMatrix: the game loads the GTE
 # matrices with inline ctc2 code, so transforms are keyed by caller address.
+# The hook must also be listed in game.toml (not in this file):
 #   [recompiler]
 #   mod_function_entry_funcs = ["0x80012C84"]
 format = 1

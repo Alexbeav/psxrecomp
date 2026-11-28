@@ -92,7 +92,7 @@ typedef struct SceneVertex {
     int32_t  sx16, sy16;
     uint32_t packed_sxy;
     uint16_t sz;
-    uint8_t  ambiguous;        /* another vertex this window had the same SXY */
+    uint8_t  ambiguous;        /* an earlier vertex in the window had the same SXY and a different view position */
 } SceneVertex;
 
 enum {

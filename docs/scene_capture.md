@@ -15,7 +15,7 @@ Code: `runtime/include/scene_capture.h`, `runtime/src/scene_capture.cpp`,
 |---|---|---|
 | Transform | GTE state at each RTPS/RTPT vertex | rotation RT, translation TR, H, OFX/OFY, light L, light colour LC, BK, FC, DQA/DQB, caller `ra`, rotation and translation source addresses, object key |
 | Vertex | each GTE perspective projection | model-space V, view-space (MAC1..3 >> 12), exact 16.16 screen position, packed SXY, SZ, transform id, VBlank, ambiguity flag |
-| Primitive | each GP0 draw command | packet address, ordering-table (OT) slot and rank, opcode, kind (polygon, line, rect), textured, semi-transparent, raw texture, Gouraud, texture page, CLUT, screen x/y, linked vertex per corner, object key |
+| Primitive | each GP0 draw command | packet address, ordering-table (OT) walk number in the frame and rank (empty OT nodes before it), opcode, kind (polygon, line, rect), textured, semi-transparent, raw texture, Gouraud, texture page, CLUT, screen x/y, linked vertex per corner, object key |
 
 A frame closes at the first VBlank after it drew something. The last closed
 frame is kept for reading.
@@ -59,7 +59,7 @@ Cost when off: one global flag test at each hook.
 
 A file replay (`PSX_INPUT_ROUTE_FILE`) refuses debug commands that could edit
 or reschedule the run. It accepts the read-only ones: `scene_dump`,
-`screenshot`, and `scene_capture` without `on`, `window` or `adapter`.
+`screenshot`, `scene_capture` without `on`, `window` or `adapter`, and `read_ram` inside main RAM (the first 2 MB).
 
 ## Per-game adapter
 
@@ -80,7 +80,7 @@ set_trans_matrix = [0x80095D8C]      # SetTransMatrix
 The addresses come from `tools/psyq_sigs` (see its README), which names the
 Sony PsyQ SDK functions in a game's EXE. Each hooked address must also be in
 `game.toml` `[recompiler] mod_function_entry_funcs`, because the hook is
-emitted by the recompiler. Without hooks the capture still works from the GTE,
+emitted by the recompiler. Write the addresses as KSEG0 (`0x80xxxxxx`): `tools/psyq_sigs` prints KUSEG (`0x00012C84`), which becomes `0x80012C84`. Without hooks the capture still works from the GTE,
 DMA channel 2 and GP0; hooks add draw-call counts and stable object keys.
 
 A load error does not stop the game; it is reported in the `adapter_error`
@@ -128,6 +128,8 @@ links are not yet explained either.
 ## Limits
 
 - Lines link their first segment only.
+- The source-model linked-list DMA path (`gpu_ll_source_model`) reports no
+  walk start or end, so its primitives carry `ot` -1 and count no walks.
 - A vertex built on the CPU (not projected by the GTE) never links.
 - Capture follows the main GTE path; speculative and replay GTE runs are
   ignored so they cannot add false vertices.
