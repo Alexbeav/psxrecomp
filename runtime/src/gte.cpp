@@ -2,7 +2,9 @@
 #include "cpu_state.h"
 #include "nd_intro_ot.h"
 #include "pgxp.h"
+#include "scene_capture.h"
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -904,6 +906,29 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
                           (uint32_t)gte->SXY[2]);
     }
     geom_note((uint32_t)gte->SXY[2], sx16, sy16);
+    if (g_scene_capture_on && !s_gte_replay_sandbox && s_speculative_depth == 0) {
+        SceneGteProjection sp;
+        sp.v = V;
+        sp.view[0] = (int32_t)(mac1 >> 12);
+        sp.view[1] = (int32_t)(mac2 >> 12);
+        sp.view[2] = (int32_t)(mac3 >> 12);
+        sp.sx16 = (int32_t)(sx16 < INT32_MIN ? INT32_MIN : (sx16 > INT32_MAX ? INT32_MAX : sx16));
+        sp.sy16 = (int32_t)(sy16 < INT32_MIN ? INT32_MIN : (sy16 > INT32_MAX ? INT32_MAX : sy16));
+        sp.packed_sxy = (uint32_t)gte->SXY[2];
+        sp.sz = gte->SZ[3];
+        sp.rt = &gte->RT[0][0];
+        sp.tr = gte->TR;
+        sp.l = &gte->L[0][0];
+        sp.lc = &gte->LC[0][0];
+        sp.bk = gte->BK;
+        sp.fc = gte->FC;
+        sp.h = gte->H;
+        sp.ofx = gte->OFX;
+        sp.ofy = gte->OFY;
+        sp.dqa = gte->DQA;
+        sp.dqb = gte->DQB;
+        scene_capture_gte_project(&sp);
+    }
 
     // Step 5: Depth cueing (MAC0/IR0) — only for last vertex of RTPT or RTPS
     if (setMac0) {
@@ -1813,6 +1838,9 @@ extern "C" void gte_execute(CPUState* cpu, uint32_t cmd) {
     if (!s_gte_replay_sandbox) s_gte_exec_count++;
     s_gte_caller_ra = cpu->gpr[31];   /* dome-locate probe: game fn that issued this projection */
 #endif
+
+    if (g_scene_capture_on && !s_gte_replay_sandbox)
+        scene_capture_gte_command(cpu->gpr[31]);
 
     GTEState gte;
     gte_import_cpu_state(&gte, cpu);

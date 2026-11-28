@@ -27,6 +27,7 @@
 #include "overlay_backend.h"
 #include "cpu_state.h"
 #include "pgxp.h"
+#include "scene_capture.h"
 #include "dma.h"
 #include "gpu.h"
 #include "gpu_render.h"   /* gr_scale + gr_render_display_hires (screenshot_hires) */
@@ -5394,6 +5395,125 @@ static void handle_write_ram(int id, const char *json)
  * the faithful way. So "enabled" alone tells you nothing — these counters are
  * how you tell an engaged correction from an inert one. Both are free-running
  * totals; sample twice and diff for a per-window rate. */
+/* scene_capture — typed scene capture (scene_capture.h). Optional fields:
+ * "on":0|1, "window":<vblanks>, "adapter":"<path to scene adapter toml>".
+ * The reply carries the state and the stats of the last closed frame; the
+ * linked share of 3D primitives is polys_linked / polys. */
+static void handle_scene_capture(int id, const char *json)
+{
+    char path[1024];
+    char err[256] = "";
+    if (json_get_str(json, "adapter", path, (int)sizeof(path)) && path[0] &&
+        !scene_capture_load_adapter(path, err, (uint32_t)sizeof(err))) {
+        for (char *c = err; *c; c++) if (*c == '"' || *c == '\\') *c = '\'';
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"adapter: %s\"}", id, err);
+        return;
+    }
+    int window = json_get_int(json, "window", -1);
+    if (window > 0) scene_capture_set_link_window((uint32_t)window);
+    int on = json_get_int(json, "on", -1);
+    if (on >= 0) scene_capture_set_enabled(on);
+    SceneCaptureStats s;
+    scene_capture_stats(&s);
+    const char *aerr = scene_capture_adapter_error();
+    char aerr_safe[256];
+    snprintf(aerr_safe, sizeof aerr_safe, "%s", aerr ? aerr : "");
+    for (char *c = aerr_safe; *c; c++) if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) *c = '\'';
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"window\":%u,\"adapter_game\":\"%s\",\"adapter_error\":\"%s\","
+             "\"frames\":%llu,\"frame\":%u,\"vblank_open\":%u,\"vblank_close\":%u,"
+             "\"prims\":%u,\"polys\":%u,\"lines\":%u,\"rects\":%u,"
+             "\"polys_linked\":%u,\"polys_partial\":%u,\"polys_unlinked\":%u,"
+             "\"rects_linked\":%u,\"vertices\":%u,\"transforms\":%u,\"objects\":%u,"
+             "\"ot_walks\":%u,\"draw_calls\":%u,\"stale_links\":%u,\"ambiguous_links\":%u,"
+             "\"projections_total\":%llu,\"transforms_total\":%llu}",
+             id, g_scene_capture_on, scene_capture_link_window(), scene_capture_adapter_game(), aerr_safe,
+             (unsigned long long)s.frames, s.frame_number, s.vblank_open, s.vblank_close,
+             s.prims, s.polys, s.lines, s.rects,
+             s.polys_linked, s.polys_partial, s.polys_unlinked,
+             s.rects_linked, s.vertices, s.transforms, s.objects,
+             s.ot_walks, s.draw_calls, s.stale_links, s.ambiguous_links,
+             (unsigned long long)s.projections_total, (unsigned long long)s.transforms_total);
+}
+
+/* scene_dump — page through the last closed frame:
+ * {"cmd":"scene_dump","what":"prims"|"vertices"|"transforms","offset":0,"count":500}. */
+static void handle_scene_dump(int id, const char *json)
+{
+    char what[32] = "prims";
+    json_get_str(json, "what", what, (int)sizeof(what));
+    int offset = json_get_int(json, "offset", 0);
+    int count = json_get_int(json, "count", 500);
+    if (offset < 0) offset = 0;
+    if (count < 1) count = 1;
+    if (count > 4000) count = 4000;
+    size_t cap = 512 + (size_t)count * 420;
+    char *out = (char *)malloc(cap);
+    if (!out) { send_err(id, "oom"); return; }
+    size_t pos = 0;
+#define SC_PUT(...) do { int n_ = snprintf(out + pos, cap - pos, __VA_ARGS__); \
+                         if (n_ > 0) pos += ((size_t)n_ < cap - pos) ? (size_t)n_ : cap - pos - 1; } while (0)
+    SceneCaptureStats st;
+    scene_capture_stats(&st);
+    if (strcmp(what, "vertices") == 0) {
+        const SceneVertex *v = NULL;
+        uint32_t n = scene_capture_frame_vertices(&v);
+        SC_PUT("{\"id\":%d,\"ok\":true,\"frame\":%u,\"what\":\"vertices\",\"total\":%u,\"offset\":%d,\"entries\":[",
+               id, st.frame_number, n, offset);
+        for (uint32_t i = (uint32_t)offset, k = 0; i < n && k < (uint32_t)count; i++, k++) {
+            const SceneVertex *e = &v[i];
+            SC_PUT("%s{\"id\":%u,\"t\":%u,\"vb\":%u,\"v\":[%d,%d,%d],\"view\":[%d,%d,%d],"
+                   "\"s16\":[%d,%d],\"sxy\":\"0x%08X\",\"sz\":%u,\"amb\":%u}",
+                   k ? "," : "", e->id, e->transform, e->vblank, e->v[0], e->v[1], e->v[2],
+                   e->view[0], e->view[1], e->view[2], e->sx16, e->sy16, e->packed_sxy,
+                   (unsigned)e->sz, (unsigned)e->ambiguous);
+        }
+    } else if (strcmp(what, "transforms") == 0) {
+        const SceneTransform *t = NULL;
+        uint32_t n = scene_capture_frame_transforms(&t);
+        SC_PUT("{\"id\":%d,\"ok\":true,\"frame\":%u,\"what\":\"transforms\",\"total\":%u,\"offset\":%d,\"entries\":[",
+               id, st.frame_number, n, offset);
+        for (uint32_t i = (uint32_t)offset, k = 0; i < n && k < (uint32_t)count; i++, k++) {
+            const SceneTransform *e = &t[i];
+            SC_PUT("%s{\"id\":%u,\"ra\":\"0x%08X\",\"rot_src\":\"0x%08X\",\"trans_src\":\"0x%08X\","
+                   "\"obj\":\"0x%08X\",\"rt\":[%d,%d,%d,%d,%d,%d,%d,%d,%d],\"tr\":[%d,%d,%d],"
+                   "\"h\":%u,\"ofx\":%d,\"ofy\":%d,\"l\":[%d,%d,%d,%d,%d,%d,%d,%d,%d],"
+                   "\"lc\":[%d,%d,%d,%d,%d,%d,%d,%d,%d],\"bk\":[%d,%d,%d],\"fc\":[%d,%d,%d],"
+                   "\"dqa\":%d,\"dqb\":%d}",
+                   k ? "," : "", e->id, e->caller_ra, e->rot_src, e->trans_src, e->object_key,
+                   e->rt[0], e->rt[1], e->rt[2], e->rt[3], e->rt[4], e->rt[5], e->rt[6], e->rt[7], e->rt[8],
+                   e->tr[0], e->tr[1], e->tr[2], (unsigned)e->h, e->ofx, e->ofy,
+                   e->l[0], e->l[1], e->l[2], e->l[3], e->l[4], e->l[5], e->l[6], e->l[7], e->l[8],
+                   e->lc[0], e->lc[1], e->lc[2], e->lc[3], e->lc[4], e->lc[5], e->lc[6], e->lc[7], e->lc[8],
+                   e->bk[0], e->bk[1], e->bk[2], e->fc[0], e->fc[1], e->fc[2], e->dqa, e->dqb);
+        }
+    } else {
+        const ScenePrim *p = NULL;
+        uint32_t n = scene_capture_frame_prims(&p);
+        SC_PUT("{\"id\":%d,\"ok\":true,\"frame\":%u,\"what\":\"prims\",\"total\":%u,\"offset\":%d,\"entries\":[",
+               id, st.frame_number, n, offset);
+        for (uint32_t i = (uint32_t)offset, k = 0; i < n && k < (uint32_t)count; i++, k++) {
+            const ScenePrim *e = &p[i];
+            SC_PUT("%s{\"i\":%u,\"op\":\"0x%02X\",\"kind\":%u,\"addr\":\"0x%08X\",\"ot\":%d,\"rank\":%u,"
+                   "\"tex\":%u,\"semi\":%u,\"raw\":%u,\"tpage\":\"0x%04X\",\"clut\":\"0x%04X\",\"obj\":\"0x%08X\",\"v\":[",
+                   k ? "," : "", e->index, e->opcode, (unsigned)e->kind, e->packet_addr,
+                   e->ot_index == 0xFFFFFFFFu ? -1 : (int)e->ot_index, e->ot_rank,
+                   (unsigned)e->textured, (unsigned)e->semi_trans, (unsigned)e->raw_texture,
+                   (unsigned)e->texpage, (unsigned)e->clut, e->object_key);
+            for (uint32_t j = 0; j < e->nverts; j++) {
+                if (e->vertex[j] == SCENE_NO_VERTEX)
+                    SC_PUT("%s[%d,%d,null]", j ? "," : "", e->x[j], e->y[j]);
+                else
+                    SC_PUT("%s[%d,%d,%u]", j ? "," : "", e->x[j], e->y[j], e->vertex[j]);
+            }
+            SC_PUT("]}");
+        }
+    }
+    SC_PUT("]}");
+#undef SC_PUT
+    debug_server_send_line(out);
+    free(out);
+}
+
 static void handle_geom_correction(int id, const char *json)
 {
     (void)json;
@@ -14029,6 +14149,8 @@ static const CmdEntry s_commands[] = {
     { "write_ram",         handle_write_ram },
     { "gpu_state",         handle_gpu_state },
     { "geom_correction",   handle_geom_correction },
+    { "scene_capture",     handle_scene_capture },
+    { "scene_dump",        handle_scene_dump },
     { "pgxp",              handle_pgxp },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
