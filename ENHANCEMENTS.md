@@ -867,3 +867,26 @@ tooling defect found on the way: `screenshot_hires` produces a tiled/black
 PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
 the census + the player's own captures carried the session; fix it before
 the formal Crash/Tomba2 A/B.
+
+---
+
+## M1 — Surface materials: data-driven water shading (2026-11-28, ACTIVE — testbed: MGS Dock)
+
+Game-agnostic "what is this polygon made of" layer: a per-game
+`surface_materials.toml` maps Beetle-compatible texture keys (upload CRC +
+CLUT CRC, shared with the HD texture-pack tracker) to materials, and the GL
+TEX shader applies the material per prim. First kind: `water` (texel-space
+ripple displacement, lighting-scaled sun glint, tint, flow). Authoring is
+three TCP commands (`surface_census` / `surface_probe` / `surface_highlight`),
+so tagging any game's water is a data file, not code. Default off and
+pixel-identical when off. Full design, workflow and limits:
+`docs/SURFACE_MATERIALS.md`.
+
+- Verified: `surface_materials_test`; `tools/surface_material_smoke.py` on the
+  real GL renderer via `gp0_inject` (key discovered, water applied + animating,
+  highlight, off render pixel-identical).
+- Owed: real-title validation (MGS Dock water tag + user playtest).
+- Next: reflections/fresnel, shadows and GI on top of the shared depth layer
+  (owned by the Alien Resurrection frame-rate work).
+- Tool fix on the way: `gl_fbo_peek` now flushes open prim batches first; a
+  peek right after a submission used to read the pre-batch FBO.

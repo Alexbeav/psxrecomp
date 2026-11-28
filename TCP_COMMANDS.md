@@ -54,6 +54,13 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `present_shot` | ✓ |   | `path` | PNG of the **composed present surface** — the frame after the backend fits the display buffer to the window, so it carries the presented aspect. ⚠ every other capture resolves the display buffer *before* that fit: on a 508×256 display in a 4:3 window they answer 508×256 while the player sees 640×480. Use this one for anything aspect-shaped (widescreen, letterbox), where a pre-fit buffer would hide the very stage the change touches. Staged and fulfilled on the next present, so the ack means *queued* — poll `present_shot_seq`. Unavailable headless and on the Vulkan backend (its swapchain has no readback hook) |
 | `present_shot_seq` | ✓ |   | — | Completion counter for `present_shot`, plus `wrote` (1 = that completion produced a PNG). Sample before staging, poll until `seq` moves. Advances on success *and* failure, so the poll always terminates |
 | `geom_correction` |   | ✓ | — | `[video] geometry_correction` / `perspective_texturing` engagement: enable flag plus free-running `geometry_vertex_hits` and `perspective_triangles` totals. Both enhancements silently fall back to the faithful path on anything they cannot prove is projected geometry, so a zero counter with the flag on means the title never qualifies — sample twice and diff for a rate |
+| `surface_status` | ✓ |   | — | Surface-material table (`docs/SURFACE_MATERIALS.md`): source file, materials, rules, tracked uploads, classified / identified / tagged prim totals, highlight key |
+| `surface_probe_on` | ✓ |   | `on` | Record per-prim texture keys each frame (also starts upload tracking with no table loaded). Textures uploaded before this have no identity until the game re-uploads them |
+| `surface_probe` | ✓ |   | `x`, `y` | Textured prims covering VRAM pixel (`x`,`y`) in the last frame that drew any, topmost first, each with its `tex-pal` key, status (`found` / `untracked` / `ambiguous`), material slot and VRAM bbox. VRAM = `gpu_state` `display_x/y` + screen px |
+| `surface_census` | ✓ |   | `limit` | That frame's unique texture keys sorted by covered area — the quickest way to find a game's water/lava/glass textures |
+| `surface_highlight` | ✓ |   | `key` | Pulse every prim with `key` (`tex-pal` or `tex-*`) magenta to confirm a tag on screen; no `key` clears |
+| `surface_load` | ✓ |   | `path` | (Re)load a `surface_materials.toml`; `""` clears. Errors leave the previous table active |
+| `gp0_inject` | ✓ |   | `words`, `stage` | Write raw words to GP0 (the hardware model, as a CPU store would). Requests cap at 8 KB, so stage long streams with `stage:1` on every chunk but the last; the last chunk writes everything at one safe point so the program's own GP0 traffic cannot interleave. Renderer bring-up tool (see `tools/surface_material_smoke.py`) |
 | `sio_state` | ✓ | ✓ | — | SIO registers + (native only) pad/memcard protocol + TX/RX history |
 | `irq_state` | ✓ | ✓ | — | `I_STAT`, `I_MASK` (both), plus chain state on native |
 | `dma_state` | ✓ | ✓ | — | DPCR, DICR, all 7 channel states (madr/bcr/chcr) |
@@ -265,9 +272,9 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 ## Complete command index (generated)
 
-**306 commands registered** — 293 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**318 commands registered** — 305 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-51 of 306 have prose above; **255 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+58 of 318 have prose above; **260 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -312,6 +319,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `cdrom_sector_history_clear` | ✓ |  | ✓ |
 | `cdrom_state` | ✓ |  |  |
 | `cdrom_timing` | ✓ |  |  |
+| `cdrom_timing_dump` | ✓ |  |  |
 | `cdrom_trace_clear` | ✓ |  |  |
 | `cdrom_trace_dump` | ✓ |  |  |
 | `ce_profile` | ✓ |  |  |
@@ -394,6 +402,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `gl_vram_diff` | ✓ |  |  |
 | `gl_wide_fast` | ✓ |  |  |
 | `gl_ws_ablate` | ✓ |  |  |
+| `gp0_inject` | ✓ |  | ✓ |
 | `gp1_dump` | ✓ |  | ✓ |
 | `gpu_frame_dump` | ✓ |  | ✓ |
 | `gpu_opcodes` | ✓ |  |  |
@@ -404,6 +413,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `gte_latch_dump` | ✓ |  |  |
 | `gte_ring_dump` | ✓ |  |  |
 | `gte_state` | ✓ |  |  |
+| `guest_tty_dump` | ✓ |  |  |
 | `history` | ✓ | ✓ | ✓ |
 | `hle_dump` | ✓ |  | ✓ |
 | `idle_skip` | ✓ |  |  |
@@ -490,6 +500,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `run_to_frame` | ✓ |  | ✓ |
 | `s3_smear_watch` | ✓ |  | ✓ |
 | `savestate` | ✓ |  |  |
+| `savestate_status` | ✓ |  |  |
 | `screenshot` | ✓ | ✓ | ✓ |
 | `screenshot_file` | ✓ | ✓ | ✓ |
 | `screenshot_hires` | ✓ |  | ✓ |
@@ -522,6 +533,12 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `stack_profile` | ✓ |  |  |
 | `starv_ring` | ✓ |  |  |
 | `step` | ✓ |  | ✓ |
+| `surface_census` | ✓ |  | ✓ |
+| `surface_highlight` | ✓ |  | ✓ |
+| `surface_load` | ✓ |  | ✓ |
+| `surface_probe` | ✓ |  | ✓ |
+| `surface_probe_on` | ✓ |  | ✓ |
+| `surface_status` | ✓ |  | ✓ |
 | `synth_recurse` | ✓ |  |  |
 | `thread_ctx_ring` | ✓ |  |  |
 | `thread_trace` | ✓ |  |  |
@@ -555,6 +572,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `ws_hud_mode` | ✓ |  |  |
 | `ws_margin` | ✓ |  |  |
 | `ws_nw` | ✓ |  |  |
+| `ws_ui_groups` | ✓ |  |  |
 | `wtrace_add` | ✓ |  |  |
 | `wtrace_all_dump` | ✓ | ✓ |  |
 | `wtrace_all_reset` | ✓ | ✓ |  |
@@ -579,5 +597,6 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `xlate` | ✓ |  |  |
 | `xprobe` | ✓ |  |  |
 | `xprobe_arm` | ✓ |  |  |
+| `xprobe_watch` | ✓ |  |  |
 
 <!-- END AUTOGENERATED COMMAND INDEX -->

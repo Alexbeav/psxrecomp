@@ -119,6 +119,19 @@ if(BUILD_TESTING)
     target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
     add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
 
+    # Surface materials (docs/SURFACE_MATERIALS.md): key parsing, table load,
+    # residency identity through the shared HD-pack tracker, render-to-texture
+    # invalidation, probe/census, and the default-off gate.
+    add_executable(surface_materials_test
+        tests/test_surface_materials.cpp
+        src/surface_materials.cpp
+        src/hd_texture_pack.cpp)
+    target_compile_definitions(surface_materials_test PRIVATE HD_TEXTURE_PACK_DISABLE_PNG_DECODE=1)
+    target_include_directories(surface_materials_test PRIVATE include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/lib/toml11)
+    target_link_libraries(surface_materials_test PRIVATE Threads::Threads)
+    add_test(NAME surface_materials_test COMMAND surface_materials_test)
+
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
     # g_debug_last_store_pc references that this test's stub block never gained,

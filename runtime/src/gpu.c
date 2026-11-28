@@ -11,6 +11,7 @@
  */
 
 #include "gpu.h"
+#include "surface_materials.h"
 #include "pgxp.h"
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
@@ -2303,6 +2304,11 @@ static void gp0_commit_cpu_to_vram(void) {
             vram_write_pixels[row * vram_write_w + col] =
                 vram[((vram_write_y + row) & 511u) * 1024u +
                      ((vram_write_x + col) & 1023u)];
+    /* Surface materials key textures by this exact GP0(A0h) upload
+     * (docs/SURFACE_MATERIALS.md); savestate VRAM restores are not uploads. */
+    if (surface_materials_active())
+        surface_note_upload(vram_write_x, vram_write_y,
+                            vram_write_w, vram_write_h, vram_write_pixels);
     gr_vram_transfer_in(vram_write_x, vram_write_y,
                         vram_write_w, vram_write_h, vram_write_pixels);
     depth24_note_upload(vram_write_x, vram_write_w);
@@ -2933,6 +2939,9 @@ void gpu_vblank_flush_present(void) {
 
 void gpu_vblank_tick(void) {
     lcf ^= 1;
+    /* Surface materials: rotate probe samples + advance shader time (no-op
+     * bookkeeping when the feature is off). */
+    surface_frame_end();
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
      * field while GP1(08h) vertical interlace is on, in antiphase with the
      * even/odd-lines bit 31 during active display. Modeled here at vblank
@@ -5475,6 +5484,15 @@ static void gpu_write_gp0_body(uint32_t val) {
  * rasterization / batching / VRAM transfer work on the emu thread — as its
  * own phase so it is separable from the guest code that issued the write.
  * Covers both the MMIO store chokepoint and DMA channel-2 feeds. */
+/* Debug-tool gate (gp0_inject): 1 when no GP0 command or transfer is in
+ * flight, so injected words cannot be consumed as another command's
+ * parameters or pixel data. */
+int gpu_gp0_at_command_boundary(void) {
+    /* Collection, VRAM transfers and polylines each hold a non-idle state;
+     * gp0_words_collected keeps its last value after a command executes. */
+    return gp0_state == GP0_IDLE;
+}
+
 void gpu_write_gp0(uint32_t val) {
     extern int g_exec_phase;
     int prev_phase = g_exec_phase;
