@@ -72,6 +72,8 @@ static void builtin_cpu_speed_vblank(void) {
     else if (s_hold) --s_hold;
     s_decodes_seen = decodes;
     psx_guest_cycle_scale_gate_open(s_hold == 0u);
+    psx_mod_counter_add(s_hold ? "psx.cpu-speed.stock_vblanks"
+                               : "psx.cpu-speed.fast_vblanks", 1u);
 }
 
 static void builtin_cpu_speed_restored(void) {
