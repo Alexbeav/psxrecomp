@@ -899,6 +899,19 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME controller_port_route_test COMMAND controller_port_route_test)
 
+    # Surface materials (docs/SURFACE_MATERIALS.md): key parsing, table load,
+    # residency identity through the shared HD-pack tracker, render-to-texture
+    # invalidation, probe/census, and the default-off gate.
+    add_executable(surface_materials_test
+        tests/test_surface_materials.cpp
+        src/surface_materials.cpp
+        src/hd_texture_pack.cpp)
+    target_compile_definitions(surface_materials_test PRIVATE HD_TEXTURE_PACK_DISABLE_PNG_DECODE=1)
+    target_include_directories(surface_materials_test PRIVATE include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../recompiler/lib/toml11)
+    target_link_libraries(surface_materials_test PRIVATE Threads::Threads)
+    add_test(NAME surface_materials_test COMMAND surface_materials_test)
+
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
     # g_debug_last_store_pc references that this test's stub block never gained,
@@ -1472,6 +1485,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     endif()
     add_test(NAME frame_interpolation_schedule_test
              COMMAND frame_interpolation_schedule_test)
+
+    add_executable(frame_cadence_test
+        tests/test_frame_cadence.c
+        src/frame_cadence.c)
+    target_include_directories(frame_cadence_test PRIVATE include)
+    add_test(NAME frame_cadence_test COMMAND frame_cadence_test)
 
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)

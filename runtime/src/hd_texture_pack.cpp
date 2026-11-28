@@ -660,6 +660,10 @@ struct HdTexturePack {
      * larger after invalidation, but is reset with tracking and therefore can
      * only cause extra work, never a missed invalidation. */
     Rect upload_bounds{};
+    /* Bumped whenever the set of live residencies changes (upload, a cut that
+     * actually removed words, reset, state load) so consumers can cache
+     * identity results and revalidate cheaply. */
+    uint64_t generation = 1;
     DecodeCache decode;
 };
 
@@ -882,6 +886,17 @@ int hd_texture_pack_create(const char* explicit_root,
     }
 }
 
+int hd_texture_tracker_create(HdTexturePack** out_pack) {
+    if (out_pack) *out_pack = nullptr;
+    if (!out_pack) return 0;
+    try {
+        *out_pack = new HdTexturePack();
+        return 1;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 void hd_texture_pack_destroy(HdTexturePack* pack) {
     delete pack;
 }
@@ -976,6 +991,7 @@ void hd_texture_pack_invalidate(HdTexturePack* pack,
                     next.push_back(fragment);
                     continue;
                 }
+                ++pack->generation;
                 std::vector<Fragment> pieces = subtract_fragment(fragment, cut);
                 next.insert(next.end(), pieces.begin(), pieces.end());
             }
@@ -1037,6 +1053,7 @@ int hd_texture_pack_track_upload(HdTexturePack* pack,
         pack->upload_bounds.height = bottom - pack->upload_bounds.y;
     }
     pack->uploads.push_back(std::move(upload));
+    ++pack->generation;
     /* A push may reallocate the vector, so refresh all broad-phase pointers
      * after adding an upload.  Upload creation is far less frequent than GPU
      * primitive submission. */
@@ -1050,6 +1067,7 @@ void hd_texture_pack_reset_tracking(HdTexturePack* pack) {
         pack->uploads.clear();
         upload_index_clear(pack);
         pack->upload_bounds = Rect{};
+        ++pack->generation;
     }
 }
 
@@ -1154,6 +1172,7 @@ int hd_texture_pack_tracking_state_load(HdTexturePack* pack,
             pack->next_upload_serial = next_serial;
             pack->uploads.swap(uploads);
             upload_index_rebuild(pack);
+            ++pack->generation;
         }
         return 1;
     } catch (...) {
@@ -1163,6 +1182,10 @@ int hd_texture_pack_tracking_state_load(HdTexturePack* pack,
 
 size_t hd_texture_pack_tracking_upload_count(const HdTexturePack* pack) {
     return pack ? pack->uploads.size() : 0;
+}
+
+uint64_t hd_texture_pack_tracking_generation(const HdTexturePack* pack) {
+    return pack ? pack->generation : 0;
 }
 
 int hd_texture_pack_match(HdTexturePack* pack,
@@ -1218,6 +1241,41 @@ int hd_texture_pack_match(HdTexturePack* pack,
                 break;
             }
         }
+    }
+    return HD_TEXTURE_LOOKUP_FOUND;
+}
+
+int hd_texture_identify(HdTexturePack* pack,
+                        const HdTextureDrawQuery* query,
+                        HdTextureIdentity* out_identity) {
+    if (out_identity) std::memset(out_identity, 0, sizeof(*out_identity));
+    if (!pack || !query || query->depth > HD_TEXTURE_DEPTH_16BPP ||
+        !query->vram || query->vram_word_count < kVramWords)
+        return HD_TEXTURE_LOOKUP_ERROR;
+    const std::vector<Rect> wanted = query_rectangles(*query);
+    if (wanted.empty()) return HD_TEXTURE_LOOKUP_ERROR;
+    std::vector<uint64_t> candidate_serials;
+    upload_index_collect(pack, wanted, &candidate_serials);
+    const Upload* candidate = nullptr;
+    for (const uint64_t serial : candidate_serials) {
+        const auto indexed = pack->upload_by_serial.find(serial);
+        if (indexed == pack->upload_by_serial.end() || !indexed->second)
+            continue;
+        const Upload& upload = *indexed->second;
+        if (!covered_by_upload(upload, wanted)) continue;
+        /* Tracking subtracts every older residency an upload overlaps, so two
+         * live uploads can never both cover the same words; keep the check so
+         * a future tracker change fails explicitly instead of picking one. */
+        if (candidate) return HD_TEXTURE_LOOKUP_AMBIGUOUS;
+        candidate = &upload;
+    }
+    if (!candidate) return HD_TEXTURE_LOOKUP_NONE;
+    if (out_identity) {
+        out_identity->texture_hash = candidate->hash;
+        out_identity->palette_hash = hd_texture_hash_clut(
+            query->vram, query->vram_word_count, query->clut_x, query->clut_y,
+            query->depth);
+        out_identity->upload_serial = candidate->serial;
     }
     return HD_TEXTURE_LOOKUP_FOUND;
 }

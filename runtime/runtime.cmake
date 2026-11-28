@@ -378,6 +378,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vram_dirty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
+    ${PSXRECOMP_ROOT}/runtime/src/surface_materials.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/hd_texture_pack.cpp
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/dma_gpu_ll.c
@@ -387,6 +389,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/interrupts.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_pacing.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_interpolation.c
+    ${PSXRECOMP_ROOT}/runtime/src/frame_cadence.c
     ${PSXRECOMP_ROOT}/runtime/src/host_time.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
@@ -464,6 +467,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_pgxp.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_scene_capture.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_bezel.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_frame_rate.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_texture_banks.c

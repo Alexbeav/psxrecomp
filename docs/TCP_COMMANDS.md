@@ -98,6 +98,13 @@ Columns: **N** = native, **D** = DuckStation oracle.
 ¹ Native `vram_peek` is the legacy name; DS calls it `read_vram`. Same semantics.
 ² The `pc_*` family is specific to the DS oracle: DuckStation's CPU core honours `CPU::AddBreakpointWithCallback`, while our native runtime dispatches whole recompiled functions (no mid-function PC breaks).
 
+| `surface_status` | ✓ |   | — | Surface-material table (`docs/SURFACE_MATERIALS.md`): source file, materials, rules, tracked uploads, classified / identified / tagged prim totals, highlight key |
+| `surface_probe_on` | ✓ |   | `on` | Record per-prim texture keys each frame (also starts upload tracking with no table loaded). Textures uploaded before this have no identity until the game re-uploads them |
+| `surface_probe` | ✓ |   | `x`, `y` | Textured prims covering VRAM pixel (`x`,`y`) in the last frame that drew any, topmost first, each with its `tex-pal` key, status (`found` / `untracked` / `ambiguous`), material slot and VRAM bbox. VRAM = `gpu_state` `display_x/y` + screen px |
+| `surface_census` | ✓ |   | `limit` | That frame's unique texture keys sorted by covered area — the quickest way to find a game's water/lava/glass textures |
+| `surface_highlight` | ✓ |   | `key` | Pulse every prim with `key` (`tex-pal` or `tex-*`) magenta to confirm a tag on screen; no `key` clears |
+| `surface_load` | ✓ |   | `path` | (Re)load a `surface_materials.toml`; `""` clears. Errors leave the previous table active |
+| `gp0_inject` | ✓ |   | `words`, `stage` | Write raw words to GP0 (the hardware model, as a CPU store would). Requests cap at 8 KB, so stage long streams with `stage:1` on every chunk but the last; the last chunk writes everything at one safe point so the program's own GP0 traffic cannot interleave. Renderer bring-up tool (see `tools/surface_material_smoke.py`) |
 ### Boot-time write ranges
 
 Set `PSX_WTRACE_BOOT=lo,hi[;lo,hi...]` before launching a debug-tools build to
@@ -312,9 +319,9 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 ## Complete command index (generated)
 
-**315 commands registered** — 302 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**329 commands registered** — 315 on the native server (`runtime/src/debug_server.c`), 63 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-53 of 315 have prose above; **262 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+60 of 329 have prose above; **269 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -385,6 +392,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `dirty_insn_log` | ✓ |  |  |
 | `dirty_ram_stats` | ✓ |  | ✓ |
 | `dirty_ram_unsupported` | ✓ |  |  |
+| `disc_change` |  | ✓ |  |
 | `disp_ring` | ✓ |  |  |
 | `dispatch_check` | ✓ |  |  |
 | `dispatch_stats` | ✓ |  |  |
@@ -424,7 +432,8 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `fntrace_dump` | ✓ | ✓ |  |
 | `fntrace_reset` |  | ✓ |  |
 | `fntrace_unfiltered` |  | ✓ |  |
-| `frame` | ✓ |  | ✓ |
+| `frame` | ✓ | ✓ | ✓ |
+| `frame_cadence` | ✓ |  |  |
 | `frame_fingerprint` | ✓ |  |  |
 | `frame_perf` | ✓ |  |  |
 | `frame_range` | ✓ | ✓ | ✓ |
@@ -443,6 +452,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `gl_vram_diff` | ✓ |  |  |
 | `gl_wide_fast` | ✓ |  |  |
 | `gl_ws_ablate` | ✓ |  |  |
+| `gp0_inject` | ✓ |  | ✓ |
 | `gp1_dump` | ✓ |  | ✓ |
 | `gpu_frame_dump` | ✓ |  | ✓ |
 | `gpu_opcodes` | ✓ |  |  |
@@ -501,6 +511,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `overlay_rescan` | ✓ |  |  |
 | `overlay_shadow_detail` | ✓ |  |  |
 | `overlay_shadow_dump` | ✓ |  |  |
+| `overlay_tier_witness` | ✓ |  |  |
 | `pace_state` | ✓ |  |  |
 | `pad_status` | ✓ | ✓ |  |
 | `parity_ctl` | ✓ | ✓ |  |
@@ -519,6 +530,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `press` | ✓ | ✓ |  |
 | `probe_clear` | ✓ |  |  |
 | `probe_trace` | ✓ |  |  |
+| `publish_ring` | ✓ |  |  |
 | `quit` | ✓ |  | ✓ |
 | `ra_load_watch` | ✓ |  |  |
 | `read_frame_ram` | ✓ | ✓ | ✓ |
@@ -544,6 +556,8 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `savestate` | ✓ |  |  |
 | `savestate_status` | ✓ |  |  |
 | `scanline` | ✓ |  | ✓ |
+| `scene_capture` | ✓ |  |  |
+| `scene_dump` | ✓ |  |  |
 | `screenshot` | ✓ | ✓ | ✓ |
 | `screenshot_file` | ✓ | ✓ | ✓ |
 | `screenshot_hires` | ✓ |  | ✓ |
@@ -576,6 +590,12 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `stack_profile` | ✓ |  |  |
 | `starv_ring` | ✓ |  |  |
 | `step` | ✓ |  | ✓ |
+| `surface_census` | ✓ |  | ✓ |
+| `surface_highlight` | ✓ |  | ✓ |
+| `surface_load` | ✓ |  | ✓ |
+| `surface_probe` | ✓ |  | ✓ |
+| `surface_probe_on` | ✓ |  | ✓ |
+| `surface_status` | ✓ |  | ✓ |
 | `synth_recurse` | ✓ |  |  |
 | `thread_ctx_ring` | ✓ |  |  |
 | `thread_trace` | ✓ |  |  |
@@ -601,6 +621,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `ws_backdrop_margin` | ✓ |  |  |
 | `ws_backdrop_ring` | ✓ |  |  |
 | `ws_backdrop_stretch` | ✓ |  |  |
+| `ws_branch_sites` | ✓ |  |  |
 | `ws_census` | ✓ |  |  |
 | `ws_dbg_stretch` | ✓ |  |  |
 | `ws_dome` | ✓ |  |  |

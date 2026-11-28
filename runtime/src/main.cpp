@@ -56,6 +56,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
 #include "gpu_gl_renderer.h"
+#include "frame_cadence.h"
 /* Declarations only: STB_IMAGE_IMPLEMENTATION lives in psx_window_icon.cpp. */
 #define STBI_NO_STDIO
 #include "../third_party/stb_image.h"
@@ -569,6 +570,7 @@ static int post_load_probe_env_on(void) {
 static Uint64   s_fps_last_time = 0;
 static uint64_t s_fps_last_frame = 0;
 static uint64_t s_fps_last_drawn = 0;   /* game-drawn frames (PS1B-468) */
+static uint64_t s_fps_last_swaps = 0;   /* GL decoupled presents */
 static std::string s_fps_base_title;
 static int      s_fps_telemetry_enabled = -1; /* -1 = unread env */
 static FramePacer s_frame_pacer = { 0 };
@@ -1377,6 +1379,7 @@ static int present_effective_swap_interval(void);
 static int present_should_wall_pace(void);
 static void apply_present_cadence(void);
 static void refresh_host_display_cadence(int force_log, int force_probe);
+static void apply_interpolation_rates(void);
 
 
 /* FMV auto-skip detection hooks (cdrom.c / mdec.c). */
@@ -1497,7 +1500,9 @@ extern "C" int psx_mod_set_native_vblank_rate(
 extern "C" int psx_mod_set_frame_interpolation(
     uint32_t frames_per_second) {
     if (frames_per_second != 0 &&
-        (frames_per_second < 60 || frames_per_second > 1000)) {
+        frames_per_second != PSX_MOD_FRAME_RATE_UNLIMITED &&
+        (frames_per_second < PSX_MOD_FRAME_RATE_MIN ||
+         frames_per_second > PSX_MOD_FRAME_RATE_MAX)) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected invalid interpolated frame rate %u FPS\n",
             (unsigned)frames_per_second);
@@ -1514,8 +1519,14 @@ extern "C" int psx_mod_set_frame_interpolation(
     g_frame_interpolation = 1;
     g_frame_interpolation_fps =
         frames_per_second ? (int)frames_per_second : 0;
+    if (frames_per_second == PSX_MOD_FRAME_RATE_UNLIMITED)
+        g_frame_interpolation_fps = -1;   /* gl_renderer: < 0 = unlimited */
 
-    if (frames_per_second) {
+    if (frames_per_second == PSX_MOD_FRAME_RATE_UNLIMITED) {
+        std::fprintf(stdout,
+            "psxrecomp: mod selected unlimited presentation rate; guest "
+            "timing remains stock (no motion vectors)\n");
+    } else if (frames_per_second) {
         std::fprintf(stdout,
             "psxrecomp: mod selected presentation-only temporal blending at "
             "%u presents/s; guest timing remains stock (no motion vectors)\n",
@@ -1531,7 +1542,8 @@ extern "C" int psx_mod_set_frame_interpolation(
 extern "C" int psx_mod_set_frame_interpolation_blend(
     uint32_t blend_mode) {
     if (blend_mode != PSX_MOD_FRAME_INTERPOLATION_LINEAR &&
-        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE) {
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE &&
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_NONE) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected invalid frame-interpolation blend %u\n",
             (unsigned)blend_mode);
@@ -1540,7 +1552,9 @@ extern "C" int psx_mod_set_frame_interpolation_blend(
     g_frame_interpolation_blend = (int)blend_mode;
     std::fprintf(stdout, "psxrecomp: frame-interpolation blend = %s\n",
         blend_mode == PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE
-            ? "motion-adaptive clarity" : "linear crossfade");
+            ? "motion-adaptive clarity"
+        : blend_mode == PSX_MOD_FRAME_INTERPOLATION_NONE
+            ? "none (rate limiter only)" : "linear crossfade");
     return 1;
 }
 
@@ -3459,6 +3473,26 @@ extern "C" int psx_present_vsync_owns_cadence(void) {
     return present_vsync_owns_cadence();
 }
 
+/* The GP1 video standard can flip at runtime (EU BIOS shell -> game, or a
+ * title toggling modes). Re-apply the present cadence (swap interval) when it
+ * does, so the pacer/vsync ownership above takes effect immediately. */
+static void present_track_video_standard(void) {
+    static int s_last_pal = -1;
+    const int pal = gpu_video_standard_is_pal();
+    if (pal == s_last_pal) return;
+    /* Also on the first observation: the renderer was initialised before the
+     * game (or a PAL BIOS) selected its standard. */
+    if (g_frame_interpolation) apply_interpolation_rates();
+    if (s_last_pal >= 0) {
+        apply_present_cadence();
+        std::printf("psxrecomp: video standard now %s; present cadence %s (%.4f ms/frame)\n",
+                    pal ? "PAL (50 Hz)" : "NTSC (59.94 Hz)",
+                    present_vsync_owns_cadence() ? "driver vsync" : "wall-clock pacer",
+                    present_effective_frame_period_ms());
+    }
+    s_last_pal = pal;
+}
+
 static int present_effective_swap_interval(void) {
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
@@ -3494,6 +3528,20 @@ static int present_should_wall_pace(void) {
      * vsync works and supplies the cap where it does not, which also means it
      * cannot add latency to the healthy path. */
     return g_frame_period_ms > 0.0;
+}
+
+/* The decoupled GL presenter owns the wall clock while it is active, so its
+ * source rate IS the guest VBlank rate. It must follow the live video
+ * standard exactly like the wall-clock pacer (present_effective_frame_
+ * period_ms): a PAL title paced at the NTSC/host 60 Hz runs 1.2x fast. Called
+ * at renderer init and again whenever GP1(08h) flips the standard. */
+static void apply_interpolation_rates(void) {
+    if (!g_gl_active) return;
+    const double period = present_effective_frame_period_ms();
+    gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
+                                  (double)g_frame_interpolation_fps,
+                                  period > 0.0 ? 1000.0 / period : 59.94,
+                                  g_frame_interpolation_blend);
 }
 
 static void apply_present_cadence(void) {
@@ -9214,10 +9262,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             const double fps = rates.video_fps;
             const double speed = rates.speed_pct / 100.0;
             double display_fps = 0.0;
-            if (g_frame_interpolation && g_gl_active) {
-                display_fps = g_frame_interpolation_fps > 0
-                    ? (double)g_frame_interpolation_fps
-                    : g_host_refresh_hz;
+            {
+                int en = 0, su = 0, hi = 0; double hh = 0, th = 0;
+                uint64_t swaps = 0;
+                gl_renderer_interpolation_diag(&en, &su, &hi, &hh, &th, &swaps);
+                if (g_frame_interpolation && g_gl_active && en && !su)
+                    display_fps = (double)(swaps - s_fps_last_swaps) / seconds;
+                s_fps_last_swaps = swaps;
             }
             if (!g_headless && sdl_window) {
                 char title[256];
@@ -9235,7 +9286,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 SDL_SetWindowTitle(sdl_window, title);
             }
             if (!g_headless) {
-                char osd[96];
+                char osd[96];  /* host OSD shows 64 chars: keep both formats under */
                 if (display_fps > 0.0) {
                     snprintf(osd, sizeof(osd),
                              "Game %.0f FPS | Video %.0f FPS | Speed %.0f%% | Display %.0f FPS",
@@ -16505,7 +16556,8 @@ int main(int argc, char** argv) {
     /* Latency knobs: env overrides win over config (for A/B measurement).
      * PSX_LOW_LATENCY_INPUT=0/1 ; PSX_VSYNC=1(vsync)/0(immediate)/-1(adaptive)
      * (vsync XOR wall-clock pacer — vsync clocks only ~60 Hz panels);
-     * PSX_FRAME_INTERPOLATION=0/1; PSX_FRAME_INTERPOLATION_FPS=0|90+. */
+     * PSX_FRAME_INTERPOLATION=0/1;
+     * PSX_FRAME_INTERPOLATION_FPS=0 (display) | -1 (unlimited) | 24..1000. */
     if (const char *e = std::getenv("PSX_LOW_LATENCY_INPUT")) g_low_latency_input = atoi(e) ? 1 : 0;
     if (const char *e = std::getenv("PSX_VSYNC"))             g_video_vsync       = atoi(e);
     if (const char *e = std::getenv("PSX_SMOOTH_60FPS"))
@@ -16514,7 +16566,10 @@ int main(int argc, char** argv) {
         g_frame_interpolation = atoi(e) ? 1 : 0;
     if (const char *e = std::getenv("PSX_FRAME_INTERPOLATION_FPS")) {
         int fps = atoi(e);
-        if (fps == 0 || fps >= 90) g_frame_interpolation_fps = fps;
+        if (fps == 0 || fps == -1 ||
+            (fps >= (int)PSX_MOD_FRAME_RATE_MIN &&
+             fps <= (int)PSX_MOD_FRAME_RATE_MAX))
+            g_frame_interpolation_fps = fps;
     }
 
     /* Apply writable-state isolation before game-options and launcher setup,
@@ -17897,9 +17952,15 @@ session_reboot:
     if (!turbo_loads_offered)
         g_turbo_loads_enabled = 0;
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    /* Presentation decoupling is mod-owned (frame_interpolation_offered is
+     * false): a soft return must not keep the previous game's Frame Rate
+     * Unlock active when the next game has it disabled. */
+    g_frame_interpolation = 0;
+    g_frame_interpolation_fps = 0;
     mod_runtime_activate_plugins();
     /* Frame interpolation and bezel mods select OpenGL; --renderer still wins. */
     if (cli_renderer >= 0) g_video_renderer = cli_renderer;
+    apply_interpolation_rates();   /* no-op before the GL context exists */
     apply_netplay_local_viewport_aspect(net_cfg.enabled);
     for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
         if (g_mod_controller_mode_override[i] >= 0)
@@ -18690,12 +18751,7 @@ session_reboot:
          * the settings preference (equals gr_scale() under dual-raster). */
         if (!netplay_cpu_auth_gpu())
             g_video_scale = gr_scale();
-        gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
-                                      (double)g_frame_interpolation_fps,
-                                      g_frame_period_ms > 0.0
-                                          ? 1000.0 / g_frame_period_ms
-                                          : 59.94,
-                                      g_frame_interpolation_blend);
+        apply_interpolation_rates();
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init

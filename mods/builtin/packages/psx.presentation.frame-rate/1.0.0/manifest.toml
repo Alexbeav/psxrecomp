@@ -1,0 +1,90 @@
+format_version = 5
+id = "psx.presentation.frame-rate"
+version = "1.0.0"
+name = "Frame Rate Unlock"
+author = "psxrecomp"
+description = "Decouples how often the window is updated from how fast the game runs. The game keeps its own speed and timing (a PAL title still updates its world 50 times a second); the presenter updates the window at the limit you choose and fills the gaps between the game's frames. Works with any title. Uses the OpenGL renderer."
+resolver = "declarative"
+save_compatibility = "shared"
+
+# Presentation rate is a property of the host display path, not of any
+# particular disc, so this ships with the framework and applies to every game.
+[[target]]
+game_id = "*"
+
+[[feature]]
+id = "frame-rate"
+name = "Frame Rate Unlock"
+description = "Disabled by default. Guest timing, game logic, audio and saves are untouched: only presentation changes. The in-between frames follow the game's real frame pace, so a title that drops to 25 or 17 fps is smoothed across the whole frame instead of stuttering. Today the in-between frames are blends of the two newest game frames; per-object motion is a planned later tier."
+group = "Visual"
+default_enabled = false
+
+[[option]]
+feature = "frame-rate"
+id = "limit"
+label = "Frame rate limit"
+description = "How many times per second the window is updated. Below the game's own rate (30 on a 50 Hz PAL game) shows fewer frames without slowing the game. Unlimited updates as fast as your GPU allows; expect tearing without a variable-refresh display."
+group = "Visual"
+type = "choice"
+default = "display"
+
+[[option.choice]]
+value = "display"
+label = "Match display refresh"
+
+[[option.choice]]
+value = "30"
+label = "30 FPS"
+
+[[option.choice]]
+value = "60"
+label = "60 FPS"
+
+[[option.choice]]
+value = "90"
+label = "90 FPS"
+
+[[option.choice]]
+value = "120"
+label = "120 FPS"
+
+[[option.choice]]
+value = "144"
+label = "144 FPS"
+
+[[option.choice]]
+value = "240"
+label = "240 FPS"
+
+[[option.choice]]
+value = "360"
+label = "360 FPS"
+
+[[option.choice]]
+value = "unlimited"
+label = "Unlimited"
+
+[[option]]
+feature = "frame-rate"
+id = "smoothing"
+label = "In-between frames"
+description = "How the frames between two game frames are made. Motion-adaptive blends small changes and cuts cleanly on big ones (fewer double images). Crossfade always blends. Off shows the newest game frame with no blending: a pure frame-rate limiter."
+group = "Visual"
+type = "choice"
+default = "adaptive"
+
+[[option.choice]]
+value = "adaptive"
+label = "Motion-adaptive blend"
+
+[[option.choice]]
+value = "linear"
+label = "Crossfade"
+
+[[option.choice]]
+value = "none"
+label = "Off (limiter only)"
+
+[[plugin]]
+feature = "frame-rate"
+id = "psx.frame-rate"
