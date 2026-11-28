@@ -60,6 +60,7 @@ struct State {
     uint32_t hl_tex = 0, hl_pal = 0;
     bool hl_any = false;
     bool probe_on = false;
+    bool renderer_supported = false;
     bool env_done = false;
     HdTexturePack *tracker = nullptr;
     IdCacheEntry cache[kIdCacheSlots];
@@ -82,7 +83,13 @@ uint64_t key64(uint32_t tex, uint32_t pal) { return (uint64_t{tex} << 32) | pal;
 
 void refresh_active() {
     State &s = st();
-    const int on = (!s.rules.empty() || s.highlight_on || s.probe_on) ? 1 : 0;
+    const int on = (s.renderer_supported &&
+                    (!s.rules.empty() || s.highlight_on || s.probe_on)) ? 1 : 0;
+    if (!on && g_surface_materials_active && s.tracker) {
+        /* Nothing feeds the tracker while inactive, so any residency it holds
+         * would go stale. Drop it; tracking restarts clean on re-activation. */
+        hd_texture_pack_reset_tracking(s.tracker);
+    }
     if (on && !s.tracker) {
         /* Tracking starts now: textures uploaded before this point have no
          * identity until the game re-uploads them (scene loads always do). */
@@ -357,6 +364,16 @@ void surface_materials_set_highlight(uint32_t tex, uint32_t pal, int any_palette
     s.hl_pal = pal;
     s.hl_any = any_palette != 0;
     refresh_active();
+}
+
+void surface_materials_set_renderer_supported(int on) {
+    st().renderer_supported = on != 0;
+    refresh_active();
+}
+
+void surface_materials_reset_tracking(void) {
+    State &s = st();
+    if (s.tracker) hd_texture_pack_reset_tracking(s.tracker);
 }
 
 void surface_materials_set_probe(int on) {

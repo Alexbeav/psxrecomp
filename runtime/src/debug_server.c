@@ -13633,7 +13633,9 @@ static int surface_json_str(const char *json, const char *key, char *out, int ca
  * quad) exercise a renderer feature without a disc. Requests are capped at
  * RECV_BUF_SIZE, so a long stream (a VRAM upload) is staged with "stage":1 on
  * every chunk but the last; the last chunk writes everything at ONE safe point,
- * so the running program's own GP0 traffic can never interleave mid-transfer. */
+ * so the running program's own GP0 traffic can never interleave mid-transfer.
+ * The write is refused (staged words kept) while the program is mid-command,
+ * so injected words can never become another command's parameters. */
 static uint32_t s_gp0_stage[65536];
 static int      s_gp0_stage_n = 0;
 
@@ -13643,6 +13645,12 @@ static void handle_gp0_inject(int id, const char *json)
     if (!p || !(p = strchr(p, '['))) { send_err(id, "words array required"); return; }
     p++;
     int start = s_gp0_stage_n;
+    /* A request longer than RECV_BUF_SIZE arrives truncated, possibly
+     * mid-word: require the closing ']' so a cut request is rejected whole. */
+    {
+        const char *close = strchr(p, ']');
+        if (!close) { send_err(id, "words array not closed (request truncated? stage smaller chunks)"); return; }
+    }
     while (*p && *p != ']') {
         while (*p == ' ' || *p == ',' || *p == '"') p++;
         if (*p == ']' || !*p) break;
@@ -13660,6 +13668,13 @@ static void handle_gp0_inject(int id, const char *json)
         return;
     }
     extern void gpu_write_gp0(uint32_t val);
+    extern int gpu_gp0_at_command_boundary(void);
+    if (!gpu_gp0_at_command_boundary()) {
+        /* The program is between two words of its own GP0 command; writing
+         * now would splice ours into it. Keep the staged words; retry. */
+        send_err(id, "GPU mid-command; staged words kept, retry with an empty words array");
+        return;
+    }
     int n = s_gp0_stage_n;
     for (int k = 0; k < n; k++) gpu_write_gp0(s_gp0_stage[k]);
     s_gp0_stage_n = 0;
@@ -13691,7 +13706,10 @@ static void handle_surface_probe(int id, const char *json)
 static void handle_surface_census(int id, const char *json)
 {
     static char body[32768];
-    surface_census_json(json_get_int(json, "limit", 40), body, sizeof body);
+    /* ~130 bytes per key: 200 keys always fit the 32 KB body. */
+    int limit = json_get_int(json, "limit", 40);
+    if (limit > 200) limit = 200;
+    surface_census_json(limit, body, sizeof body);
     send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
 }
 

@@ -47,9 +47,19 @@ def q(port, obj):
 
 def inject(port, words):
     chunks = [words[i:i + 500] for i in range(0, len(words), 500)]
-    for k, c in enumerate(chunks):
-        q(port, {"cmd": "gp0_inject", "stage": 1 if k < len(chunks) - 1 else 0,
-                 "words": ["0x%X" % w for w in c]})
+    for k, c in enumerate(chunks[:-1]):
+        q(port, {"cmd": "gp0_inject", "stage": 1, "words": ["0x%X" % w for w in c]})
+    last = ["0x%X" % w for w in chunks[-1]]
+    for _ in range(200):  # the runtime refuses while the program is mid-command
+        try:
+            q(port, {"cmd": "gp0_inject", "words": last})
+            return
+        except RuntimeError as e:
+            if "mid-command" not in str(e):
+                raise
+            last = []  # staged words are kept; just retry the commit
+            time.sleep(0.005)
+    raise RuntimeError("GPU never reached a command boundary")
 
 
 def texture_words():
@@ -89,10 +99,7 @@ def grab(port):
 
 
 def save(pixels, path):
-    try:
-        from PIL import Image
-    except ImportError:
-        return
+    from PIL import Image  # required: main() checks for it up front
     w, h = X1 - X0 + 1, Y1 - Y0 + 1
     img = Image.new("RGB", (w, h))
     img.putdata([((v & 31) * 255 // 31, ((v >> 5) & 31) * 255 // 31, ((v >> 10) & 31) * 255 // 31)
@@ -105,6 +112,11 @@ def main():
     ap.add_argument("--port", type=int, default=4370)
     ap.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "surface_smoke"))
     a = ap.parse_args()
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        print("FAIL Pillow is required for the captures (pip install pillow)")
+        return 2
     os.makedirs(a.out, exist_ok=True)
     p = a.port
     fails = []

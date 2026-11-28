@@ -63,6 +63,27 @@ void test_parse_errors() {
               e, sizeof e),
           "duplicate key");
     check(surface_materials_active() == 0, "failed loads leave the gate off");
+
+    /* A failed reload keeps the previous table and gate. */
+    surface_materials_set_renderer_supported(1);
+    check(surface_materials_load_text(
+              "format_version=1\n[materials.a]\nkind=\"water\"\n[[surface]]\nkey=\"1-2\"\nmaterial=\"a\"\n",
+              e, sizeof e), e);
+    check(!surface_materials_load_text("format_version=1\n[materials.a]\nkind=\"lava\"\n", e, sizeof e),
+          "unknown kind on reload");
+    check(surface_materials_count() == 1 && surface_materials_rule_count() == 1 &&
+              surface_materials_active() == 1,
+          "failed reload keeps previous table and gate");
+    surface_materials_clear();
+
+    /* No consuming renderer => never active, even with a table. */
+    surface_materials_set_renderer_supported(0);
+    check(surface_materials_load_text(
+              "format_version=1\n[materials.a]\nkind=\"water\"\n[[surface]]\nkey=\"1-2\"\nmaterial=\"a\"\n",
+              e, sizeof e) && surface_materials_active() == 0,
+          "unsupported renderer keeps tracking off");
+    surface_materials_clear();
+    surface_materials_set_renderer_supported(1);
 }
 
 void test_default_off() {

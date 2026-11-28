@@ -50,6 +50,14 @@ typedef struct SurfaceMaterial {
 extern int g_surface_materials_active;
 static inline int surface_materials_active(void) { return g_surface_materials_active; }
 
+/* Only a renderer that consumes materials (OpenGL today) enables tracking;
+ * the facade sets this when the backend is chosen. Default 0. */
+void surface_materials_set_renderer_supported(int on);
+
+/* Drop all residency (savestate load: restored VRAM is not an upload, so its
+ * textures regain identity when the game re-uploads them). */
+void surface_materials_reset_tracking(void);
+
 /* Startup: loads $PSXRECOMP_SURFACE_MATERIALS when set. Safe to call twice. */
 void surface_materials_init_from_env(void);
 
@@ -89,7 +97,10 @@ int  surface_classify_prim(uint16_t texpage, uint16_t clut_x, uint16_t clut_y,
 void  surface_frame_end(void);
 float surface_time_seconds(void); /* guest-frame time (pauses with the game) */
 
-/* TCP bodies (no surrounding braces/id). Return bytes written. */
+/* TCP bodies (no surrounding braces/id). Return bytes written. Output is
+ * bounded by construction (probe: 32 hits, census: caller-clamped limit,
+ * status: 14 materials) so the debug server's fixed buffers always hold a
+ * complete JSON body; on an undersized buffer they truncate at cap-1. */
 int surface_probe_json(int vram_x, int vram_y, char *buf, int cap);
 int surface_census_json(int limit, char *buf, int cap);
 int surface_status_json(char *buf, int cap);

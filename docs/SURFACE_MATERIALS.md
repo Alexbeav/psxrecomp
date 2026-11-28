@@ -1,9 +1,12 @@
 # Surface materials — tag what a polygon is made of, shade it like a modern game
 
 Enhancement tier (CLAUDE.md Rule -1 scope, `ENHANCEMENTS.md`). Off by default;
-with no table loaded and the probe off, nothing is tracked, every primitive gets
-material 0 and the renderer output is pixel-identical to a build without the
-feature (checked by `tools/surface_material_smoke.py`).
+with no table loaded and the probe off, nothing is tracked and every primitive
+gets material 0, so the shader's material branch never runs.
+`tools/surface_material_smoke.py` checks that clearing the feature restores
+the first render pixel for pixel. Tracking runs only on the OpenGL backend
+(the only consumer), and a savestate load drops residency, because restored
+VRAM is not an upload.
 
 ## Why this exists
 
@@ -122,8 +125,8 @@ keys. Nothing MGS-specific goes into the runtime.
 ## Limits (current)
 
 - OpenGL backend only. Software and Vulkan draw the faithful image.
-- Tracker residency is not saved in savestates yet. After loading a state,
-  textures regain identity when the game re-uploads them (any area change).
+- Tracker residency is not saved in savestates yet. Loading a state drops it,
+  and textures regain identity when the game re-uploads them (any area change).
   `hd_texture_pack_tracking_state_save/load` already exist for this.
 - The probe keeps only the last frame that drew textured primitives.
 
