@@ -18039,6 +18039,7 @@ void debug_server_record_frame(void)
     if (s_fmv_quiet) {
         s_history_count = s_frame_count + 1;
         s_frame_count++;
+        scene_capture_frame_boundary(s_frame_count);
         return;
     }
     if (!s_frame_history || !s_cpu) {
@@ -18112,6 +18113,7 @@ void debug_server_record_frame(void)
 
     s_history_count = s_frame_count + 1;
     s_frame_count++;
+    scene_capture_frame_boundary(s_frame_count);
     /* Layer-1 first-divergence: snapshot the cumulative write fingerprint for
      * the frame that just completed. Tagged with the new frame number so two
      * runs line up by frame index. */
