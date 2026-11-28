@@ -77,6 +77,12 @@ int hd_texture_pack_create(const char* explicit_root,
                            char* error,
                            size_t error_capacity);
 void hd_texture_pack_destroy(HdTexturePack* pack);
+/* Tracking-only instance: no replacement files, so hd_texture_pack_match
+ * never finds anything, but upload tracking and hd_texture_identify work.
+ * Used by consumers that key on texture identity without an HD pack
+ * (surface materials). Destroy with hd_texture_pack_destroy. */
+int hd_texture_tracker_create(HdTexturePack** out_pack);
+
 void hd_texture_pack_get_info(const HdTexturePack* pack,
                               HdTexturePackInfo* out_info);
 
@@ -135,6 +141,11 @@ int hd_texture_pack_tracking_state_load(HdTexturePack* pack,
                                         const uint8_t* data,
                                         size_t size);
 size_t hd_texture_pack_tracking_upload_count(const HdTexturePack* pack);
+/* Monotonic counter that changes whenever live residency changes (upload,
+ * an invalidation that removed tracked words, reset, state load). Equal
+ * generations guarantee an identical identify/match result for the same
+ * query and VRAM CLUT contents. */
+uint64_t hd_texture_pack_tracking_generation(const HdTexturePack* pack);
 
 /* Matches only when one uniquely-keyed tracked upload still contains every
  * word touched by the texture page/depth/UV query. Any pack-key or residency
@@ -142,6 +153,20 @@ size_t hd_texture_pack_tracking_upload_count(const HdTexturePack* pack);
 int hd_texture_pack_match(HdTexturePack* pack,
                           const HdTextureDrawQuery* query,
                           HdTextureMatch* out_match);
+
+typedef struct HdTextureIdentity {
+    uint32_t texture_hash; /* CRC of the original upload (Beetle dump key) */
+    uint32_t palette_hash; /* CRC of the live CLUT; 0 for 16bpp */
+    uint64_t upload_serial;
+} HdTextureIdentity;
+
+/* Pack-independent identity: the same residency rule as
+ * hd_texture_pack_match (one tracked upload must still contain every word
+ * the query touches), but it does not require the key to exist in a pack.
+ * Returns FOUND / NONE / AMBIGUOUS / ERROR. */
+int hd_texture_identify(HdTexturePack* pack,
+                        const HdTextureDrawQuery* query,
+                        HdTextureIdentity* out_identity);
 
 /* Live GP0 draw adapter: derives page_x/page_y/depth from the PS1 texpage word
  * and applies the same deterministic residency/CLUT/UV match above. This keeps

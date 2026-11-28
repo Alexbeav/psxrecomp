@@ -11,6 +11,7 @@
  */
 
 #include "gpu.h"
+#include "surface_materials.h"
 #include "pgxp.h"
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
@@ -2933,6 +2934,9 @@ void gpu_vblank_flush_present(void) {
 
 void gpu_vblank_tick(void) {
     lcf ^= 1;
+    /* Surface materials: rotate probe samples + advance shader time (no-op
+     * bookkeeping when the feature is off). */
+    surface_frame_end();
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
      * field while GP1(08h) vertical interlace is on, in antiphase with the
      * even/odd-lines bit 31 during active display. Modeled here at vblank
