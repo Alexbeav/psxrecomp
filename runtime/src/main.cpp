@@ -144,7 +144,12 @@ extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "host_time.h"
 #if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/auth.h"
+/* recomp-ui header, on the include path only for launcher builds; its one
+ * caller (ae_np_account_sync) is inside #if defined(RECOMP_LAUNCHER). The
+ * headless psx-oracle has netplay but no launcher (PS1B-710). */
+#if defined(RECOMP_LAUNCHER)
 #include "recomp_netplay_account.h"   /* shared recomp-ui account sync */
+#endif
 #include "recomp_net/host_relay.h" /* RNetHostRelayStatus for the launcher relay line */
 #include "recomp_net/host_ice.h"   /* RNetHostIceStatus: host relay over ICE waiting-room line */
 #include "recomp_net/chat_filter.h" /* chat profanity mask, LAN rooms too */
