@@ -888,7 +888,9 @@ static uint64_t hold_host_ticks(void) {
 #ifdef _WIN32
     LARGE_INTEGER c; QueryPerformanceCounter(&c); return (uint64_t)c.QuadPart;
 #else
-    struct timespec ts; timespec_get(&ts, TIME_UTC);   /* C11; diagnostics only */
+    /* POSIX clock_gettime, as cdrom.c uses: TIME_UTC is C11 and this file
+     * builds as C99. Diagnostics only. */
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 #endif
 }
