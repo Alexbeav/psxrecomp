@@ -19,6 +19,7 @@
 #include "source_gpu_runtime.h"
 #include "interrupts.h"
 #include "pgxp.h"
+#include "scene_capture.h"
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
@@ -2796,7 +2797,7 @@ void gpu_ws_begin_linked_list(void) {
 }
 
 void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
-    (void)addr;
+    if (g_scene_capture_on) scene_capture_ot_node(addr, word_count);
     if (word_count == 0) {
         gp0_ot_rank = gp0_ot_rank == 0xFFFFu ? 0u
                                              : (uint16_t)(gp0_ot_rank + 1u);
@@ -2804,6 +2805,7 @@ void gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count) {
 }
 
 void gpu_ws_end_linked_list(void) {
+    if (g_scene_capture_on) scene_capture_ot_end();
     gp0_ot_rank = 0xFFFFu;
 }
 
@@ -3231,6 +3233,7 @@ static void drawn_frames_vblank_sample(void) {
 }
 
 void gpu_vblank_tick(void) {
+    if (g_scene_capture_on) scene_capture_vblank();
     if (psx_drawn_frames_enabled())
         drawn_frames_vblank_sample();
     lcf ^= 1;
@@ -5021,6 +5024,7 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
 }
 
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {
+    if (g_scene_capture_on) scene_capture_ot_begin(start_addr);
     ws_ui_prepass_count = 0;
     ws_ui_prepass_node_count = 0;
     ws_ui_prepass_rank = 0xFFFFu;
@@ -5477,6 +5481,8 @@ static void gp0_execute_command(void) {
     if (psx_drawn_frames_enabled())
         drawn_frames_note_gp0(opcode);
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
+    if (g_scene_capture_on)
+        scene_capture_gp0(gp0_cmd_buf, (uint32_t)gp0_words_needed, gp0_cmd_source_addr);
     extern void ws_bg_phase_note(uint32_t op);
     ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
 
@@ -5956,10 +5962,12 @@ static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
             gp0_opcode_count[opcode]++;
             if(opcode==2)gp0_fill_count++;else if(opcode==0x80)gp0_copy_count++;else gp0_draw_count++;
             gp0_ring_record(gp0_cmd_buf,event->count);
+            if(g_scene_capture_on)scene_capture_gp0(gp0_cmd_buf,event->count,gp0_cmd_source_addr);
             extra_work=gpu_source_draw_block(event->words);
         } else if(source_gpu_polygon_supported(opcode)) {
             gp0_opcode_count[opcode]++;gp0_draw_count++;
             gp0_ring_record(gp0_cmd_buf,event->count);
+            if(g_scene_capture_on)scene_capture_gp0(gp0_cmd_buf,event->count,gp0_cmd_source_addr);
             extra_work=gpu_source_draw_triangle(event->words,0);
         } else {
             if(opcode==1)gr_source_texture_control(1,0);
@@ -5975,6 +5983,7 @@ static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
     } else if(event->kind==SOURCE_GPU_DISPATCH_QUAD_SECOND) {
         /* The completed packet supplies source vertex groups (1,2,3). */
         gp0_ring_record(gp0_cmd_buf,event->count);
+        if(g_scene_capture_on)scene_capture_gp0(gp0_cmd_buf,event->count,gp0_cmd_source_addr);
         extra_work=gpu_source_draw_triangle(event->words,1);
     }
     g_exec_phase=previous_phase;
