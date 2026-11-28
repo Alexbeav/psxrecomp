@@ -4432,3 +4432,17 @@ add_test(NAME runtime_test_temp_isolation COMMAND ${CMAKE_COMMAND} -DTEST_NAME=r
          -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/check_test_temp.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_test_temp.cmake")
 psx_isolate_test_temp()
+
+# Test executables that compile gpu.c, the widescreen code or other maths call
+# lround, llround and sqrt. glibc keeps those in libm; MinGW and macOS do not
+# need it. Link libm into every *_test executable on Linux so a new test cannot
+# miss it (PS1B-712).
+if(BUILD_TESTING AND UNIX AND NOT APPLE)
+    get_property(_psx_dir_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_psx_target IN LISTS _psx_dir_targets)
+        get_target_property(_psx_type ${_psx_target} TYPE)
+        if(_psx_type STREQUAL "EXECUTABLE" AND _psx_target MATCHES "_test$")
+            target_link_libraries(${_psx_target} PRIVATE m)
+        endif()
+    endforeach()
+endif()
