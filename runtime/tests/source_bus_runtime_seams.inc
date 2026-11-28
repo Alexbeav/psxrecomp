@@ -9,6 +9,7 @@ uint64_t s_frame_count;
 uint64_t psx_cycle_count;          /* gpu_timeline.c stamps notes with it */
 int g_exec_phase;
 int g_psx_render_pass_active;
+int g_scene_capture_on;
 void psx_mod_counter_add(const char *name, uint32_t delta) { (void)name; (void)delta; }
 static int fixture_pgxp_enabled;
 int pgxp_enabled(void) { return fixture_pgxp_enabled; }
