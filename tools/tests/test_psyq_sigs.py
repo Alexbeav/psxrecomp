@@ -131,6 +131,26 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(names["SetTiny"]["how"], "psyq-near")
         self.assertEqual(names["SetTiny"]["pc"], f"0x{0x80010000 + len(code) - 12:08X}")
 
+    def test_short_object_flush_at_two_sites_is_ambiguous(self):
+        big = unique_code(6, 12)
+        tiny = words(0x48C60000, JR_RA, NOP)
+        code = tiny + big + tiny                   # flush on both sides of BIG
+        root = self.fx.sigset("460", "LIBGTE", [
+            {"name": "BIG.OBJ", "sig": sig_of(big), "labels": [{"name": "Big", "offset": 0}]},
+            {"name": "TINY.OBJ", "sig": sig_of(tiny), "labels": [{"name": "SetTiny", "offset": 0}]},
+        ])
+        rep = PS.match_image(self.fx.image(code), PS.load_public_set(root), [])
+        self.assertNotIn("SetTiny", {f["name"] for f in rep["functions"]})
+
+    def test_claim_prefers_the_longer_pattern(self):
+        def sig(n: int, concrete: int) -> "PS.Signature":
+            mask = b"\xff" * concrete + b"\x00" * (n - concrete)
+            return PS.Signature("psyq", "460", "L", f"O{n}", b"\x00" * n, mask, [])
+        long_m = PS.Match(sig(64, 20), 0, set())
+        short_m = PS.Match(sig(32, 32), 16, set())
+        kept = PS.claim([short_m, long_m])
+        self.assertEqual([m.sig.obj for m in kept], ["O64"])
+
     def test_toml_is_symbols_format(self):
         obj = unique_code(10, 10)
         root = self.fx.sigset("460", "LIBGPU", [{"name": "C.OBJ", "sig": sig_of(obj),
@@ -156,6 +176,16 @@ class GenTests(unittest.TestCase):
         self.assertEqual(m[8:12], b"\x00\x00\xff\xff")
         self.assertEqual(m[12:16], b"\x00\x00\xff\xff")
         self.assertEqual(m[16:20], b"\xff\xff\xff\xff")
+
+    def test_load_clears_a_high_register(self):
+        code = words(
+            0x3C048001,                  # lui a0, 0x8001
+            0x8C840010,                  # lw a0, 0x10(a0)  (lo half: masked; a0 now data)
+            0x8C850004,                  # lw a1, 4(a0)     (a0 is data: concrete)
+        )
+        m = PS.mask_function(code)
+        self.assertEqual(m[4:8], b"\x00\x00\xff\xff")
+        self.assertEqual(m[8:12], b"\xff\xff\xff\xff")
 
     def test_gen_then_match_elsewhere(self):
         fx = Fixture()

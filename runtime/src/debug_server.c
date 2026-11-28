@@ -5605,7 +5605,11 @@ static void handle_scene_dump(int id, const char *json)
     if (offset < 0) offset = 0;
     if (count < 1) count = 1;
     if (count > 4000) count = 4000;
-    size_t cap = 512 + (size_t)count * 420;
+    /* Worst-case bytes per entry: a transform has 42 signed fields of up to 11
+     * characters plus its keys (about 760 bytes); a primitive has four corners
+     * (about 360); a vertex about 260. */
+    size_t per_entry = strcmp(what, "transforms") == 0 ? 1024 : 512;
+    size_t cap = 512 + (size_t)count * per_entry;
     char *out = (char *)malloc(cap);
     if (!out) { send_err(id, "oom"); return; }
     size_t pos = 0;

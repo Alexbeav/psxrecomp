@@ -242,19 +242,30 @@ static void test_off_by_default_and_reset() {
     CHECK(s.frames == 0 && s.prims == 0);
 }
 
+static bool write_text(const char *path, const char *text) {
+    FILE *f = std::fopen(path, "wb");
+    if (!f) return false;
+    std::fputs(text, f);
+    std::fclose(f);
+    return true;
+}
+
 static void test_adapter() {
     const char *path = "scene_adapter_test.toml";
-    FILE *f = std::fopen(path, "wb");
-    std::fputs("format = 1\ngame = \"Test Game\"\nlink_window_vblanks = 6\n"
-               "[hooks]\ndraw_ot = [0x800928EC]\nset_rot_matrix = [0x80095D5C]\n"
-               "set_trans_matrix = [0x80095D8C]\n", f);
-    std::fclose(f);
+    if (!write_text(path, "format = 1\ngame = \"Test Game\"\nlink_window_vblanks = 6\n"
+                          "[hooks]\ndraw_ot = [0x800928EC]\nset_rot_matrix = [0x80095D5C]\n"
+                          "set_trans_matrix = [0x80095D8C]\n")) {
+        CHECK(!"cannot write the adapter test file");
+        return;
+    }
     char err[256] = "";
     g_regs.clear();
     CHECK(scene_capture_load_adapter(path, err, sizeof err) == 1);
     CHECK(std::string(scene_capture_adapter_game()) == "Test Game");
     CHECK(scene_capture_link_window() == 6);
-    CHECK(g_regs.size() == 3 && g_regs[1].addr == 0x80095D5C);
+    CHECK(g_regs.size() == 3);
+    if (g_regs.size() != 3) return;
+    CHECK(g_regs[1].addr == 0x80095D5C);
 
     /* The hooks read a0 only. */
     fresh();
@@ -275,9 +286,27 @@ static void test_adapter() {
     scene_capture_stats(&s);
     CHECK(s.draw_calls == 1);
 
-    f = std::fopen(path, "wb");
-    std::fputs("format = 2\n", f);
-    std::fclose(f);
+    /* Reloading replaces the hook set: the dropped DrawOTag address no longer
+     * counts, and nothing new is registered for addresses already known. */
+    CHECK(write_text(path, "format = 1\ngame = \"Test Game\"\n"
+                           "[hooks]\nset_rot_matrix = [0x80095D5C]\n"));
+    CHECK(scene_capture_load_adapter(path, err, sizeof err) == 1);
+    CHECK(g_regs.size() == 3);
+    fresh();
+    g_regs[0].cb(&cpu, g_regs[0].addr);
+    project(g, 0, 0, 0, 3, 3);
+    scene_capture_gp0(pkt, 4, 0xFFFFFFFFu);
+    scene_capture_vblank();
+    scene_capture_stats(&s);
+    CHECK(s.draw_calls == 0);
+
+    /* One address under two kinds is refused. */
+    CHECK(write_text(path, "format = 1\n[hooks]\ndraw_ot = [0x80001000]\n"
+                           "set_rot_matrix = [0x80001000]\n"));
+    CHECK(scene_capture_load_adapter(path, err, sizeof err) == 0);
+    CHECK(std::strstr(err, "twice") != nullptr);
+
+    CHECK(write_text(path, "format = 2\n"));
     CHECK(scene_capture_load_adapter(path, err, sizeof err) == 0);
     CHECK(std::strstr(err, "format") != nullptr);
     CHECK(scene_capture_link_window() == 4);   /* fresh() set it; a bad file changes nothing */
