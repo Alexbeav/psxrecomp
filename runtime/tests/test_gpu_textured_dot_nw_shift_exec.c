@@ -16,6 +16,14 @@ uint32_t g_debug_last_store_pc;
 CPUState *debug_cpu_ptr;
 int g_psx_vram_dirty_tracking;
 
+/* Scene capture stays off here, so its hooks in gpu.c are never taken. */
+int g_scene_capture_on;
+void scene_capture_ot_begin(uint32_t start_addr) { (void)start_addr; }
+void scene_capture_ot_node(uint32_t node_addr, uint32_t word_count) { (void)node_addr; (void)word_count; }
+void scene_capture_ot_end(void) {}
+void scene_capture_gp0(const uint32_t *words, uint32_t count, uint32_t src_addr) { (void)words; (void)count; (void)src_addr; }
+void scene_capture_vblank(void) {}
+
 static uint32_t test_ram[0x00200000u / 4u];
 
 static struct {

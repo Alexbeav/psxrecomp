@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
@@ -371,6 +372,27 @@ void scene_capture_vblank(void) {
     State &s = S();
     if (!s.prims.empty()) close_frame(s);
     s.vblank++;
+}
+
+/* PSX_SCENE_CAPTURE_FRAMES="<on>,<off>" turns capture on at guest frame <on>
+ * and off at <off>, from boot, so a file replay captures the same frame every
+ * run without a TCP command racing the route. The last closed frame stays
+ * readable after <off>. Capture is host memory only; the guest never sees it. */
+void scene_capture_frame_boundary(uint64_t frame) {
+    static int parsed = 0;
+    static uint64_t on_at = 0, off_at = 0;
+    if (!parsed) {
+        parsed = 1;
+        const char *env = std::getenv("PSX_SCENE_CAPTURE_FRAMES");
+        unsigned long long a = 0, b = 0;
+        if (env && std::sscanf(env, "%llu,%llu", &a, &b) == 2 && a > 0 && b > a) {
+            on_at = a;
+            off_at = b;
+        }
+    }
+    if (!on_at) return;
+    if (frame == on_at) scene_capture_set_enabled(1);
+    else if (frame == off_at) scene_capture_set_enabled(0);
 }
 
 void scene_capture_stats(SceneCaptureStats *out) {

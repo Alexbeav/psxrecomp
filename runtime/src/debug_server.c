@@ -14446,8 +14446,15 @@ static void process_command(const char *line)
     int id = json_get_int(line, "id", 0);
 
     /* A preloaded evidence run cannot be edited or rescheduled over TCP. */
+    /* Scene readout and screenshot only read host memory. scene_capture is a
+     * pure read when it carries no on, window or adapter;
+     * PSX_SCENE_CAPTURE_FRAMES sets the window from boot instead. */
+    const int scene_read = strcmp(cmd, "scene_dump") == 0 ||
+        strcmp(cmd, "screenshot") == 0 ||
+        (strcmp(cmd, "scene_capture") == 0 && !strstr(line, "\"on\"") &&
+         !strstr(line, "\"window\"") && !strstr(line, "\"adapter\""));
     if (s_input_route_file_mode && strcmp(cmd, "input_route_status") != 0 &&
-        strcmp(cmd, "pad_status") != 0) {
+        strcmp(cmd, "pad_status") != 0 && !scene_read) {
         send_err(id, "file replay permits only input_route_status and pad_status");
         return;
     }
@@ -15044,6 +15051,7 @@ void debug_server_record_frame(void)
     if (s_fmv_quiet) {
         s_history_count = s_frame_count + 1;
         s_frame_count++;
+        scene_capture_frame_boundary(s_frame_count);
         return;
     }
     if (!s_frame_history) return;
@@ -15115,6 +15123,7 @@ void debug_server_record_frame(void)
 
     s_history_count = s_frame_count + 1;
     s_frame_count++;
+    scene_capture_frame_boundary(s_frame_count);
     /* Layer-1 first-divergence: snapshot the cumulative write fingerprint for
      * the frame that just completed. Tagged with the new frame number so two
      * runs line up by frame index. */

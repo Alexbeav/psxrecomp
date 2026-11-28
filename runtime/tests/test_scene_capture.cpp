@@ -9,6 +9,7 @@
 #include "mod_plugins.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -283,6 +284,25 @@ static void test_adapter() {
     std::remove(path);
 }
 
+static void test_frame_window_from_environment() {
+#ifdef _WIN32
+    _putenv_s("PSX_SCENE_CAPTURE_FRAMES", "10,12");
+#else
+    setenv("PSX_SCENE_CAPTURE_FRAMES", "10,12", 1);
+#endif
+    scene_capture_set_enabled(0);
+    scene_capture_frame_boundary(9);
+    CHECK(!g_scene_capture_on);
+    scene_capture_frame_boundary(10);
+    CHECK(g_scene_capture_on);
+    scene_capture_frame_boundary(11);
+    CHECK(g_scene_capture_on);
+    scene_capture_frame_boundary(12);
+    CHECK(!g_scene_capture_on);
+    scene_capture_frame_boundary(13);
+    CHECK(!g_scene_capture_on);
+}
+
 int main() {
     test_off_by_default_and_reset();
     test_flat_triangle_links_all_vertices();
@@ -292,6 +312,7 @@ int main() {
     test_transform_changes_and_object_keys();
     test_ambiguous_sxy();
     test_adapter();
+    test_frame_window_from_environment();
     if (g_failures) {
         std::fprintf(stderr, "scene_capture_test: %d failure(s)\n", g_failures);
         return 1;

@@ -169,6 +169,9 @@ void scene_capture_ot_end(void);
  * word, or 0xFFFFFFFF when it did not come from RAM by DMA. */
 void scene_capture_gp0(const uint32_t *words, uint32_t count, uint32_t src_addr);
 void scene_capture_vblank(void);
+/* Once per guest frame, after the frame counter advances. Applies the
+ * PSX_SCENE_CAPTURE_FRAMES="<on>,<off>" window from boot. */
+void scene_capture_frame_boundary(uint64_t frame);
 
 /* Readout of the last closed frame. Returned pointers stay valid until the
  * next frame closes or the capture is reset. */
