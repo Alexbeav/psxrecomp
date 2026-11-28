@@ -4374,6 +4374,8 @@ if(BUILD_TESTING)
             overlay_capture_history_test overlay_capture_queue_bound_test)
         if(TARGET ${_span_target})
             target_sources(${_span_target} PRIVATE src/host_span_ring.c)
+            # The restored recipe adds include on WIN32 only (PS1B-713).
+            target_include_directories(${_span_target} PRIVATE include)
         endif()
     endforeach()
 endif()
