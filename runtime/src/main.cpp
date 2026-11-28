@@ -3473,26 +3473,6 @@ extern "C" int psx_present_vsync_owns_cadence(void) {
     return present_vsync_owns_cadence();
 }
 
-/* The GP1 video standard can flip at runtime (EU BIOS shell -> game, or a
- * title toggling modes). Re-apply the present cadence (swap interval) when it
- * does, so the pacer/vsync ownership above takes effect immediately. */
-static void present_track_video_standard(void) {
-    static int s_last_pal = -1;
-    const int pal = gpu_video_standard_is_pal();
-    if (pal == s_last_pal) return;
-    /* Also on the first observation: the renderer was initialised before the
-     * game (or a PAL BIOS) selected its standard. */
-    if (g_frame_interpolation) apply_interpolation_rates();
-    if (s_last_pal >= 0) {
-        apply_present_cadence();
-        std::printf("psxrecomp: video standard now %s; present cadence %s (%.4f ms/frame)\n",
-                    pal ? "PAL (50 Hz)" : "NTSC (59.94 Hz)",
-                    present_vsync_owns_cadence() ? "driver vsync" : "wall-clock pacer",
-                    present_effective_frame_period_ms());
-    }
-    s_last_pal = pal;
-}
-
 static int present_effective_swap_interval(void) {
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
@@ -3531,13 +3511,12 @@ static int present_should_wall_pace(void) {
 }
 
 /* The decoupled GL presenter owns the wall clock while it is active, so its
- * source rate IS the guest VBlank rate. It must follow the live video
- * standard exactly like the wall-clock pacer (present_effective_frame_
- * period_ms): a PAL title paced at the NTSC/host 60 Hz runs 1.2x fast. Called
- * at renderer init and again whenever GP1(08h) flips the standard. */
+ * source rate IS the guest VBlank rate: g_guest_frame_period_ms, which the
+ * stage sets from the disc region (PAL 50 Hz) or a mod's native VBlank rate.
+ * A PAL title paced at the NTSC/host 60 Hz would run 1.2x fast. */
 static void apply_interpolation_rates(void) {
     if (!g_gl_active) return;
-    const double period = present_effective_frame_period_ms();
+    const double period = g_guest_frame_period_ms;
     gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
                                   (double)g_frame_interpolation_fps,
                                   period > 0.0 ? 1000.0 / period : 59.94,
