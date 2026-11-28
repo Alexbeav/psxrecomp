@@ -293,6 +293,12 @@ void psx_fatal_halt(const char *reason) { fprintf(stderr, "%s\n", reason); abort
 void crash_trace_note_gpu_fatal(uint32_t opcode, uint32_t word) { (void)opcode; (void)word; }
 void event_ring_note_gpu_irq(uint32_t stat) { (void)stat; }
 int g_psx_vram_dirty_tracking = 0;
+int g_scene_capture_on = 0;
+void scene_capture_ot_begin(uint32_t start_addr) { (void)start_addr; }
+void scene_capture_ot_node(uint32_t node_addr, uint32_t word_count) { (void)node_addr; (void)word_count; }
+void scene_capture_ot_end(void) {}
+void scene_capture_gp0(const uint32_t *words, uint32_t count, uint32_t src_addr) { (void)words; (void)count; (void)src_addr; }
+void scene_capture_vblank(void) {}
 int g_exec_phase = 0;
 int g_psx_render_pass_active = 0;
 int pgxp_enabled(void) { return 0; }

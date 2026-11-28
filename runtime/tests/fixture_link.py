@@ -24,6 +24,7 @@ DATA_SEAMS = {
     'g_psx_cpu_step_boundary_callback',
     'g_psx_cycle_fast_limit', 'g_psx_device_gen',
     'g_psx_guest_time_frozen', 'g_psx_render_pass_active', 'g_psx_savestate_pending',
+    'g_scene_capture_on',
 }
 
 # A stub would silently override a symbol the C library would otherwise

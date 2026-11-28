@@ -1,0 +1,11 @@
+# The public PsyQ signature set that psyq_sigs.py matches against.
+# Fetched by fetch_signatures.py into a folder of your choice; never committed
+# here (the upstream repository carries no licence file).
+
+[signatures]
+name = "psx_psyq_signatures"
+repository = "https://github.com/lab313ru/psx_psyq_signatures"
+commit = "e9e46e7e133ef275a79bfce650924f98edb086bc"
+archive = "https://codeload.github.com/lab313ru/psx_psyq_signatures/tar.gz/e9e46e7e133ef275a79bfce650924f98edb086bc"
+archive_bytes = 5731173
+archive_sha256 = "fc6f8dac4c93d99cef74a0089558caa85cce429856c3c6d0f9489056cacc997d"

@@ -494,6 +494,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/projection_scale_config.cpp
     ${PSXRECOMP_ROOT}/runtime/src/pgxp.cpp
     ${PSXRECOMP_ROOT}/runtime/src/pgxp_session.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/scene_capture.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/scene_capture_adapter.cpp
     ${PSXRECOMP_ROOT}/runtime/src/nd_intro_ot.c
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_sha256.c
@@ -537,11 +539,14 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
     ${PSXRECOMP_ROOT}/runtime/src/audio_sync.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_speed.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_frame_rate.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_cpu_speed.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_debug.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_bulk_write.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_server_policy.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_pgxp.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_internal_resolution.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_scene_capture.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_bezel.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_ram.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_hd_textures.c

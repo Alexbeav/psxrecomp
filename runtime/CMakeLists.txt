@@ -1994,6 +1994,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         src/gte.cpp
         src/pgxp.cpp
         src/psx_ram_geometry.c
+        src/scene_capture.cpp
     )
     target_include_directories(gte_register_access_test PRIVATE include)
     target_compile_definitions(gte_register_access_test PRIVATE
@@ -2015,12 +2016,21 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         --library $<TARGET_FILE:mdec_clean_fixture_probe>)
     # Same ABI/result corpus for the native operation entry and the reference.
     add_executable(gte_hle_contract_test
-        tests/test_gte_register_access.cpp src/gte.cpp src/pgxp.cpp src/psx_ram_geometry.c)
+        tests/test_gte_register_access.cpp src/gte.cpp src/pgxp.cpp src/psx_ram_geometry.c
+        src/scene_capture.cpp)
     target_include_directories(gte_hle_contract_test PRIVATE include)
     target_compile_definitions(gte_hle_contract_test PRIVATE
         PSX_NO_DEBUG_TOOLS=1 PSX_GTE_REGISTER_TEST=1 PSX_ENABLE_BLOCK_CYCLES=1)
     psxrecomp_execution_profile(gte_hle_contract_test PROFILE ENHANCED)
     add_test(NAME gte_hle_contract_test COMMAND gte_hle_contract_test)
+
+    # Typed scene capture (scene_capture.h): GTE vertex records joined to GP0
+    # primitives by exact SXY, link window, transform snapshots, object keys,
+    # frame close, and the per-game adapter TOML.
+    add_executable(scene_capture_test tests/test_scene_capture.cpp
+        src/scene_capture.cpp src/scene_capture_adapter.cpp)
+    target_include_directories(scene_capture_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/lib/toml11)
+    add_test(NAME scene_capture_test COMMAND scene_capture_test)
 
     # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
     # load/store/COP2 roundtrips, half-word semantics, validate-on-read

@@ -1,0 +1,45 @@
+format_version = 5
+id = "psx.enhancement.cpu-speed"
+version = "1.0.0"
+name = "CPU Speed"
+author = "psxrecomp"
+description = "Emulated CPU speed. Gives the game's own code more time per frame, so a game that drops frames when the scene is busy can hold its frame rate. Devices keep their real speed."
+resolver = "declarative"
+save_compatibility = "shared"
+
+# CPU speed is a property of the emulated hardware, not of any particular
+# disc, so this ships with the framework and applies to every game.
+[[target]]
+game_id = "*"
+
+[[feature]]
+id = "cpu-speed"
+name = "CPU Speed"
+description = "Disabled by default. Runs the emulated CPU faster than the real 33.87 MHz while the CD drive, GPU, sound chip and timers keep their real speed. A game that waits for a fixed number of frames does not change; a game whose frame rate falls in busy scenes holds it longer. A game that times itself by counting CPU loops can run too fast: lower the value or turn the feature off if it does. Movies play at the real CPU speed: they gain nothing from a faster CPU, and the extra work can make them stutter. A title whose game.toml already sets a CPU scale keeps its own."
+group = "Enhancements"
+default_enabled = false
+
+[[option]]
+feature = "cpu-speed"
+id = "percent"
+label = "CPU speed"
+description = "200 doubles the CPU's speed."
+group = "Enhancements"
+type = "choice"
+default = "200"
+
+[[option.choice]]
+value = "200"
+label = "200 %"
+
+[[option.choice]]
+value = "300"
+label = "300 %"
+
+[[option.choice]]
+value = "400"
+label = "400 %"
+
+[[plugin]]
+feature = "cpu-speed"
+id = "psx.cpu-speed"
