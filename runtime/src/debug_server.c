@@ -5328,6 +5328,18 @@ static void handle_get_registers(int id, const char *json)
     free(buf);
 }
 
+/* A file replay admits read_ram only inside main RAM: those reads touch no
+ * device register, so they cannot change the run. */
+static int replay_read_is_main_ram(const char *json)
+{
+    char addr_str[32];
+    if (!json_get_str(json, "addr", addr_str, sizeof(addr_str))) return 0;
+    const uint32_t addr = hex_to_u32(addr_str) & 0x1FFFFFFFu;
+    int len = json_get_int(json, "len", 1);
+    if (len < 1) len = 1;
+    return addr < 0x200000u && (uint64_t)addr + (uint64_t)len <= 0x200000u;
+}
+
 static void handle_read_ram(int id, const char *json)
 {
     char addr_str[32];
@@ -5446,7 +5458,11 @@ static void handle_scene_dump(int id, const char *json)
     if (offset < 0) offset = 0;
     if (count < 1) count = 1;
     if (count > 4000) count = 4000;
-    size_t cap = 512 + (size_t)count * 420;
+    /* Worst-case bytes per entry: a transform has 42 signed fields of up to 11
+     * characters plus its keys (about 760 bytes); a primitive has four corners
+     * (about 360); a vertex about 260. */
+    size_t per_entry = strcmp(what, "transforms") == 0 ? 1024 : 512;
+    size_t cap = 512 + (size_t)count * per_entry;
     char *out = (char *)malloc(cap);
     if (!out) { send_err(id, "oom"); return; }
     size_t pos = 0;
@@ -14452,10 +14468,12 @@ static void process_command(const char *line)
     const int scene_read = strcmp(cmd, "scene_dump") == 0 ||
         strcmp(cmd, "screenshot") == 0 ||
         (strcmp(cmd, "scene_capture") == 0 && !strstr(line, "\"on\"") &&
-         !strstr(line, "\"window\"") && !strstr(line, "\"adapter\""));
+         !strstr(line, "\"window\"") && !strstr(line, "\"adapter\"")) ||
+        ((strcmp(cmd, "read_ram") == 0 || strcmp(cmd, "dump_ram") == 0) &&
+         replay_read_is_main_ram(line));
     if (s_input_route_file_mode && strcmp(cmd, "input_route_status") != 0 &&
         strcmp(cmd, "pad_status") != 0 && !scene_read) {
-        send_err(id, "file replay permits only input_route_status and pad_status");
+        send_err(id, "file replay permits only input_route_status, pad_status and read-only scene, screenshot and main-RAM queries");
         return;
     }
 
@@ -15054,8 +15072,13 @@ void debug_server_record_frame(void)
         scene_capture_frame_boundary(s_frame_count);
         return;
     }
-    if (!s_frame_history) return;
-    if (!s_cpu) return;
+    if (!s_frame_history || !s_cpu) {
+        /* No history (debug socket failed, or no CPU yet): still count the
+         * guest frame so PSX_SCENE_CAPTURE_FRAMES arms on time. */
+        s_frame_count++;
+        scene_capture_frame_boundary(s_frame_count);
+        return;
+    }
 
     uint32_t idx = (uint32_t)(s_frame_count % FRAME_HISTORY_CAP);
     PSXFrameRecord *r = &s_frame_history[idx];

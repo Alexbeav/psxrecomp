@@ -3,9 +3,11 @@ id = "psx.framework.scene-capture"
 version = "1.0.0"
 name = "Scene Capture (mod framework)"
 author = "psxrecomp"
-description = "Records each frame as a typed scene: GTE transforms and pre-projection vertices, the drawn primitives with their ordering-table slot, materials (texture page, CLUT, blend) and the link from each 2D vertex back to the 3D vertex it came from. Read-only: it observes the GTE, DMA2 and GP0 and never changes what the game computes or draws. Other enhancement mods (interpolation, widescreen, fog, path tracing) build on it. Query it with the debug server's scene_capture and scene_dump commands."
+description = "Records each frame as a typed scene: GTE transforms and pre-projection vertices, the drawn primitives with their ordering-table walk and rank, materials (texture page, CLUT, blend) and the link from each 2D vertex back to the 3D vertex it came from. Read-only: it observes the GTE, DMA2 and GP0 and never changes what the game computes or draws. It is meant as the base for later enhancement mods (interpolation, widescreen, fog, path tracing); none uses it yet. Query it with the debug server's scene_capture and scene_dump commands."
 resolver = "declarative"
 save_compatibility = "shared"
+# Developer tooling: absent from release catalogs.
+channel = "developer"
 
 # Capture is a property of the emulated GTE/GPU pair, so it applies to every
 # game. A per-game scene_adapter.toml beside game.toml adds hook addresses.

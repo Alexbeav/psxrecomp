@@ -952,6 +952,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # suppression bracket, invalidate-all, and GetPreciseVertex safeguards
     # (truncation agreement + tolerance clamp). White-box: includes src/pgxp.cpp
     # and stubs the gte.cpp fallback-cache extern.
+    add_executable(pgxp_test tests/test_pgxp.cpp src/pgxp.cpp)
+    target_include_directories(pgxp_test PRIVATE include)
+    add_test(NAME pgxp_test COMMAND pgxp_test)
+
     # Typed scene capture (scene_capture.h): GTE vertex records joined to GP0
     # primitives by exact SXY, link window, transform snapshots, object keys,
     # frame close, and the per-game adapter TOML.
@@ -959,10 +963,6 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         src/scene_capture.cpp src/scene_capture_adapter.cpp)
     target_include_directories(scene_capture_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/lib/toml11)
     add_test(NAME scene_capture_test COMMAND scene_capture_test)
-
-    add_executable(pgxp_test tests/test_pgxp.cpp src/pgxp.cpp)
-    target_include_directories(pgxp_test PRIVATE include)
-    add_test(NAME pgxp_test COMMAND pgxp_test)
 
     add_executable(psx_instr_cost_test tests/test_psx_instr_cost.cpp)
     target_include_directories(psx_instr_cost_test PRIVATE include)

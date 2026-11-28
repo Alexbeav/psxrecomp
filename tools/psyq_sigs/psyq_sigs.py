@@ -218,10 +218,14 @@ class Match:
 
 
 def claim(matches: list[Match]) -> list[Match]:
-    """Keep the longest match for every byte range; drop overlaps."""
+    """Keep the longest match for every byte range; drop overlaps.
+
+    Longest pattern first; among equal lengths, the one with more concrete
+    bytes.
+    """
     taken: list[tuple[int, int]] = []
     kept: list[Match] = []
-    for m in sorted(matches, key=lambda m: (-m.sig.concrete, m.start)):
+    for m in sorted(matches, key=lambda m: (-len(m.sig.pattern), -m.sig.concrete, m.start)):
         if any(m.start < e and s < m.end for s, e in taken):
             continue
         taken.append((m.start, m.end))
@@ -277,13 +281,19 @@ def match_image(img: Image, public: list[Signature], gen: list[Signature]) -> di
         for s in short:
             if (s.lib, s.obj) in placed:
                 continue
+            flush_hits = []
             for h in s.find(img):
                 end = h + len(s.pattern)
                 if any(h < e and st < end for st, e in claimed):
                     continue
-                flush = any(0 <= h - e <= NEAR_GAP or 0 <= st - end <= NEAR_GAP for st, e in claimed)
-                if not flush:
-                    continue
+                if any(0 <= h - e <= NEAR_GAP or 0 <= st - end <= NEAR_GAP for st, e in claimed):
+                    flush_hits.append(h)
+            # Ambiguous: the object fits flush at more than one site.
+            if len(flush_hits) != 1:
+                if len(flush_hits) > 1:
+                    stats["near_ambiguous"] = stats.get("near_ambiguous", 0) + 1
+                continue
+            for h in flush_hits:
                 prev = found.get(h)
                 if prev is None or s.concrete > prev.sig.concrete:
                     found[h] = Match(s, h, set(s.versions))
@@ -402,6 +412,8 @@ def mask_function(code: bytes) -> bytes:
             if rs in hi_regs or rs in (1, 28):
                 mask[off:off + 2] = b"\x00\x00"
             if op in (0x09, 0x0D) and rt != rs:
+                hi_regs.discard(rt)
+            elif 0x20 <= op <= 0x26:          # a load overwrites rt
                 hi_regs.discard(rt)
     return bytes(mask)
 

@@ -305,7 +305,10 @@ void scene_capture_ot_begin(uint32_t) {
 }
 
 void scene_capture_ot_node(uint32_t, uint32_t word_count) {
-    if (word_count == 0) S().ot_rank++;
+    /* The source-model linked-list path reports nodes without a walk begin;
+     * rank counts only inside a walk. */
+    State &s = S();
+    if (s.in_ot && word_count == 0) s.ot_rank++;
 }
 
 void scene_capture_ot_end(void) { S().in_ot = false; }
