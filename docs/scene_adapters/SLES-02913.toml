@@ -1,0 +1,14 @@
+# Scene adapter for Alien Resurrection (Europe), SLES-02913.
+# Copy beside game.toml as scene_adapter.toml. The EXE links at 0x00010000
+# (KUSEG); the recompiler names functions by their KSEG0 address, so the
+# psyq_sigs address 0x00012C84 is written as 0x80012C84. psyq_sigs finds DrawOTag in
+# SLES_029.13 but no SetRotMatrix or SetTransMatrix: the game loads the GTE
+# matrices with inline ctc2 code, so transforms are keyed by caller address.
+#   [recompiler]
+#   mod_function_entry_funcs = ["0x80012C84"]
+format = 1
+game = "SLES-02913"
+link_window_vblanks = 4
+
+[hooks]
+draw_ot = [0x80012C84]   # DrawOTag

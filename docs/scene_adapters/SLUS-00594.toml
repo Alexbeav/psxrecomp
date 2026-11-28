@@ -1,0 +1,14 @@
+# Scene adapter for Metal Gear Solid (USA, Rev 1), SLUS-00594.
+# Copy beside game.toml as scene_adapter.toml. Addresses are the libgpu and
+# libgte entry points that tools/psyq_sigs named in SLUS_005.94 (exact
+# object matches). Each must also be listed in game.toml:
+#   [recompiler]
+#   mod_function_entry_funcs = ["0x800928EC", "0x80092A1C", "0x80095D5C", "0x80095D8C"]
+format = 1
+game = "SLUS-00594"
+link_window_vblanks = 4
+
+[hooks]
+draw_ot = [0x800928EC, 0x80092A1C]   # DrawOTag, DrawOTagEnv
+set_rot_matrix = [0x80095D5C]        # SetRotMatrix
+set_trans_matrix = [0x80095D8C]      # SetTransMatrix
