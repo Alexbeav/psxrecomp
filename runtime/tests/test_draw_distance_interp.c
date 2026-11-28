@@ -91,6 +91,11 @@ uint32_t gte_read_ctrl(CPUState *cpu, uint8_t r) { (void)cpu; (void)r; return 0;
 uint32_t gte_read_data(CPUState *cpu, uint8_t r) { return cpu->gte_data[r]; }
 void gte_write_ctrl(CPUState *cpu, uint8_t r, uint32_t v) { (void)cpu; (void)r; (void)v; }
 void gte_write_data(CPUState *cpu, uint8_t r, uint32_t v) { cpu->gte_data[r] = v; }
+/* psx_ws_nclip_branch (gpu.c) calls these gte.cpp helpers. LTO and
+ * --gc-sections drop it in a plain build; a sanitizer build keeps it. */
+int gte_nclip_native_wide_sign(int32_t mac0, int *sign) { (void)mac0; (void)sign; return 0; }
+int gte_nclip_native_wide_previous_sign(int32_t mac0, int *sign) { (void)mac0; (void)sign; return 0; }
+int gte_nclip_zero_positive(int32_t mac0, uint32_t pc) { (void)mac0; (void)pc; return 0; }
 int overlay_loader_call_native(CPUState *cpu, uint32_t a) { (void)cpu; (void)a; return 0; }
 void psx_bail_record(uint32_t ra, uint32_t sp, uint32_t pc, uint32_t gsp) {
     (void)ra; (void)sp; (void)pc; (void)gsp;
