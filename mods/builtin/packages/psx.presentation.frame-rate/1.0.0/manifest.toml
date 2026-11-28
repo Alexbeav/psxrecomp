@@ -1,0 +1,83 @@
+format_version = 11
+id = "psx.presentation.frame-rate"
+version = "1.0.0"
+name = "Frame Rate Unlock"
+author = "psxrecomp"
+description = "Updates the window more often than the game draws, and fills the gaps between the game's frames. The game keeps its own speed and timing. Works with any title. Uses the OpenGL renderer."
+resolver = "declarative"
+save_compatibility = "shared"
+
+# Presentation rate is a property of the host display path, not of any
+# particular disc, so this ships with the framework and applies to every game.
+[[target]]
+game_id = "*"
+
+[[feature]]
+id = "frame-rate"
+name = "Frame Rate Unlock"
+description = "Disabled by default. Guest timing, game logic, audio and saves are untouched: only presentation changes. The in-between frames follow the game's real flips, so a title that draws at 25 or 30 fps is blended across its whole frame. The in-between frames are blends of the two newest game frames, not new object positions."
+group = "Visual"
+default_enabled = false
+vsync = "off"
+
+[[option]]
+feature = "frame-rate"
+id = "limit"
+label = "Frame rate limit"
+description = "How many times per second the window is updated."
+group = "Visual"
+type = "choice"
+default = "display"
+
+[[option.choice]]
+value = "display"
+label = "Match display refresh"
+
+[[option.choice]]
+value = "60"
+label = "60 FPS"
+
+[[option.choice]]
+value = "90"
+label = "90 FPS"
+
+[[option.choice]]
+value = "120"
+label = "120 FPS"
+
+[[option.choice]]
+value = "144"
+label = "144 FPS"
+
+[[option.choice]]
+value = "240"
+label = "240 FPS"
+
+[[option.choice]]
+value = "360"
+label = "360 FPS"
+
+[[option]]
+feature = "frame-rate"
+id = "smoothing"
+label = "In-between frames"
+description = "Motion-adaptive blends small changes and cuts cleanly on big ones (fewer double images). Crossfade always blends. Off repeats the newest game frame: a limiter only."
+group = "Visual"
+type = "choice"
+default = "adaptive"
+
+[[option.choice]]
+value = "adaptive"
+label = "Motion-adaptive blend"
+
+[[option.choice]]
+value = "linear"
+label = "Crossfade"
+
+[[option.choice]]
+value = "none"
+label = "Off (limiter only)"
+
+[[plugin]]
+feature = "frame-rate"
+id = "psx.frame-rate"
